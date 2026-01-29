@@ -77,9 +77,29 @@ def capture(
     """
     try:
         from har_capture.capture import capture_device_har, check_basic_auth, check_device_connectivity
+        from har_capture.capture.deps import check_browser_installed, install_browser
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
         raise typer.Exit(1) from None
+
+    # Check if browser is installed
+    if not check_browser_installed(browser):
+        typer.echo()
+        typer.echo(f"Browser '{browser}' is not installed.")
+        typer.echo()
+        install = typer.confirm(f"Download and install {browser}? (~150MB, one-time)", default=True)
+        if install:
+            typer.echo(f"Installing {browser}...")
+            if not install_browser(browser):
+                typer.echo(
+                    f"Failed to install {browser}. Try manually: playwright install {browser}", err=True
+                )
+                raise typer.Exit(1)
+            typer.echo(f"  ✓ {browser.capitalize()} installed successfully!")
+            typer.echo()
+        else:
+            typer.echo(f"Run manually: playwright install {browser}")
+            raise typer.Exit(1)
 
     typer.echo("=" * 60)
     typer.echo("DEVICE TRAFFIC CAPTURE")
@@ -164,4 +184,14 @@ def capture(
         orig = result.stats["original_entries"]
         filt = result.stats["filtered_entries"]
         typer.echo(f"  Removed {removed} bloat entries ({orig} -> {filt})")
+    typer.echo()
+
+    # Show next steps
+    main_file = result.sanitized_path or result.compressed_path or result.har_path
+    typer.echo("Next steps:")
+    if result.sanitized_path:
+        typer.echo(f"  • Share the sanitized file (PII removed): {result.sanitized_path}")
+    else:
+        typer.echo(f"  • Sanitize before sharing: har-capture sanitize {main_file}")
+    typer.echo(f"  • Validate for secrets:    har-capture validate {main_file}")
     typer.echo()

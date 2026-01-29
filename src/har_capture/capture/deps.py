@@ -28,6 +28,51 @@ def check_playwright() -> bool:
         return False
 
 
+def check_browser_installed(browser: str = "chromium") -> bool:
+    """Check if Playwright browser is installed.
+
+    Args:
+        browser: Browser to check ("chromium", "firefox", "webkit")
+
+    Returns:
+        True if browser is installed and ready
+    """
+    if not check_playwright():
+        return False
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "--dry-run", browser],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # If dry-run says nothing to install, browser is installed
+        return "already installed" in result.stdout.lower() or result.returncode == 0
+    except Exception:
+        # Fall back to trying to launch - will fail fast if not installed
+        return True  # Assume installed, let launch fail with clear error
+
+
+def install_browser(browser: str = "chromium") -> bool:
+    """Install Playwright browser.
+
+    Args:
+        browser: Browser to install ("chromium", "firefox", "webkit")
+
+    Returns:
+        True if installation succeeded
+    """
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", browser],
+            check=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def install_playwright() -> bool:
     """Install Playwright and Chromium browser automatically.
 

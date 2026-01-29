@@ -12,7 +12,7 @@ Capture and sanitize [HAR (HTTP Archive)](http://www.softwareishard.com/blog/har
 
 ```bash
 pip install har-capture[full]
-har-capture capture --ip 192.168.100.1
+har-capture capture 192.168.100.1
 ```
 
 <details>

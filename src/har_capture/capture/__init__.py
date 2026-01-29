@@ -24,7 +24,9 @@ from har_capture.capture.connectivity import (
     check_device_connectivity,
 )
 from har_capture.capture.deps import (
+    check_browser_installed,
     check_playwright,
+    install_browser,
     install_browser_deps,
     install_playwright,
 )
@@ -40,6 +42,8 @@ __all__ = [
     "check_basic_auth",
     # Dependency management
     "check_playwright",
+    "check_browser_installed",
     "install_playwright",
+    "install_browser",
     "install_browser_deps",
 ]

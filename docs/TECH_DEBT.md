@@ -58,6 +58,11 @@ The pattern `if is_sensitive_field(key) and isinstance(value, str)` with conditi
 
 No unified error handling strategy.
 
+## UX Improvements
+
+### Platform-specific Quick Start tabs
+README Quick Start could use tabs (via GitHub's limited support or HTML details) to show platform-specific commands for Windows/macOS/Linux.
+
 ## Performance
 
 ### Repeated deep copies

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-01-29
+
+### Added
+
+- Auto-prompt to install browser on first capture (Y/n with default Yes)
+- "Next steps" guidance after capture completes
+- New functions: `check_browser_installed()`, `install_browser()`
+
+### Fixed
+
+- README Quick Start: `--ip` flag → positional argument
+
 ## [0.1.1] - 2026-01-29
 
 ### Fixed
