@@ -1,0 +1,70 @@
+{
+  "_comment": "Sensitive fields and headers to redact in HAR files",
+  "headers": {
+    "_comment": "HTTP headers that contain sensitive data (case-insensitive)",
+    "full_redact": [
+      "authorization",
+      "x-auth-token",
+      "x-api-key",
+      "x-session-id",
+      "x-csrf-token"
+    ],
+    "cookie_redact": [
+      "cookie",
+      "set-cookie"
+    ]
+  },
+  "fields": {
+    "_comment": "Form field name patterns that indicate sensitive data",
+    "patterns": [
+      "password",
+      "passwd",
+      "pwd",
+      "pass",
+      "secret",
+      "token",
+      "key",
+      "auth",
+      "credential",
+      "apikey",
+      "api_key"
+    ]
+  },
+  "tagValueList": {
+    "_comment": "Safe values in Netgear-style tagValueList (pipe-delimited) that should NOT be redacted",
+    "safe_values": [
+      "good",
+      "locked",
+      "not locked",
+      "atdma",
+      "unknown",
+      "operational",
+      "ok",
+      "none",
+      "&nbsp;",
+      "enabled",
+      "disabled",
+      "bpi+",
+      "qam256",
+      "qam64",
+      "qpsk",
+      "retail",
+      "ipv6 only",
+      "ipv6only",
+      "success",
+      "primary",
+      "backup primary",
+      "honor mdd",
+      "dhcpclient",
+      "fixed ip",
+      "enable",
+      "off",
+      "on",
+      "both",
+      "in progress",
+      "synchronized",
+      "not synchronized",
+      "done"
+    ]
+  }
+}

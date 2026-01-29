@@ -1,0 +1,311 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "har-capture"
+version = "0.1.0"
+description = "HAR capture and PII sanitization library for network traffic analysis"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Solent Labs", email = "dev@solentlabs.io" }
+]
+keywords = ["har", "http-archive", "sanitization", "pii", "capture", "playwright"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
+
+# Core has ZERO dependencies - only stdlib
+dependencies = []
+
+[project.optional-dependencies]
+capture = ["playwright>=1.40"]
+cli = ["typer>=0.12"]
+full = [
+    "playwright>=1.40",
+    "typer>=0.12",
+]
+dev = [
+    # Testing
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.5",      # Parallel test execution
+    "hypothesis>=6.100",       # Property-based testing
+    # Type checking
+    "mypy>=1.10",
+    # Linting & formatting
+    "ruff>=0.5.0",
+    # Pre-commit
+    "pre-commit>=3.7",
+    # Security
+    "pip-audit>=2.7",
+]
+
+[project.scripts]
+har-capture = "har_capture.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/solentlabs/har-capture"
+Documentation = "https://github.com/solentlabs/har-capture#readme"
+Repository = "https://github.com/solentlabs/har-capture"
+Issues = "https://github.com/solentlabs/har-capture/issues"
+Changelog = "https://github.com/solentlabs/har-capture/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/har_capture"]
+
+# =============================================================================
+# Ruff - Linting & Formatting
+# =============================================================================
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    # Core
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    # Quality
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "PTH",    # flake8-use-pathlib
+    "PL",     # pylint
+    "RUF",    # ruff-specific
+    # Documentation
+    "D",      # pydocstyle
+    # Security
+    "S",      # flake8-bandit (security)
+    # Type checking
+    "TCH",    # flake8-type-checking
+    "ANN",    # flake8-annotations
+    # Testing
+    "PT",     # flake8-pytest-style
+    # Complexity
+    "C90",    # mccabe complexity
+    # Return statements
+    "RET",    # flake8-return
+    # Error messages
+    "EM",     # flake8-errmsg
+    # Logging
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    # Miscellaneous
+    "PIE",    # flake8-pie
+    "T20",    # flake8-print (no print statements)
+    "RSE",    # flake8-raise
+    "SLF",    # flake8-self
+    "SLOT",   # flake8-slots
+    "TID",    # flake8-tidy-imports
+    "ICN",    # flake8-import-conventions
+    "PGH",    # pygrep-hooks
+    "FLY",    # flynt (f-string conversion)
+    "PERF",   # perflint
+    "FURB",   # refurb
+]
+
+ignore = [
+    # Line length handled by formatter
+    "E501",
+    # Function call in default argument (needed for typer)
+    "B008",
+    # Too many arguments/branches/statements - case by case
+    "PLR0913", "PLR0912", "PLR0915",
+    # Magic value comparison - too noisy
+    "PLR2004",
+    # Allow TODO comments
+    "FIX002",
+    # First line of docstring should be imperative - conflicts with Google style
+    "D401",
+    # Missing docstring in __init__ - we document in class docstring
+    "D107",
+    # Blank line before class docstring
+    "D203",
+    # Multi-line docstring summary on second line
+    "D213",
+    # Section underline - not using numpy style
+    "D407", "D408", "D409",
+    # Dynamically typed expressions - too strict for some patterns
+    "ANN401",
+    # Imports inside functions - intentional for optional dependencies
+    "PLC0415",
+    # Use Path.open() instead of open() - style preference
+    "PTH123",
+    # __all__ sorting - prefer logical grouping over alphabetical
+    "RUF022",
+    # Exception string literals - acceptable for simple messages
+    "EM101", "EM102",
+    # Unnecessary parentheses on raised exception - readability
+    "RSE102",
+    # Ternary operator - if/else often more readable
+    "SIM108",
+    # Unnecessary assignment before return - clearer for complex values
+    "RET504",
+    # Too many return statements - can be clearer than deep nesting
+    "PLR0911",
+    # Type checking imports - not worth the complexity
+    "TC002", "TC003",
+    # Complexity threshold - handled case by case
+    "C901",
+    # Iterable unpacking style - list concatenation is fine
+    "RUF005",
+    # startswith/endswith tuple - readability preference
+    "PIE810",
+    # List comprehension style - sometimes loops are clearer
+    "PERF401",
+    # set() comprehension vs generator - style preference
+    "C401",
+    # Nested if to and - readability preference
+    "SIM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can use assert, print, magic values, and don't need docstrings
+"tests/**/*.py" = [
+    "S101",    # assert is fine in tests
+    "S104",    # 0.0.0.0 is test data placeholder, not actual binding
+    "S105",    # hardcoded passwords are test fixtures
+    "D100", "D101", "D102", "D103", "D104",  # docstrings optional in tests
+    "PLR2004", # magic values ok in tests
+    "T20",     # print ok in tests
+    "ANN",     # type annotations optional in tests
+    "ARG",     # unused arguments ok in fixtures
+    "SLF001",  # private member access ok in tests
+    "RUF012",  # ClassVar not needed for test data
+]
+# CLI can use print
+"src/har_capture/cli/**/*.py" = ["T20"]
+# Allow print in __main__ for CLI entry
+"src/har_capture/__main__.py" = ["T20"]
+# Connectivity checks intentionally use URL open
+"src/har_capture/capture/connectivity.py" = ["S310"]
+# Browser capture uses dynamic imports and Path("")
+"src/har_capture/capture/browser.py" = ["PTH201"]
+# Deps uses subprocess for package installation (trusted commands)
+"src/har_capture/capture/deps.py" = ["S603", "S607"]
+# Validation uses subprocess for git commands and pickle detection
+"src/har_capture/validation/secrets.py" = ["S603", "S607", "S301"]
+# Hasher uses random for format-preserving hashes (not security)
+# S104 is false positive - 0.0.0.0 is a placeholder value, not bind address
+"src/har_capture/patterns/hasher.py" = ["S311", "S104"]
+# Loader executes dynamic patterns from JSON
+"src/har_capture/patterns/loader.py" = ["S608"]
+# HAR sanitization uses eval-like patterns detection
+"src/har_capture/sanitization/har.py" = ["S608"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["har_capture"]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.pylint]
+max-args = 8
+
+[tool.ruff.format]
+docstring-code-format = true
+docstring-code-line-length = 80
+
+# =============================================================================
+# Mypy - Type Checking
+# =============================================================================
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+
+# Per-module overrides for optional dependencies
+[[tool.mypy.overrides]]
+module = [
+    "playwright.*",
+    "typer.*",
+]
+ignore_missing_imports = true
+
+# =============================================================================
+# Pytest - Testing
+# =============================================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",  # Show extra test summary for all except passed
+    "--cov=har_capture",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-fail-under=60",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+filterwarnings = [
+    "error",  # Treat warnings as errors
+    "ignore::DeprecationWarning:hypothesis.*",
+]
+
+# =============================================================================
+# Coverage - Test Coverage
+# =============================================================================
+
+[tool.coverage.run]
+source = ["src/har_capture"]
+branch = true
+parallel = true
+
+[tool.coverage.paths]
+source = ["src/har_capture"]
+
+[tool.coverage.report]
+fail_under = 60
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@overload",
+    "raise NotImplementedError",
+    "assert_never",
+    "\\.\\.\\.",  # Ellipsis in type stubs
+]
+
+[tool.coverage.html]
+directory = "htmlcov"

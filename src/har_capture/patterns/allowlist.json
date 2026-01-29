@@ -1,0 +1,55 @@
+{
+  "_comment": "Values recognized as already-redacted (not flagged as PII)",
+
+  "static_placeholders": {
+    "_comment": "Exact values produced when salt=None",
+    "values": [
+      "XX:XX:XX:XX:XX:XX",
+      "0.0.0.0",
+      "::",
+      "x@x.invalid",
+      "[REDACTED]"
+    ]
+  },
+
+  "format_preserving_patterns": {
+    "_comment": "Regex patterns for format-preserving hashes (RFC-reserved ranges)",
+    "mac": {
+      "pattern": "^02:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$",
+      "description": "Locally administered MAC (02:xx:xx:xx:xx:xx)"
+    },
+    "private_ip": {
+      "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
+      "description": "Redacted private IP (10.255.x.x)"
+    },
+    "public_ip": {
+      "pattern": "^192\\.0\\.2\\.\\d{1,3}$",
+      "description": "TEST-NET-1 documentation range (RFC 5737)"
+    },
+    "ipv6": {
+      "pattern": "^2001:db8::",
+      "description": "IPv6 documentation prefix (RFC 3849)"
+    },
+    "email": {
+      "pattern": "@redacted\\.invalid$",
+      "description": "Reserved .invalid TLD (RFC 2606)"
+    }
+  },
+
+  "hash_prefixes": {
+    "_comment": "Prefixes for non-format-preserving hashes (PREFIX_xxxxxxxx)",
+    "values": [
+      "SERIAL_",
+      "ACCOUNT_",
+      "PASS_",
+      "TOKEN_",
+      "CSRF_",
+      "CONFIG_",
+      "WIFI_",
+      "DEVICE_",
+      "FIELD_",
+      "AUTH_",
+      "COOKIE_"
+    ]
+  }
+}

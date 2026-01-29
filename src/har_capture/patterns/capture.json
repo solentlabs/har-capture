@@ -1,0 +1,10 @@
+{
+  "_comment": "Capture settings for HAR filtering and compression",
+  "bloat_extensions": {
+    "_comment": "File extensions to filter out during capture (reduces HAR size)",
+    "fonts": [".woff", ".woff2", ".ttf", ".otf", ".eot"],
+    "images": [".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp"],
+    "media": [".mp3", ".mp4", ".wav", ".webm", ".ogg", ".avi", ".mov"],
+    "sourcemaps": [".map"]
+  }
+}
