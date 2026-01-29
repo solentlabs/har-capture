@@ -1,12 +1,43 @@
 # har-capture
 
 [![PyPI version](https://badge.fury.io/py/har-capture.svg)](https://pypi.org/project/har-capture/)
-[![Downloads](https://pepy.tech/badge/har-capture)](https://pepy.tech/project/har-capture)
+[![Downloads](https://img.shields.io/pypi/dm/har-capture)](https://pypi.org/project/har-capture/)
 [![codecov](https://codecov.io/gh/solentlabs/har-capture/branch/main/graph/badge.svg)](https://codecov.io/gh/solentlabs/har-capture)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![AI Assisted](https://img.shields.io/badge/AI-Claude%20Assisted-5A67D8.svg)](https://claude.ai)
 
 Capture and sanitize [HAR (HTTP Archive)](http://www.softwareishard.com/blog/har-12-spec/) files for network traffic analysis. HAR files record browser network activity and are commonly used for debugging, diagnostics, and test fixtures.
+
+## Quick Start
+
+```bash
+pip install har-capture[full]
+har-capture capture --ip 192.168.100.1
+```
+
+<details>
+<summary><b>Already have a HAR file?</b></summary>
+
+```bash
+pip install har-capture
+har-capture sanitize myfile.har
+```
+</details>
+
+<details>
+<summary><b>Python API</b></summary>
+
+```python
+from har_capture.sanitization import sanitize_har
+
+with open("input.har") as f:
+    har_data = json.load(f)
+
+sanitized = sanitize_har(har_data)
+```
+</details>
+
+---
 
 ## Why har-capture?
 
