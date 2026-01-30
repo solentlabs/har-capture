@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from har_capture.capture.browser import CaptureOptions
+from har_capture.capture.browser import CaptureOptions, capture_device_har
 from har_capture.capture.deps import check_playwright
 from har_capture.patterns import get_bloat_extensions
 from har_capture.validation.secrets import is_private_ip
@@ -242,3 +245,209 @@ class TestPrivateIpDetection:
         """Test invalid IPs return False."""
         result = is_private_ip(ip)
         assert result is False, f"{desc}: invalid IP '{ip}' should return False"
+
+
+class TestCaptureDeviceHar:
+    """Tests for capture_device_har function parameters."""
+
+    @pytest.fixture
+    def mock_playwright(self) -> MagicMock:
+        """Create a mock Playwright instance with all necessary components."""
+        mock_pw = MagicMock()
+        mock_browser = MagicMock()
+        mock_context = MagicMock()
+        mock_page = MagicMock()
+
+        # Chain the mocks
+        mock_pw.chromium.launch.return_value = mock_browser
+        mock_pw.firefox.launch.return_value = mock_browser
+        mock_pw.webkit.launch.return_value = mock_browser
+        mock_browser.new_context.return_value = mock_context
+        mock_context.new_page.return_value = mock_page
+
+        return mock_pw
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_headless_parameter_passed_to_browser(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test headless parameter is passed to browser launch."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+
+        # Test with headless=True
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_playwright.chromium.launch.assert_called_once_with(headless=True)
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_headless_false_parameter(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test headless=False is passed correctly."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=False,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_playwright.chromium.launch.assert_called_once_with(headless=False)
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    @patch("time.sleep")
+    def test_timeout_triggers_sleep(
+        self,
+        mock_sleep: MagicMock,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test timeout parameter triggers time.sleep instead of wait_for_event."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+        mock_page = (
+            mock_playwright.chromium.launch.return_value.new_context.return_value.new_page.return_value
+        )
+
+        output = tmp_path / "test.har"
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=5,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Should call time.sleep with the timeout value
+        mock_sleep.assert_called_once_with(5)
+        # Should NOT call wait_for_event when timeout is set
+        mock_page.wait_for_event.assert_not_called()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_no_timeout_waits_for_close(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test timeout=None waits for browser close event."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+        mock_page = (
+            mock_playwright.chromium.launch.return_value.new_context.return_value.new_page.return_value
+        )
+
+        output = tmp_path / "test.har"
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=None,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Should call wait_for_event when timeout is None
+        mock_page.wait_for_event.assert_called_once_with("close", timeout=0)
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_firefox_browser_selection(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test firefox browser is selected correctly."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            browser="firefox",
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_playwright.firefox.launch.assert_called_once_with(headless=True)
+        mock_playwright.chromium.launch.assert_not_called()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_webkit_browser_selection(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_playwright: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test webkit browser is selected correctly."""
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            browser="webkit",
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_playwright.webkit.launch.assert_called_once_with(headless=True)
+        mock_playwright.chromium.launch.assert_not_called()
