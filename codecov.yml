@@ -2,6 +2,8 @@
 # https://docs.codecov.com/docs/codecov-yaml
 
 coverage:
+  # Badge color thresholds: 60% = red, 90% = green
+  range: "60...90"
   status:
     project:
       default:
@@ -14,6 +16,6 @@ coverage:
         informational: true  # Won't block PRs
 
 comment:
-  layout: "reach,diff,flags,files"
+  layout: "reach,diff,files"
   behavior: default
   require_changes: true  # Only comment when coverage changes

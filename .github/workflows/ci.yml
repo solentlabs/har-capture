@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # Fast unit tests (no browser)
+  # Fast unit tests + lint (no browser required)
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -30,19 +30,11 @@ jobs:
       - name: Lint with ruff
         run: ruff check .
 
-      - name: Run unit tests with coverage
-        run: pytest -m "not integration" --cov=har_capture --cov-report=xml
+      - name: Run unit tests
+        run: pytest -m "not integration" --cov=har_capture --cov-report=term-missing
 
-      - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage.xml
-          fail_ci_if_error: false
-
-  # Integration tests with Playwright (slower)
-  integration:
+  # Full test suite with Playwright - uploads combined coverage
+  coverage:
     runs-on: ubuntu-latest
     needs: test  # Only run if unit tests pass
 
@@ -62,13 +54,15 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps
 
-      - name: Run integration tests
-        run: pytest -m "integration" --cov=har_capture --cov-report=xml --cov-fail-under=0 -v
+      - name: Run unit tests with coverage
+        run: pytest -m "not integration" --cov=har_capture --cov-report=
 
-      - name: Upload integration coverage to Codecov
+      - name: Run integration tests with coverage (append)
+        run: pytest -m "integration" --cov=har_capture --cov-append --cov-report=xml -v
+
+      - name: Upload combined coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.xml
-          flags: integration
           fail_ci_if_error: false
