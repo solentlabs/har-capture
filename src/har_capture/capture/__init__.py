@@ -9,6 +9,8 @@ Exports:
     - CaptureOptions: Options for filtering (fonts, images, media)
     - check_playwright: Check if Playwright is available
     - install_playwright: Install Playwright and browser
+    - CaptureWorkflowResult: Result dataclass from workflow
+    - run_capture_workflow: Run the complete capture workflow
 """
 
 from __future__ import annotations
@@ -30,6 +32,18 @@ from har_capture.capture.deps import (
     install_browser_deps,
     install_playwright,
 )
+from har_capture.capture.workflow import (
+    AuthResult,
+    BrowserCheckResult,
+    CaptureWorkflowResult,
+    ConnectivityResult,
+    check_auth_phase,
+    check_browser_phase,
+    check_connectivity_phase,
+    run_capture_phase,
+    run_capture_workflow,
+)
+from har_capture.capture.workflow import CaptureResult as WorkflowCaptureResult
 
 __all__ = [
     # Core capture
@@ -46,4 +60,15 @@ __all__ = [
     "install_playwright",
     "install_browser",
     "install_browser_deps",
+    # Workflow orchestration
+    "CaptureWorkflowResult",
+    "BrowserCheckResult",
+    "ConnectivityResult",
+    "AuthResult",
+    "WorkflowCaptureResult",
+    "check_browser_phase",
+    "check_connectivity_phase",
+    "check_auth_phase",
+    "run_capture_phase",
+    "run_capture_workflow",
 ]

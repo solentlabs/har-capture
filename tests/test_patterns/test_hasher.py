@@ -213,6 +213,18 @@ def test_hash_ipv6_format() -> None:
     assert all(len(p) == 4 for p in parts)
 
 
+def test_hash_ipv6_caching() -> None:
+    """Test hash_ipv6() returns cached results for repeated calls."""
+    hasher = Hasher.create(salt="cache-test")
+
+    # Call twice with same value - second should hit cache
+    result1 = hasher.hash_ipv6("2001:db8::1")
+    result2 = hasher.hash_ipv6("2001:db8::1")
+
+    # Both should be identical (from cache)
+    assert result1 == result2
+
+
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ hash_email() test cases                                                     │
 # ├─────────────────────────────────────┬───────────────────────────────────────┤

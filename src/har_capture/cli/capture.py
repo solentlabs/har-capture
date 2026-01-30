@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
+
+if TYPE_CHECKING:
+    from har_capture.capture.workflow import CaptureWorkflowResult
 
 
 def capture(
@@ -81,19 +84,24 @@ def capture(
         har-capture get router.local --include-images
     """
     try:
-        from har_capture.capture import capture_device_har, check_basic_auth, check_device_connectivity
-        from har_capture.capture.deps import check_browser_installed, install_browser
+        from har_capture.capture.deps import install_browser
+        from har_capture.capture.workflow import (
+            check_auth_phase,
+            check_browser_phase,
+            check_connectivity_phase,
+            run_capture_phase,
+        )
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
         raise typer.Exit(1) from None
 
-    # Check if browser is installed
-    if not check_browser_installed(browser):
+    # Phase 1: Check browser installation
+    result = check_browser_phase(browser)
+    if result.needs_browser_install:
         typer.echo()
         typer.echo(f"Browser '{browser}' is not installed.")
         typer.echo()
-        install = typer.confirm(f"Download and install {browser}? (~150MB, one-time)", default=True)
-        if install:
+        if typer.confirm(f"Download and install {browser}? (~150MB, one-time)", default=True):
             typer.echo(f"Installing {browser}...")
             if not install_browser(browser):
                 typer.echo(
@@ -106,6 +114,52 @@ def capture(
             typer.echo(f"Run manually: playwright install {browser}")
             raise typer.Exit(1)
 
+    # Display header
+    _display_header(target, browser, output)
+
+    # Phase 2: Check connectivity
+    typer.echo("Checking connectivity...")
+    result = check_connectivity_phase(target, result)
+    if not result.connectivity_ok:
+        typer.echo(f"  ERROR: {result.connectivity_error}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"  Connected:  {result.target_url}")
+
+    # Phase 3: Check authentication
+    typer.echo()
+    typer.echo("Checking authentication type...")
+    result = check_auth_phase(result.target_url, result)
+
+    http_credentials = _handle_auth(result, username, password)
+
+    # Display instructions
+    _display_instructions()
+
+    # Phase 4: Run capture
+    result = run_capture_phase(
+        target=target,
+        output=output,
+        browser=browser,
+        http_credentials=http_credentials,
+        sanitize=not no_sanitize,
+        compress=not no_compress,
+        keep_raw=keep_raw,
+        include_fonts=include_fonts,
+        include_images=include_images,
+        include_media=include_media,
+        result=result,
+    )
+
+    if not result.capture_success:
+        typer.echo(f"Capture failed: {result.capture_error}", err=True)
+        raise typer.Exit(1)
+
+    # Display results
+    _display_results(result)
+
+
+def _display_header(target: str, browser: str, output: Path | None) -> None:
+    """Display capture header."""
     typer.echo("=" * 60)
     typer.echo("HAR CAPTURE")
     typer.echo("=" * 60)
@@ -116,40 +170,33 @@ def capture(
         typer.echo(f"  Output:     {output}")
     typer.echo()
 
-    # Check connectivity
-    typer.echo("Checking connectivity...")
-    reachable, scheme, error = check_device_connectivity(target)
 
-    if not reachable:
-        typer.echo(f"  ERROR: {error}", err=True)
-        raise typer.Exit(1)
-
-    target_url = f"{scheme}://{target}/"
-    typer.echo(f"  Connected:  {target_url}")
-
-    # Check for Basic Auth
-    http_credentials = None
-    typer.echo()
-    typer.echo("Checking authentication type...")
-    requires_basic, realm = check_basic_auth(target_url)
-
-    if requires_basic:
-        typer.echo(f"  Detected: HTTP Basic Auth{f' ({realm})' if realm else ''}")
+def _handle_auth(
+    result: CaptureWorkflowResult,
+    username: str | None,
+    password: str | None,
+) -> dict[str, str] | None:
+    """Handle authentication based on workflow result."""
+    if result.requires_basic_auth:
+        realm_msg = f" ({result.auth_realm})" if result.auth_realm else ""
+        typer.echo(f"  Detected: HTTP Basic Auth{realm_msg}")
         if username is not None and password is not None:
-            http_credentials = {"username": username, "password": password}
+            return {"username": username, "password": password}
+        typer.echo()
+        if result.auth_realm:
+            typer.echo(f"This site ({result.auth_realm}) requires HTTP Basic Authentication.")
         else:
-            typer.echo()
-            if realm:
-                typer.echo(f"This site ({realm}) requires HTTP Basic Authentication.")
-            else:
-                typer.echo("This site requires HTTP Basic Authentication.")
-            typer.echo()
-            prompted_user = typer.prompt("Username", default="admin")
-            prompted_pass = typer.prompt("Password", hide_input=True)
-            http_credentials = {"username": prompted_user, "password": prompted_pass or ""}
-    else:
-        typer.echo("  Detected: Form-based or no auth required")
+            typer.echo("This site requires HTTP Basic Authentication.")
+        typer.echo()
+        prompted_user = typer.prompt("Username", default="admin")
+        prompted_pass = typer.prompt("Password", hide_input=True)
+        return {"username": prompted_user, "password": prompted_pass or ""}
+    typer.echo("  Detected: Form-based or no auth required")
+    return None
 
+
+def _display_instructions() -> None:
+    """Display capture instructions."""
     typer.echo()
     typer.echo("Instructions:")
     typer.echo("  1. Interact with the site when the browser opens")
@@ -158,23 +205,9 @@ def capture(
     typer.echo("  4. Close the browser window when done")
     typer.echo()
 
-    result = capture_device_har(
-        ip=target,
-        output=output,
-        browser=browser,
-        http_credentials=http_credentials,
-        sanitize=not no_sanitize,
-        compress=not no_compress,
-        keep_raw=keep_raw,
-        include_fonts=include_fonts,
-        include_images=include_images,
-        include_media=include_media,
-    )
 
-    if not result.success:
-        typer.echo(f"Capture failed: {result.error}", err=True)
-        raise typer.Exit(1)
-
+def _display_results(result: CaptureWorkflowResult) -> None:
+    """Display capture results."""
     typer.echo()
     typer.echo("=" * 60)
     typer.echo("CAPTURE COMPLETE")
@@ -187,9 +220,9 @@ def capture(
     if result.sanitized_path:
         typer.echo(f"  Sanitized: {result.sanitized_path}")
     if result.stats:
-        removed = result.stats["removed_entries"]
-        orig = result.stats["original_entries"]
-        filt = result.stats["filtered_entries"]
+        removed = result.stats.get("removed_entries", 0)
+        orig = result.stats.get("original_entries", 0)
+        filt = result.stats.get("filtered_entries", 0)
         typer.echo(f"  Removed {removed} bloat entries ({orig} -> {filt})")
     typer.echo()
 
