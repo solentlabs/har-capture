@@ -1,4 +1,4 @@
-"""Capture command for har-capture CLI."""
+"""Capture command for har-capture CLI - captures HTTP traffic to HAR files."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import typer
 
 
 def capture(
-    ip: Annotated[
+    target: Annotated[
         str,
-        typer.Argument(help="Device IP address or hostname"),
+        typer.Argument(help="URL, hostname, or IP address to capture"),
     ],
     output: Annotated[
         Path | None,
@@ -37,6 +37,10 @@ def capture(
         bool,
         typer.Option("--no-compress", help="Skip compression"),
     ] = False,
+    keep_raw: Annotated[
+        bool,
+        typer.Option("--keep-raw", help="Keep the raw (unsanitized) HAR file"),
+    ] = False,
     include_fonts: Annotated[
         bool,
         typer.Option("--include-fonts", help="Include font files in capture (.woff, .ttf, etc.)"),
@@ -50,30 +54,31 @@ def capture(
         typer.Option("--include-media", help="Include media files in capture (.mp3, .mp4, etc.)"),
     ] = False,
 ) -> None:
-    """Capture device traffic using Playwright browser.
+    """Capture HTTP traffic using Playwright browser.
 
-    Opens a browser window where you can interact with your device.
-    Network traffic is recorded to a HAR file.
+    Opens a browser window where you can interact with a website or device.
+    All HTTP traffic is recorded to a HAR file.
 
     By default, font/image/media files are filtered out to reduce HAR size.
     Use --include-fonts, --include-images, or --include-media to keep them.
 
     Args:
-        ip: Device IP address to capture traffic from
+        target: URL, hostname, or IP address to capture
         output: Output HAR filename (auto-generated if not provided)
         browser: Browser engine to use (chromium, firefox, webkit)
         username: Username for HTTP Basic Auth if required
         password: Password for HTTP Basic Auth if required
         no_sanitize: Skip automatic PII sanitization
         no_compress: Skip HAR compression
+        keep_raw: Keep the raw (unsanitized) HAR file
         include_fonts: Include font files in capture
         include_images: Include image files in capture
         include_media: Include media files in capture
 
     Example:
-        har-capture capture router.local
-        har-capture capture 10.0.0.1 --output device.har
-        har-capture capture mydevice.local --include-images
+        har-capture get https://example.com
+        har-capture get 192.168.100.1 --output capture.har
+        har-capture get router.local --include-images
     """
     try:
         from har_capture.capture import capture_device_har, check_basic_auth, check_device_connectivity
@@ -102,31 +107,31 @@ def capture(
             raise typer.Exit(1)
 
     typer.echo("=" * 60)
-    typer.echo("DEVICE TRAFFIC CAPTURE")
+    typer.echo("HAR CAPTURE")
     typer.echo("=" * 60)
     typer.echo()
-    typer.echo(f"  Device IP:  {ip}")
+    typer.echo(f"  Target:     {target}")
     typer.echo(f"  Browser:    {browser}")
     if output:
         typer.echo(f"  Output:     {output}")
     typer.echo()
 
     # Check connectivity
-    typer.echo("Checking device connectivity...")
-    reachable, scheme, error = check_device_connectivity(ip)
+    typer.echo("Checking connectivity...")
+    reachable, scheme, error = check_device_connectivity(target)
 
     if not reachable:
         typer.echo(f"  ERROR: {error}", err=True)
         raise typer.Exit(1)
 
-    device_url = f"{scheme}://{ip}/"
-    typer.echo(f"  Connected:  {device_url}")
+    target_url = f"{scheme}://{target}/"
+    typer.echo(f"  Connected:  {target_url}")
 
     # Check for Basic Auth
     http_credentials = None
     typer.echo()
     typer.echo("Checking authentication type...")
-    requires_basic, realm = check_basic_auth(device_url)
+    requires_basic, realm = check_basic_auth(target_url)
 
     if requires_basic:
         typer.echo(f"  Detected: HTTP Basic Auth{f' ({realm})' if realm else ''}")
@@ -135,9 +140,9 @@ def capture(
         else:
             typer.echo()
             if realm:
-                typer.echo(f"This device ({realm}) requires HTTP Basic Authentication.")
+                typer.echo(f"This site ({realm}) requires HTTP Basic Authentication.")
             else:
-                typer.echo("This device requires HTTP Basic Authentication.")
+                typer.echo("This site requires HTTP Basic Authentication.")
             typer.echo()
             username = typer.prompt("Username", default="admin")
             password = typer.prompt("Password", hide_input=True)
@@ -147,19 +152,20 @@ def capture(
 
     typer.echo()
     typer.echo("Instructions:")
-    typer.echo("  1. Log into your device when the browser opens")
-    typer.echo("  2. Visit ALL pages to capture complete API data")
+    typer.echo("  1. Interact with the site when the browser opens")
+    typer.echo("  2. Visit all pages you want to capture")
     typer.echo("  3. IMPORTANT: Wait 3-5 seconds on each page for data to load!")
     typer.echo("  4. Close the browser window when done")
     typer.echo()
 
     result = capture_device_har(
-        ip=ip,
+        ip=target,
         output=output,
         browser=browser,
         http_credentials=http_credentials,
         sanitize=not no_sanitize,
         compress=not no_compress,
+        keep_raw=keep_raw,
         include_fonts=include_fonts,
         include_images=include_images,
         include_media=include_media,
@@ -174,7 +180,8 @@ def capture(
     typer.echo("CAPTURE COMPLETE")
     typer.echo("=" * 60)
     typer.echo()
-    typer.echo(f"  Raw HAR: {result.har_path}")
+    if result.har_path:
+        typer.echo(f"  Raw HAR: {result.har_path}")
     if result.compressed_path:
         typer.echo(f"  Compressed: {result.compressed_path}")
     if result.sanitized_path:

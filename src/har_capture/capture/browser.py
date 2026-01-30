@@ -58,7 +58,7 @@ class CaptureResult:
     """Result of a HAR capture operation.
 
     Attributes:
-        har_path: Path to the captured HAR file
+        har_path: Path to the raw HAR file (None if deleted after sanitization)
         compressed_path: Path to compressed .har.gz file if created
         sanitized_path: Path to sanitized HAR file if created
         stats: Dict with capture statistics (entry counts, sizes)
@@ -66,7 +66,7 @@ class CaptureResult:
         error: Error message if capture failed
     """
 
-    har_path: Path
+    har_path: Path | None = None
     compressed_path: Path | None = None
     sanitized_path: Path | None = None
     stats: dict[str, Any] | None = None
@@ -200,23 +200,25 @@ def capture_device_har(
     http_credentials: dict[str, str] | None = None,
     sanitize: bool = True,
     compress: bool = True,
+    keep_raw: bool = False,
     include_fonts: bool = False,
     include_images: bool = False,
     include_media: bool = False,
 ) -> CaptureResult:
-    """Capture device traffic using Playwright browser.
+    """Capture HTTP traffic using Playwright browser.
 
     This function launches a browser window and records all network traffic
-    while the user interacts with their device. The user logs in manually -
+    while the user interacts with the target. The user logs in manually -
     the browser handles authentication regardless of the method used.
 
     Args:
-        ip: Device IP address or hostname (e.g., "router.local", "10.0.0.1")
+        ip: Target URL, hostname, or IP address (e.g., "example.com", "10.0.0.1")
         output: Output HAR filename (default: capture_<timestamp>.har)
         browser: Browser to use ("chromium", "firefox", "webkit")
         http_credentials: Optional dict with "username" and "password" for HTTP Basic Auth
         sanitize: Whether to sanitize the HAR after capture
         compress: Whether to compress the HAR after capture
+        keep_raw: If True, keep the raw (unsanitized) HAR file
         include_fonts: If True, don't filter font files (.woff, .ttf, etc.)
         include_images: If True, don't filter image files (.png, .jpg, etc.)
         include_media: If True, don't filter media files (.mp3, .mp4, etc.)
@@ -369,6 +371,14 @@ def capture_device_har(
 
             sanitized_path = sanitize_har_file(str(output_path))
             result.sanitized_path = Path(sanitized_path)
+
+            # Delete raw file unless keep_raw is set
+            if not keep_raw and result.sanitized_path and result.sanitized_path.exists():
+                try:
+                    output_path.unlink()
+                    result.har_path = None  # type: ignore[assignment]
+                except Exception as e:
+                    _LOGGER.warning("Failed to delete raw HAR: %s", e)
         except Exception as e:
             _LOGGER.warning("Sanitization failed: %s", e)
 

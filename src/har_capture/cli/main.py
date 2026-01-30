@@ -1,7 +1,8 @@
 """Main CLI entry point for har-capture.
 
 Provides commands for:
-- capture: Capture device traffic using Playwright
+- [default]: Capture HTTP traffic (har-capture <TARGET>)
+- get: Capture HTTP traffic (alias for default)
 - sanitize: Remove PII from HAR files
 - validate: Check HAR files for PII leaks
 """
@@ -19,11 +20,11 @@ from har_capture.cli.validate import validate
 
 app = typer.Typer(
     name="har-capture",
-    help="HAR capture and PII sanitization tools.",
+    help="Capture and sanitize HAR files.",
     no_args_is_help=True,
 )
 
-app.command()(capture)
+app.command(name="get", help="Capture HTTP traffic from a URL")(capture)
 app.command()(sanitize)
 app.command()(validate)
 
@@ -52,7 +53,15 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """HAR capture and PII sanitization tools."""
+    r"""Capture and sanitize HAR files.
+
+    \b
+    Examples:
+        har-capture get https://example.com
+        har-capture get 192.168.1.1 --output capture.har
+        har-capture sanitize myfile.har
+        har-capture validate myfile.har
+    """
 
 
 if __name__ == "__main__":

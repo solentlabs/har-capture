@@ -1,11 +1,5 @@
 # Security Policy
 
-<!--
-MAINTAINER TODO: Enable private vulnerability reporting
-Settings → Code security and analysis → Private vulnerability reporting → Enable
-Delete this comment once enabled.
--->
-
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in har-capture, please report it privately using GitHub's security advisory feature:
