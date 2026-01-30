@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from har_capture.capture.browser import CaptureOptions, capture_device_har
+from har_capture.capture.connectivity import _parse_target
 from har_capture.capture.deps import check_playwright
 from har_capture.patterns import get_bloat_extensions
 from har_capture.validation.secrets import is_private_ip
@@ -100,6 +101,36 @@ BLOAT_MEDIA_EXTENSIONS = [
 
 BLOAT_OTHER_EXTENSIONS = [
     (".map",    "sourcemap"),
+]
+# fmt: on
+
+# ┌───────────────────────────────┬─────────────────────┬─────────┬──────────────────────┐
+# │ target_input                  │ expected_host       │ scheme  │ description          │
+# ├───────────────────────────────┼─────────────────────┼─────────┼──────────────────────┤
+# │ URL or hostname to parse      │ extracted hostname  │ scheme  │ test case name       │
+# └───────────────────────────────┴─────────────────────┴─────────┴──────────────────────┘
+#
+# fmt: off
+PARSE_TARGET_CASES = [
+    # Full URLs with scheme
+    ("https://example.com",             "example.com",       "https",  "https_url"),
+    ("http://example.com",              "example.com",       "http",   "http_url"),
+    ("https://example.com/",            "example.com",       "https",  "https_trailing_slash"),
+    ("https://example.com/path/page",   "example.com",       "https",  "https_with_path"),
+    ("http://example.com:8080",         "example.com:8080",  "http",   "http_with_port"),
+    ("https://192.168.1.1:8443",        "192.168.1.1:8443",  "https",  "https_ip_with_port"),
+    # Hostnames without scheme
+    ("example.com",                     "example.com",       None,     "hostname_only"),
+    ("sub.example.com",                 "sub.example.com",   None,     "subdomain"),
+    ("router.local",                    "router.local",      None,     "local_hostname"),
+    # IP addresses without scheme
+    ("192.168.1.1",                     "192.168.1.1",       None,     "ipv4_address"),
+    ("192.168.1.1:8080",                "192.168.1.1:8080",  None,     "ipv4_with_port"),
+    ("10.0.0.1",                        "10.0.0.1",          None,     "private_ip"),
+    # Edge cases
+    ("HTTPS://EXAMPLE.COM",             "EXAMPLE.COM",       "https",  "uppercase_scheme"),
+    ("http://localhost",                "localhost",         "http",   "localhost"),
+    ("http://127.0.0.1",                "127.0.0.1",         "http",   "loopback_ip"),
 ]
 # fmt: on
 
@@ -245,6 +276,23 @@ class TestPrivateIpDetection:
         """Test invalid IPs return False."""
         result = is_private_ip(ip)
         assert result is False, f"{desc}: invalid IP '{ip}' should return False"
+
+
+class TestParseTarget:
+    """Tests for target URL parsing."""
+
+    @pytest.mark.parametrize(
+        ("target", "expected_host", "expected_scheme", "desc"),
+        PARSE_TARGET_CASES,
+        ids=[c[3] for c in PARSE_TARGET_CASES],
+    )
+    def test_parse_target(
+        self, target: str, expected_host: str, expected_scheme: str | None, desc: str
+    ) -> None:
+        """Test URL/hostname parsing extracts host and scheme correctly."""
+        host, scheme = _parse_target(target)
+        assert host == expected_host, f"{desc}: expected host '{expected_host}', got '{host}'"
+        assert scheme == expected_scheme, f"{desc}: expected scheme '{expected_scheme}', got '{scheme}'"
 
 
 class TestCaptureDeviceHar:
