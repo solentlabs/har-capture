@@ -295,8 +295,16 @@ class TestParseTarget:
         assert scheme == expected_scheme, f"{desc}: expected scheme '{expected_scheme}', got '{scheme}'"
 
 
+# Skip this class if Playwright isn't installed (unit tests don't require it)
+playwright = pytest.importorskip("playwright", reason="Playwright not installed")
+
+
 class TestCaptureDeviceHar:
-    """Tests for capture_device_har function parameters."""
+    """Tests for capture_device_har function parameters.
+
+    These tests mock Playwright to test the capture_device_har parameters
+    without requiring actual browser automation.
+    """
 
     @pytest.fixture
     def mock_playwright(self) -> MagicMock:
