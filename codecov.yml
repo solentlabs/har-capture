@@ -1,0 +1,19 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    project:
+      default:
+        # Overall project coverage target
+        target: auto  # Use coverage from base commit
+        threshold: 5%  # Allow 5% drop
+    patch:
+      default:
+        # New code coverage - informational only for new projects
+        informational: true  # Won't block PRs
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true  # Only comment when coverage changes
