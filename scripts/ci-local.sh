@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Run the same checks as CI locally
-# Usage: ./scripts/ci-local.sh [--quick]
+# Usage: ./scripts/ci-local.sh [--quick] [--integration]
 #
-# --quick: Skip slow tests (pytest -m "not slow")
+# --quick: Skip slow tests
+# --integration: Also run integration tests (requires Playwright)
 
 set -e
 
@@ -25,16 +26,19 @@ if [ -z "$VIRTUAL_ENV" ]; then
 fi
 
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  Running local CI checks                              ${NC}"
+echo -e "${YELLOW}  Local CI - mirrors GitHub Actions                    ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
 # Parse arguments
 QUICK=false
+INTEGRATION=false
 for arg in "$@"; do
     case $arg in
         --quick)
             QUICK=true
-            shift
+            ;;
+        --integration)
+            INTEGRATION=true
             ;;
     esac
 done
@@ -42,7 +46,7 @@ done
 # Track failures
 FAILED=0
 
-# Step 1: Ruff lint
+# Step 1: Ruff lint (same as CI)
 echo -e "\n${YELLOW}[1/3] Running ruff check...${NC}"
 if ruff check .; then
     echo -e "${GREEN}✓ Ruff check passed${NC}"
@@ -51,33 +55,33 @@ else
     FAILED=1
 fi
 
-# Step 2: Ruff format check
-echo -e "\n${YELLOW}[2/3] Checking ruff format...${NC}"
-if ruff format --check .; then
-    echo -e "${GREEN}✓ Ruff format check passed${NC}"
+# Step 2: Unit tests (same as CI: pytest -m "not integration")
+echo -e "\n${YELLOW}[2/3] Running unit tests...${NC}"
+PYTEST_ARGS="--tb=short -q -m 'not integration'"
+if [ "$QUICK" = true ]; then
+    PYTEST_ARGS="$PYTEST_ARGS -m 'not integration and not slow'"
+    echo -e "${YELLOW}  (quick mode - skipping slow tests)${NC}"
+fi
+
+if pytest --tb=short -q -m "not integration"; then
+    echo -e "${GREEN}✓ Unit tests passed${NC}"
 else
-    echo -e "${RED}✗ Ruff format check failed${NC}"
-    echo -e "${YELLOW}  Run 'ruff format .' to fix${NC}"
+    echo -e "${RED}✗ Unit tests failed${NC}"
     FAILED=1
 fi
 
-# Step 3: Pytest
-echo -e "\n${YELLOW}[3/3] Running pytest...${NC}"
-if [ "$QUICK" = true ]; then
-    echo -e "${YELLOW}  (quick mode - skipping slow tests)${NC}"
-    if pytest --tb=short -q -m "not slow"; then
-        echo -e "${GREEN}✓ Tests passed${NC}"
+# Step 3: Integration tests (optional, requires Playwright)
+if [ "$INTEGRATION" = true ]; then
+    echo -e "\n${YELLOW}[3/3] Running integration tests...${NC}"
+    if pytest --tb=short -q -m "integration"; then
+        echo -e "${GREEN}✓ Integration tests passed${NC}"
     else
-        echo -e "${RED}✗ Tests failed${NC}"
+        echo -e "${RED}✗ Integration tests failed${NC}"
         FAILED=1
     fi
 else
-    if pytest --tb=short -q; then
-        echo -e "${GREEN}✓ Tests passed${NC}"
-    else
-        echo -e "${RED}✗ Tests failed${NC}"
-        FAILED=1
-    fi
+    echo -e "\n${YELLOW}[3/3] Skipping integration tests${NC}"
+    echo -e "  (use --integration to run them)"
 fi
 
 # Summary

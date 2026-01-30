@@ -77,14 +77,14 @@ repos:
         stages: [commit-msg]
 
   # ==========================================================================
-  # Pre-push: Full test suite
+  # Pre-push: Run full CI checks (mirrors GitHub Actions)
   # ==========================================================================
   - repo: local
     hooks:
-      - id: pytest
-        name: pytest
-        entry: pytest --tb=short -q
-        language: system
+      - id: ci-local
+        name: ci-local
+        entry: ./scripts/ci-local.sh
+        language: script
         pass_filenames: false
         always_run: true
         stages: [pre-push]

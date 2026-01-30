@@ -74,22 +74,22 @@ har-capture get <TARGET>     # Capture + sanitize in one step
 ### Comparison with Existing Tools
 
 | Feature | har-capture | [DevTools](https://developer.chrome.com/docs/devtools/network/reference) | [Google](https://github.com/google/har-sanitizer) | [Cloudflare](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | [Edgio](https://github.com/Edgio/har-tools) |
-|---------|-------------|----------|--------|------------|-------|
+|---------|:-----------:|:--------:|:------:|:----------:|:-----:|
 | **Sanitization** |
-| Cookies/auth headers | Yes | Yes | Yes | Yes | Yes |
-| IPs, MACs, emails | **Yes** | No | No | No | No |
-| Passwords in forms | **Yes** | No | Yes | No | Yes |
-| JWT smart redaction | No | No | No | **Yes** | No |
-| Correlation-preserving | **Yes** | No | No | No | No |
+| Cookies/auth headers | ✅ | ✅ | ✅ | ✅ | ✅ |
+| IPs, MACs, emails | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Passwords in forms | ✅ | ❌ | ✅ | ❌ | ✅ |
+| JWT smart redaction | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Correlation-preserving | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Usability** |
-| No installation needed | No | **Yes** | No | **Yes** | **Yes** |
-| Data stays local | **Yes** | **Yes** | No | **Yes** | **Yes** |
-| CLI/scriptable | **Yes** | No | Yes | No | Yes |
-| Preview before redact | Yes | No | **Yes** | No | No |
+| No installation needed | ❌ | ✅ | ❌ | ✅ | ✅ |
+| Data stays local | ✅ | ✅ | ❌ | ✅ | ✅ |
+| CLI/scriptable | ✅ | ❌ | ✅ | ❌ | ✅ |
+| Preview before redact | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **Extras** |
-| Integrated capture | **Yes** | **Yes** | No | No | No |
-| Custom patterns | **Yes** | No | Yes | No | No |
-| Validation | **Yes** | No | No | No | No |
+| Integrated capture | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Custom patterns | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Validation | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ### Target Use Cases
 

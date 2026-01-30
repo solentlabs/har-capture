@@ -204,6 +204,8 @@ def capture_device_har(
     include_fonts: bool = False,
     include_images: bool = False,
     include_media: bool = False,
+    headless: bool = False,
+    timeout: int | None = None,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -222,6 +224,8 @@ def capture_device_har(
         include_fonts: If True, don't filter font files (.woff, .ttf, etc.)
         include_images: If True, don't filter image files (.png, .jpg, etc.)
         include_media: If True, don't filter media files (.mp3, .mp4, etc.)
+        headless: If True, run browser in headless mode (for automated capture)
+        timeout: Seconds to wait before closing browser (None = wait for user to close)
 
     Returns:
         CaptureResult with paths to generated files
@@ -232,6 +236,9 @@ def capture_device_har(
     Example:
         >>> result = capture_device_har("router.local")
         >>> print(result.har_path)
+
+        # Automated capture (headless with timeout)
+        >>> result = capture_device_har("example.com", headless=True, timeout=10)
     """
     capture_options = CaptureOptions(
         include_fonts=include_fonts,
@@ -285,7 +292,7 @@ def capture_device_har(
                 browser_type = p.chromium
 
             # Launch browser with HAR recording
-            browser_instance = browser_type.launch(headless=False)
+            browser_instance = browser_type.launch(headless=headless)
 
             # Build context options
             context_options: dict[str, Any] = {
@@ -308,11 +315,16 @@ def capture_device_har(
             page = context.new_page()
             page.goto(device_url, wait_until="networkidle")
 
-            _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
+            if timeout is not None:
+                # Automated mode: wait for timeout then close
+                import time
 
-            # Wait for browser to close
-            with contextlib.suppress(Exception):
-                page.wait_for_event("close", timeout=0)
+                time.sleep(timeout)
+            else:
+                # Interactive mode: wait for user to close browser
+                _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
+                with contextlib.suppress(Exception):
+                    page.wait_for_event("close", timeout=0)
 
             # Close context to save HAR
             context.close()
