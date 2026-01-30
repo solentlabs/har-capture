@@ -4,7 +4,7 @@
 # Update: pre-commit autoupdate
 
 default_language_version:
-  python: python3.10
+  python: python3
 
 repos:
   # ==========================================================================
@@ -36,7 +36,7 @@ repos:
   # Ruff - Linting & Formatting
   # ==========================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.0
+    rev: v0.9.0
     hooks:
       # Run the linter
       - id: ruff
@@ -75,6 +75,19 @@ repos:
     hooks:
       - id: commitizen
         stages: [commit-msg]
+
+  # ==========================================================================
+  # Pre-push: Full test suite
+  # ==========================================================================
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest --tb=short -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
 
   # ==========================================================================
   # Documentation

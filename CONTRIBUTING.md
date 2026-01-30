@@ -11,7 +11,7 @@ Thank you for your interest in contributing to har-capture!
    cd har-capture
    ```
 
-2. **Create a virtual environment**
+1. **Create a virtual environment**
 
    ```bash
    python -m venv .venv
@@ -20,18 +20,25 @@ Thank you for your interest in contributing to har-capture!
    .venv\Scripts\activate     # Windows
    ```
 
-3. **Install in development mode**
+1. **Install in development mode**
 
    ```bash
    pip install -e ".[dev,full]"
    ```
 
-4. **Install pre-commit hooks**
+1. **Install pre-commit hooks**
 
    ```bash
    pre-commit install
    pre-commit install --hook-type commit-msg
+   pre-commit install --hook-type pre-push
    ```
+
+   This installs:
+
+   - **pre-commit**: Runs ruff lint/format on staged files
+   - **commit-msg**: Validates commit message format
+   - **pre-push**: Runs full test suite before push
 
 ## Code Quality Standards
 
@@ -96,6 +103,7 @@ type(scope): description
 ```
 
 Types:
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation only
@@ -106,6 +114,7 @@ Types:
 - `chore`: Maintenance tasks
 
 Examples:
+
 ```
 feat(sanitization): add WiFi credential detection
 fix(cli): handle missing output directory
@@ -116,30 +125,38 @@ test(validation): add PII detection tests
 ## Pull Request Process
 
 1. **Create a branch** from `main`:
+
    ```bash
    git checkout -b feat/my-feature
    ```
 
-2. **Make your changes** following the code standards above
+1. **Make your changes** following the code standards above
 
-3. **Run all checks locally**:
+1. **Run all checks locally**:
+
    ```bash
+   # One command to run everything CI runs:
+   ./scripts/ci-local.sh
+
+   # Or run each check separately:
    pre-commit run --all-files
    pytest
    mypy src/
    ```
 
-4. **Push and create a PR**:
+1. **Push and create a PR**:
+
    ```bash
    git push -u origin feat/my-feature
    ```
 
-5. **Fill out the PR template** with:
+1. **Fill out the PR template** with:
+
    - Description of changes
    - Related issues
    - Testing performed
 
-6. **Wait for CI** to pass and address any feedback
+1. **Wait for CI** to pass and address any feedback
 
 ## Project Structure
 
@@ -158,10 +175,10 @@ har-capture/
 ## Adding New Features
 
 1. **Write tests first** (TDD encouraged)
-2. **Add type hints** to all functions
-3. **Add docstrings** (Google style)
-4. **Update CHANGELOG.md** under `[Unreleased]`
-5. **Update README.md** if adding user-facing features
+1. **Add type hints** to all functions
+1. **Add docstrings** (Google style)
+1. **Update CHANGELOG.md** under `[Unreleased]`
+1. **Update README.md** if adding user-facing features
 
 ## Dependencies
 
@@ -177,7 +194,7 @@ har-capture/
 
 Thank you for contributing!
 
----
+______________________________________________________________________
 
 ## Maintainer Setup
 
@@ -186,9 +203,11 @@ One-time setup for repository maintainers:
 ### GitHub Repository Settings
 
 1. **Enable private vulnerability reporting**
+
    - Settings → Code security and analysis → Private vulnerability reporting → Enable
 
-2. **Create GitHub Environments**
+1. **Create GitHub Environments**
+
    - Settings → Environments → New environment
    - Create `pypi` (for production releases)
    - Create `test-pypi` (for test releases)
@@ -198,13 +217,15 @@ One-time setup for repository maintainers:
 Configure OIDC publishing (no API tokens needed):
 
 1. **PyPI:** https://pypi.org/manage/account/publishing/
+
    - Add publisher
    - Owner: `solentlabs`
    - Repository: `har-capture`
    - Workflow: `publish.yml`
    - Environment: `pypi`
 
-2. **Test PyPI:** https://test.pypi.org/manage/account/publishing/
+1. **Test PyPI:** https://test.pypi.org/manage/account/publishing/
+
    - Same settings, environment: `test-pypi`
 
 ### Releasing

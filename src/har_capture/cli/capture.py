@@ -135,7 +135,7 @@ def capture(
 
     if requires_basic:
         typer.echo(f"  Detected: HTTP Basic Auth{f' ({realm})' if realm else ''}")
-        if username and password:
+        if username is not None and password is not None:
             http_credentials = {"username": username, "password": password}
         else:
             typer.echo()
@@ -144,9 +144,9 @@ def capture(
             else:
                 typer.echo("This site requires HTTP Basic Authentication.")
             typer.echo()
-            username = typer.prompt("Username", default="admin")
-            password = typer.prompt("Password", hide_input=True)
-            http_credentials = {"username": username, "password": password}
+            prompted_user = typer.prompt("Username", default="admin")
+            prompted_pass = typer.prompt("Password", hide_input=True)
+            http_credentials = {"username": prompted_user, "password": prompted_pass or ""}
     else:
         typer.echo("  Detected: Form-based or no auth required")
 

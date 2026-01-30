@@ -376,7 +376,7 @@ def capture_device_har(
             if not keep_raw and result.sanitized_path and result.sanitized_path.exists():
                 try:
                     output_path.unlink()
-                    result.har_path = None  # type: ignore[assignment]
+                    result.har_path = None
                 except Exception as e:
                     _LOGGER.warning("Failed to delete raw HAR: %s", e)
         except Exception as e:
