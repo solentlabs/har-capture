@@ -6,12 +6,15 @@ import pytest
 
 from har_capture.validation.secrets import (
     Finding,
+    check_content,
     check_headers,
+    check_json_fields,
     check_post_data,
     is_cookie_attributes_only,
     is_private_ip,
     is_redacted,
     truncate,
+    validate_har,
 )
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -388,3 +391,206 @@ class TestFindingDataclass:
             reason="Potential email address",
         )
         assert finding.severity == "warning"
+
+
+class TestCheckJsonFields:
+    """Tests for check_json_fields() function."""
+
+    def test_detects_password_in_json(self) -> None:
+        """Test detection of password field in JSON."""
+        data = {"username": "admin", "password": "secret123"}
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 1
+        assert findings[0].field == "password"
+        assert findings[0].severity == "error"
+
+    def test_detects_nested_sensitive_field(self) -> None:
+        """Test detection of sensitive field in nested JSON."""
+        data = {"user": {"credentials": {"api_key": "abc123xyz"}}}
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 1
+        assert "api_key" in findings[0].field
+
+    def test_ignores_redacted_value(self) -> None:
+        """Test redacted values are not flagged."""
+        data = {"password": "[REDACTED]"}
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 0
+
+    def test_ignores_empty_value(self) -> None:
+        """Test empty values are not flagged."""
+        data = {"password": ""}
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 0
+
+    def test_handles_list_of_objects(self) -> None:
+        """Test JSON with list of objects."""
+        data = [{"token": "secret1"}, {"token": "secret2"}]
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 2
+
+    def test_handles_nested_lists(self) -> None:
+        """Test deeply nested structures."""
+        data = {"items": [{"credentials": {"password": "secret"}}]}
+        findings: list[Finding] = []
+        check_json_fields(data, "request.body", findings)
+        assert len(findings) == 1
+
+
+class TestCheckContent:
+    """Tests for check_content() function."""
+
+    def test_detects_public_ip(self) -> None:
+        """Test detection of public IP address in content."""
+        content = "Server is at 203.0.113.45 and ready"
+        findings: list[Finding] = []
+        check_content(content, "response.body", findings)
+        assert any("ip" in f.reason.lower() for f in findings)
+
+    def test_ignores_private_ip(self) -> None:
+        """Test private IPs are not flagged."""
+        content = "Local server at 192.168.1.1"
+        findings: list[Finding] = []
+        check_content(content, "response.body", findings)
+        # 192.168.x.x is private, should not be flagged
+        ip_findings = [f for f in findings if "ip" in f.reason.lower()]
+        assert len(ip_findings) == 0
+
+    def test_detects_mac_address(self) -> None:
+        """Test detection of MAC address in content."""
+        content = "Device MAC is AA:BB:CC:11:22:33"
+        findings: list[Finding] = []
+        check_content(content, "response.body", findings)
+        assert any("mac" in f.reason.lower() for f in findings)
+
+    def test_ignores_anonymized_mac(self) -> None:
+        """Test anonymized MAC is not flagged."""
+        content = "MAC: 00:00:00:00:00:00"
+        findings: list[Finding] = []
+        check_content(content, "response.body", findings)
+        mac_findings = [f for f in findings if "mac" in f.reason.lower()]
+        assert len(mac_findings) == 0
+
+    def test_handles_empty_content(self) -> None:
+        """Test empty content is handled."""
+        findings: list[Finding] = []
+        check_content("", "response.body", findings)
+        assert len(findings) == 0
+
+    def test_handles_redacted_content(self) -> None:
+        """Test redacted content is handled."""
+        findings: list[Finding] = []
+        check_content("[REDACTED]", "response.body", findings)
+        assert len(findings) == 0
+
+
+class TestValidateHar:
+    """Tests for validate_har() function."""
+
+    def test_validates_har_with_sensitive_header(self, tmp_path) -> None:
+        """Test validation catches sensitive headers."""
+        import json
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "http://example.com",
+                            "headers": [{"name": "Authorization", "value": "Bearer secret"}],
+                        },
+                        "response": {"headers": []},
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+        assert len(findings) > 0
+        assert any("Authorization" in f.field for f in findings)
+
+    def test_validates_clean_har(self, tmp_path) -> None:
+        """Test validation of clean HAR returns no findings."""
+        import json
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "http://example.com",
+                            "headers": [{"name": "Content-Type", "value": "text/html"}],
+                        },
+                        "response": {
+                            "headers": [],
+                            "content": {"text": "Hello World", "mimeType": "text/html"},
+                        },
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "clean.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+        assert len(findings) == 0
+
+    def test_validates_har_with_post_data(self, tmp_path) -> None:
+        """Test validation catches sensitive POST data."""
+        import json
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "http://example.com/login",
+                            "headers": [],
+                            "postData": {
+                                "mimeType": "application/x-www-form-urlencoded",
+                                "params": [{"name": "password", "value": "mysecret"}],
+                            },
+                        },
+                        "response": {"headers": []},
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "login.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+        assert len(findings) > 0
+        assert any("password" in f.field.lower() for f in findings)
+
+    def test_validates_gzipped_har(self, tmp_path) -> None:
+        """Test validation of gzipped HAR file."""
+        import gzip
+        import json
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "http://example.com",
+                            "headers": [{"name": "Cookie", "value": "session=abc123"}],
+                        },
+                        "response": {"headers": []},
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "test.har.gz"
+        with gzip.open(har_file, "wt", encoding="utf-8") as f:
+            json.dump(har_data, f)
+
+        findings = validate_har(har_file)
+        assert len(findings) > 0

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 class TestMainEntryPoint:
     """Tests for the __main__.py entry point."""
 
     @patch("har_capture.cli.main.app")
-    def test_main_calls_app(self, mock_app) -> None:
+    def test_main_calls_app(self, mock_app: MagicMock) -> None:
         """Test main() calls the typer app."""
         from har_capture.__main__ import main
 
@@ -30,7 +30,7 @@ class TestMainEntryPoint:
         assert callable(main)
 
     @patch("har_capture.cli.main.app")
-    def test_main_with_successful_import(self, mock_app) -> None:
+    def test_main_with_successful_import(self, mock_app: MagicMock) -> None:
         """Test main works when cli.main can be imported."""
         from har_capture.__main__ import main
 

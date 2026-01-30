@@ -137,6 +137,8 @@ class TestCaptureWorkflowResult:
         assert result.capture_success is False
         assert result.capture_error is None
         assert result.har_path is None
+        assert result.compressed_path is None
+        assert result.sanitized_path is None
         assert result.stats == {}
 
     def test_convenience_properties_with_values(self, tmp_path: Path) -> None:
