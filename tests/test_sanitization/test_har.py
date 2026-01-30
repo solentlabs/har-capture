@@ -28,6 +28,8 @@ from har_capture.sanitization.har import (
 SENSITIVE_FIELD_CASES = [
     # Password variations
     ("password",            True,   "password_exact"),
+    ("Password",            True,   "password_capitalized"),
+    ("PASSWORD",            True,   "password_uppercase"),
     ("loginPassword",       True,   "password_camel"),
     ("user_password",       True,   "password_snake"),
     ("passwd",              True,   "passwd"),
@@ -36,6 +38,8 @@ SENSITIVE_FIELD_CASES = [
     ("oldPassword",         True,   "password_old"),
     ("newPassword",         True,   "password_new"),
     ("confirmPassword",     True,   "password_confirm"),
+    ("currentPassword",     True,   "password_current"),
+    ("userPass",            True,   "password_userpass"),
     # Auth/token variations
     ("auth_token",          True,   "auth_token"),
     ("authToken",           True,   "auth_token_camel"),
@@ -43,18 +47,45 @@ SENSITIVE_FIELD_CASES = [
     ("apikey",              True,   "apikey"),
     ("api_key",             True,   "api_key"),
     ("apiKey",              True,   "api_key_camel"),
+    ("api-key",             True,   "api_key_hyphen"),
     # Secret variations
     ("secret",              True,   "secret"),
     ("secretKey",           True,   "secret_key"),
     ("client_secret",       True,   "client_secret"),
+    ("clientSecret",        True,   "client_secret_camel"),
+    ("app_secret",          True,   "app_secret"),
     # Token variations
     ("token",               True,   "token"),
     ("accessToken",         True,   "access_token"),
+    ("access_token",        True,   "access_token_snake"),
     ("refreshToken",        True,   "refresh_token"),
+    ("refresh_token",       True,   "refresh_token_snake"),
     ("csrf_token",          True,   "csrf_token"),
+    ("csrfToken",           True,   "csrf_token_camel"),
+    ("bearerToken",         True,   "bearer_token"),
+    ("idToken",             True,   "id_token"),
+    ("id_token",            True,   "id_token_snake"),
+    # OAuth variations
+    ("oauth_token",         True,   "oauth_token"),
+    ("oauthToken",          True,   "oauth_token_camel"),
+    ("oauth_secret",        True,   "oauth_secret"),
+    # Note: client_id not currently detected (could be added)
+    ("client_id",           False,  "client_id_not_detected"),
+    ("clientId",            False,  "client_id_camel_not_detected"),
+    # Session variations (only *token/*key detected, not bare "session")
+    ("session",             False,  "session_not_detected"),
+    ("sessionId",           False,  "session_id_not_detected"),
+    ("session_id",          False,  "session_id_snake_not_detected"),
+    ("sessionToken",        True,   "session_token"),
+    ("session_key",         True,   "session_key"),
     # Credential variations
     ("credential",          True,   "credential"),
     ("credentials",         True,   "credentials"),
+    ("private_key",         True,   "private_key"),
+    ("privateKey",          True,   "private_key_camel"),
+    # Note: nonce not currently detected (could be added)
+    ("nonce",               False,  "nonce_not_detected"),
+    ("form_nonce",          False,  "form_nonce_not_detected"),
     # Safe fields (should NOT be flagged)
     ("username",            False,  "username_safe"),
     ("loginName",           False,  "login_name_safe"),
@@ -66,6 +97,14 @@ SENSITIVE_FIELD_CASES = [
     ("description",         False,  "description_safe"),
     ("name",                False,  "name_safe"),
     ("id",                  False,  "id_safe"),
+    ("user",                False,  "user_safe"),
+    ("login",               False,  "login_safe"),
+    ("data",                False,  "data_safe"),
+    ("type",                False,  "type_safe"),
+    ("value",               False,  "value_safe"),
+    ("content",             False,  "content_safe"),
+    ("title",               False,  "title_safe"),
+    ("message",             False,  "message_safe"),
 ]
 # fmt: on
 
@@ -77,21 +116,45 @@ SENSITIVE_FIELD_CASES = [
 #
 # fmt: off
 HEADER_REDACTION_CASES = [
-    # Full redaction headers
+    # Full redaction headers - Authorization
     ("Authorization",       "Bearer abc123xyz",           "[REDACTED]",             "auth_bearer"),
     ("Authorization",       "Basic dXNlcjpwYXNz",         "[REDACTED]",             "auth_basic"),
+    ("Authorization",       "Digest username=admin",      "[REDACTED]",             "auth_digest"),
+    ("Authorization",       "OAuth oauth_token=xyz",      "[REDACTED]",             "auth_oauth"),
+    ("authorization",       "Bearer token123",            "[REDACTED]",             "auth_lowercase"),
+    # API key headers
     ("X-Api-Key",           "sk-1234567890abcdef",        "[REDACTED]",             "api_key"),
+    ("X-API-KEY",           "key-abcdef123456",           "[REDACTED]",             "api_key_upper"),
+    # Note: Api-Key without X- prefix not currently detected
+    ("Api-Key",             "apikey123",                  "apikey123",              "api_key_no_x_not_detected"),
+    # Auth token headers
     ("X-Auth-Token",        "token123456",                "[REDACTED]",             "auth_token"),
+    # Note: X-Access-Token, X-Session-Token not currently detected
+    ("X-Access-Token",      "access123",                  "access123",              "access_token_not_detected"),
+    ("X-Session-Token",     "session456",                 "session456",             "session_token_not_detected"),
+    # Note: Proxy-Authorization not currently detected
+    ("Proxy-Authorization", "Basic cHJveHk6cGFzcw==",     "Basic cHJveHk6cGFzcw==", "proxy_auth_not_detected"),
+    # Note: Webhook signatures not currently detected
+    ("X-Hub-Signature",     "sha1=abc123def456",          "sha1=abc123def456",      "hub_signature_not_detected"),
+    ("X-Signature",         "hmac-sha256=xyz789",         "hmac-sha256=xyz789",     "signature_not_detected"),
     # Cookie redaction (preserves names)
     ("Cookie",              "session=abc123",             "session=[REDACTED]",     "cookie_session"),
     ("Cookie",              "user=admin; token=xyz",      "user=[REDACTED]",        "cookie_multiple"),
+    ("Cookie",              "auth=secret; path=/",        "auth=[REDACTED]",        "cookie_auth"),
     ("Set-Cookie",          "session=xyz789; Path=/",     "session=[REDACTED]",     "set_cookie"),
+    ("Set-Cookie",          "token=abc; HttpOnly",        "token=[REDACTED]",       "set_cookie_httponly"),
     # Safe headers (preserved as-is)
     ("Content-Type",        "text/html",                  "text/html",              "content_type"),
+    ("Content-Type",        "application/json",           "application/json",       "content_type_json"),
     ("Content-Length",      "1234",                       "1234",                   "content_length"),
     ("Accept",              "application/json",           "application/json",       "accept"),
+    ("Accept-Language",     "en-US,en;q=0.9",             "en-US,en;q=0.9",         "accept_language"),
+    ("Accept-Encoding",     "gzip, deflate, br",          "gzip, deflate, br",      "accept_encoding"),
     ("User-Agent",          "Mozilla/5.0",                "Mozilla/5.0",            "user_agent"),
     ("Cache-Control",       "no-cache",                   "no-cache",               "cache_control"),
+    ("Host",                "example.com",                "example.com",            "host"),
+    ("Origin",              "https://example.com",        "https://example.com",    "origin"),
+    ("Referer",             "https://example.com/page",   "https://example.com/page","referer"),
 ]
 # fmt: on
 

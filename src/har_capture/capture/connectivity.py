@@ -1,6 +1,6 @@
-"""Device connectivity checking utilities.
+"""Target connectivity checking utilities.
 
-This module provides functions to check device reachability and authentication
+This module provides functions to check target reachability and authentication
 requirements before launching the browser capture.
 """
 
@@ -10,27 +10,64 @@ import logging
 import ssl
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def check_device_connectivity(ip: str, timeout: int = 5) -> tuple[bool, str, str | None]:
-    """Check if device is reachable and determine the correct URL scheme.
+def _parse_target(target: str) -> tuple[str, str | None]:
+    """Parse a target string into hostname and optional scheme.
 
-    Tries HTTP first, then HTTPS if HTTP fails.
+    Handles various input formats:
+    - Full URL: "https://example.com" -> ("example.com", "https")
+    - URL with path: "https://example.com/page" -> ("example.com", "https")
+    - Hostname only: "example.com" -> ("example.com", None)
+    - IP address: "192.168.1.1" -> ("192.168.1.1", None)
+    - IP with port: "192.168.1.1:8080" -> ("192.168.1.1:8080", None)
 
     Args:
-        ip: Device IP address
+        target: URL, hostname, or IP address
+
+    Returns:
+        Tuple of (hostname_with_port, scheme_or_none)
+    """
+    # Check if it looks like a URL (has scheme)
+    if "://" in target:
+        parsed = urlparse(target)
+        host = parsed.netloc or parsed.path.split("/")[0]
+        return host, parsed.scheme
+    # No scheme - return as-is
+    return target, None
+
+
+def check_device_connectivity(target: str, timeout: int = 5) -> tuple[bool, str, str | None]:
+    """Check if target is reachable and determine the correct URL scheme.
+
+    Tries the provided scheme first (if any), otherwise tries HTTP then HTTPS.
+
+    Args:
+        target: URL, hostname, or IP address (e.g., "example.com", "https://example.com", "192.168.1.1")
         timeout: Connection timeout in seconds
 
     Returns:
         Tuple of (reachable, scheme, error_message)
-        - reachable: True if device responded
+        - reachable: True if target responded
         - scheme: "http" or "https"
         - error_message: None if reachable, otherwise describes the problem
     """
-    for scheme in ["http", "https"]:
-        url = f"{scheme}://{ip}/"
+    # Parse target to extract hostname and any provided scheme
+    host, provided_scheme = _parse_target(target)
+
+    # Determine which schemes to try
+    if provided_scheme in ("http", "https"):
+        schemes_to_try = [provided_scheme]
+    else:
+        schemes_to_try = ["http", "https"]
+
+    last_error: str | None = None
+
+    for scheme in schemes_to_try:
+        url = f"{scheme}://{host}/"
         try:
             req = urllib.request.Request(url, method="GET")
             if scheme == "https":
@@ -43,17 +80,15 @@ def check_device_connectivity(ip: str, timeout: int = 5) -> tuple[bool, str, str
                 urllib.request.urlopen(req, timeout=timeout)
             return True, scheme, None
         except urllib.error.HTTPError:
-            # HTTP error means device is reachable (might need auth, that's fine)
+            # HTTP error means target is reachable (might need auth, that's fine)
             return True, scheme, None
         except urllib.error.URLError as e:
             # Connection refused, timeout, etc - try next scheme
-            if scheme == "https":
-                return False, "http", f"Cannot connect to device at {ip}: {e.reason}"
+            last_error = str(e.reason)
         except Exception as e:
-            if scheme == "https":
-                return False, "http", f"Cannot connect to device at {ip}: {e}"
+            last_error = str(e)
 
-    return False, "http", f"Cannot connect to device at {ip}"
+    return False, schemes_to_try[0], f"Cannot connect to {host}: {last_error}"
 
 
 def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:

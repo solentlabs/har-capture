@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from har_capture.capture.connectivity import check_device_connectivity
+from har_capture.capture.connectivity import _parse_target, check_device_connectivity
 from har_capture.capture.deps import check_playwright, install_browser_deps
 from har_capture.patterns import get_bloat_extensions
 
@@ -269,16 +269,19 @@ def capture_device_har(
     if output_path.suffix != ".har":
         output_path = output_path.with_suffix(".har")
 
+    # Parse target to extract hostname (handles URLs like "https://example.com")
+    host, _ = _parse_target(ip)
+
     # Check connectivity and determine scheme
     reachable, scheme, error = check_device_connectivity(ip)
     if not reachable:
         return CaptureResult(
             har_path=output_path,
             success=False,
-            error=error or f"Cannot connect to device at {ip}",
+            error=error or f"Cannot connect to {host}",
         )
 
-    device_url = f"{scheme}://{ip}/"
+    target_url = f"{scheme}://{host}/"
 
     def launch_browser_and_capture() -> bool:
         """Launch browser and capture HAR. Returns True on success."""
@@ -313,7 +316,7 @@ def capture_device_har(
 
             # Create page and navigate to device
             page = context.new_page()
-            page.goto(device_url, wait_until="networkidle")
+            page.goto(target_url, wait_until="networkidle")
 
             if timeout is not None:
                 # Automated mode: wait for timeout then close

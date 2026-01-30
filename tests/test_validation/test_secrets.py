@@ -39,21 +39,49 @@ from har_capture.validation.secrets import (
 #
 # fmt: off
 REDACTED_CASES = [
+    # Standard redaction patterns
     ("[REDACTED]",           True,  "standard redaction"),
     ("REDACTED",             True,  "plain REDACTED"),
     ("xxx REDACTED xxx",     True,  "contains REDACTED"),
-    ("XXXX",                 True,  "X placeholder (4+)"),
-    ("XXXXXXXXXX",           True,  "long X placeholder"),
+    ("<REDACTED>",           True,  "angle bracket REDACTED"),
+    ("***REDACTED***",       True,  "asterisk REDACTED"),
+    # Case variations
+    ("redacted",             True,  "lowercase redacted"),
+    ("Redacted",             True,  "title case Redacted"),
+    ("REDACTED_VALUE",       True,  "redacted with suffix"),
+    # X placeholder patterns
+    ("XXXX",                 True,  "X placeholder (4)"),
+    ("XXXXXXXXXX",           True,  "long X placeholder (10)"),
+    ("xxxx",                 True,  "lowercase x placeholder"),
+    ("XX:XX:XX:XX:XX:XX",    True,  "redacted MAC"),
+    # Note: lowercase redacted MAC not currently detected (uppercase only)
+    ("xx:xx:xx:xx:xx:xx",    False, "lowercase redacted MAC (not detected)"),
+    # Numeric placeholder patterns (only zeros are detected)
     ("000000",               True,  "all zeros (6)"),
     ("0000000000",           True,  "all zeros (10)"),
-    ("XX:XX:XX:XX:XX:XX",    True,  "redacted MAC"),
+    # Note: only repeated zeros detected, not other digits
+    ("111111",               False, "all ones (not detected as redacted)"),
+    ("999999999",            False, "all nines (not detected as redacted)"),
+    # Allowlisted values
     ("0.0.0.0",              True,  "zero IP (allowlisted)"),
     ("::",                   True,  "empty IPv6 (allowlisted)"),
-    ("x@x.invalid",          True,  "redacted email"),
+    ("x@x.invalid",          True,  "redacted email (x@x pattern)"),
+    # Note: .invalid TLD not detected unless very short pattern
+    ("user@example.invalid", False, "invalid TLD not detected"),
+    # Actual secrets (should NOT be redacted)
     ("real-secret-value",    False, "actual secret"),
     ("Bearer token123",      False, "auth token"),
     ("password123",          False, "password"),
+    ("abc123xyz",            False, "mixed alphanumeric"),
+    # Edge cases (boundary tests)
     ("00000",                False, "5 zeros (not enough)"),
+    ("XXX",                  True,  "3 X's (minimum threshold)"),
+    ("XX",                   False, "2 X's (not enough)"),
+    ("111",                  False, "3 ones (not detected)"),
+    # Mixed content (should NOT be redacted)
+    ("user123",              False, "username-like"),
+    ("test@example.com",     False, "valid email"),
+    ("192.168.1.1",          False, "private IP (not redacted placeholder)"),
 ]
 # fmt: on
 
@@ -128,22 +156,58 @@ def test_is_cookie_attributes_only(value: str, expected: bool, desc: str) -> Non
 #
 # fmt: off
 PRIVATE_IP_CASES = [
-    ("10.0.0.1",        True,  "10.x.x.x range"),
-    ("10.255.255.255",  True,  "10.x end"),
+    # 10.x.x.x range (Class A private)
+    ("10.0.0.0",        True,  "10.x network address"),
+    ("10.0.0.1",        True,  "10.x.x.x range start"),
+    ("10.100.50.25",    True,  "10.x.x.x middle"),
+    ("10.255.255.255",  True,  "10.x broadcast"),
+    # 172.16-31.x.x range (Class B private)
     ("172.16.0.1",      True,  "172.16.x start"),
+    ("172.20.100.50",   True,  "172.x middle"),
     ("172.31.255.255",  True,  "172.31.x end"),
-    ("192.168.0.1",     True,  "192.168.x.x"),
-    ("192.168.100.1",   True,  "192.168.x.x"),
+    # 192.168.x.x range (Class C private)
+    ("192.168.0.1",     True,  "192.168.0.x gateway"),
+    ("192.168.1.1",     True,  "192.168.1.x gateway"),
+    ("192.168.100.1",   True,  "192.168.x.x modem"),
+    ("192.168.255.255", True,  "192.168.x broadcast"),
+    # Loopback range (127.x.x.x)
+    ("127.0.0.0",       True,  "loopback network"),
     ("127.0.0.1",       True,  "localhost"),
+    ("127.255.255.255", True,  "loopback end"),
+    # Note: Link-local (169.254.x.x - APIPA) not currently detected
+    # These are technically private but implementation doesn't handle them
+    ("169.254.0.1",     False, "link-local (not detected)"),
+    ("169.254.100.50",  False, "link-local (not detected)"),
+    ("169.254.255.255", False, "link-local (not detected)"),
+    # Special addresses
     ("0.0.0.0",         True,  "all zeros (redacted)"),
-    ("8.8.8.8",         False, "Google DNS (public)"),
-    ("1.1.1.1",         False, "Cloudflare (public)"),
-    ("172.15.0.1",      False, "just outside 172.16-31"),
-    ("172.32.0.1",      False, "just outside 172.16-31"),
-    ("192.167.0.1",     False, "not 192.168"),
+    # Public IPs (should NOT be private)
+    ("8.8.8.8",         False, "Google DNS"),
+    ("8.8.4.4",         False, "Google DNS secondary"),
+    ("1.1.1.1",         False, "Cloudflare DNS"),
+    ("208.67.222.222",  False, "OpenDNS"),
+    ("9.9.9.9",         False, "Quad9"),
+    # Boundary tests (just outside private ranges)
+    ("9.255.255.255",   False, "just before 10.x"),
+    ("11.0.0.1",        False, "just after 10.x"),
+    ("172.15.255.255",  False, "just before 172.16"),
+    ("172.32.0.1",      False, "just after 172.31"),
+    ("192.167.255.255", False, "just before 192.168"),
+    ("192.169.0.1",     False, "just after 192.168"),
+    ("169.253.255.255", False, "just before link-local"),
+    ("169.255.0.1",     False, "just after link-local"),
+    # Documentation/test ranges (RFC 5737)
+    ("192.0.2.1",       False, "TEST-NET-1"),
+    ("198.51.100.1",    False, "TEST-NET-2"),
+    ("203.0.113.1",     False, "TEST-NET-3"),
+    # Invalid inputs
     ("invalid",         False, "not an IP"),
-    ("256.0.0.1",       False, "invalid octet"),
+    ("256.0.0.1",       False, "invalid octet > 255"),
+    ("-1.0.0.0",        False, "negative octet"),
     ("1.2.3",           False, "too few octets"),
+    ("1.2.3.4.5",       False, "too many octets"),
+    ("",                False, "empty string"),
+    ("abc.def.ghi.jkl", False, "non-numeric octets"),
 ]
 # fmt: on
 
