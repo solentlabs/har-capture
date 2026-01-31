@@ -370,31 +370,39 @@ def capture_device_har(
 
     result = CaptureResult(har_path=output_path)
 
-    # Compress if requested
-    if compress:
-        try:
-            compressed_path, stats = filter_and_compress_har(output_path, capture_options)
-            result.compressed_path = compressed_path
-            result.stats = stats
-        except Exception as e:
-            _LOGGER.warning("Compression failed: %s", e)
-
-    # Sanitize if requested
+    # Sanitize first (must happen before compression)
     if sanitize:
         try:
             from har_capture.sanitization import sanitize_har_file
 
             sanitized_path = sanitize_har_file(str(output_path))
             result.sanitized_path = Path(sanitized_path)
-
-            # Delete raw file unless keep_raw is set
-            if not keep_raw and result.sanitized_path and result.sanitized_path.exists():
-                try:
-                    output_path.unlink()
-                    result.har_path = None
-                except Exception as e:
-                    _LOGGER.warning("Failed to delete raw HAR: %s", e)
         except Exception as e:
             _LOGGER.warning("Sanitization failed: %s", e)
+
+    # Compress the sanitized file (never compress unsanitized)
+    if compress and result.sanitized_path and result.sanitized_path.exists():
+        try:
+            compressed_path, stats = filter_and_compress_har(result.sanitized_path, capture_options)
+            result.compressed_path = compressed_path
+            result.stats = stats
+
+            # Delete uncompressed sanitized file
+            if not keep_raw:
+                try:
+                    result.sanitized_path.unlink()
+                    result.sanitized_path = None
+                except Exception as e:
+                    _LOGGER.warning("Failed to delete uncompressed sanitized HAR: %s", e)
+        except Exception as e:
+            _LOGGER.warning("Compression failed: %s", e)
+
+    # Delete raw file unless keep_raw is set
+    if not keep_raw and (result.sanitized_path or result.compressed_path):
+        try:
+            output_path.unlink()
+            result.har_path = None
+        except Exception as e:
+            _LOGGER.warning("Failed to delete raw HAR: %s", e)
 
     return result

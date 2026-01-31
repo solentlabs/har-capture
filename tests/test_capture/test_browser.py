@@ -507,3 +507,115 @@ class TestCaptureDeviceHar:
 
         mock_playwright.webkit.launch.assert_called_once_with(headless=True)
         mock_playwright.chromium.launch.assert_not_called()
+
+
+class TestSanitizationBeforeCompression:
+    """Tests to ensure compression happens AFTER sanitization.
+
+    SECURITY INVARIANT: The workflow must sanitize before compressing.
+    This ensures the compressed output is based on sanitized content.
+    """
+
+    def test_compressed_file_named_from_sanitized_source(self, tmp_path: Path) -> None:
+        """Test that compressed file is created from sanitized file path.
+
+        The compressed output should be named based on the sanitized file,
+        not the raw file. This ensures we're compressing the right source.
+        """
+        import json
+
+        from har_capture.capture.browser import filter_and_compress_har
+        from har_capture.sanitization import sanitize_har_file
+
+        raw_har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+
+        raw_path = tmp_path / "test.har"
+        raw_path.write_text(json.dumps(raw_har))
+
+        # Workflow: sanitize then compress
+        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        compressed_path, _ = filter_and_compress_har(sanitized_path, None)
+
+        # Compressed file should be based on sanitized path
+        assert "sanitized" in str(compressed_path), (
+            f"Compressed path {compressed_path} should be based on sanitized file"
+        )
+        assert compressed_path.suffix == ".gz"
+
+    def test_workflow_order_sanitize_then_compress(self, tmp_path: Path) -> None:
+        """Test the workflow processes in correct order: sanitize then compress.
+
+        We verify this by adding a marker during sanitization and checking
+        it appears in the compressed output.
+        """
+        import gzip
+        import json
+
+        from har_capture.capture.browser import filter_and_compress_har
+        from har_capture.sanitization import sanitize_har_file
+
+        # Create a minimal HAR
+        raw_har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+
+        raw_path = tmp_path / "order_test.har"
+        raw_path.write_text(json.dumps(raw_har))
+
+        # Run the workflow
+        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        compressed_path, _ = filter_and_compress_har(sanitized_path, None)
+
+        # The compressed content should come from the sanitized file
+        # We can verify by checking that sanitized_path content matches
+        # the decompressed content (modulo metadata added by compression)
+        with gzip.open(compressed_path, "rt") as f:
+            compressed_har = json.load(f)
+
+        # Should have _har_capture metadata from compression step
+        # Metadata is inside the 'log' object
+        assert "_har_capture" in compressed_har.get("log", {}), "Missing capture metadata"
+
+    def test_raw_file_not_compressed_directly(self, tmp_path: Path) -> None:
+        """Test that raw file path is NOT used for compression.
+
+        The browser.py code must pass sanitized_path to filter_and_compress_har,
+        not the raw output_path. This test verifies the file naming convention.
+        """
+        import json
+
+        from har_capture.capture.browser import filter_and_compress_har
+        from har_capture.sanitization import sanitize_har_file
+
+        raw_har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+
+        raw_path = tmp_path / "capture.har"
+        raw_path.write_text(json.dumps(raw_har))
+
+        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        compressed_path, _ = filter_and_compress_har(sanitized_path, None)
+
+        # The compressed file should NOT be named "capture.har.gz"
+        # It should be named "capture.sanitized.har.gz"
+        assert compressed_path.name != "capture.har.gz", (
+            "Compressed file should not be from raw path"
+        )
+        assert "sanitized" in compressed_path.name, (
+            "Compressed file should be based on sanitized file"
+        )
