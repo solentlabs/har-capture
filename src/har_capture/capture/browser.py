@@ -167,9 +167,9 @@ def filter_and_compress_har(
     har["log"]["entries"] = filtered_entries
     filtered_count = len(filtered_entries)
 
-    # Write filtered HAR
+    # Write filtered HAR (pretty-printed for readability)
     with open(har_path, "w", encoding="utf-8") as f:
-        json.dump(har, f, separators=(",", ":"))  # Compact JSON
+        json.dump(har, f, indent=2)
 
     filtered_size = har_path.stat().st_size
 
