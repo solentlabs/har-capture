@@ -68,7 +68,7 @@ sanitized = sanitize_har(har_data)
 **har-capture** provides **deep sanitization** and **CLI automation**:
 
 ```bash
-har-capture get <TARGET>     # Capture + sanitize in one step
+har-capture get <TARGET>     # Capture → sanitize → compress (all automatic)
 ```
 
 ### Comparison with Existing Tools
@@ -261,13 +261,23 @@ The sanitization removes the following types of PII:
 
 ### get
 
-Capture HTTP traffic using a browser.
+Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
 
 ```bash
-har-capture get <TARGET>
-har-capture get <TARGET> --output capture.har
-har-capture get <TARGET> --no-sanitize
+har-capture get <TARGET>                  # Outputs: <target>.sanitized.har.gz
+har-capture get <TARGET> --output out.har # Outputs: out.sanitized.har.gz
+har-capture get <TARGET> --keep-raw       # Also keeps the unsanitized .har file
+har-capture get <TARGET> --no-sanitize    # Skip sanitization (not recommended)
+har-capture get <TARGET> --no-compress    # Skip compression
 ```
+
+**Default behavior:**
+1. Captures all HTTP traffic to a raw `.har` file
+2. Sanitizes PII → creates `.sanitized.har`
+3. Compresses → creates `.sanitized.har.gz`
+4. Deletes intermediate files (raw and uncompressed sanitized)
+
+Use `--keep-raw` to preserve the original unsanitized file for debugging.
 
 ### sanitize
 
