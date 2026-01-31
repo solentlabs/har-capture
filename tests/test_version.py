@@ -1,5 +1,7 @@
 """Test version consistency across package files."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 
