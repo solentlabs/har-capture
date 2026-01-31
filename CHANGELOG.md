@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-01-31
+
+### Changed
+
+- HAR files are now pretty-printed by default (indent=2) for better readability
+- Compressed output size unchanged (whitespace compresses well)
+
+## [0.2.2] - 2026-01-31
+
+### Fixed
+
+- **Security**: Compressed files now contain sanitized content (was compressing raw file)
+- Workflow order: sanitize first, then compress the sanitized file
+
+### Added
+
+- Version consistency test to prevent `__init__.py` / `pyproject.toml` mismatch
+- Documentation clarifying that `get` command sanitizes by default
+
+## [0.2.1] - 2026-01-30
+
+### Fixed
+
+- Python 3.10 compatibility for version test (use regex instead of tomllib)
+
+## [0.2.0] - 2026-01-30
+
+### Added
+
+- Correlation-preserving redaction with salted hashes
+- Format-preserving replacements (MAC, IP, email stay valid formats)
+- Custom pattern support via external JSON files
+- `--salt` and `--no-salt` CLI options
+- Comprehensive test coverage (84%+)
+
+### Changed
+
+- Default sanitization now uses random salt per session
+- Refactored `CaptureResult` with composition pattern
+
 ## [0.1.2] - 2026-01-29
 
 ### Added
@@ -53,5 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Zero dependencies for core sanitization (stdlib only)
 - Optional dependencies for capture (playwright), CLI (typer)
 
-[Unreleased]: https://github.com/solentlabs/har-capture/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/solentlabs/har-capture/releases/tag/v0.1.0
+[0.1.1]: https://github.com/solentlabs/har-capture/compare/v0.1.0...v0.1.1
+[0.1.2]: https://github.com/solentlabs/har-capture/compare/v0.1.1...v0.1.2
+[0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
+[0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
+[0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
+[0.2.3]: https://github.com/solentlabs/har-capture/compare/v0.2.2...v0.2.3
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.2.3...HEAD
