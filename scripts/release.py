@@ -173,51 +173,6 @@ def check_changelog_has_version(repo_root: Path, version: str) -> bool:
         return False
 
 
-def update_changelog_unreleased(repo_root: Path, version: str) -> bool:
-    """Move [Unreleased] section to new version if it has content."""
-    changelog_path = repo_root / "CHANGELOG.md"
-
-    try:
-        content = changelog_path.read_text(encoding="utf-8")
-
-        # Check if version already exists
-        if re.search(rf"## \[{re.escape(version)}\]", content):
-            print_info(f"CHANGELOG.md already has entry for {version}")
-            return True
-
-        # Check if there's unreleased content
-        unreleased_match = re.search(r"## \[Unreleased\]\s*\n(.*?)(?=## \[|$)", content, re.DOTALL)
-
-        if not unreleased_match or not unreleased_match.group(1).strip():
-            print_error("No unreleased changes in CHANGELOG.md")
-            print_error("Add changes under ## [Unreleased] before releasing")
-            return False
-
-        # Replace [Unreleased] with new version
-        today = datetime.now().strftime("%Y-%m-%d")
-        new_content = content.replace(
-            "## [Unreleased]",
-            f"## [Unreleased]\n\n## [{version}] - {today}",
-            1,
-        )
-
-        # Update the links at the bottom
-        # Find the [unreleased] link and update it, add new version link
-        new_content = re.sub(
-            r"\[unreleased\]: (https://github\.com/[^/]+/[^/]+)/compare/v[\d.]+\.\.\.HEAD",
-            f"[unreleased]: \\1/compare/v{version}...HEAD\n[{version}]: \\1/compare/v",
-            new_content,
-            flags=re.IGNORECASE,
-        )
-
-        changelog_path.write_text(new_content, encoding="utf-8")
-        print_success(f"Updated CHANGELOG.md for version {version}")
-        return True
-    except Exception as e:
-        print_error(f"Failed to update CHANGELOG.md: {e}")
-        return False
-
-
 def update_pyproject_toml(repo_root: Path, version: str) -> bool:
     """Update version in pyproject.toml."""
     pyproject_path = repo_root / "pyproject.toml"

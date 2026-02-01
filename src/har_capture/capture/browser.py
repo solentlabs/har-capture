@@ -10,7 +10,10 @@ import contextlib
 import gzip
 import json
 import logging
+import os
+import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -288,8 +291,6 @@ def capture_device_har(
     temp_fd, temp_path_str = tempfile.mkstemp(suffix=".har", prefix="har_capture_")
     temp_path = Path(temp_path_str)
     # Close the file descriptor - Playwright will write to it by path
-    import os
-
     os.close(temp_fd)
 
     def launch_browser_and_capture() -> bool:
@@ -329,8 +330,6 @@ def capture_device_har(
 
             if timeout is not None:
                 # Automated mode: wait for timeout then close
-                import time
-
                 time.sleep(timeout)
             else:
                 # Interactive mode: wait for user to close browser
@@ -408,8 +407,6 @@ def capture_device_har(
     # - sanitize is False (user wants the raw file as output)
     if keep_raw or not sanitize:
         try:
-            import shutil
-
             shutil.copy2(temp_path, output_path)
             result.har_path = output_path
         except Exception as e:
