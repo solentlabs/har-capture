@@ -10,6 +10,7 @@ import contextlib
 import gzip
 import json
 import logging
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -283,6 +284,14 @@ def capture_device_har(
 
     target_url = f"{scheme}://{host}/"
 
+    # Create temp file for raw HAR (contains PII, never stored in user's directory)
+    temp_fd, temp_path_str = tempfile.mkstemp(suffix=".har", prefix="har_capture_")
+    temp_path = Path(temp_path_str)
+    # Close the file descriptor - Playwright will write to it by path
+    import os
+
+    os.close(temp_fd)
+
     def launch_browser_and_capture() -> bool:
         """Launch browser and capture HAR. Returns True on success."""
         with sync_playwright() as p:
@@ -297,9 +306,9 @@ def capture_device_har(
             # Launch browser with HAR recording
             browser_instance = browser_type.launch(headless=headless)
 
-            # Build context options
+            # Build context options - write raw HAR to temp file
             context_options: dict[str, Any] = {
-                "record_har_path": str(output_path),
+                "record_har_path": str(temp_path),
                 "record_har_content": "embed",  # Embed response bodies in HAR
                 "ignore_https_errors": True,  # Devices often have self-signed certs
                 "service_workers": "block",  # Disable service workers to prevent caching
@@ -339,6 +348,11 @@ def capture_device_har(
         error_lower = error_msg.lower()
         return any(pattern in error_lower for pattern in _MISSING_DEPS_PATTERNS)
 
+    def _cleanup_temp() -> None:
+        """Clean up temp file."""
+        with contextlib.suppress(Exception):
+            temp_path.unlink()
+
     try:
         launch_browser_and_capture()
     except Exception as e:
@@ -350,35 +364,59 @@ def capture_device_har(
                 try:
                     launch_browser_and_capture()
                 except Exception as e2:
+                    _cleanup_temp()
                     return CaptureResult(
-                        har_path=output_path,
+                        har_path=Path(),
                         success=False,
                         error=_sanitize_error_message(str(e2), http_credentials),
                     )
             else:
+                _cleanup_temp()
                 return CaptureResult(
-                    har_path=output_path,
+                    har_path=Path(),
                     success=False,
                     error="Failed to install browser dependencies",
                 )
         else:
+            _cleanup_temp()
             return CaptureResult(
-                har_path=output_path,
+                har_path=Path(),
                 success=False,
                 error=error_str,
             )
 
-    result = CaptureResult(har_path=output_path)
+    # Determine sanitized output path based on user's output_path
+    if str(output_path).endswith(".har"):
+        sanitized_output = output_path.parent / (output_path.stem + ".sanitized.har")
+    else:
+        sanitized_output = output_path.with_suffix(".sanitized.har")
 
-    # Sanitize first (must happen before compression)
+    result = CaptureResult(har_path=None)
+
+    # Sanitize from temp file to user's output location
     if sanitize:
         try:
             from har_capture.sanitization import sanitize_har_file
 
-            sanitized_path = sanitize_har_file(str(output_path))
-            result.sanitized_path = Path(sanitized_path)
+            sanitize_har_file(str(temp_path), str(sanitized_output))
+            result.sanitized_path = sanitized_output
         except Exception as e:
             _LOGGER.warning("Sanitization failed: %s", e)
+
+    # Copy raw file to user's output location if:
+    # - keep_raw is True, OR
+    # - sanitize is False (user wants the raw file as output)
+    if keep_raw or not sanitize:
+        try:
+            import shutil
+
+            shutil.copy2(temp_path, output_path)
+            result.har_path = output_path
+        except Exception as e:
+            _LOGGER.warning("Failed to copy raw HAR: %s", e)
+
+    # Always clean up temp file (raw PII should not persist)
+    _cleanup_temp()
 
     # Compress the sanitized file (never compress unsanitized)
     if compress and result.sanitized_path and result.sanitized_path.exists():
@@ -387,7 +425,7 @@ def capture_device_har(
             result.compressed_path = compressed_path
             result.stats = stats
 
-            # Delete uncompressed sanitized file
+            # Delete uncompressed sanitized file unless keep_raw
             if not keep_raw:
                 try:
                     result.sanitized_path.unlink()
@@ -396,13 +434,5 @@ def capture_device_har(
                     _LOGGER.warning("Failed to delete uncompressed sanitized HAR: %s", e)
         except Exception as e:
             _LOGGER.warning("Compression failed: %s", e)
-
-    # Delete raw file unless keep_raw is set
-    if not keep_raw and (result.sanitized_path or result.compressed_path):
-        try:
-            output_path.unlink()
-            result.har_path = None
-        except Exception as e:
-            _LOGGER.warning("Failed to delete raw HAR: %s", e)
 
     return result
