@@ -41,16 +41,6 @@ Contains 14 sequential `re.sub()` calls with nested callback functions. Handles 
 
 Handles validation, browser setup, error handling with retry logic, compression, and sanitization. Too many responsibilities.
 
-## Code Duplication
-
-### ~~`[REDACTED]` string literal~~ ✅ DONE (v0.2.4)
-
-Extracted to `REDACTED` constant and `_redact_value()` helper in `har.py`.
-
-### ~~Sensitive field checking pattern~~ ✅ DONE (v0.2.4)
-
-Consolidated into `_redact_value(value, hasher, category)` helper function.
-
 ## Error Handling
 
 ### Silent exception suppression
