@@ -1,6 +1,6 @@
 # har-capture
 
-[![PyPI version](https://badge.fury.io/py/har-capture.svg)](https://pypi.org/project/har-capture/)
+[![PyPI version](https://img.shields.io/pypi/v/har-capture)](https://pypi.org/project/har-capture/)
 [![Downloads](https://img.shields.io/pypi/dm/har-capture)](https://pypi.org/project/har-capture/)
 [![codecov](https://codecov.io/gh/solentlabs/har-capture/branch/main/graph/badge.svg)](https://codecov.io/gh/solentlabs/har-capture)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,7 +14,7 @@ Capture and sanitize [HAR (HTTP Archive)](http://www.softwareishard.com/blog/har
 <summary><b>Windows</b></summary>
 
 1. Install Python from the [Microsoft Store](https://apps.microsoft.com/detail/9NRWMJP3717K) or [python.org](https://www.python.org/downloads/)
-2. Open PowerShell and run:
+1. Open PowerShell and run:
 
 ```bash
 pip install har-capture[full]
@@ -40,6 +40,7 @@ har-capture get https://example.com
 pip install har-capture
 har-capture sanitize myfile.har
 ```
+
 </details>
 
 <details>
@@ -53,9 +54,10 @@ with open("input.har") as f:
 
 sanitized = sanitize_har(har_data)
 ```
+
 </details>
 
----
+______________________________________________________________________
 
 ## Why har-capture?
 
@@ -73,23 +75,23 @@ har-capture get <TARGET>     # Capture → sanitize → compress (all automatic)
 
 ### Comparison with Existing Tools
 
-| Feature | har-capture | [DevTools](https://developer.chrome.com/docs/devtools/network/reference) | [Google](https://github.com/google/har-sanitizer) | [Cloudflare](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | [Edgio](https://github.com/Edgio/har-tools) |
-|---------|:-----------:|:--------:|:------:|:----------:|:-----:|
-| **Sanitization** |
-| Cookies/auth headers | ✅ | ✅ | ✅ | ✅ | ✅ |
-| IPs, MACs, emails | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Passwords in forms | ✅ | ❌ | ✅ | ❌ | ✅ |
-| JWT smart redaction | ❌ | ❌ | ❌ | ✅ | ❌ |
-| Correlation-preserving | ✅ | ❌ | ❌ | ❌ | ❌ |
-| **Usability** |
-| No installation needed | ❌ | ✅ | ❌ | ✅ | ✅ |
-| Data stays local | ✅ | ✅ | ❌ | ✅ | ✅ |
-| CLI/scriptable | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Preview before redact | ✅ | ❌ | ✅ | ❌ | ❌ |
-| **Extras** |
-| Integrated capture | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Custom patterns | ✅ | ❌ | ✅ | ❌ | ❌ |
-| Validation | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Feature                | har-capture | [DevTools](https://developer.chrome.com/docs/devtools/network/reference) | [Google](https://github.com/google/har-sanitizer) | [Cloudflare](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | [Edgio](https://github.com/Edgio/har-tools) |
+| ---------------------- | :---------: | :----------------------------------------------------------------------: | :-----------------------------------------------: | :-------------------------------------------------------------------------------------: | :-----------------------------------------: |
+| **Sanitization**       |             |                                                                          |                                                   |                                                                                         |                                             |
+| Cookies/auth headers   |     ✅      |                                    ✅                                    |                        ✅                         |                                           ✅                                            |                     ✅                      |
+| IPs, MACs, emails      |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
+| Passwords in forms     |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ✅                      |
+| JWT smart redaction    |     ❌      |                                    ❌                                    |                        ❌                         |                                           ✅                                            |                     ❌                      |
+| Correlation-preserving |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
+| **Usability**          |             |                                                                          |                                                   |                                                                                         |                                             |
+| No installation needed |     ❌      |                                    ✅                                    |                        ❌                         |                                           ✅                                            |                     ✅                      |
+| Data stays local       |     ✅      |                                    ✅                                    |                        ❌                         |                                           ✅                                            |                     ✅                      |
+| CLI/scriptable         |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ✅                      |
+| Preview before redact  |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ❌                      |
+| **Extras**             |             |                                                                          |                                                   |                                                                                         |                                             |
+| Integrated capture     |     ✅      |                                    ✅                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
+| Custom patterns        |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ❌                      |
+| Validation             |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
 
 ### Target Use Cases
 
@@ -178,6 +180,7 @@ By default, har-capture uses **format-preserving salted hashes** for redaction:
 - Uses reserved/documentation ranges that won't collide with real data
 
 **Example:**
+
 ```
 Before:
   MAC: AA:BB:CC:DD:EE:FF (appears 3 times)
@@ -192,15 +195,17 @@ With static placeholders (--no-salt):
 ```
 
 **Format-preserving ranges used:**
-| Type | Range | Standard |
-|------|-------|----------|
-| MAC | `02:xx:xx:xx:xx:xx` | Locally administered bit |
-| Private IP | `10.255.x.x` | RFC 1918 |
-| Public IP | `192.0.2.x` | RFC 5737 TEST-NET-1 |
-| IPv6 | `2001:db8::` | RFC 3849 documentation |
-| Email | `user_xxx@redacted.invalid` | RFC 2606 .invalid TLD |
+
+| Type       | Range                       | Standard                 |
+| ---------- | --------------------------- | ------------------------ |
+| MAC        | `02:xx:xx:xx:xx:xx`         | Locally administered bit |
+| Private IP | `10.255.x.x`                | RFC 1918                 |
+| Public IP  | `192.0.2.x`                 | RFC 5737 TEST-NET-1      |
+| IPv6       | `2001:db8::`                | RFC 3849 documentation   |
+| Email      | `user_xxx@redacted.invalid` | RFC 2606 .invalid TLD    |
 
 **Salt options:**
+
 - `--salt auto` (default): Random salt per session
 - `--salt my-key`: Consistent hashing across runs
 - `--no-salt`: Static placeholders (legacy mode)
@@ -217,12 +222,14 @@ src/har_capture/patterns/
 ```
 
 **Add custom patterns via CLI:**
+
 ```bash
 har-capture sanitize capture.har --patterns my_patterns.json
 har-capture validate capture.har --patterns my_patterns.json
 ```
 
 **Add custom patterns via Python:**
+
 ```python
 from har_capture.sanitization import sanitize_html
 
@@ -230,6 +237,7 @@ clean = sanitize_html(html, custom_patterns="my_patterns.json")
 ```
 
 **Example custom patterns file:**
+
 ```json
 {
   "patterns": {
@@ -272,10 +280,11 @@ har-capture get <TARGET> --no-compress    # Skip compression
 ```
 
 **Default behavior:**
+
 1. Captures all HTTP traffic to a raw `.har` file
-2. Sanitizes PII → creates `.sanitized.har`
-3. Compresses → creates `.sanitized.har.gz`
-4. Deletes intermediate files (raw and uncompressed sanitized)
+1. Sanitizes PII → creates `.sanitized.har`
+1. Compresses → creates `.sanitized.har.gz`
+1. Deletes intermediate files (raw and uncompressed sanitized)
 
 Use `--keep-raw` to preserve the original unsanitized file for debugging.
 
@@ -306,12 +315,12 @@ har-capture validate capture.har --patterns custom.json
 
 ## Platform Support
 
-| Component | Windows | macOS | Linux |
-|-----------|---------|-------|-------|
-| Sanitization | Yes | Yes | Yes |
-| Validation | Yes | Yes | Yes |
-| CLI | Yes | Yes | Yes |
-| Capture | Yes | Yes | Yes |
+| Component    | Windows | macOS | Linux |
+| ------------ | ------- | ----- | ----- |
+| Sanitization | Yes     | Yes   | Yes   |
+| Validation   | Yes     | Yes   | Yes   |
+| CLI          | Yes     | Yes   | Yes   |
+| Capture      | Yes     | Yes   | Yes   |
 
 ## Development
 

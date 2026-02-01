@@ -613,9 +613,95 @@ class TestSanitizationBeforeCompression:
 
         # The compressed file should NOT be named "capture.har.gz"
         # It should be named "capture.sanitized.har.gz"
-        assert compressed_path.name != "capture.har.gz", (
-            "Compressed file should not be from raw path"
-        )
-        assert "sanitized" in compressed_path.name, (
-            "Compressed file should be based on sanitized file"
-        )
+        assert compressed_path.name != "capture.har.gz", "Compressed file should not be from raw path"
+        assert "sanitized" in compressed_path.name, "Compressed file should be based on sanitized file"
+
+
+# ┌─────────────┬───────────────┬─────────────────┬─────────────────┬─────────────┬─────────────────┐
+# │ browser     │ is_installed  │ install_result  │ expect_install  │ expect_ok   │ error_contains  │
+# ├─────────────┼───────────────┼─────────────────┼─────────────────┼─────────────┼─────────────────┤
+# │ Browser     │ check result  │ install result  │ install called? │ success?    │ error substring │
+# └─────────────┴───────────────┴─────────────────┴─────────────────┴─────────────┴─────────────────┘
+#
+# fmt: off
+AUTO_INSTALL_CASES = [
+    # Browser missing, install succeeds
+    ("chromium", False, True,  True,  True,  None),
+    ("firefox",  False, True,  True,  True,  None),
+    ("webkit",   False, True,  True,  True,  None),
+    # Browser missing, install fails
+    ("chromium", False, False, True,  False, "Failed to install chromium"),
+    ("firefox",  False, False, True,  False, "Failed to install firefox"),
+    # Browser already installed
+    ("chromium", True,  None,  False, True,  None),
+    ("firefox",  True,  None,  False, True,  None),
+]
+# fmt: on
+
+
+class TestBrowserAutoInstall:
+    """Tests for automatic browser installation when missing."""
+
+    @pytest.mark.parametrize(
+        ("browser", "is_installed", "install_result", "expect_install", "expect_ok", "error_contains"),
+        AUTO_INSTALL_CASES,
+        ids=[
+            f"{c[0]}_{'present' if c[1] else 'missing'}_{'ok' if c[4] else 'fail'}"
+            for c in AUTO_INSTALL_CASES
+        ],
+    )
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_auto_install_behavior(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+        browser: str,
+        is_installed: bool,
+        install_result: bool | None,
+        expect_install: bool,
+        expect_ok: bool,
+        error_contains: str | None,
+    ) -> None:
+        """Test browser auto-install behavior for various scenarios."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        with (
+            patch(
+                "har_capture.capture.browser.check_browser_installed",
+                return_value=is_installed,
+            ),
+            patch(
+                "har_capture.capture.browser.install_browser",
+                return_value=install_result,
+            ) as mock_install,
+        ):
+            output = tmp_path / "test.har"
+
+            result = capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                browser=browser,
+                headless=True,
+                timeout=1,
+                sanitize=False,
+                compress=False,
+            )
+
+            # Verify install was called (or not) as expected
+            if expect_install:
+                mock_install.assert_called_once_with(browser)
+            else:
+                mock_install.assert_not_called()
+
+            # Verify success/failure
+            assert result.success is expect_ok
+
+            # Verify error message if expected
+            if error_contains:
+                assert error_contains in result.error

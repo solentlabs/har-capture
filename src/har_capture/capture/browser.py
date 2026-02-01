@@ -20,7 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from har_capture.capture.connectivity import _parse_target, check_device_connectivity
-from har_capture.capture.deps import check_playwright, install_browser_deps
+from har_capture.capture.deps import (
+    check_browser_installed,
+    check_playwright,
+    install_browser,
+    install_browser_deps,
+)
 from har_capture.patterns import get_bloat_extensions
 
 _LOGGER = logging.getLogger(__name__)
@@ -257,6 +262,17 @@ def capture_device_har(
             success=False,
             error="Playwright not installed. Run: pip install har-capture[capture]",
         )
+
+    # Check browser installed - auto-install if missing
+    if not check_browser_installed(browser):
+        _LOGGER.info("Browser %s not installed. Installing...", browser)
+        if not install_browser(browser):
+            return CaptureResult(
+                har_path=Path(),
+                success=False,
+                error=f"Failed to install {browser}. Run: playwright install {browser}",
+            )
+        _LOGGER.info("Browser %s installed successfully.", browser)
 
     from playwright.sync_api import sync_playwright
 
