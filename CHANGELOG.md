@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-02-01
+
+### Added
+
+- Release automation script (`scripts/release.py`) for consistent version bumps
+
+### Security
+
+- Raw HAR capture now uses temp files; PII is never written to user's directory
+- Only sanitized content is saved to user-specified output path
+
+### Changed
+
+- Extracted `REDACTED` constant and `_redact_value()` helper to reduce code duplication
+
 ## [0.2.3] - 2026-01-31
 
 ### Changed
@@ -100,4 +115,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
 [0.2.3]: https://github.com/solentlabs/har-capture/compare/v0.2.2...v0.2.3
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.2.3...HEAD
+[0.2.4]: https://github.com/solentlabs/har-capture/compare/v0.2.3...v0.2.4
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.2.4...HEAD
