@@ -196,6 +196,8 @@ ignore = [
 ]
 # CLI can use print
 "src/har_capture/cli/**/*.py" = ["T20"]
+# Scripts use print and subprocess for automation (trusted commands)
+"scripts/**/*.py" = ["T20", "S603", "S607", "RUF001"]
 # Allow print in __main__ for CLI entry
 "src/har_capture/__main__.py" = ["T20"]
 # Connectivity checks intentionally use URL open
