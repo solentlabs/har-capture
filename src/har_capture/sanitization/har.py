@@ -152,6 +152,25 @@ def _load_sensitive_field_patterns() -> re.Pattern[str]:
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE = _load_sensitive_field_patterns()
 
+# Redaction placeholder - single source of truth
+REDACTED = "[REDACTED]"
+
+
+def _redact_value(value: str, hasher: Hasher | None, category: str = "FIELD") -> str:
+    """Redact a value, using hasher for correlation-preserving hashes if available.
+
+    Args:
+        value: The sensitive value to redact
+        hasher: Optional hasher for correlation-preserving redaction
+        category: Hash category (FIELD, AUTH, COOKIE) for hasher
+
+    Returns:
+        Hashed value if hasher provided, otherwise REDACTED placeholder
+    """
+    if hasher:
+        return hasher.hash_generic(value, category)
+    return REDACTED
+
 
 def is_sensitive_field(field_name: str) -> bool:
     """Check if a form field name is sensitive.
@@ -195,19 +214,15 @@ def sanitize_header_value(
     name_lower = name.lower()
 
     if name_lower in _FULL_REDACT_HEADERS:
-        if hasher:
-            return hasher.hash_generic(value, "AUTH")
-        return "[REDACTED]"
+        return _redact_value(value, hasher, "AUTH")
 
     if name_lower in _COOKIE_REDACT_HEADERS:
         # Preserve cookie names, redact values
         def redact_cookie(match: re.Match[str]) -> str:
             cookie_name = match.group(1)
             cookie_value = match.group(2)
-            if hasher:
-                hashed = hasher.hash_generic(cookie_value, "COOKIE")
-                return f"{cookie_name}={hashed}"
-            return f"{cookie_name}=[REDACTED]"
+            hashed = _redact_value(cookie_value, hasher, "COOKIE")
+            return f"{cookie_name}={hashed}"
 
         return re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
 
@@ -229,10 +244,7 @@ def _sanitize_form_urlencoded(text: str, hasher: Hasher | None = None) -> str:
         if "=" in pair:
             key, value = pair.split("=", 1)
             if is_sensitive_field(key):
-                if hasher:
-                    value = hasher.hash_generic(value, "FIELD")
-                else:
-                    value = "[REDACTED]"
+                value = _redact_value(value, hasher)
             pairs.append(f"{key}={value}")
         else:
             pairs.append(pair)
@@ -254,10 +266,7 @@ def _sanitize_json_text(text: str, hasher: Hasher | None = None) -> str:
         if isinstance(data, dict):
             for key in data:
                 if is_sensitive_field(key) and isinstance(data[key], str):
-                    if hasher:
-                        data[key] = hasher.hash_generic(data[key], "FIELD")
-                    else:
-                        data[key] = "[REDACTED]"
+                    data[key] = _redact_value(data[key], hasher)
         return json.dumps(data)
     except json.JSONDecodeError:
         return text
@@ -285,10 +294,7 @@ def sanitize_post_data(
     if "params" in result and isinstance(result["params"], list):
         for param in result["params"]:
             if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                if hasher:
-                    param["value"] = hasher.hash_generic(param.get("value", ""), "FIELD")
-                else:
-                    param["value"] = "[REDACTED]"
+                param["value"] = _redact_value(param.get("value", ""), hasher)
 
     # Sanitize raw text (form-urlencoded or JSON)
     if result.get("text"):
@@ -322,10 +328,7 @@ def _sanitize_json_recursive(data: Any, hasher: Hasher | None = None, _depth: in
         result = {}
         for key, value in data.items():
             if is_sensitive_field(key) and isinstance(value, str):
-                if hasher:
-                    result[key] = hasher.hash_generic(value, "FIELD")
-                else:
-                    result[key] = "[REDACTED]"
+                result[key] = _redact_value(value, hasher)
             else:
                 result[key] = _sanitize_json_recursive(value, hasher, _depth + 1)
         return result
@@ -365,10 +368,7 @@ def _sanitize_request(req: dict[str, Any], hasher: Hasher | None = None) -> None
     if "queryString" in req and isinstance(req["queryString"], list):
         for param in req["queryString"]:
             if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                if hasher:
-                    param["value"] = hasher.hash_generic(param.get("value", ""), "FIELD")
-                else:
-                    param["value"] = "[REDACTED]"
+                param["value"] = _redact_value(param.get("value", ""), hasher)
 
 
 def _sanitize_response_content(
