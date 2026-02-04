@@ -151,6 +151,7 @@ class TestAddCaptureMetadata:
         assert "_har_capture" in har["log"]
         metadata = har["log"]["_har_capture"]
         assert "tool" in metadata
+        assert "version" in metadata
         assert "captured_at" in metadata
         assert "cache_disabled" in metadata
         assert "service_workers_blocked" in metadata
@@ -200,6 +201,16 @@ class TestAddCaptureMetadata:
         _add_capture_metadata(har)
 
         assert har["log"]["_har_capture"]["service_workers_blocked"] is True
+
+    def test_version_matches_package(self) -> None:
+        """Test version matches the package version."""
+        from har_capture import __version__
+
+        har = {"log": {"entries": []}}
+
+        _add_capture_metadata(har)
+
+        assert har["log"]["_har_capture"]["version"] == __version__
 
 
 class TestFilterAndCompressHar:

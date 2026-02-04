@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from har_capture import __version__
 from har_capture.capture.connectivity import _parse_target, check_device_connectivity
 from har_capture.capture.deps import (
     check_browser_installed,
@@ -118,6 +119,7 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
     """
     har["log"]["_har_capture"] = {
         "tool": tool_name,
+        "version": __version__,
         "captured_at": datetime.now().isoformat(),
         "cache_disabled": True,
         "service_workers_blocked": True,
