@@ -34,10 +34,16 @@ dependencies = []
 
 [project.optional-dependencies]
 capture = ["playwright>=1.40"]
-cli = ["typer>=0.12"]
+cli = [
+    "typer>=0.12",
+    "InquirerPy>=0.3.0",
+    "rich>=13.0.0",
+]
 full = [
     "playwright>=1.40",
     "typer>=0.12",
+    "InquirerPy>=0.3.0",
+    "rich>=13.0.0",
 ]
 dev = [
     # Testing
