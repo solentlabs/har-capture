@@ -624,7 +624,7 @@ def sanitize_har(
         actual_salt = salt
 
     # Create collector with the salt
-    hasher = Hasher.create(actual_salt if actual_salt else None)
+    hasher = Hasher.create(actual_salt or None)
     collector = RedactionCollector(hasher=hasher)
 
     result = copy.deepcopy(har_data)
@@ -811,7 +811,7 @@ def apply_user_redactions(
     _LOGGER.debug("Applying %d user redaction(s)", len(redactions_to_apply))
 
     # Recreate hasher with same salt used in Pass 1
-    hasher = Hasher.create(report.salt if report.salt else None)
+    hasher = Hasher.create(report.salt or None)
 
     # Work on a deep copy to avoid modifying original
     result = copy.deepcopy(har_data)

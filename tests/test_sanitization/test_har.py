@@ -238,7 +238,7 @@ class TestHeaderSanitization:
         if "=" in value:
             secret = value.split("=")[1].split(";")[0]
         else:
-            secret = value.split(" ")[-1] if " " in value else value
+            secret = value.rsplit(" ", maxsplit=1)[-1] if " " in value else value
         assert secret not in result, f"{desc}: secret '{secret}' should be removed"
 
 

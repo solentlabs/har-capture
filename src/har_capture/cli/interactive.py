@@ -299,7 +299,7 @@ def run_checkbox_selection(flagged: list[FlaggedValue]) -> list[int] | None:
         if selected is None:
             return None
 
-        return selected if selected else []
+        return selected or []
     except (KeyboardInterrupt, EOFError):
         # User wants to cancel
         return None
