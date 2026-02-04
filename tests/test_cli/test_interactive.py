@@ -315,6 +315,7 @@ class TestExceptionHandling:
         description: str,
     ) -> None:
         """Test that checkbox selection handles exceptions gracefully."""
+        pytest.importorskip("InquirerPy")
         from har_capture.cli.interactive import run_checkbox_selection
         from har_capture.sanitization.report import ConfidenceLevel, FlaggedValue
 
@@ -356,6 +357,7 @@ class TestExceptionHandling:
         description: str,
     ) -> None:
         """Test that quick action prompt handles exceptions gracefully."""
+        pytest.importorskip("InquirerPy")
         from har_capture.cli.interactive import run_quick_action_prompt
         from har_capture.sanitization.report import ConfidenceLevel, FlaggedValue
 
