@@ -21,16 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from har_capture.patterns import is_allowlisted, load_allowlist, load_sensitive_patterns
-
-# Patterns that indicate a value is properly redacted (non-format-preserving)
-# Format-preserving patterns are loaded from allowlist.json
-REDACTED_PATTERNS: list[str] = [
-    r"\[REDACTED\]",
-    r"REDACTED",
-    r"XXX+",
-    r"0{6,}",  # All zeros (MAC, serial)
-]
+from har_capture.patterns import load_sensitive_patterns
+from har_capture.patterns.redaction import is_redacted as check_if_redacted
 
 # Cookie attribute-only values (not actual session data)
 COOKIE_ATTRIBUTES_ONLY: list[str] = [
@@ -105,6 +97,9 @@ class Finding:
 def is_redacted(value: str, custom_patterns: str | None = None) -> bool:
     """Check if a value appears to be properly redacted.
 
+    This function now delegates to the consolidated redaction module for
+    consistent redaction checking across the codebase.
+
     Args:
         value: Value to check
         custom_patterns: Optional path to custom patterns file
@@ -112,13 +107,7 @@ def is_redacted(value: str, custom_patterns: str | None = None) -> bool:
     Returns:
         True if value appears to be redacted
     """
-    # Check standard redaction patterns
-    if any(re.search(pattern, value, re.IGNORECASE) for pattern in REDACTED_PATTERNS):
-        return True
-
-    # Check allowlist
-    allowlist = load_allowlist(custom_patterns)
-    return is_allowlisted(value, allowlist)
+    return check_if_redacted(value, custom_patterns)
 
 
 def is_cookie_attributes_only(value: str) -> bool:

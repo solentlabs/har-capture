@@ -107,7 +107,7 @@ class TestSanitizeBasic:
         """Test sanitizing a valid HAR file."""
         result = runner.invoke(app, ["sanitize", str(valid_har)])
         assert result.exit_code == 0
-        assert "Sanitized:" in result.stdout
+        assert "Sanitization Complete" in result.stdout
 
     def test_sanitize_with_output(self, valid_har: Path, tmp_path: Path) -> None:
         """Test sanitizing with explicit output path."""
@@ -142,7 +142,7 @@ class TestSanitizeSaltOptions:
         """Test default auto salt mode."""
         result = runner.invoke(app, ["sanitize", str(valid_har)])
         assert result.exit_code == 0
-        assert "random salt" in result.stdout
+        assert "random (correlation within file)" in result.stdout
 
     def test_sanitize_with_no_salt(self, valid_har: Path) -> None:
         """Test --no-salt option for static placeholders."""
@@ -154,7 +154,7 @@ class TestSanitizeSaltOptions:
         """Test --salt option with custom value."""
         result = runner.invoke(app, ["sanitize", str(valid_har), "--salt", "my-salt"])
         assert result.exit_code == 0
-        assert "provided salt" in result.stdout
+        assert "provided (consistent across runs)" in result.stdout
 
 
 class TestSanitizeCompression:
@@ -273,4 +273,5 @@ class TestSanitizeOutput:
         result = runner.invoke(app, ["sanitize", str(valid_har)])
         assert result.exit_code == 0
         assert "WARNING: Automated sanitization is best-effort" in result.stdout
-        assert "WiFi" in result.stdout
+        # Verify output shows redacted categories
+        assert "Auto-redacted" in result.stdout

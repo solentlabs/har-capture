@@ -1,4 +1,25 @@
-"""Tests for HAR sanitization utilities."""
+"""Tests for HAR sanitization utilities.
+
+This module tests sanitization of HTTP Archive (HAR) format files,
+ensuring sensitive data is redacted while preserving debugging utility.
+
+Test Coverage:
+    - Sensitive field detection in various HAR sections
+    - Header sanitization (Authorization, Cookie, Set-Cookie)
+    - POST data sanitization (form fields, JSON payloads)
+    - Entry-level sanitization (requests and responses)
+    - Full HAR file sanitization end-to-end
+    - Correlation-preserving redaction with salted hashes
+
+Test Strategy:
+    - Unit tests for each sanitization layer
+    - Integration tests for complete HAR processing
+    - Validation that non-sensitive data is preserved
+    - Hash consistency verification across values
+
+Dependencies:
+    - pytest for test framework
+"""
 
 from __future__ import annotations
 
@@ -340,7 +361,8 @@ class TestEntrySanitization:
         result = sanitize_entry(entry, salt=None)
         cookie_header = next(h for h in result["request"]["headers"] if h["name"] == "Cookie")
         assert "secret123" not in cookie_header["value"]
-        assert "[REDACTED]" in cookie_header["value"]
+        # Cookie values are redacted with ***COOKIE*** placeholder
+        assert "***COOKIE***" in cookie_header["value"] or "[REDACTED]" in cookie_header["value"]
 
     def test_sanitizes_response_headers(self) -> None:
         """Test response header sanitization."""
@@ -387,7 +409,8 @@ class TestEntrySanitization:
         }
         result = sanitize_entry(entry, salt=None)
         password_param = next(p for p in result["request"]["queryString"] if p["name"] == "password")
-        assert password_param["value"] == "[REDACTED]"
+        # Password values are redacted with ***FIELD*** placeholder (salt=None)
+        assert password_param["value"] in ("[REDACTED]", "***FIELD***")
 
 
 class TestFullHarSanitization:
@@ -414,7 +437,7 @@ class TestFullHarSanitization:
                 ],
             }
         }
-        result = sanitize_har(har_data, salt=None)
+        result, _ = sanitize_har(har_data, salt=None)
         entry = result["log"]["entries"][0]
         assert "11:22:33:44:55:66" not in entry["response"]["content"]["text"]
 
@@ -443,20 +466,20 @@ class TestFullHarSanitization:
                 ],
             }
         }
-        result = sanitize_har(har_data, salt=None)
+        result, _ = sanitize_har(har_data, salt=None)
         assert "AA:AA:AA:AA:AA:AA" not in result["log"]["entries"][0]["response"]["content"]["text"]
         assert "BB:BB:BB:BB:BB:BB" not in result["log"]["entries"][1]["response"]["content"]["text"]
 
     def test_handles_missing_log(self) -> None:
         """Test handling of missing log key."""
         har_data = {"invalid": "structure"}
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert "invalid" in result
 
     def test_handles_empty_entries(self) -> None:
         """Test handling of empty entries list."""
         har_data = {"log": {"version": "1.2", "entries": []}}
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert result["log"]["entries"] == []
 
     def test_preserves_structure(self) -> None:
@@ -469,7 +492,7 @@ class TestFullHarSanitization:
                 "pages": [{"title": "Test Page"}],
             }
         }
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert result["log"]["version"] == "1.2"
         assert result["log"]["creator"]["name"] == "Test"
         assert len(result["log"]["pages"]) == 1
@@ -483,5 +506,5 @@ class TestFullHarSanitization:
                 "pages": [{"title": "Device MAC: AA:BB:CC:DD:EE:FF"}],
             }
         }
-        result = sanitize_har(har_data, salt=None)
+        result, _ = sanitize_har(har_data, salt=None)
         assert "AA:BB:CC:DD:EE:FF" not in result["log"]["pages"][0]["title"]

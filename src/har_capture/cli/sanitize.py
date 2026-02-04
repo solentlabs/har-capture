@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -47,6 +48,14 @@ def sanitize(
         int,
         typer.Option("--compression-level", help="Gzip compression level 1-9 (default: 9)"),
     ] = 9,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive", "-i", help="Review suspicious values interactively"),
+    ] = False,
+    report: Annotated[
+        Path | None,
+        typer.Option("--report", "-r", help="Write JSON report to file"),
+    ] = None,
 ) -> None:
     """Remove PII from a HAR file.
 
@@ -65,6 +74,8 @@ def sanitize(
         patterns: Custom patterns JSON file to merge with defaults
         max_size: Maximum file size in MB (default: 100, 0=unlimited)
         compression_level: Gzip compression level 1-9 (default: 9)
+        interactive: Review suspicious values interactively
+        report: Write JSON report to file
 
     Example:
         har-capture sanitize device.har
@@ -73,7 +84,11 @@ def sanitize(
         har-capture sanitize device.har --no-salt  # Static placeholders
         har-capture sanitize device.har --max-size 500  # Allow up to 500MB
         har-capture sanitize device.har --max-size 0  # No size limit
+        har-capture sanitize device.har --interactive  # Review suspicious values
+        har-capture sanitize device.har --report sanitize-report.json
     """
+    import sys
+
     from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
 
     if not input_file.exists():
@@ -90,6 +105,19 @@ def sanitize(
         typer.echo(f"Error: max-size must be >= 0, got {max_size}", err=True)
         raise typer.Exit(1)
 
+    # Handle interactive mode TTY check
+    # Always run heuristics when -i is passed, even without TTY
+    run_heuristics = interactive
+    interactive_terminal = interactive and sys.stdin.isatty()
+
+    if interactive and not sys.stdin.isatty():
+        typer.echo(
+            "Warning: --interactive requires a terminal. Writing flagged values to report instead.",
+            err=True,
+        )
+        if report is None:
+            report = Path(str(input_file) + ".review.json")
+
     output_path = str(output) if output else None
     custom_patterns = str(patterns) if patterns else None
 
@@ -104,22 +132,127 @@ def sanitize(
         effective_salt = None
 
     typer.echo(f"Sanitizing {input_file}...")
+
+    # Determine salt mode description for display
     if effective_salt == "auto":
-        typer.echo("  Using random salt (correlation within file)")
+        salt_mode = "random (correlation within file)"
     elif effective_salt is None:
-        typer.echo("  Using static placeholders (no correlation)")
+        salt_mode = "static placeholders (no correlation)"
     else:
-        typer.echo("  Using provided salt (consistent across runs)")
+        salt_mode = "provided (consistent across runs)"
 
     try:
-        result_path = sanitize_har_file(
+        # Check if file appears already sanitized
+        from har_capture.sanitization import appears_sanitized
+
+        with open(input_file, encoding="utf-8") as f:
+            har_data_check = json.load(f)
+
+        is_sanitized, match_count = appears_sanitized(har_data_check)
+        if is_sanitized:
+            typer.echo()
+            typer.echo("Warning: This file appears to already be sanitized.")
+            typer.echo(f"  Found {match_count} redaction placeholder(s) (MAC_xxxxx, PASS_xxxxx, etc.)")
+            typer.echo("  Proceeding may double-hash already redacted values.")
+            typer.echo()
+            if sys.stdin.isatty():
+                confirm = typer.confirm("Continue anyway?", default=False)
+                if not confirm:
+                    typer.echo("Aborted.")
+                    raise typer.Exit(0)
+            else:
+                typer.echo("  (Non-interactive mode: proceeding anyway)")
+
+        # Enable flag_suspicious when interactive mode is requested (even without TTY)
+        flag_suspicious = run_heuristics
+
+        result_path, sanitization_report = sanitize_har_file(
             str(input_file),
             output_path,
             salt=effective_salt,
             custom_patterns=custom_patterns,
             max_size=max_size_bytes,
+            flag_suspicious=flag_suspicious,
         )
-        typer.echo(f"  Sanitized: {result_path}")
+
+        # Interactive review mode (requires TTY)
+        if interactive_terminal and sanitization_report.flagged:
+            from har_capture.cli.interactive import run_interactive_review
+            from har_capture.sanitization import apply_user_redactions
+
+            review_completed = run_interactive_review(
+                sanitization_report,
+                input_path=str(input_file),
+                output_path=result_path,
+                salt_mode=salt_mode,
+            )
+
+            if review_completed and sanitization_report.total_user_redacted > 0:
+                # Apply user redactions and rewrite the file
+                typer.echo()
+                typer.echo("Applying user redactions...")
+
+                # Read the sanitized file back
+                try:
+                    with open(result_path, encoding="utf-8") as f:
+                        sanitized_data = json.load(f)
+                except (OSError, json.JSONDecodeError) as e:
+                    typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
+                    raise typer.Exit(1) from None
+
+                # Apply user redactions
+                try:
+                    final_data = apply_user_redactions(sanitized_data, sanitization_report)
+                except Exception as e:
+                    typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
+                    raise typer.Exit(1) from None
+
+                # Write atomically using temp file + rename
+                try:
+                    # Write to temporary file first
+                    result_dir = Path(result_path).parent
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
+                    ) as tmp_file:
+                        json.dump(final_data, tmp_file, indent=2)
+                        tmp_path = tmp_file.name
+
+                    # Atomic rename (overwrites destination)
+                    Path(tmp_path).replace(result_path)
+
+                except OSError as e:
+                    typer.echo(f"Error: Failed to write output file: {e}", err=True)
+                    # Clean up temp file if it exists
+                    try:
+                        if "tmp_path" in locals():
+                            Path(tmp_path).unlink(missing_ok=True)
+                    except OSError:
+                        # Cleanup failure in error path - not critical, already exiting
+                        pass
+                    raise typer.Exit(1) from None
+
+                typer.echo(f"  Applied {sanitization_report.total_user_redacted} user redaction(s)")
+
+            # Display summary
+            from har_capture.cli.interactive import display_summary
+
+            display_summary(sanitization_report)
+
+        else:
+            # Non-interactive mode: display sanitization summary
+            from har_capture.cli.interactive import display_sanitization_summary
+
+            display_sanitization_summary(sanitization_report, str(input_file), result_path, salt_mode)
+
+            if run_heuristics and not sanitization_report.flagged:
+                typer.echo()
+                typer.echo("No suspicious values found. All values were handled automatically.")
+
+        # Write report if requested
+        if report:
+            with open(report, "w", encoding="utf-8") as f:
+                json.dump(sanitization_report.to_dict(), f, indent=2)
+            typer.echo(f"  Report: {report}")
 
         if compress:
             result_path_obj = Path(result_path)
@@ -158,8 +291,5 @@ def sanitize(
 
     typer.echo()
     typer.echo("WARNING: Automated sanitization is best-effort.")
-    typer.echo("Before sharing, search the .har file for:")
-    typer.echo("  - Your WiFi network name (SSID)")
-    typer.echo("  - Your WiFi password")
-    typer.echo("  - Your router admin password")
+    typer.echo("Before sharing, review the .har file for any remaining sensitive data.")
     typer.echo()

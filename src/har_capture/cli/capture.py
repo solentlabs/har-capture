@@ -56,6 +56,10 @@ def capture(
         bool,
         typer.Option("--include-media", help="Include media files in capture (.mp3, .mp4, etc.)"),
     ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option("--interactive", "-i", help="Interactively review flagged values during sanitization"),
+    ] = False,
 ) -> None:
     """Capture HTTP traffic using Playwright browser.
 
@@ -77,6 +81,7 @@ def capture(
         include_fonts: Include font files in capture
         include_images: Include image files in capture
         include_media: Include media files in capture
+        interactive: Enable interactive review of flagged values during sanitization
 
     Example:
         har-capture get https://example.com
@@ -147,6 +152,7 @@ def capture(
         include_fonts=include_fonts,
         include_images=include_images,
         include_media=include_media,
+        interactive=interactive,
         result=result,
     )
 
@@ -156,6 +162,10 @@ def capture(
 
     # Display results
     _display_results(result)
+
+    # Interactive review if requested
+    if interactive and result.capture and result.capture.sanitization_report:
+        _run_interactive_review(result)
 
 
 def _display_header(target: str, browser: str, output: Path | None) -> None:
@@ -227,11 +237,79 @@ def _display_results(result: CaptureWorkflowResult) -> None:
     typer.echo()
 
     # Show next steps
-    main_file = result.sanitized_path or result.compressed_path or result.har_path
+    main_file = result.compressed_path or result.sanitized_path or result.har_path
+
+    # Check if file is already sanitized (either sanitized_path set or compressed path contains .sanitized)
+    is_sanitized = result.sanitized_path or (
+        result.compressed_path and ".sanitized" in str(result.compressed_path)
+    )
+
     typer.echo("Next steps:")
-    if result.sanitized_path:
-        typer.echo(f"  • Share the sanitized file (PII removed): {result.sanitized_path}")
+    if is_sanitized:
+        typer.echo(f"  • Share the file (PII removed): {main_file}")
     else:
         typer.echo(f"  • Sanitize before sharing: har-capture sanitize {main_file}")
     typer.echo(f"  • Validate for secrets:    har-capture validate {main_file}")
     typer.echo()
+
+    if is_sanitized:
+        typer.echo("WARNING: Automated sanitization is best-effort.")
+        typer.echo("Before sharing, review the .har file for any remaining sensitive data.")
+        typer.echo()
+
+
+def _run_interactive_review(result: CaptureWorkflowResult) -> None:
+    """Run interactive review of flagged values after capture."""
+    import json
+
+    # Type narrowing: ensure we have capture data
+    if not result.capture:
+        typer.echo("Error: No capture data available for interactive review", err=True)
+        return
+
+    report = result.capture.sanitization_report
+    sanitized_path = result.capture.sanitized_path
+    raw_path = result.capture.har_path
+
+    # Ensure we have required data for interactive review
+    if not report or not sanitized_path:
+        typer.echo("Error: Missing sanitization data for interactive review", err=True)
+        return
+
+    if not report.flagged:
+        typer.echo("No suspicious values found. All values were handled automatically.")
+        return
+
+    from har_capture.cli.interactive import display_summary, run_interactive_review
+    from har_capture.sanitization import apply_user_redactions
+
+    # Determine salt mode for display
+    salt_mode = "random (correlation within file)" if report.salt else "static placeholders"
+
+    review_completed = run_interactive_review(
+        report,
+        input_path=str(raw_path) if raw_path else None,
+        output_path=str(sanitized_path) if sanitized_path else None,
+        salt_mode=salt_mode,
+    )
+
+    if review_completed and report.total_user_redacted > 0:
+        # Apply user redactions and rewrite the file
+        typer.echo()
+        typer.echo("Applying user redactions...")
+
+        # Read the sanitized file back
+        with open(sanitized_path, encoding="utf-8") as f:
+            sanitized_data = json.load(f)
+
+        # Apply user redactions
+        final_data = apply_user_redactions(sanitized_data, report)
+
+        # Write back
+        with open(sanitized_path, "w", encoding="utf-8") as f:
+            json.dump(final_data, f, indent=2)
+
+        typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
+
+    # Display summary
+    display_summary(report)

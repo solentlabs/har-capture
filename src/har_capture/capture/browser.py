@@ -6,7 +6,6 @@ Requires the 'capture' optional dependency: pip install har-capture[capture]
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 import json
 import logging
@@ -73,12 +72,14 @@ class CaptureResult:
         stats: Dict with capture statistics (entry counts, sizes)
         success: True if capture succeeded
         error: Error message if capture failed
+        sanitization_report: Report from sanitization (for interactive review)
     """
 
     har_path: Path | None = None
     compressed_path: Path | None = None
     sanitized_path: Path | None = None
     stats: dict[str, Any] | None = None
+    sanitization_report: Any | None = None  # SanitizationReport when available
     success: bool = True
     error: str | None = None
 
@@ -215,6 +216,7 @@ def capture_device_har(
     include_media: bool = False,
     headless: bool = False,
     timeout: int | None = None,
+    interactive: bool = False,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -235,6 +237,7 @@ def capture_device_har(
         include_media: If True, don't filter media files (.mp3, .mp4, etc.)
         headless: If True, run browser in headless mode (for automated capture)
         timeout: Seconds to wait before closing browser (None = wait for user to close)
+        interactive: If True, flag suspicious values for interactive review
 
     Returns:
         CaptureResult with paths to generated files
@@ -350,12 +353,24 @@ def capture_device_har(
             else:
                 # Interactive mode: wait for user to close browser
                 _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
-                with contextlib.suppress(Exception):
+                try:
                     page.wait_for_event("close", timeout=0)
+                except Exception as e:
+                    _LOGGER.warning("Error waiting for page close: %s", e)
+                    # Continue with cleanup anyway
 
             # Close context to save HAR
-            context.close()
-            browser_instance.close()
+            try:
+                context.close()
+            except Exception as e:
+                _LOGGER.warning("Failed to close browser context: %s", e)
+                # Continue cleanup anyway
+
+            try:
+                browser_instance.close()
+            except Exception as e:
+                _LOGGER.warning("Failed to close browser instance: %s", e)
+                # Continue cleanup anyway
         return True
 
     def _is_missing_deps_error(error_msg: str) -> bool:
@@ -365,8 +380,11 @@ def capture_device_har(
 
     def _cleanup_temp() -> None:
         """Clean up temp file."""
-        with contextlib.suppress(Exception):
+        try:
             temp_path.unlink()
+        except Exception as e:
+            _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
+            # Not critical, continue anyway
 
     try:
         launch_browser_and_capture()
@@ -413,8 +431,13 @@ def capture_device_har(
         try:
             from har_capture.sanitization import sanitize_har_file
 
-            sanitize_har_file(str(temp_path), str(sanitized_output))
+            _, sanitization_report = sanitize_har_file(
+                str(temp_path),
+                str(sanitized_output),
+                flag_suspicious=interactive,
+            )
             result.sanitized_path = sanitized_output
+            result.sanitization_report = sanitization_report
         except Exception as e:
             _LOGGER.warning("Sanitization failed: %s", e)
 

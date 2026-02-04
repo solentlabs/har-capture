@@ -1,4 +1,27 @@
-"""Tests for capture workflow orchestration."""
+"""Tests for capture workflow orchestration.
+
+This module tests the business logic for the multi-phase capture workflow,
+separated from CLI concerns for better testability and maintainability.
+
+Test Coverage:
+    - Phase result dataclasses (BrowserCheckResult, ConnectivityResult, etc.)
+    - Phase functions (check_browser, check_connectivity, check_auth, run_capture)
+    - Full workflow orchestration with early exit on failures
+    - Error propagation and result aggregation
+    - Sanitization and compression options
+    - Interactive mode flag handling
+
+Test Strategy:
+    - Unit tests for each phase in isolation
+    - Mocked dependencies to avoid real browser/network calls
+    - Integration tests for the complete workflow
+    - Error condition testing at each phase
+    - Result validation for success and failure paths
+
+Dependencies:
+    - unittest.mock for dependency mocking
+    - pytest for test framework
+"""
 
 from __future__ import annotations
 
@@ -412,6 +435,7 @@ class TestRunCapturePhase:
         mock_result.compressed_path = None
         mock_result.sanitized_path = None
         mock_result.stats = {}
+        mock_result.sanitization_report = None
         mock_capture.return_value = mock_result
 
         output_path = tmp_path / "out.har"
@@ -428,6 +452,7 @@ class TestRunCapturePhase:
             include_media=True,
             headless=True,
             timeout=30,
+            interactive=True,
         )
 
         mock_capture.assert_called_once_with(
@@ -443,6 +468,7 @@ class TestRunCapturePhase:
             include_media=True,
             headless=True,
             timeout=30,
+            interactive=True,
         )
 
     @patch("har_capture.capture.browser.capture_device_har")

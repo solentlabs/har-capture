@@ -1,4 +1,23 @@
-"""Tests for edge cases in sanitization."""
+"""Tests for edge cases and boundary conditions in sanitization.
+
+This module tests unusual inputs and boundary conditions that could cause
+failures in the sanitization pipeline.
+
+Test Coverage:
+    - Recursion depth limits for deeply nested JSON
+    - Malformed input handling (invalid JSON, missing keys)
+    - Large input stress testing (performance, memory)
+    - JSON content in various HAR fields
+
+Test Strategy:
+    - Stress tests with pathological inputs
+    - Error recovery and graceful degradation
+    - Performance validation for large files
+    - Deep nesting boundary testing
+
+Dependencies:
+    - pytest for test framework
+"""
 
 from __future__ import annotations
 
@@ -110,7 +129,7 @@ class TestMalformedInput:
         """Test HAR with empty log."""
         har_data = {"log": {}}
 
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert result == {"log": {}}
 
     def test_har_missing_log_key(self) -> None:
@@ -118,7 +137,7 @@ class TestMalformedInput:
         har_data = {"version": "1.2"}
 
         # Should return unchanged but log warning
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert result == {"version": "1.2"}
 
     def test_invalid_entries_type(self) -> None:
@@ -126,7 +145,7 @@ class TestMalformedInput:
         har_data = {"log": {"entries": "not a list"}}
 
         # Should return unchanged
-        result = sanitize_har(har_data)
+        result, _ = sanitize_har(har_data)
         assert result["log"]["entries"] == "not a list"
 
     def test_headers_not_list(self) -> None:
@@ -187,7 +206,7 @@ class TestLargeInputs:
         har_data = {"log": {"version": "1.2", "entries": entries}}
 
         # Should complete without timeout
-        result = sanitize_har(har_data, salt=None)
+        result, _ = sanitize_har(har_data, salt=None)
 
         # Verify sanitization happened
         assert len(result["log"]["entries"]) == 500
@@ -236,5 +255,6 @@ class TestJsonContentSanitization:
         result = sanitize_entry(entry, salt=None)
         parsed = json.loads(result["response"]["content"]["text"])
 
-        assert parsed[0]["password"] == "[REDACTED]"
-        assert parsed[1]["password"] == "[REDACTED]"
+        # Password values are redacted with ***FIELD*** placeholder (salt=None)
+        assert parsed[0]["password"] in ("[REDACTED]", "***FIELD***")
+        assert parsed[1]["password"] in ("[REDACTED]", "***FIELD***")

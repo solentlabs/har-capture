@@ -16,10 +16,13 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import Hasher, load_sensitive_patterns
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import sanitize_html
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from har_capture.sanitization.report import SanitizationReport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -156,17 +159,25 @@ _SENSITIVE_FIELD_RE = _load_sensitive_field_patterns()
 REDACTED = "[REDACTED]"
 
 
-def _redact_value(value: str, hasher: Hasher | None, category: str = "FIELD") -> str:
+def _redact_value(
+    value: str,
+    hasher: Hasher | None,
+    category: str = "FIELD",
+    collector: RedactionCollector | None = None,
+) -> str:
     """Redact a value, using hasher for correlation-preserving hashes if available.
 
     Args:
         value: The sensitive value to redact
         hasher: Optional hasher for correlation-preserving redaction
         category: Hash category (FIELD, AUTH, COOKIE) for hasher
+        collector: Optional collector to record the redaction
 
     Returns:
         Hashed value if hasher provided, otherwise REDACTED placeholder
     """
+    if collector:
+        collector.record_auto_redaction(category.lower())
     if hasher:
         return hasher.hash_generic(value, category)
     return REDACTED
@@ -194,6 +205,7 @@ def sanitize_header_value(
     name: str,
     value: str,
     hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
 ) -> str:
     """Sanitize a header value if it's sensitive.
 
@@ -201,6 +213,7 @@ def sanitize_header_value(
         name: Header name
         value: Header value
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
 
     Returns:
         Sanitized value or original if not sensitive
@@ -214,14 +227,14 @@ def sanitize_header_value(
     name_lower = name.lower()
 
     if name_lower in _FULL_REDACT_HEADERS:
-        return _redact_value(value, hasher, "AUTH")
+        return _redact_value(value, hasher, "AUTH", collector)
 
     if name_lower in _COOKIE_REDACT_HEADERS:
         # Preserve cookie names, redact values
         def redact_cookie(match: re.Match[str]) -> str:
             cookie_name = match.group(1)
             cookie_value = match.group(2)
-            hashed = _redact_value(cookie_value, hasher, "COOKIE")
+            hashed = _redact_value(cookie_value, hasher, "COOKIE", collector)
             return f"{cookie_name}={hashed}"
 
         return re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
@@ -229,12 +242,17 @@ def sanitize_header_value(
     return value
 
 
-def _sanitize_form_urlencoded(text: str, hasher: Hasher | None = None) -> str:
+def _sanitize_form_urlencoded(
+    text: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
     """Sanitize form-urlencoded text by redacting sensitive fields.
 
     Args:
         text: Form-urlencoded text to sanitize
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
 
     Returns:
         Sanitized text with sensitive field values redacted
@@ -244,19 +262,24 @@ def _sanitize_form_urlencoded(text: str, hasher: Hasher | None = None) -> str:
         if "=" in pair:
             key, value = pair.split("=", 1)
             if is_sensitive_field(key):
-                value = _redact_value(value, hasher)
+                value = _redact_value(value, hasher, "FIELD", collector)
             pairs.append(f"{key}={value}")
         else:
             pairs.append(pair)
     return "&".join(pairs)
 
 
-def _sanitize_json_text(text: str, hasher: Hasher | None = None) -> str:
+def _sanitize_json_text(
+    text: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
     """Sanitize JSON text by redacting sensitive fields.
 
     Args:
         text: JSON text to sanitize
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
 
     Returns:
         Sanitized JSON text with sensitive field values redacted
@@ -266,7 +289,7 @@ def _sanitize_json_text(text: str, hasher: Hasher | None = None) -> str:
         if isinstance(data, dict):
             for key in data:
                 if is_sensitive_field(key) and isinstance(data[key], str):
-                    data[key] = _redact_value(data[key], hasher)
+                    data[key] = _redact_value(data[key], hasher, "FIELD", collector)
         return json.dumps(data)
     except json.JSONDecodeError:
         return text
@@ -275,12 +298,14 @@ def _sanitize_json_text(text: str, hasher: Hasher | None = None) -> str:
 def sanitize_post_data(
     post_data: dict[str, Any] | None,
     hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
 ) -> dict[str, Any] | None:
     """Sanitize POST data while preserving field names.
 
     Args:
         post_data: HAR postData object
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
 
     Returns:
         Sanitized postData object
@@ -294,7 +319,7 @@ def sanitize_post_data(
     if "params" in result and isinstance(result["params"], list):
         for param in result["params"]:
             if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                param["value"] = _redact_value(param.get("value", ""), hasher)
+                param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
 
     # Sanitize raw text (form-urlencoded or JSON)
     if result.get("text"):
@@ -302,19 +327,25 @@ def sanitize_post_data(
         mime_type = result.get("mimeType", "")
 
         if "application/x-www-form-urlencoded" in mime_type:
-            result["text"] = _sanitize_form_urlencoded(text, hasher)
+            result["text"] = _sanitize_form_urlencoded(text, hasher, collector)
         elif "application/json" in mime_type:
-            result["text"] = _sanitize_json_text(text, hasher)
+            result["text"] = _sanitize_json_text(text, hasher, collector)
 
     return result
 
 
-def _sanitize_json_recursive(data: Any, hasher: Hasher | None = None, _depth: int = 0) -> Any:
+def _sanitize_json_recursive(
+    data: Any,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+    _depth: int = 0,
+) -> Any:
     """Recursively sanitize JSON data.
 
     Args:
         data: JSON data (dict, list, or primitive)
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
         _depth: Current recursion depth (internal use)
 
     Returns:
@@ -327,99 +358,188 @@ def _sanitize_json_recursive(data: Any, hasher: Hasher | None = None, _depth: in
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
+            key_lower = key.lower()
             if is_sensitive_field(key) and isinstance(value, str):
-                result[key] = _redact_value(value, hasher)
+                result[key] = _redact_value(value, hasher, "FIELD", collector)
+            elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
+                # Explicit MAC address field - always redact
+                if isinstance(value, str) and value:
+                    if collector:
+                        collector.record_auto_redaction("mac_address")
+                    result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
+                else:
+                    result[key] = value
             else:
-                result[key] = _sanitize_json_recursive(value, hasher, _depth + 1)
+                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
         return result
     if isinstance(data, list):
-        return [_sanitize_json_recursive(item, hasher, _depth + 1) for item in data]
+        return [_sanitize_json_recursive(item, hasher, collector, _depth + 1) for item in data]
+    # Apply pattern matching to string values
+    if isinstance(data, str):
+        return _sanitize_string_patterns(data, hasher, collector)
     return data
 
 
-def _sanitize_headers(headers: list[dict[str, Any]], hasher: Hasher | None = None) -> None:
+# Regex patterns for value-based sanitization
+_MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
+_PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
+_EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+
+
+def _sanitize_string_patterns(
+    value: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Apply pattern-based sanitization to a string value.
+
+    Redacts MAC addresses, private IPs, and emails found in string values.
+
+    Args:
+        value: String value to sanitize
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        Sanitized string
+    """
+    if not value or len(value) > 10000:  # Skip very long strings for performance
+        return value
+
+    # MAC addresses
+    def replace_mac(match: re.Match[str]) -> str:
+        if collector:
+            collector.record_auto_redaction("mac_address")
+        return hasher.hash_mac(match.group(0)) if hasher else "***MAC***"
+
+    value = _MAC_PATTERN.sub(replace_mac, value)
+
+    # Private IPs (keep common gateway IPs)
+    preserved_ips = {"192.168.0.1", "192.168.1.1", "10.0.0.1", "192.168.100.1"}
+
+    def replace_private_ip(match: re.Match[str]) -> str:
+        ip = match.group(0)
+        if ip in preserved_ips:
+            return ip
+        if collector:
+            collector.record_auto_redaction("private_ip")
+        return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
+
+    value = _PRIVATE_IP_PATTERN.sub(replace_private_ip, value)
+
+    # Email addresses
+    def replace_email(match: re.Match[str]) -> str:
+        if collector:
+            collector.record_auto_redaction("email")
+        return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
+
+    value = _EMAIL_PATTERN.sub(replace_email, value)
+
+    return value
+
+
+def _sanitize_headers(
+    headers: list[dict[str, Any]],
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> None:
     """Sanitize a list of headers in-place.
 
     Args:
         headers: List of header dicts with 'name' and 'value' keys
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
     """
     for header in headers:
         if isinstance(header, dict) and "name" in header and "value" in header:
-            header["value"] = sanitize_header_value(header["name"], header["value"], hasher)
+            header["value"] = sanitize_header_value(header["name"], header["value"], hasher, collector)
 
 
-def _sanitize_request(req: dict[str, Any], hasher: Hasher | None = None) -> None:
+def _sanitize_request(
+    req: dict[str, Any],
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> None:
     """Sanitize a HAR request object in-place.
 
     Args:
         req: HAR request object containing headers, postData, and queryString
         hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
     """
     # Sanitize headers
     if "headers" in req and isinstance(req["headers"], list):
-        _sanitize_headers(req["headers"], hasher)
+        _sanitize_headers(req["headers"], hasher, collector)
 
     # Sanitize POST data
     if "postData" in req:
-        req["postData"] = sanitize_post_data(req["postData"], hasher)
+        req["postData"] = sanitize_post_data(req["postData"], hasher, collector)
 
     # Sanitize query string params (in case password is in URL)
     if "queryString" in req and isinstance(req["queryString"], list):
         for param in req["queryString"]:
             if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                param["value"] = _redact_value(param.get("value", ""), hasher)
+                param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
 
 
 def _sanitize_response_content(
     content: dict[str, Any],
-    salt: str | None = "auto",
+    collector: RedactionCollector | None = None,
     custom_patterns: str | None = None,
+    flag_suspicious: bool = False,
 ) -> None:
     """Sanitize response content in-place.
 
     Args:
         content: HAR response content object with 'text' and 'mimeType' keys
-        salt: Salt for hashed redaction
+        collector: Optional collector with hasher for redaction
         custom_patterns: Optional path to custom patterns file
+        flag_suspicious: If True, flag suspicious values for user review
     """
     if "text" not in content or not content["text"]:
         return
 
     mime_type = content.get("mimeType", "")
+    hasher = collector.hasher if collector else None
 
     if "text/html" in mime_type or "text/xml" in mime_type:
-        content["text"] = sanitize_html(content["text"], salt=salt, custom_patterns=custom_patterns)
+        content["text"] = sanitize_html(
+            content["text"],
+            collector=collector,
+            custom_patterns=custom_patterns,
+            flag_suspicious=flag_suspicious,
+        )
     elif "application/json" in mime_type:
-        hasher = Hasher.create(salt) if salt else None
         try:
             data = json.loads(content["text"])
-            content["text"] = json.dumps(_sanitize_json_recursive(data, hasher))
+            content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
         except json.JSONDecodeError:
             _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
 
 
 def _sanitize_response(
     resp: dict[str, Any],
-    hasher: Hasher | None = None,
-    salt: str | None = "auto",
+    collector: RedactionCollector | None = None,
     custom_patterns: str | None = None,
+    flag_suspicious: bool = False,
 ) -> None:
     """Sanitize a HAR response object in-place.
 
     Args:
         resp: HAR response object containing headers and content
-        hasher: Optional hasher for header redaction
-        salt: Salt for content sanitization
+        collector: Optional collector with hasher for redaction
         custom_patterns: Optional path to custom patterns file
+        flag_suspicious: If True, flag suspicious values for user review
     """
+    hasher = collector.hasher if collector else None
+
     # Sanitize headers
     if "headers" in resp and isinstance(resp["headers"], list):
-        _sanitize_headers(resp["headers"], hasher)
+        _sanitize_headers(resp["headers"], hasher, collector)
 
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):
-        _sanitize_response_content(resp["content"], salt, custom_patterns)
+        _sanitize_response_content(resp["content"], collector, custom_patterns, flag_suspicious)
 
 
 def sanitize_entry(
@@ -427,25 +547,36 @@ def sanitize_entry(
     *,
     salt: str | None = "auto",
     custom_patterns: str | None = None,
+    collector: RedactionCollector | None = None,
+    flag_suspicious: bool = False,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
     Args:
         entry: HAR entry object
-        salt: Salt for hashed redaction
+        salt: Salt for hashed redaction (ignored if collector provided)
         custom_patterns: Optional path to custom patterns file
+        collector: Optional collector for tracking redactions
+        flag_suspicious: If True, flag suspicious values for user review
 
     Returns:
         Sanitized entry
     """
     result = copy.deepcopy(entry)
-    hasher = Hasher.create(salt) if salt else None
+
+    # Use collector's hasher if provided, otherwise create one
+    if collector is None and salt:
+        hasher = Hasher.create(salt)
+        collector = RedactionCollector(hasher=hasher)
+    elif collector is None:
+        # No salt and no collector - create collector with no hashing
+        collector = RedactionCollector(hasher=Hasher.create(None))
 
     if "request" in result:
-        _sanitize_request(result["request"], hasher)
+        _sanitize_request(result["request"], collector.hasher, collector)
 
     if "response" in result:
-        _sanitize_response(result["response"], hasher, salt, custom_patterns)
+        _sanitize_response(result["response"], collector, custom_patterns, flag_suspicious)
 
     return result
 
@@ -455,7 +586,8 @@ def sanitize_har(
     *,
     salt: str | None = "auto",
     custom_patterns: str | None = None,
-) -> dict[str, Any]:
+    flag_suspicious: bool = False,
+) -> tuple[dict[str, Any], SanitizationReport]:
     """Sanitize an entire HAR file.
 
     Args:
@@ -465,38 +597,74 @@ def sanitize_har(
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
         custom_patterns: Optional path to custom patterns JSON file
+        flag_suspicious: If True, flag suspicious values for user review (Phase 2)
 
     Returns:
-        Sanitized HAR data
+        Tuple of (sanitized HAR data, sanitization report)
+
+    Note:
+        This is a BREAKING CHANGE from the previous return type (dict only).
+        Callers that only need the sanitized data can unpack with:
+        result, _ = sanitize_har(...)
 
     Example:
         >>> import json
         >>> har = {"log": {"entries": []}}
-        >>> sanitized = sanitize_har(har)
+        >>> sanitized, report = sanitize_har(har)
         >>> "log" in sanitized
         True
     """
+    # Generate salt upfront so it can be stored in report
+    actual_salt: str
+    if salt in ("auto", "random"):
+        actual_salt = Hasher.generate_salt()
+    elif salt is None:
+        actual_salt = ""
+    else:
+        actual_salt = salt
+
+    # Create collector with the salt
+    hasher = Hasher.create(actual_salt if actual_salt else None)
+    collector = RedactionCollector(hasher=hasher)
+
     result = copy.deepcopy(har_data)
 
     if "log" not in result:
         _LOGGER.warning("HAR data missing 'log' key")
-        return result
+        report = collector.to_report("", "", actual_salt)
+        return result, report
 
     log = result["log"]
 
-    # Sanitize all entries
+    # Sanitize all entries using the shared collector
     if "entries" in log and isinstance(log["entries"], list):
-        log["entries"] = [
-            sanitize_entry(entry, salt=salt, custom_patterns=custom_patterns) for entry in log["entries"]
-        ]
+        sanitized_entries = []
+        for entry in log["entries"]:
+            sanitized_entries.append(
+                sanitize_entry(
+                    entry,
+                    custom_patterns=custom_patterns,
+                    collector=collector,
+                    flag_suspicious=flag_suspicious,
+                )
+            )
+        log["entries"] = sanitized_entries
 
-    # Sanitize pages (if present)
+    # Sanitize pages (if present) using the shared collector
     if "pages" in log and isinstance(log["pages"], list):
         for page in log["pages"]:
             if isinstance(page, dict) and "title" in page:
-                page["title"] = sanitize_html(page["title"], salt=salt, custom_patterns=custom_patterns)
+                page["title"] = sanitize_html(
+                    page["title"],
+                    collector=collector,
+                    custom_patterns=custom_patterns,
+                    flag_suspicious=flag_suspicious,
+                )
 
-    return result
+    # Create report with all collected data
+    report = collector.to_report("", "", actual_salt)
+
+    return result, report
 
 
 def sanitize_har_file(
@@ -507,7 +675,8 @@ def sanitize_har_file(
     custom_patterns: str | None = None,
     max_size: int | None = DEFAULT_MAX_HAR_SIZE,
     validate: bool = True,
-) -> str:
+    flag_suspicious: bool = False,
+) -> tuple[str, SanitizationReport]:
     """Sanitize a HAR file and write to a new file.
 
     Args:
@@ -517,9 +686,15 @@ def sanitize_har_file(
         custom_patterns: Optional path to custom patterns JSON file
         max_size: Maximum file size in bytes (default: 100MB). Set to None to disable.
         validate: If True, validate HAR structure before processing (default: True)
+        flag_suspicious: If True, flag suspicious values for user review (Phase 2)
 
     Returns:
-        Path to the sanitized file
+        Tuple of (output_path, sanitization report)
+
+    Note:
+        This is a BREAKING CHANGE from the previous return type (str only).
+        Callers that only need the output path can unpack with:
+        output_path, _ = sanitize_har_file(...)
 
     Raises:
         HarSizeError: If file exceeds max_size limit
@@ -528,10 +703,10 @@ def sanitize_har_file(
         json.JSONDecodeError: If file is not valid JSON
 
     Example:
-        >>> # sanitize_har_file("device.har")  # Creates device.sanitized.har
-        >>> # sanitize_har_file("device.har", "clean.har")  # Creates clean.har
-        >>> # sanitize_har_file("large.har", max_size=None)  # No size limit
-        >>> # sanitize_har_file("file.har", validate=False)  # Skip validation
+        >>> # output, report = sanitize_har_file("device.har")  # Creates device.sanitized.har
+        >>> # output, report = sanitize_har_file("device.har", "clean.har")  # Creates clean.har
+        >>> # output, report = sanitize_har_file("large.har", max_size=None)  # No size limit
+        >>> # output, report = sanitize_har_file("file.har", validate=False)  # Skip validation
     """
     from pathlib import Path as PathlibPath
 
@@ -561,13 +736,160 @@ def sanitize_har_file(
         for warning in warnings:
             _LOGGER.warning("HAR validation: %s", warning)
 
-    sanitized = sanitize_har(har_data, salt=salt, custom_patterns=custom_patterns)
+    sanitized, report = sanitize_har(
+        har_data,
+        salt=salt,
+        custom_patterns=custom_patterns,
+        flag_suspicious=flag_suspicious,
+    )
+
+    # Fill in file paths in report
+    report.input_file = input_str
+    report.output_file = output_str
 
     with open(output_str, "w", encoding="utf-8") as f:
         json.dump(sanitized, f, indent=2)
 
     _LOGGER.info("Sanitized HAR written to: %s", output_str)
-    return output_str
+    return output_str, report
+
+
+def _validate_har_for_redaction(har_data: dict[str, Any]) -> None:
+    """Validate HAR structure before applying redactions.
+
+    Args:
+        har_data: The HAR data to validate
+
+    Raises:
+        HarValidationError: If structure is invalid
+    """
+    if not isinstance(har_data, dict):
+        raise HarValidationError("har_data must be a dictionary")
+
+    if "log" not in har_data:
+        raise HarValidationError("Missing required 'log' key", "root")
+
+
+def apply_user_redactions(
+    har_data: dict[str, Any],
+    report: SanitizationReport,
+) -> dict[str, Any]:
+    """Apply user redaction decisions via global find-replace.
+
+    This is Pass 2 of the two-pass sanitization flow. For each value the user
+    chose to redact, replace ALL occurrences in the HAR data.
+
+    The hasher is recreated from report.salt to ensure consistent hashing
+    with Pass 1.
+
+    Args:
+        har_data: The HAR data (already sanitized by Pass 1)
+        report: The sanitization report with user decisions
+
+    Returns:
+        HAR data with user-selected redactions applied
+
+    Raises:
+        HarValidationError: If har_data is invalid or malformed
+
+    Note:
+        This function modifies the report in-place to set redacted_value
+        for each user-redacted item.
+    """
+    from har_capture.sanitization.report import RedactionStatus
+
+    # Validate input
+    _validate_har_for_redaction(har_data)
+
+    # Count redactions to apply
+    redactions_to_apply = [item for item in report.flagged if item.status == RedactionStatus.USER_REDACTED]
+
+    if not redactions_to_apply:
+        _LOGGER.debug("No user redactions to apply")
+        return har_data
+
+    _LOGGER.debug("Applying %d user redaction(s)", len(redactions_to_apply))
+
+    # Recreate hasher with same salt used in Pass 1
+    hasher = Hasher.create(report.salt if report.salt else None)
+
+    # Work on a deep copy to avoid modifying original
+    result = copy.deepcopy(har_data)
+
+    try:
+        # Serialize to string for global replacement
+        content = json.dumps(result)
+    except (TypeError, ValueError) as e:
+        raise HarValidationError(f"Failed to serialize HAR data: {e}") from e
+
+    # Apply each redaction
+    for item in redactions_to_apply:
+        try:
+            # Generate redacted value
+            redacted = hasher.hash_generic(item.original_value, item.category.upper())
+            item.redacted_value = redacted
+
+            # IMPORTANT: Escape values for JSON string context
+            # This handles newlines, quotes, backslashes, etc.
+            escaped_original = json.dumps(item.original_value)[1:-1]  # Strip quotes
+            escaped_redacted = json.dumps(redacted)[1:-1]
+
+            # Perform global replacement
+            content = content.replace(escaped_original, escaped_redacted)
+
+        except Exception as e:  # noqa: PERF203 - intentional: continue with other redactions on error
+            _LOGGER.warning("Failed to redact value '%s...': %s", item.original_value[:20], e)
+            # Continue with other redactions
+            continue
+
+    try:
+        # Parse back to dict
+        result = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise HarValidationError(
+            f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
+        ) from e
+
+    return result  # type: ignore[no-any-return]
+
+
+def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bool, int]:
+    """Check if a HAR file appears to already be sanitized.
+
+    Looks for redaction placeholders that indicate the file has been
+    previously processed by the sanitizer.
+
+    Args:
+        har_data: Parsed HAR JSON data
+        threshold: Minimum number of redaction patterns to consider file sanitized
+
+    Returns:
+        Tuple of (appears_sanitized, match_count)
+    """
+    content = json.dumps(har_data)
+
+    # Patterns that indicate redacted values
+    redaction_patterns = [
+        r"MAC_[a-f0-9]{8}",  # Hashed MAC addresses
+        r"PASS_[a-f0-9]{8}",  # Hashed passwords
+        r"TOKEN_[a-f0-9]{8}",  # Hashed tokens
+        r"SERIAL_[a-f0-9]{8}",  # Hashed serial numbers
+        r"WIFI_[a-f0-9]{8}",  # Hashed WiFi credentials
+        r"DEVICE_[a-f0-9]{8}",  # Hashed device names
+        r"PRIV_IP_[a-f0-9]{8}",  # Hashed private IPs (old format)
+        r"\*\*\*[A-Z]+\*\*\*",  # Static placeholders
+        r"02:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}",  # Hashed MACs
+        r"10\.255\.\d+\.\d+",  # Hashed private IPs
+        r"192\.0\.2\.\d+",  # Hashed public IPs (TEST-NET-1)
+        r"user_[a-f0-9]{8}@redacted\.invalid",  # Hashed emails
+    ]
+
+    total_matches = 0
+    for pattern in redaction_patterns:
+        matches = re.findall(pattern, content, re.IGNORECASE)
+        total_matches += len(matches)
+
+    return total_matches >= threshold, total_matches
 
 
 # Legacy exports for backwards compatibility

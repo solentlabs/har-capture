@@ -75,23 +75,30 @@ har-capture get <TARGET>     # Capture → sanitize → compress (all automatic)
 
 ### Comparison with Existing Tools
 
-| Feature                | har-capture | [DevTools](https://developer.chrome.com/docs/devtools/network/reference) | [Google](https://github.com/google/har-sanitizer) | [Cloudflare](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | [Edgio](https://github.com/Edgio/har-tools) |
-| ---------------------- | :---------: | :----------------------------------------------------------------------: | :-----------------------------------------------: | :-------------------------------------------------------------------------------------: | :-----------------------------------------: |
-| **Sanitization**       |             |                                                                          |                                                   |                                                                                         |                                             |
-| Cookies/auth headers   |     ✅      |                                    ✅                                    |                        ✅                         |                                           ✅                                            |                     ✅                      |
-| IPs, MACs, emails      |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
-| Passwords in forms     |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ✅                      |
-| JWT smart redaction    |     ❌      |                                    ❌                                    |                        ❌                         |                                           ✅                                            |                     ❌                      |
-| Correlation-preserving |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
-| **Usability**          |             |                                                                          |                                                   |                                                                                         |                                             |
-| No installation needed |     ❌      |                                    ✅                                    |                        ❌                         |                                           ✅                                            |                     ✅                      |
-| Data stays local       |     ✅      |                                    ✅                                    |                        ❌                         |                                           ✅                                            |                     ✅                      |
-| CLI/scriptable         |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ✅                      |
-| Preview before redact  |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ❌                      |
-| **Extras**             |             |                                                                          |                                                   |                                                                                         |                                             |
-| Integrated capture     |     ✅      |                                    ✅                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
-| Custom patterns        |     ✅      |                                    ❌                                    |                        ✅                         |                                           ❌                                            |                     ❌                      |
-| Validation             |     ✅      |                                    ❌                                    |                        ❌                         |                                           ❌                                            |                     ❌                      |
+| Feature                | har-capture | DevTools¹ | Google² | Cloudflare³ | Edgio⁴ |
+| ---------------------- | :---------: | :-------: | :-----: | :---------: | :----: |
+| **Sanitization**       |             |           |         |             |        |
+| Cookies/auth headers   |     ✅      |    ✅     |   ✅    |     ✅      |   ✅   |
+| IPs, MACs, emails      |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
+| Passwords in forms     |     ✅      |    ❌     |   ✅    |     ❌      |   ✅   |
+| JWT smart redaction    |     ❌      |    ❌     |   ❌    |     ✅      |   ❌   |
+| Correlation-preserving |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
+| **Usability**          |             |           |         |             |        |
+| No installation needed |     ❌      |    ✅     |   ❌    |     ✅      |   ✅   |
+| Data stays local       |     ✅      |    ✅     |   ❌    |     ✅      |   ✅   |
+| CLI/scriptable         |     ✅      |    ❌     |   ✅    |     ❌      |   ✅   |
+| Interactive review     |     ✅      |    ❌     |   ✅    |     ❌      |   ❌   |
+| **Extras**             |             |           |         |             |        |
+| Integrated capture     |     ✅      |    ✅     |   ❌    |     ❌      |   ❌   |
+| Custom patterns        |     ✅      |    ❌     |   ✅    |     ❌      |   ❌   |
+| Validation             |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
+
+**References:**
+
+1. [Chrome DevTools Network Reference](https://developer.chrome.com/docs/devtools/network/reference)
+1. [Google HAR Sanitizer](https://github.com/google/har-sanitizer)
+1. [Cloudflare HAR Sanitizer](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/)
+1. [Edgio HAR Tools](https://github.com/Edgio/har-tools)
 
 ### Target Use Cases
 
@@ -105,6 +112,7 @@ har-capture get <TARGET>     # Capture → sanitize → compress (all automatic)
 - **Zero Dependencies Core**: Core sanitization uses only Python stdlib
 - **HAR Capture**: Browser-based capture using Playwright (optional)
 - **PII Sanitization**: Remove sensitive data from HTML and HAR files
+- **Interactive Review**: Review and approve suspicious values with beautiful CLI interface
 - **Correlation-Preserving Redaction**: Salted hashes maintain value relationships
 - **Custom Patterns**: External JSON files for easy pattern updates
 - **Validation**: Check HAR files for PII leaks before committing
@@ -295,12 +303,16 @@ Remove PII from HAR files.
 ```bash
 har-capture sanitize capture.har
 har-capture sanitize capture.har --output clean.har --compress
+har-capture sanitize capture.har --interactive      # Review suspicious values
+har-capture sanitize capture.har --report sanitize-report.json
 har-capture sanitize capture.har --salt my-key      # Consistent hash
 har-capture sanitize capture.har --no-salt          # Static placeholders
 har-capture sanitize capture.har --patterns custom.json
 har-capture sanitize capture.har --max-size 500     # Allow up to 500MB
 har-capture sanitize capture.har --compression-level 6  # Faster compression
 ```
+
+**Interactive Mode**: Review edge cases like WiFi SSIDs, device names, or credentials that don't match standard patterns. See [Interactive Sanitization Guide](docs/INTERACTIVE_SANITIZATION.md) for details.
 
 ### validate
 

@@ -8,16 +8,21 @@ Exports:
     - sanitize_har: Remove PII from HAR data
     - sanitize_har_file: Sanitize a HAR file on disk
     - check_for_pii: Detect potential PII in content
+    - SanitizationReport: Report of sanitization operations
+    - RedactionCollector: Collector for tracking redactions
 """
 
 from __future__ import annotations
 
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     DEFAULT_MAX_HAR_SIZE,
     SENSITIVE_FIELD_PATTERNS,
     SENSITIVE_HEADERS,
     HarSizeError,
     HarValidationError,
+    appears_sanitized,
+    apply_user_redactions,
     is_sensitive_field,
     sanitize_entry,
     sanitize_har,
@@ -29,6 +34,12 @@ from har_capture.sanitization.har import (
 from har_capture.sanitization.html import (
     check_for_pii,
     sanitize_html,
+)
+from har_capture.sanitization.report import (
+    ConfidenceLevel,
+    FlaggedValue,
+    RedactionStatus,
+    SanitizationReport,
 )
 
 __all__ = [
@@ -43,10 +54,18 @@ __all__ = [
     "sanitize_header_value",
     "is_sensitive_field",
     "validate_har_structure",
+    "apply_user_redactions",
+    "appears_sanitized",
     "SENSITIVE_HEADERS",
     "SENSITIVE_FIELD_PATTERNS",
     # Size limits and errors
     "DEFAULT_MAX_HAR_SIZE",
     "HarSizeError",
     "HarValidationError",
+    # Report types
+    "SanitizationReport",
+    "FlaggedValue",
+    "ConfidenceLevel",
+    "RedactionStatus",
+    "RedactionCollector",
 ]

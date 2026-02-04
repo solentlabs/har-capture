@@ -35,12 +35,16 @@ from har_capture.patterns import (
 if TYPE_CHECKING:
     from typing import Any
 
+    from har_capture.sanitization.collector import RedactionCollector
+
 
 def sanitize_html(
     html: str,
     *,
     salt: str | None = "auto",
     custom_patterns: str | None = None,
+    collector: RedactionCollector | None = None,
+    flag_suspicious: bool = False,
 ) -> str:
     """Remove sensitive information from HTML.
 
@@ -54,7 +58,10 @@ def sanitize_html(
             - "auto" (default): Random salt, correlates within this call
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
+            (ignored if collector is provided)
         custom_patterns: Optional path to custom patterns JSON file
+        collector: Optional collector for tracking redactions
+        flag_suspicious: If True, flag suspicious values for user review
 
     Returns:
         Sanitized HTML with personal info removed
@@ -65,25 +72,36 @@ def sanitize_html(
         >>> sanitize_html("MAC: AA:BB:CC:DD:EE:FF", salt=None)
         'MAC: ***MAC***'
     """
-    hasher = Hasher.create(salt)
+    # Use collector's hasher if provided, otherwise create one
+    if collector is not None:
+        hasher = collector.hasher
+    else:
+        hasher = Hasher.create(salt)
+        # Import here to avoid circular import
+        from har_capture.sanitization.collector import RedactionCollector
+
+        collector = RedactionCollector(hasher=hasher)
+
     pii = load_pii_patterns(custom_patterns)
     sensitive = load_sensitive_patterns(custom_patterns)
 
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0))
 
     html = re.sub(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", replace_mac, html)
 
     # 2. Serial Numbers (various label formats)
     def replace_serial(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("serial_number")
         label = match.group(1)
         serial = match.group(2) if match.lastindex and match.lastindex >= 2 else ""
         hashed = hasher.hash_generic(serial, "SERIAL") if serial else "***SERIAL***"
         return f"{label}: {hashed}"
 
     html = re.sub(
-        r"(Serial\s*Number|SerialNum|SN|S/N)\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,
@@ -91,6 +109,7 @@ def sanitize_html(
 
     # 3. Account/Subscriber IDs
     def replace_account(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("account")
         prefix = match.group(1)
         suffix = match.group(2)
         return f"{prefix} {suffix}: {hasher.hash_generic(match.group(0), 'ACCOUNT')}"
@@ -109,6 +128,7 @@ def sanitize_html(
         ip = match.group(0)
         if ip in preserved_ips:
             return ip
+        collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True)
 
     html = re.sub(
@@ -119,6 +139,7 @@ def sanitize_html(
 
     # 5. Public IP addresses (any non-private, non-localhost IP)
     def replace_public_ip(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("public_ip")
         return hasher.hash_ip(match.group(0), is_private=False)
 
     html = re.sub(
@@ -141,6 +162,7 @@ def sanitize_html(
         # Use strict validation via ipaddress module
         try:
             ipaddress.IPv6Address(text)
+            collector.record_auto_redaction("ipv6")
             return hasher.hash_ipv6(text)
         except ipaddress.AddressValueError:
             # Not a valid IPv6 address (e.g., time format "12:34:56")
@@ -157,6 +179,7 @@ def sanitize_html(
 
     # 7. Passwords/Passphrases in HTML forms or text
     def replace_password(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("password")
         label = match.group(1)
         return f"{label}={hasher.hash_generic(match.group(2), 'PASS')}"
 
@@ -167,8 +190,39 @@ def sanitize_html(
         flags=re.IGNORECASE,
     )
 
+    # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>)
+    def replace_ssid_text(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("wifi")
+        label = match.group(1)
+        sep = match.group(2)
+        return f"{label}{sep}{hasher.hash_generic(match.group(3), 'WIFI')}"
+
+    html = re.sub(
+        r'\b(SSID|Network\s*Name)\s*([=:])\s*([^\s<>"\']+)',
+        replace_ssid_text,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # 7b. JavaScript object password fields (password_24g: 'value', guest_password: 'value')  # pragma: allowlist secret
+    def replace_js_password(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("password")
+        label = match.group(1)
+        sep = match.group(2)
+        quote1 = match.group(3)
+        quote2 = match.group(5)
+        return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'PASS')}{quote2}"
+
+    html = re.sub(
+        r'(\w*password\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        replace_js_password,
+        html,
+        flags=re.IGNORECASE,
+    )
+
     # 8. Password input fields
     def replace_password_input(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("password")
         prefix = match.group(1)
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
@@ -180,8 +234,25 @@ def sanitize_html(
         flags=re.IGNORECASE,
     )
 
+    # 8b. SSID input fields (input following SSID label)
+    # Matches: <label>...SSID...</label><input value="...">
+    def replace_ssid_input(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("wifi")
+        prefix = match.group(1)
+        value_start = match.group(2)
+        value_end = match.group(4)
+        return f"{prefix}{value_start}{hasher.hash_generic(match.group(3), 'WIFI')}{value_end}"
+
+    html = re.sub(
+        r'(<label>[^<]*SSID[^<]*</label>\s*<input[^>]*)(value=["\'\\]?)([^"\'\\>]+)(["\'\\]?)',
+        replace_ssid_input,
+        html,
+        flags=re.IGNORECASE,
+    )
+
     # 9. Session tokens/cookies (long alphanumeric strings)
     def replace_token(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("token")
         label = match.group(1)
         return f"{label}={hasher.hash_generic(match.group(2), 'TOKEN')}"
 
@@ -194,6 +265,7 @@ def sanitize_html(
 
     # 10. CSRF tokens in meta tags
     def replace_csrf(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("csrf")
         prefix = match.group(1)
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'CSRF')}{suffix}"
@@ -207,6 +279,7 @@ def sanitize_html(
 
     # 11. Email addresses (RFC 5321 simplified)
     def replace_email(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("email")
         return hasher.hash_email(match.group(0))
 
     # Pattern supports: user@domain.tld, user.name+tag@sub.domain.co.uk
@@ -218,6 +291,7 @@ def sanitize_html(
 
     # 12. Config file paths (may contain ISP/customer identifiers)
     def replace_config(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("config")
         label = match.group(1)
         return f"{label}: {hasher.hash_generic(match.group(2), 'CONFIG')}"
 
@@ -230,6 +304,7 @@ def sanitize_html(
 
     # 13. Motorola JavaScript password variables
     def replace_motorola_pw(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("password")
         prefix = match.group(1)
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
@@ -244,57 +319,79 @@ def sanitize_html(
     # 14. WiFi credentials and device names in Netgear tagValueList
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
+    # Import heuristics for detection
+    from har_capture.cli.interactive import capture_pipe_context
+    from har_capture.sanitization.heuristics import (
+        analyze_value,
+        is_safe_value,
+    )
+
     def sanitize_tag_value_list(match: re.Match[str]) -> str:
-        """Sanitize potential WiFi credentials and device names in tagValueList."""
+        """Sanitize pipe-delimited values in tagValueList.
+
+        Auto-redacts only values that match KNOWN patterns (MAC addresses, IPs).
+        Flags suspicious values (SSIDs, passwords, device names) for user review
+        when flag_suspicious=True.
+
+        This preserves the two-pass flow:
+        - Pass 1: Auto-redact known patterns, flag suspicious values
+        - Pass 2: User reviews flagged values and decides what to redact
+        """
         prefix = match.group(1)
         values_str = match.group(2)
         suffix = match.group(3)
 
         values = values_str.split("|")
-        sanitized_values = []
+        sanitized_values: list[str] = []
 
         for i, val in enumerate(values):
             val_stripped = val.strip()
             val_lower = val_stripped.lower()
 
-            # Check if next value is a placeholder (indicates this is a device name)
-            next_val = values[i + 1].strip() if i + 1 < len(values) else ""
-            is_before_placeholder = (
-                next_val.startswith("***")
-                or next_val.startswith("MAC_")
-                or next_val.startswith("PRIV_IP_")
-                or next_val == "XX:XX:XX:XX:XX:XX"
-            )
-
-            # Device name: appears before IP/MAC, contains letters, not a placeholder
-            is_device_name = (
-                is_before_placeholder
-                and re.search(r"[a-zA-Z]", val_stripped)
-                and val_stripped != "--"
-                and not val_stripped.startswith("***")
-                and not val_stripped.startswith("MAC_")
-            )
-
-            # WiFi credential: 8+ alphanumeric chars, not status values
-            is_potential_credential = (
-                len(val_stripped) >= 8
-                and re.match(r"^[a-zA-Z0-9]+$", val_stripped)
-                and val_lower not in safe_values
-                and not re.match(r"^\d+$", val_stripped)
-                and not val_stripped.startswith("***")
-                and not re.match(r"^V\d", val_stripped)
-                and not val_stripped.endswith("Hz")
-                and not val_stripped.endswith("dB")
-                and not val_stripped.endswith("dBmV")
-                and "Ksym" not in val_stripped
-            )
-
-            if is_device_name:
-                sanitized_values.append(hasher.hash_generic(val_stripped, "DEVICE"))
-            elif is_potential_credential:
-                sanitized_values.append(hasher.hash_generic(val_stripped, "WIFI"))
-            else:
+            # Skip empty values, safe values, and already-redacted placeholders
+            if not val_stripped or is_safe_value(val_stripped):
                 sanitized_values.append(val)
+                continue
+
+            # Skip already-redacted values
+            if (
+                val_stripped.startswith("***")
+                or re.match(r"^[A-Z]+_[a-f0-9]{8}$", val_stripped)
+                or val_stripped == "XX:XX:XX:XX:XX:XX"
+            ):
+                sanitized_values.append(val)
+                continue
+
+            # Check if value is in safe list
+            if val_lower in safe_values:
+                sanitized_values.append(val)
+                continue
+
+            # AUTO-REDACT: Only known reliable patterns (MAC addresses within values)
+            if re.match(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", val_stripped):
+                collector.record_auto_redaction("mac_address")
+                sanitized_values.append(hasher.hash_mac(val_stripped))
+                continue
+
+            # Keep the value - flag for review if heuristics match
+            sanitized_values.append(val)
+
+            # FLAG for interactive review (not auto-redact)
+            if flag_suspicious:
+                should_flag, confidence, category, reason = analyze_value(
+                    val_stripped,
+                    values_context=sanitized_values,
+                    value_index=len(sanitized_values) - 1,
+                )
+                if should_flag:
+                    context = capture_pipe_context(values, i)
+                    collector.flag_value(
+                        val_stripped,
+                        category,
+                        confidence,
+                        context,
+                        reason,
+                    )
 
         return prefix + "|".join(sanitized_values) + suffix
 
@@ -302,6 +399,29 @@ def sanitize_html(
         r"(var\s+tagValueList\s*=\s*['\"])([^'\"]+)(['\"])",
         sanitize_tag_value_list,
         html,
+    )
+
+    # 15. Other pipe-delimited variables (connectedDevices, deviceList, etc.)
+    html = re.sub(
+        r"(var\s+(?:connected)?[Dd]evice(?:s|List)?\s*=\s*['\"])([^'\"]+)(['\"])",
+        sanitize_tag_value_list,
+        html,
+    )
+
+    # 16. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
+    def replace_js_ssid(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("wifi")
+        label = match.group(1)
+        sep = match.group(2)
+        quote1 = match.group(3)
+        quote2 = match.group(5)
+        return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'WIFI')}{quote2}"
+
+    html = re.sub(
+        r'(\w*ssid\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        replace_js_ssid,
+        html,
+        flags=re.IGNORECASE,
     )
 
     return html

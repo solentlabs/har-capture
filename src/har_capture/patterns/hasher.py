@@ -36,6 +36,18 @@ class Hasher:
     hash_length: int = 8
     _cache: dict[str, str] = field(default_factory=dict, repr=False)
 
+    @staticmethod
+    def generate_salt() -> str:
+        """Generate a random salt for hashing.
+
+        This separates salt generation from hasher creation, allowing the salt
+        to be stored in reports for later reconstruction of the same hasher.
+
+        Returns:
+            A 32-character hex string (16 bytes of randomness)
+        """
+        return secrets.token_hex(16)
+
     @classmethod
     def create(cls, salt: str | None = "auto") -> Hasher:
         """Create a new hasher with the specified salt.
@@ -51,8 +63,7 @@ class Hasher:
         """
         actual_salt: str | None
         if salt in ("auto", "random"):
-            # Generate a random salt for this session
-            actual_salt = secrets.token_hex(16)
+            actual_salt = cls.generate_salt()
         else:
             actual_salt = salt
 

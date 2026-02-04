@@ -51,5 +51,21 @@
       "AUTH_",
       "COOKIE_"
     ]
+  },
+
+  "redaction_patterns": {
+    "_comment": "Regex patterns that indicate a value is already redacted",
+    "values": [
+      "\\[REDACTED\\]",
+      "REDACTED",
+      "XXX+",
+      "0{6,}",
+      "\\*\\*\\*[A-Z]+\\*\\*\\*",
+      "COOKIE_[a-f0-9]{8}",
+      "MAC_[a-f0-9]{8}",
+      "PASS_[a-f0-9]{8}",
+      "TOKEN_[a-f0-9]{8}",
+      "FIELD_[a-f0-9]{8}"
+    ]
   }
 }

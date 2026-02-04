@@ -1,4 +1,28 @@
-"""Tests for browser capture module."""
+"""Tests for browser-based HAR capture functionality.
+
+This module tests the core HAR capture functionality using Playwright, including:
+
+Test Coverage:
+    - Bloat extension filtering (fonts, images, media)
+    - Capture options configuration
+    - Playwright dependency checking and auto-installation
+    - Private IP detection (RFC 1918 ranges, loopback, special addresses)
+    - Target URL parsing and validation
+    - End-to-end device HAR capture with mocking
+    - Sanitization before compression
+    - Browser cleanup and error handling
+    - Retry logic and timeout handling
+
+Test Strategy:
+    - Table-driven tests for IP detection with comprehensive edge cases
+    - Mocked Playwright context for fast, deterministic tests
+    - Integration tests for the full capture workflow
+    - Error condition testing (network failures, browser crashes, etc.)
+
+Dependencies:
+    - pytest for test framework
+    - unittest.mock for Playwright mocking (avoids real browser launches)
+"""
 
 from __future__ import annotations
 
@@ -539,7 +563,8 @@ class TestSanitizationBeforeCompression:
         raw_path.write_text(json.dumps(raw_har))
 
         # Workflow: sanitize then compress
-        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        sanitized_path_str, _ = sanitize_har_file(str(raw_path))
+        sanitized_path = Path(sanitized_path_str)
         compressed_path, _ = filter_and_compress_har(sanitized_path, None)
 
         # Compressed file should be based on sanitized path
@@ -573,7 +598,8 @@ class TestSanitizationBeforeCompression:
         raw_path.write_text(json.dumps(raw_har))
 
         # Run the workflow
-        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        sanitized_path_str, _ = sanitize_har_file(str(raw_path))
+        sanitized_path = Path(sanitized_path_str)
         compressed_path, _ = filter_and_compress_har(sanitized_path, None)
 
         # The compressed content should come from the sanitized file
@@ -608,7 +634,8 @@ class TestSanitizationBeforeCompression:
         raw_path = tmp_path / "capture.har"
         raw_path.write_text(json.dumps(raw_har))
 
-        sanitized_path = Path(sanitize_har_file(str(raw_path)))
+        sanitized_path_str, _ = sanitize_har_file(str(raw_path))
+        sanitized_path = Path(sanitized_path_str)
         compressed_path, _ = filter_and_compress_har(sanitized_path, None)
 
         # The compressed file should NOT be named "capture.har.gz"
@@ -705,3 +732,120 @@ class TestBrowserAutoInstall:
             # Verify error message if expected
             if error_contains:
                 assert error_contains in result.error
+
+
+class TestBrowserCleanupErrorHandling:
+    """Tests for graceful handling of browser cleanup failures."""
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_context_close_failure_continues_cleanup(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that context.close() failure doesn't crash the capture process."""
+        mock_playwright = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        # Mock browser context to raise exception on close
+        mock_context = mock_playwright.chromium.launch.return_value.new_context.return_value
+        mock_context.close.side_effect = RuntimeError("Failed to close context")
+
+        output = tmp_path / "test.har"
+
+        # Should not raise exception despite context.close() failure
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Capture should still succeed
+        assert result.success is True
+        # Context close was attempted
+        mock_context.close.assert_called_once()
+        # Browser close should still be called even if context close failed
+        mock_playwright.chromium.launch.return_value.close.assert_called_once()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_browser_close_failure_logged(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that browser.close() failure is logged but doesn't crash."""
+        mock_playwright = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        # Mock browser instance to raise exception on close
+        mock_browser = mock_playwright.chromium.launch.return_value
+        mock_browser.close.side_effect = RuntimeError("Failed to close browser")
+
+        output = tmp_path / "test.har"
+
+        # Should not raise exception despite browser.close() failure
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Capture should still succeed
+        assert result.success is True
+        # Browser close was attempted
+        mock_browser.close.assert_called_once()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_both_close_failures_handled(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that both context and browser close failures are handled."""
+        mock_playwright = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_playwright
+        mock_connectivity.return_value = (True, "http", None)
+
+        # Both context and browser raise exceptions on close
+        mock_context = mock_playwright.chromium.launch.return_value.new_context.return_value
+        mock_browser = mock_playwright.chromium.launch.return_value
+        mock_context.close.side_effect = RuntimeError("Context close failed")
+        mock_browser.close.side_effect = RuntimeError("Browser close failed")
+
+        output = tmp_path / "test.har"
+
+        # Should not raise exception despite both failures
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Capture should still succeed
+        assert result.success is True
+        # Both close methods were attempted
+        mock_context.close.assert_called_once()
+        mock_browser.close.assert_called_once()

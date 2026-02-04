@@ -14,12 +14,12 @@ from har_capture.patterns.loader import (
     clear_pattern_cache,
     compile_pattern,
     get_bloat_extensions,
-    is_allowlisted,
     load_allowlist,
     load_capture_settings,
     load_pii_patterns,
     load_sensitive_patterns,
 )
+from har_capture.patterns.redaction import is_allowlisted, is_redacted
 
 __all__ = [
     # Pattern loading
@@ -30,8 +30,10 @@ __all__ = [
     "get_bloat_extensions",
     "clear_pattern_cache",
     "compile_pattern",
-    "is_allowlisted",
     "PatternLoadError",
+    # Redaction checking
+    "is_allowlisted",
+    "is_redacted",
     # Hashing
     "Hasher",
 ]

@@ -16,10 +16,10 @@ This script automates the complete release process by:
 10. Pushing to remote (optional)
 
 Usage:
-    python scripts/release.py 0.2.4                    # Full release
-    python scripts/release.py 0.2.4 --no-push          # Prepare without pushing
-    python scripts/release.py 0.2.4 --skip-tests       # Skip tests (not recommended)
-    python scripts/release.py 0.2.4 --skip-quality     # Skip code quality checks
+    python scripts/release.py X.Y.Z                    # Full release
+    python scripts/release.py X.Y.Z --no-push          # Prepare without pushing
+    python scripts/release.py X.Y.Z --skip-tests       # Skip tests (not recommended)
+    python scripts/release.py X.Y.Z --skip-quality     # Skip code quality checks
 """
 
 from __future__ import annotations
@@ -373,12 +373,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python scripts/release.py 0.2.4              # Full release
-    python scripts/release.py 0.2.4 --no-push    # Prepare without pushing
-    python scripts/release.py 0.2.4 --skip-tests # Skip tests (not recommended)
+    python scripts/release.py X.Y.Z              # Full release
+    python scripts/release.py X.Y.Z --no-push    # Prepare without pushing
+    python scripts/release.py X.Y.Z --skip-tests # Skip tests (not recommended)
 """,
     )
-    parser.add_argument("version", help="Version to release (e.g., 0.2.4)")
+    parser.add_argument("version", help="Version to release (e.g., X.Y.Z)")
     parser.add_argument(
         "--no-push",
         action="store_true",
@@ -408,7 +408,7 @@ Examples:
 
     # Validate version format
     if not validate_version(version):
-        print_error(f"Invalid version format: {version}. Must be X.Y.Z (e.g., 0.2.4)")
+        print_error(f"Invalid version format: {version}. Must be X.Y.Z format")
         sys.exit(1)
     print_success(f"Version format valid: {version}")
 

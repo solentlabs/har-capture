@@ -69,6 +69,7 @@ class CaptureResult:
         compressed_path: Path to compressed HAR file
         sanitized_path: Path to sanitized HAR file
         stats: Capture statistics
+        sanitization_report: Report from sanitization (for interactive review)
     """
 
     success: bool = False
@@ -77,6 +78,7 @@ class CaptureResult:
     compressed_path: Path | None = None
     sanitized_path: Path | None = None
     stats: dict[str, Any] = field(default_factory=dict)
+    sanitization_report: Any | None = None  # SanitizationReport when available
 
 
 # =============================================================================
@@ -272,6 +274,7 @@ def run_capture_phase(
     include_media: bool = False,
     headless: bool = False,
     timeout: int | None = None,
+    interactive: bool = False,
     result: CaptureWorkflowResult | None = None,
 ) -> CaptureWorkflowResult:
     """Run the actual capture.
@@ -289,6 +292,7 @@ def run_capture_phase(
         include_media: Include media files
         headless: Run browser in headless mode
         timeout: Timeout in seconds (None = wait for user to close)
+        interactive: Flag suspicious values for interactive review
         result: Existing result to update, or None to create new
 
     Returns:
@@ -313,6 +317,7 @@ def run_capture_phase(
         include_media=include_media,
         headless=headless,
         timeout=timeout,
+        interactive=interactive,
     )
 
     result.capture = CaptureResult(
@@ -322,6 +327,7 @@ def run_capture_phase(
         compressed_path=capture_result.compressed_path,
         sanitized_path=capture_result.sanitized_path,
         stats=capture_result.stats or {},
+        sanitization_report=capture_result.sanitization_report,
     )
 
     if capture_result.success:

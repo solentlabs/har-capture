@@ -1,4 +1,26 @@
-"""Tests for HTML sanitization utilities."""
+"""Tests for HTML sanitization utilities.
+
+This module tests sanitization of HTML content extracted from device web
+interfaces, removing PII while preserving structure for debugging.
+
+Test Coverage:
+    - Full HTML sanitization (MAC, email, IP, passwords, etc.)
+    - PII detection in HTML content
+    - Pattern loading from configuration files
+    - Custom pattern file support
+    - Multiple PII types in single document
+    - Nested HTML structures
+
+Test Strategy:
+    - Real-world HTML samples from device interfaces
+    - Pattern-specific unit tests
+    - End-to-end sanitization validation
+    - Preservation of non-PII content
+    - Custom pattern merging tests
+
+Dependencies:
+    - pytest for test framework
+"""
 
 from __future__ import annotations
 
@@ -61,9 +83,8 @@ SANITIZE_PII_CASES = [
     # Config paths - uses ***CONFIG*** placeholder
     ("Config File Name: customer123.cfg",       "customer123.cfg",       "***CONFIG***",       "config_path"),
     ("config file: isp_settings.cfg",           "isp_settings.cfg",      "***CONFIG***",       "config_lowercase"),
-    # WiFi credentials in tagValueList - uses ***WIFI*** placeholder
-    ("var tagValueList = '0|Good||happymango167|test';", "happymango167", "***WIFI***",        "wifi_credential"),
-    ("var tagValueList = 'status|MySecretWiFi123|data';", "MySecretWiFi123", "***WIFI***",     "wifi_ssid_like"),
+    # Note: WiFi credentials in tagValueList are now FLAGGED for user review, not auto-redacted.
+    # See FLAGGED_CASES below for those test cases.
 ]
 # fmt: on
 
@@ -91,6 +112,9 @@ PRESERVE_CASES = [
     ("var tagValueList = 'Locked|OK|Operational|QAM256';", "Locked",     "status_locked"),
     ("var tagValueList = 'Locked|OK|Operational|QAM256';", "OK",         "status_ok"),
     ("var tagValueList = 'Locked|OK|Operational|QAM256';", "QAM256",     "status_qam"),
+    # WiFi credentials in tagValueList are PRESERVED (flagged for review, not auto-redacted)
+    ("var tagValueList = '0|Good||happymango167|test';", "happymango167", "wifi_credential_flagged"),
+    ("var tagValueList = 'status|MySecretWiFi123|data';", "MySecretWiFi123", "wifi_ssid_flagged"),
     # Numeric values
     ("Channel: 123",                            "123",                   "numeric_channel"),
     ("Version: 1.0.0",                          "1.0.0",                 "version_string"),

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-04
+
+### Added
+
+- **Interactive Sanitization Mode** - Review and approve edge cases (WiFi SSIDs, device names, credentials) with beautiful CLI interface
+  - Checkbox selection for flagged values with confidence indicators
+  - Context display (surrounding HTML/values) for informed decisions
+  - Quick actions (redact all, redact high confidence, skip review)
+  - Two-pass workflow: auto-redaction + user review
+- **Heuristic Detection** - ML-free detection of suspicious values:
+  - SSID-like patterns (WiFi network names)
+  - Device name patterns (router hostnames)
+  - High-entropy values (potential passwords)
+  - Values adjacent to redacted content
+- **Sanitization Reports** - Structured reports with:
+  - Auto-redaction statistics
+  - Flagged values with confidence levels (high/medium/low)
+  - User decisions (redacted/skipped)
+  - Salt preservation for Pass 2
+- **Consolidated Redaction Checking** - Single source of truth in `patterns/redaction.py`
+  - Moved hard-coded patterns to `allowlist.json` configuration
+  - Custom pattern support with merge logic
+  - 99% test coverage with 71 parameterized tests
+
+### Changed
+
+- **BREAKING**: Removed deprecated `patterns.loader.is_allowlisted()` - Use `patterns.is_allowlisted` instead
+- **BREAKING**: Removed deprecated `validation.secrets.REDACTED_PATTERNS` - Now in `allowlist.json`
+- Version bump to 0.3.0 (major release with breaking changes)
+- Simplified README comparison table for better readability
+- All test files now have comprehensive docstrings
+- Tests refactored to table-driven style with `@pytest.mark.parametrize`
+
+### Removed
+
+- Deprecated backward compatibility shims (clean v0.3.0 API)
+- `docs/TECH_DEBT.md` (observations now tracked via TODO comments or issues)
+
+### Fixed
+
+- ReDoS prevention with length checks before regex matching
+- Input validation in `apply_user_redactions` with clear error messages
+- Exception handling in interactive mode (graceful terminal error recovery)
+
+### Migration Guide
+
+**Breaking Changes:**
+
+```python
+# ❌ No longer works:
+from har_capture.patterns.loader import is_allowlisted
+from har_capture.validation.secrets import REDACTED_PATTERNS
+
+# ✅ Use instead:
+from har_capture.patterns import is_allowlisted
+from har_capture.patterns import is_redacted  # Recommended
+```
+
+**New Features:**
+
+```bash
+# Interactive mode - review edge cases
+har-capture sanitize input.har --interactive
+
+# Customize patterns
+har-capture sanitize input.har --patterns custom-allowlist.json
+```
+
 ## [0.2.5] - 2026-02-01
 
 ### Changed

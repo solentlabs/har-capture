@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "har-capture"
-version = "0.2.5"
+version = "0.3.0"
 description = "HAR capture and PII sanitization library for network traffic analysis"
 readme = "README.md"
 license = "MIT"
@@ -193,6 +193,13 @@ ignore = [
     "ARG",     # unused arguments ok in fixtures
     "SLF001",  # private member access ok in tests
     "RUF012",  # ClassVar not needed for test data
+    "PT006",   # parametrize args don't need to be tuples
+    "PT011",   # broad pytest.raises ok in tests
+    "PT014",   # duplicate parametrize cases ok
+    "PT018",   # combined assertions ok in tests
+    "B017",    # broad exception catching ok in tests
+    "RUF059",  # unused unpacked vars ok in tests
+    "PGH003",  # type ignore without code ok in tests
 ]
 # CLI can use print
 "src/har_capture/cli/**/*.py" = ["T20"]
@@ -253,8 +260,15 @@ pretty = true
 module = [
     "playwright.*",
     "typer.*",
+    "InquirerPy.*",
+    "InquirerPy",
 ]
 ignore_missing_imports = true
+
+# Interactive CLI has incomplete InquirerPy typing
+[[tool.mypy.overrides]]
+module = "har_capture.cli.interactive"
+disable_error_code = ["arg-type", "unused-ignore"]
 
 # =============================================================================
 # Pytest - Testing

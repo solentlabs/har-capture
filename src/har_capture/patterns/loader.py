@@ -273,6 +273,11 @@ def load_allowlist(custom_path: Path | str | None = None) -> dict[str, Any]:
             for key, pattern in custom["format_preserving_patterns"].items():
                 if not key.startswith("_"):
                     builtin["format_preserving_patterns"][key] = pattern
+        # redaction_patterns can be extended with additional patterns
+        if "redaction_patterns" in custom and "values" in custom["redaction_patterns"]:
+            if "redaction_patterns" not in builtin:
+                builtin["redaction_patterns"] = {"values": []}
+            builtin["redaction_patterns"]["values"].extend(custom["redaction_patterns"]["values"])
 
     _cache_set(cache_key, builtin)
     return builtin
@@ -311,36 +316,3 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str]:
                 _LOGGER.warning("Unknown regex flag: %s", flag_name)
 
     return re.compile(regex, flags)
-
-
-def is_allowlisted(value: str, allowlist: dict[str, Any] | None = None) -> bool:
-    """Check if a value is in the allowlist.
-
-    Args:
-        value: Value to check
-        allowlist: Allowlist data (loads default if None)
-
-    Returns:
-        True if the value should be ignored
-    """
-    if allowlist is None:
-        allowlist = load_allowlist()
-
-    # Check static placeholders (exact matches)
-    static = allowlist.get("static_placeholders", {})
-    if value in static.get("values", []):
-        return True
-
-    # Check hash prefixes (for values like SERIAL_a1b2c3d4)
-    prefixes = allowlist.get("hash_prefixes", {})
-    for prefix in prefixes.get("values", []):
-        if value.startswith(prefix):
-            return True
-
-    # Check format-preserving patterns (MAC, IP, email in reserved ranges)
-    for pattern_def in allowlist.get("format_preserving_patterns", {}).values():
-        if isinstance(pattern_def, dict) and "pattern" in pattern_def:
-            if re.search(pattern_def["pattern"], value, re.IGNORECASE):
-                return True
-
-    return False

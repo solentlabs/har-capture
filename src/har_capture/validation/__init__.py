@@ -13,7 +13,6 @@ from __future__ import annotations
 from har_capture.validation.secrets import (
     COOKIE_ATTRIBUTES_ONLY,
     MAC_PATTERN,
-    REDACTED_PATTERNS,
     SENSITIVE_FIELDS,
     SENSITIVE_HEADERS,
     Finding,
@@ -31,7 +30,6 @@ from har_capture.validation.secrets import (
 __all__ = [
     "COOKIE_ATTRIBUTES_ONLY",
     "MAC_PATTERN",
-    "REDACTED_PATTERNS",
     "SENSITIVE_FIELDS",
     "SENSITIVE_HEADERS",
     "Finding",
