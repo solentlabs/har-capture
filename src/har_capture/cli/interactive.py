@@ -269,13 +269,19 @@ def run_checkbox_selection(flagged: list[FlaggedValue]) -> list[int] | None:
 
         label = f"{conf_indicator} {icon} {value_display}"
 
-        # Pre-select credentials/passwords, but not SSIDs/device names (user should confirm those)
-        is_credential = item.category.lower() in ("credential", "password")
+        # Pre-select:
+        # - All HIGH confidence items (likely critical PII)
+        # - MEDIUM confidence credentials/passwords (likely passwords)
+        # Leave WiFi SSIDs and device names unselected for user confirmation
+        should_preselect = (
+            item.confidence.value == "high"
+            or (item.confidence.value == "medium" and item.category.lower() in ("credential", "password"))
+        )
         choices.append(  # type: ignore[arg-type,dict-item]
             {
                 "name": label,
                 "value": i,
-                "enabled": is_credential,
+                "enabled": should_preselect,
             }
         )
 
