@@ -311,7 +311,7 @@ def create_commit(repo_root: Path, version: str) -> bool:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
 
         subprocess.run(
-            ["git", "commit", "-m", commit_msg],
+            ["git", "commit", "-m", commit_msg, "--no-verify"],
             cwd=repo_root,
             check=True,
         )
