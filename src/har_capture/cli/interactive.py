@@ -242,12 +242,7 @@ def display_summary(report: SanitizationReport) -> None:
     table.add_row("User redacted", f"[cyan]{report.total_user_redacted}[/]")
     table.add_row("User skipped", f"[yellow]{report.total_user_skipped}[/]")
 
-    panel = Panel(
-        table,
-        title="[bold]Summary[/]",
-        subtitle="Solent Labs™",
-        border_style="blue"
-    )
+    panel = Panel(table, title="[bold]Summary[/]", subtitle="Solent Labs™", border_style="blue")
     console.print()
     console.print(panel)
 

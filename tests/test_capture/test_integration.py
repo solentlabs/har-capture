@@ -50,8 +50,7 @@ class MockHandler(BaseHTTPRequestHandler):
             )
         elif self.path == "/page2":
             self._send_html(
-                "<html><head><title>Page 2</title></head>"
-                "<body><h1>Second Page</h1></body></html>"
+                "<html><head><title>Page 2</title></head><body><h1>Second Page</h1></body></html>"
             )
         elif self.path == "/api/data":
             self._send_json({"status": "ok", "value": 42})
