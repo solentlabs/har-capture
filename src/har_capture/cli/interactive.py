@@ -182,12 +182,18 @@ def display_sanitization_summary(
     from rich.panel import Panel
     from rich.table import Table
 
+    from har_capture import __version__
+
     console = Console()
 
     # Build content - use expand=False to prevent table from filling panel width
     table = Table(show_header=False, box=None, padding=(0, 1), expand=False)
     table.add_column("Label", style="bold")
     table.add_column("Value")
+
+    # Version
+    table.add_row("Version", f"[dim]har-capture {__version__}[/]")
+    table.add_row("", "")
 
     # Input file
     table.add_row("Input", f"{input_path}")
@@ -206,7 +212,15 @@ def display_sanitization_summary(
     table.add_row("", "")
     table.add_row("Output", f"[cyan]{output_path}[/]")
 
-    panel = Panel(table, title="[bold]Sanitization Complete[/]", border_style="blue")
+    # Choose title and style based on whether review is needed
+    if report.flagged:
+        title = "[bold]Review Required[/]"
+        border_style = "yellow"
+    else:
+        title = "[bold]Sanitization Complete[/]"
+        border_style = "green"
+
+    panel = Panel(table, title=title, border_style=border_style)
     console.print()
     console.print(panel)
 
@@ -228,7 +242,7 @@ def display_summary(report: SanitizationReport) -> None:
     table.add_row("User redacted", f"[cyan]{report.total_user_redacted}[/]")
     table.add_row("User skipped", f"[yellow]{report.total_user_skipped}[/]")
 
-    panel = Panel(table, title="[bold green]✓ Review Complete[/]", border_style="green")
+    panel = Panel(table, title="[bold]Summary[/]", border_style="blue")
     console.print()
     console.print(panel)
 
@@ -273,9 +287,8 @@ def run_checkbox_selection(flagged: list[FlaggedValue]) -> list[int] | None:
         # - All HIGH confidence items (likely critical PII)
         # - MEDIUM confidence credentials/passwords (likely passwords)
         # Leave WiFi SSIDs and device names unselected for user confirmation
-        should_preselect = (
-            item.confidence.value == "high"
-            or (item.confidence.value == "medium" and item.category.lower() in ("credential", "password"))
+        should_preselect = item.confidence.value == "high" or (
+            item.confidence.value == "medium" and item.category.lower() in ("credential", "password")
         )
         choices.append(  # type: ignore[arg-type,dict-item]
             {
@@ -286,18 +299,21 @@ def run_checkbox_selection(flagged: list[FlaggedValue]) -> list[int] | None:
         )
 
     # Run the checkbox prompt with checkbox symbols (not radio circles)
-    # ESC key is bound to skip (go back)
     try:
         selected = inquirer.checkbox(  # type: ignore[attr-defined]
-            message="Select values to REDACT:",
+            message="Select values to REDACT (high confidence pre-selected):",
             choices=choices,
-            instruction="(↑↓=navigate, space=toggle, a=all, n=none, enter=confirm, backspace=back)",
+            instruction="(Space=toggle, A=all, N=none, Backspace=back)",
             validate=lambda _: True,  # Allow empty selection
             invalid_message="",
             enabled_symbol="☑",
             disabled_symbol="☐",
             mandatory=False,  # Allow ESC/backspace to skip
-            keybindings={"skip": [{"key": "escape"}, {"key": "backspace"}]},
+            keybindings={
+                "toggle-all-true": [{"key": "a"}],
+                "toggle-all-false": [{"key": "n"}],
+                "skip": [{"key": "escape"}, {"key": "backspace"}],
+            },
             transformer=lambda result: f"{len(result)} selected" if result else "none selected",
         ).execute()
 
@@ -346,7 +362,7 @@ def run_quick_action_prompt(flagged: list[FlaggedValue]) -> str | None:
 
     try:
         return inquirer.select(  # type: ignore[attr-defined,no-any-return]
-            message="How would you like to handle flagged values?",
+            message="How would you like to handle flagged values? (Ctrl+C to cancel)",
             choices=choices,
             default="select",
         ).execute()
@@ -379,11 +395,21 @@ def run_interactive_review(
     Returns:
         True if review completed normally, False if cancelled
     """
+    import os
+    import sys
+
     from rich.console import Console
 
     from har_capture.sanitization.report import ConfidenceLevel, RedactionStatus
 
     console = Console()
+
+    # Clear screen and scrollback buffer before starting interactive mode
+    if sys.platform == "win32":
+        os.system("cls")
+    else:
+        os.system("clear")
+
     flagged = report.flagged
 
     if not flagged:

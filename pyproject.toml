@@ -204,11 +204,10 @@ ignore = [
     "PT014",   # duplicate parametrize cases ok
     "PT018",   # combined assertions ok in tests
     "B017",    # broad exception catching ok in tests
-    "RUF059",  # unused unpacked vars ok in tests
     "PGH003",  # type ignore without code ok in tests
 ]
-# CLI can use print
-"src/har_capture/cli/**/*.py" = ["T20"]
+# CLI can use print and system commands (clear/cls for terminal)
+"src/har_capture/cli/**/*.py" = ["T20", "S605", "S607"]
 # Scripts use print and subprocess for automation (trusted commands)
 "scripts/**/*.py" = ["T20", "S603", "S607", "RUF001"]
 # Allow print in __main__ for CLI entry
@@ -274,7 +273,7 @@ ignore_missing_imports = true
 # Interactive CLI has incomplete InquirerPy typing
 [[tool.mypy.overrides]]
 module = "har_capture.cli.interactive"
-disable_error_code = ["arg-type", "unused-ignore"]
+disable_error_code = ["arg-type", "unused-ignore", "unreachable"]
 
 # =============================================================================
 # Pytest - Testing

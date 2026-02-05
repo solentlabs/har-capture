@@ -850,7 +850,7 @@ def apply_user_redactions(
             f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
         ) from e
 
-    return result  # type: ignore[no-any-return]
+    return result
 
 
 def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bool, int]:
