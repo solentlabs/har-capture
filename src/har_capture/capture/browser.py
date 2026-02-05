@@ -463,8 +463,9 @@ def capture_device_har(
             result.compressed_path = compressed_path
             result.stats = stats
 
-            # Delete uncompressed sanitized file unless keep_raw
-            if not keep_raw:
+            # Delete uncompressed sanitized file unless keep_raw or interactive
+            # Interactive mode needs the uncompressed file for user review
+            if not keep_raw and not interactive:
                 try:
                     result.sanitized_path.unlink()
                     result.sanitized_path = None
