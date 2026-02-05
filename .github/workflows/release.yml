@@ -1,0 +1,54 @@
+name: Create GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes from CHANGELOG
+        id: changelog
+        run: |
+          # Extract the section for this version from CHANGELOG.md
+          version="${GITHUB_REF#refs/tags/v}"
+
+          # Get content between this version and the next version header
+          awk "/^## \[$version\]/,/^## \[/" CHANGELOG.md | \
+            grep -v "^## \[$version\]" | \
+            grep -v "^## \[" | \
+            sed '/^$/d' > release_notes.txt
+
+          # Add installation instructions
+          cat >> release_notes.txt << EOF
+
+          ## Installation
+
+          \`\`\`bash
+          pip install har-capture==$version
+          \`\`\`
+
+          ## Full Changelog
+
+          See [CHANGELOG.md](https://github.com/solentlabs/har-capture/blob/v$version/CHANGELOG.md) for complete details.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          body_path: release_notes.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
