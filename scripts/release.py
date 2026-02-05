@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Release automation script for har-capture.
 
-This script automates the complete release process by:
+This script automates the release preparation process by:
 1. Validating the version format
 2. Checking git working directory is clean
 3. Running tests (pytest)
@@ -11,13 +11,20 @@ This script automates the complete release process by:
    - pyproject.toml
    - src/har_capture/__init__.py
 7. Verifying version consistency
-8. Creating a git commit with all changes
-9. Creating an annotated git tag
-10. Pushing to remote (optional)
+8. Creating a release branch (release/vX.Y.Z)
+9. Creating a git commit with all changes
+10. Creating a pull request for human review
+
+After the PR is merged, you must manually create and push the tag:
+    git checkout main && git pull
+    git tag -a vX.Y.Z -m "Release X.Y.Z"
+    git push origin vX.Y.Z
+
+This ensures human supervision before releasing to PyPI.
 
 Usage:
-    python scripts/release.py X.Y.Z                    # Full release
-    python scripts/release.py X.Y.Z --no-push          # Prepare without pushing
+    python scripts/release.py X.Y.Z                    # Create release PR
+    python scripts/release.py X.Y.Z --no-push          # Prepare without creating PR
     python scripts/release.py X.Y.Z --skip-tests       # Skip tests (not recommended)
     python scripts/release.py X.Y.Z --skip-quality     # Skip code quality checks
 """
@@ -289,6 +296,18 @@ def verify_version_consistency(repo_root: Path, version: str) -> bool:
     return all_correct
 
 
+def create_release_branch(version: str) -> bool:
+    """Create a release branch."""
+    try:
+        branch_name = f"release/v{version}"
+        subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+        print_success(f"Created branch: {branch_name}")
+        return True
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to create branch: {e}")
+        return False
+
+
 def create_commit(repo_root: Path, version: str) -> bool:
     """Create a git commit with version changes."""
     try:
@@ -311,7 +330,7 @@ def create_commit(repo_root: Path, version: str) -> bool:
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
 
         subprocess.run(
-            ["git", "commit", "-m", commit_msg, "--no-verify"],
+            ["git", "commit", "-m", commit_msg],
             cwd=repo_root,
             check=True,
         )
@@ -323,59 +342,74 @@ Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"""
         return False
 
 
-def create_tag(version: str) -> bool:
-    """Create an annotated git tag."""
+def create_pull_request(version: str) -> bool:
+    """Push branch and create a pull request."""
     try:
-        tag_name = f"v{version}"
-        tag_msg = f"Release {version}"
+        branch_name = f"release/v{version}"
 
-        subprocess.run(["git", "tag", "-a", tag_name, "-m", tag_msg], check=True)
+        # Push branch
+        subprocess.run(["git", "push", "-u", "origin", branch_name], check=True)
+        print_success(f"Pushed branch to origin/{branch_name}")
 
-        print_success(f"Created tag: {tag_name}")
-        return True
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to create tag: {e}")
-        return False
+        # Create PR
+        pr_title = f"Release v{version}"
+        pr_body = f"""## Release v{version}
 
+This PR updates version numbers and prepares for release.
 
-def push_changes(version: str) -> bool:
-    """Push commit and tag to remote."""
-    try:
-        tag_name = f"v{version}"
+### Changes
+- Update version in `pyproject.toml`: {version}
+- Update version in `src/har_capture/__init__.py`: {version}
+- CHANGELOG.md entry for v{version}
 
-        # Get current branch
-        result = subprocess.run(
-            ["git", "branch", "--show-current"],
-            capture_output=True,
-            text=True,
+### Next Steps (Human Review Required 🚦)
+1. Review the version bumps and CHANGELOG entry
+2. Merge this PR
+3. Create and push the tag:
+   ```bash
+   git checkout main && git pull
+   git tag -a v{version} -m "Release {version}"
+   git push origin v{version}
+   ```
+4. GitHub Actions will automatically create the GitHub Release
+
+### Checklist
+- [ ] Version numbers updated correctly
+- [ ] CHANGELOG entry is accurate
+- [ ] All CI checks pass
+"""
+
+        subprocess.run(
+            ["gh", "pr", "create", "--title", pr_title, "--body", pr_body],
             check=True,
         )
-        current_branch = result.stdout.strip()
-
-        # Push commit
-        subprocess.run(["git", "push", "origin", current_branch], check=True)
-        print_success(f"Pushed commit to origin/{current_branch}")
-
-        # Push tag
-        subprocess.run(["git", "push", "origin", tag_name], check=True)
-        print_success(f"Pushed tag {tag_name} to origin")
+        print_success(f"Created pull request for v{version}")
 
         return True
     except subprocess.CalledProcessError as e:
-        print_error(f"Failed to push changes: {e}")
+        print_error(f"Failed to create pull request: {e}")
         return False
 
 
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Automate har-capture releases",
+        description="Automate har-capture release preparation (creates PR for human review)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python scripts/release.py X.Y.Z              # Full release
-    python scripts/release.py X.Y.Z --no-push    # Prepare without pushing
+    python scripts/release.py X.Y.Z              # Create release PR
+    python scripts/release.py X.Y.Z --no-push    # Prepare without creating PR
     python scripts/release.py X.Y.Z --skip-tests # Skip tests (not recommended)
+
+Workflow:
+    1. Run this script to create a release PR
+    2. Review and merge the PR (human supervision 🚦)
+    3. Manually create and push the tag:
+       git checkout main && git pull
+       git tag -a vX.Y.Z -m "Release X.Y.Z"
+       git push origin vX.Y.Z
+    4. GitHub Actions creates the verified release and publishes to PyPI
 """,
     )
     parser.add_argument("version", help="Version to release (e.g., X.Y.Z)")
@@ -474,32 +508,40 @@ Examples:
     # === GIT PHASE ===
     print_info("=== Git Phase ===")
 
+    # Create release branch
+    if not create_release_branch(version):
+        sys.exit(1)
+
     # Create commit
     if not create_commit(repo_root, version):
         sys.exit(1)
 
-    # Create tag
-    if not create_tag(version):
-        sys.exit(1)
-
-    # Push if not --no-push
+    # Create PR if not --no-push
     if not args.no_push:
-        if not push_changes(version):
+        if not create_pull_request(version):
             sys.exit(1)
     else:
         print_warning("Skipping push (--no-push)")
         print_info("To complete the release manually:")
-        print_info("  git push origin main")
-        print_info(f"  git push origin v{version}")
+        print_info(f"  git push -u origin release/v{version}")
+        print_info(f"  gh pr create --title 'Release v{version}'")
     print()
 
     # === DONE ===
     if args.no_push:
-        print_success(f"Release {version} prepared! Push manually to complete.")
+        print_success(f"Release {version} prepared! Create PR manually to continue.")
     else:
-        print_success(f"Release {version} complete!")
-        print_info(f"PyPI publish will be triggered by the v{version} tag")
-        print_info(f"Check: https://pypi.org/project/har-capture/{version}/")
+        print_success(f"Release PR created for v{version}!")
+        print()
+        print_info("Next steps (Human supervision required 🚦):")
+        print_info("  1. Review the PR and ensure all checks pass")
+        print_info("  2. Merge the PR")
+        print_info("  3. Create and push the tag:")
+        print_info("     git checkout main && git pull")
+        print_info(f"     git tag -a v{version} -m 'Release {version}'")
+        print_info(f"     git push origin v{version}")
+        print_info("  4. GitHub Actions will create the verified release")
+        print_info(f"  5. Check: https://pypi.org/project/har-capture/{version}/")
 
 
 if __name__ == "__main__":

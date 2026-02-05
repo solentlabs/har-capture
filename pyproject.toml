@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Solent Labs", email = "dev@solentlabs.io" }
+    { name = "Solent Labs™" }
 ]
 keywords = ["har", "http-archive", "sanitization", "pii", "capture", "playwright"]
 classifiers = [
