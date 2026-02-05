@@ -126,7 +126,7 @@ class TestPipeDelimitedCredentialGaps:
         when using --interactive mode. They are NOT auto-redacted because
         user confirmation is required.
         """
-        flagged, confidence, category, reason = analyze_value(suspicious_value)
+        flagged, _confidence, category, reason = analyze_value(suspicious_value)
         assert flagged, (
             f"{desc}: value '{suspicious_value}' should be flagged as suspicious. "
             f"Got: flagged={flagged}, category={category}, reason={reason}"
@@ -145,7 +145,7 @@ class TestPipeDelimitedCredentialGaps:
         These 8+ character passwords with mixed character types are detected
         as high-entropy credentials and flagged for interactive review.
         """
-        flagged, confidence, category, reason = analyze_value(password)
+        flagged, _confidence, category, reason = analyze_value(password)
         assert flagged, (
             f"{desc}: password '{password}' should be flagged as suspicious. "
             f"Got: flagged={flagged}, category={category}, reason={reason}"
@@ -168,7 +168,7 @@ class TestPipeDelimitedCredentialGaps:
         However, they match SSID-like patterns and are still flagged for
         user review in interactive mode, which is the desired behavior.
         """
-        flagged, confidence, category, reason = analyze_value(password)
+        flagged, _confidence, category, reason = analyze_value(password)
         assert flagged, (
             f"{desc}: short password '{password}' should be flagged for review. "
             f"Got: flagged={flagged}, category={category}, reason={reason}"

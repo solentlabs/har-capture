@@ -238,7 +238,7 @@ class TestEdgeCases:
         """Test HAR with None values doesn't crash."""
         har_data = {"log": None, "content": None}
         # Should not raise
-        is_sanitized, count = appears_sanitized(har_data)
+        is_sanitized, _count = appears_sanitized(har_data)
         assert is_sanitized is False
 
     def test_large_har_file(self) -> None:

@@ -351,7 +351,7 @@ class TestAnalyzeValue:
         desc: str,
     ) -> None:
         """Test analyze_value function."""
-        flagged, confidence, category, reason = analyze_value(value, values_context, value_index)
+        flagged, _confidence, category, reason = analyze_value(value, values_context, value_index)
         assert flagged is should_flag, f"{desc}: '{value}' should {'be' if should_flag else 'not be'} flagged"
         if should_flag:
             assert category == expected_category, (
@@ -398,7 +398,7 @@ class TestRegexDoSPrevention:
         malicious_input = "A" + "-" * 1000 + "!"
 
         start = time.time()
-        result, reason = is_ssid_like(malicious_input)
+        result, _reason = is_ssid_like(malicious_input)
         elapsed = time.time() - start
 
         # Should be fast (< 0.1s) and return False (too long)
@@ -432,8 +432,8 @@ class TestEntropyThresholds:
     )
     def test_entropy_false_positives_not_flagged(self, value: str, description: str) -> None:
         """Test that legitimate technical strings aren't flagged."""
-        result, reason = is_high_entropy(value)
-        assert result is False, f"'{value}' should not be flagged as high entropy: {reason}"
+        result, _reason = is_high_entropy(value)
+        assert result is False, f"'{value}' should not be flagged as high entropy"
 
     @pytest.mark.parametrize(
         ("value", "description"),
@@ -446,7 +446,7 @@ class TestEntropyThresholds:
     )
     def test_entropy_true_positives_still_caught(self, value: str, description: str) -> None:
         """Test that real passwords are still caught."""
-        result, reason = is_high_entropy(value)
+        result, _reason = is_high_entropy(value)
         assert result is True, f"'{value}' should be flagged as high entropy"
 
     @pytest.mark.parametrize(
