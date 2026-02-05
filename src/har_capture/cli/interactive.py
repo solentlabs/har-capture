@@ -220,7 +220,7 @@ def display_sanitization_summary(
         title = "[bold]Sanitization Complete[/]"
         border_style = "green"
 
-    panel = Panel(table, title=title, border_style=border_style)
+    panel = Panel(table, title=title, subtitle="Solent Labs™", border_style=border_style)
     console.print()
     console.print(panel)
 
@@ -242,7 +242,12 @@ def display_summary(report: SanitizationReport) -> None:
     table.add_row("User redacted", f"[cyan]{report.total_user_redacted}[/]")
     table.add_row("User skipped", f"[yellow]{report.total_user_skipped}[/]")
 
-    panel = Panel(table, title="[bold]Summary[/]", border_style="blue")
+    panel = Panel(
+        table,
+        title="[bold]Summary[/]",
+        subtitle="Solent Labs™",
+        border_style="blue"
+    )
     console.print()
     console.print(panel)
 
@@ -421,15 +426,16 @@ def run_interactive_review(
     confidence_order = {"high": 0, "medium": 1, "low": 2}
     flagged.sort(key=lambda x: (confidence_order.get(x.confidence.value, 3), x.category))
 
-    def display_full_screen() -> None:
+    def display_full_screen(clear: bool = True) -> None:
         """Clear and display the full review screen."""
-        console.clear()
+        if clear:
+            console.clear()
         if input_path and output_path and salt_mode:
             display_sanitization_summary(report, input_path, output_path, salt_mode)
         display_flagged_table(flagged)
 
-    # Show initial screen
-    display_full_screen()
+    # Show initial screen (already cleared with os.system)
+    display_full_screen(clear=False)
 
     # Main action loop - allows going back from individual selection
     while True:

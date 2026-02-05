@@ -286,10 +286,14 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
     # Determine salt mode for display
     salt_mode = "random (correlation within file)" if report.salt else "static placeholders"
 
+    # Use raw_path as input if available, otherwise use sanitized_path
+    # (raw_path is None when keep_raw=False, which is the default)
+    input_display = str(raw_path) if raw_path else str(sanitized_path)
+
     review_completed = run_interactive_review(
         report,
-        input_path=str(raw_path) if raw_path else None,
-        output_path=str(sanitized_path) if sanitized_path else None,
+        input_path=input_display,
+        output_path=str(sanitized_path),
         salt_mode=salt_mode,
     )
 
