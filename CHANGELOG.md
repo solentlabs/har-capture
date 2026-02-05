@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-04
+
+### Fixed
+
+- **Interactive Mode Display** - Fixed summary panel not displaying when `keep_raw=False` (default)
+  - Now shows version, auto-redacted counts, and file paths at start of review
+  - Fixed double screen clearing that was hiding the summary
+- **Interactive Mode File Handling** - Keep sanitized HAR file when interactive mode is enabled
+  - Previously deleted uncompressed file, causing "Missing sanitization data" error
+  - Now preserves file for user review and redaction application
+- **Test Linting** - Fixed RUF059 warnings for unused unpacked variables in tests
+- **Type Checking** - Re-added necessary type ignore for json.loads return type
+
+### Added
+
+- **Solent Labs™ Branding** - Added watermark to interactive mode panels
+- **Improved Instructions** - Clearer checkbox prompts ("Enter when done", pre-selected items noted)
+- **Better UX** - Simplified keybindings (A/N for all/none work now), removed redundant Ctrl+C mention
+
 ## \[0.3.0\] - 2026-02-04
 
 ### Added
