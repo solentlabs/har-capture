@@ -230,3 +230,39 @@ class Hasher:
             Hashed placeholder like "SERIAL_a1b2c3d4"
         """
         return self.hash_value(value, prefix)
+
+    def hash_sensitive_value(self, value: str, category: str) -> str:
+        """Hash a heuristically-detected sensitive value with category-aware prefix.
+
+        Maps heuristic detection categories to appropriate hash prefixes for
+        human-readable redacted output. This is used when heuristics detect
+        potential PII but can't determine the exact type.
+
+        Args:
+            value: The sensitive value to hash
+            category: Category from heuristics analysis. Common values:
+                - "wifi_ssid": WiFi network names
+                - "credential": High-entropy potential passwords
+                - "device_name": Device/host names
+                - "suspicious": Values adjacent to redacted content
+
+        Returns:
+            Hashed value like "WIFI_a1b2c3d4" or "***WIFI***" if no salt
+
+        Example:
+            >>> hasher = Hasher.create("test-salt")
+            >>> hasher.hash_sensitive_value("MyNetwork-5G", "wifi_ssid")
+            'WIFI_...'
+            >>> hasher = Hasher.create(None)
+            >>> hasher.hash_sensitive_value("password123", "credential")
+            '***CRED***'
+        """
+        # Map heuristic categories to prefixes
+        prefix_map = {
+            "wifi_ssid": "WIFI",
+            "credential": "CRED",
+            "device_name": "DEVICE",
+            "suspicious": "SENSITIVE",
+        }
+        prefix = prefix_map.get(category, "SENSITIVE")
+        return self.hash_value(value, prefix)

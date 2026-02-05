@@ -36,21 +36,28 @@ if TYPE_CHECKING:
     from typing import Any
 
     from har_capture.sanitization.collector import RedactionCollector
+    from har_capture.sanitization.report import HeuristicMode
+else:
+    from har_capture.sanitization.report import HeuristicMode
 
 
 def sanitize_html(
     html: str,
     *,
     salt: str | None = "auto",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     collector: RedactionCollector | None = None,
-    flag_suspicious: bool = False,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> str:
     """Remove sensitive information from HTML.
 
     This function sanitizes device HTML to remove PII before inclusion in
     diagnostics or fixture files. It's designed to be thorough while
     preserving data structure for debugging.
+
+    By default, only **known patterns** (MACs, IPs, emails, serial numbers)
+    are redacted. Enable heuristics to analyze pipe-delimited values that
+    lack field labels (e.g., tagValueList in router HTML).
 
     Args:
         html: Raw HTML from device
@@ -59,18 +66,27 @@ def sanitize_html(
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
             (ignored if collector is provided)
-        custom_patterns: Optional path to custom patterns JSON file
+        custom_patterns: Custom PII patterns to apply. Options:
+            - String: Path to JSON patterns file
+            - Dict: Pattern definitions directly (e.g., from modem.yaml)
+            - None: Use built-in patterns only
         collector: Optional collector for tracking redactions
-        flag_suspicious: If True, flag suspicious values for user review
+        heuristics: How to handle unlabeled pipe-delimited values:
+            - DISABLED (default): Skip heuristics, only redact known patterns
+            - FLAG: Flag suspicious values for manual review (interactive)
+            - REDACT: Auto-redact suspicious values (may over-redact)
 
     Returns:
         Sanitized HTML with personal info removed
 
     Example:
+        >>> from har_capture.sanitization.report import HeuristicMode
         >>> sanitize_html("MAC: AA:BB:CC:DD:EE:FF")  # doctest: +SKIP
         'MAC: MAC_a1b2c3d4'
         >>> sanitize_html("MAC: AA:BB:CC:DD:EE:FF", salt=None)
         'MAC: ***MAC***'
+        >>> # Enable heuristics for pipe-delimited values
+        >>> sanitize_html(html, heuristics=HeuristicMode.REDACT)  # doctest: +SKIP
     """
     # Use collector's hasher if provided, otherwise create one
     if collector is not None:
@@ -320,7 +336,6 @@ def sanitize_html(
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
     # Import heuristics for detection
-    from har_capture.cli.interactive import capture_pipe_context
     from har_capture.sanitization.heuristics import (
         analyze_value,
         is_safe_value,
@@ -329,13 +344,14 @@ def sanitize_html(
     def sanitize_tag_value_list(match: re.Match[str]) -> str:
         """Sanitize pipe-delimited values in tagValueList.
 
-        Auto-redacts only values that match KNOWN patterns (MAC addresses, IPs).
-        Flags suspicious values (SSIDs, passwords, device names) for user review
-        when flag_suspicious=True.
+        Always auto-redacts values matching KNOWN patterns (MAC addresses).
 
-        This preserves the two-pass flow:
-        - Pass 1: Auto-redact known patterns, flag suspicious values
-        - Pass 2: User reviews flagged values and decides what to redact
+        When heuristics are enabled, analyzes remaining values to detect
+        potential PII (WiFi credentials, SSIDs, device names) based on
+        patterns, entropy, and context:
+        - DISABLED: Skip heuristic analysis (default)
+        - FLAG: Flag suspicious values for manual review
+        - REDACT: Auto-redact suspicious values (may over-redact)
         """
         prefix = match.group(1)
         values_str = match.group(2)
@@ -373,25 +389,37 @@ def sanitize_html(
                 sanitized_values.append(hasher.hash_mac(val_stripped))
                 continue
 
-            # Keep the value - flag for review if heuristics match
-            sanitized_values.append(val)
-
-            # FLAG for interactive review (not auto-redact)
-            if flag_suspicious:
+            # HEURISTICS: Analyze unknown values (opt-in)
+            if heuristics != HeuristicMode.DISABLED:
                 should_flag, confidence, category, reason = analyze_value(
                     val_stripped,
                     values_context=sanitized_values,
-                    value_index=len(sanitized_values) - 1,
+                    value_index=len(sanitized_values),
                 )
+
                 if should_flag:
-                    context = capture_pipe_context(values, i)
-                    collector.flag_value(
-                        val_stripped,
-                        category,
-                        confidence,
-                        context,
-                        reason,
-                    )
+                    if heuristics == HeuristicMode.REDACT:
+                        # Auto-redact the flagged value
+                        redacted = hasher.hash_sensitive_value(val_stripped, category)
+                        sanitized_values.append(redacted)
+                        collector.record_auto_redaction(category)
+                        continue
+                    if heuristics == HeuristicMode.FLAG:
+                        # Flag for review, preserve value
+                        from har_capture.cli.interactive import capture_pipe_context
+
+                        context = capture_pipe_context(values, i)
+                        collector.flag_value(
+                            val_stripped,
+                            category,
+                            confidence,
+                            context,
+                            reason,
+                        )
+                        # Fall through to append original value
+
+            # Preserve value (either not flagged, or flagged for review)
+            sanitized_values.append(val)
 
         return prefix + "|".join(sanitized_values) + suffix
 

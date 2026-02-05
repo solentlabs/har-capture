@@ -27,6 +27,7 @@ from har_capture.capture.deps import (
     install_browser_deps,
 )
 from har_capture.patterns import get_bloat_extensions
+from har_capture.sanitization.report import HeuristicMode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -436,7 +437,7 @@ def capture_device_har(
             _, sanitization_report = sanitize_har_file(
                 str(temp_path),
                 str(sanitized_output),
-                flag_suspicious=interactive,
+                heuristics=HeuristicMode.FLAG if interactive else HeuristicMode.DISABLED,
             )
             result.sanitized_path = sanitized_output
             result.sanitization_report = sanitization_report
