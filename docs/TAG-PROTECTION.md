@@ -225,6 +225,5 @@ ______________________________________________________________________
 
 ## See Also
 
-- [Tag Protection Best Practices](../../devkit/tag-protection-best-practices.md) - Comprehensive guide
-- [Release Workflow](.github/workflows/release.yml) - Automated release process
+- [Release Workflow](../.github/workflows/release.yml) - Automated release process
 - [Contributing Guidelines](../CONTRIBUTING.md) - Development workflow

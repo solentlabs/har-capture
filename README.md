@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![AI Assisted](https://img.shields.io/badge/AI-Claude%20Assisted-5A67D8.svg)](https://claude.ai)
 
-Capture and sanitize [HAR (HTTP Archive)](http://www.softwareishard.com/blog/har-12-spec/) files. HAR files record browser HTTP activity and are commonly used for debugging, diagnostics, and test fixtures.
+Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/specs/HAR/Overview.html) files with deep PII removal. Perfect for support diagnostics, security reviews, and test fixtures.
 
 ## Quick Start
 
@@ -43,335 +43,144 @@ har-capture sanitize myfile.har
 
 </details>
 
-<details>
-<summary><b>Python API</b></summary>
-
-```python
-from har_capture.sanitization import sanitize_har
-
-with open("input.har") as f:
-    har_data = json.load(f)
-
-sanitized = sanitize_har(har_data)
-```
-
-</details>
-
 ______________________________________________________________________
 
 ## Why har-capture?
 
-[Chrome DevTools v130+](https://developer.chrome.com/blog/new-in-devtools-130) now sanitizes cookies and auth headers by default when exporting HAR files. That's a good start, but HAR files contain much more sensitive data:
+Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **much more sensitive data**: IP addresses, MAC addresses, emails, passwords in form bodies, serial numbers, device names, WiFi credentials, session tokens, and API keys.
 
-- IP addresses, MAC addresses, email addresses
-- Passwords and credentials in form bodies
-- Serial numbers, device names, session tokens
+**How har-capture compares:**
 
-**har-capture** provides **deep sanitization** and **CLI automation**:
+| Feature                               | har-capture | DevTools | Google/Cloudflare |
+| ------------------------------------- | ----------- | -------- | ----------------- |
+| Deep sanitization (IPs, MACs, emails) | ✅          | ❌       | ❌                |
+| Correlation-preserving hashes         | ✅          | ❌       | ❌                |
+| Interactive review                    | ✅          | ❌       | Varies            |
+| Custom patterns                       | ✅          | ❌       | Limited           |
+| Local + CLI automation                | ✅          | No CLI   | Varies            |
 
-```bash
-har-capture get <TARGET>     # Capture → sanitize → compress (all automatic)
-```
+**Key benefits:**
 
-### Comparison with Existing Tools
+- **Zero dependencies** - Core sanitization uses only Python stdlib
+- **Format-preserving hashes** - Track the same device across requests without exposing real values
+- **One-command workflow** - Capture, sanitize, and compress in a single step
 
-| Feature                | har-capture | DevTools¹ | Google² | Cloudflare³ | Edgio⁴ |
-| ---------------------- | :---------: | :-------: | :-----: | :---------: | :----: |
-| **Sanitization**       |             |           |         |             |        |
-| Cookies/auth headers   |     ✅      |    ✅     |   ✅    |     ✅      |   ✅   |
-| IPs, MACs, emails      |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
-| Passwords in forms     |     ✅      |    ❌     |   ✅    |     ❌      |   ✅   |
-| JWT smart redaction    |     ❌      |    ❌     |   ❌    |     ✅      |   ❌   |
-| Correlation-preserving |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
-| **Usability**          |             |           |         |             |        |
-| No installation needed |     ❌      |    ✅     |   ❌    |     ✅      |   ✅   |
-| Data stays local       |     ✅      |    ✅     |   ❌    |     ✅      |   ✅   |
-| CLI/scriptable         |     ✅      |    ❌     |   ✅    |     ❌      |   ✅   |
-| Interactive review     |     ✅      |    ❌     |   ✅    |     ❌      |   ❌   |
-| **Extras**             |             |           |         |             |        |
-| Integrated capture     |     ✅      |    ✅     |   ❌    |     ❌      |   ❌   |
-| Custom patterns        |     ✅      |    ❌     |   ✅    |     ❌      |   ❌   |
-| Validation             |     ✅      |    ❌     |   ❌    |     ❌      |   ❌   |
+[See detailed comparison with all tools →](docs/COMPARISON.md)
 
-**References:**
-
-1. [Chrome DevTools Network Reference](https://developer.chrome.com/docs/devtools/network/reference)
-1. [Google HAR Sanitizer](https://github.com/google/har-sanitizer)
-1. [Cloudflare HAR Sanitizer](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/)
-1. [Edgio HAR Tools](https://github.com/Edgio/har-tools)
-
-### Target Use Cases
-
-- **Support diagnostics**: Users submit sanitized HAR files without exposing credentials
-- **Web development**: Capture and analyze HTTP traffic for debugging
-- **Test fixtures**: Generate reproducible traffic captures for testing
-- **Security review**: Validate HAR files for PII leaks before sharing
-
-## Features
-
-- **Zero Dependencies Core**: Core sanitization uses only Python stdlib
-- **HAR Capture**: Browser-based capture using Playwright (optional)
-- **PII Sanitization**: Remove sensitive data from HTML and HAR files
-- **Interactive Review**: Review and approve suspicious values with beautiful CLI interface
-- **Correlation-Preserving Redaction**: Salted hashes maintain value relationships
-- **Custom Patterns**: External JSON files for easy pattern updates
-- **Validation**: Check HAR files for PII leaks before committing
-- **CLI Interface**: Easy-to-use command line tools
+______________________________________________________________________
 
 ## Installation
 
 ```bash
-# Core only (zero dependencies)
+# Core only (sanitization - zero dependencies)
 pip install har-capture
 
-# With browser capture
+# With browser capture support
 pip install har-capture[capture]
-playwright install chromium  # Install browser
+playwright install chromium
 
-# With CLI
-pip install har-capture[cli]
-
-# Full installation
+# Full installation (recommended)
 pip install har-capture[full]
 ```
 
-## Quick Start
+______________________________________________________________________
 
-### Python API
+## Usage
 
-```python
-from har_capture.sanitization import sanitize_html, sanitize_har
-from har_capture.sanitization.report import HeuristicMode
-
-# Sanitize HTML (correlation-preserving by default)
-clean_html = sanitize_html(raw_html)
-
-# Sanitize with consistent salt (correlate across files)
-clean_html = sanitize_html(raw_html, salt="my-secret-key")
-
-# Use static placeholders (legacy mode)
-clean_html = sanitize_html(raw_html, salt=None)
-
-# Enable heuristic detection for WiFi credentials, SSIDs, device names
-# DISABLED (default): Only redact known patterns
-# FLAG: Flag suspicious values for manual review
-# REDACT: Auto-redact suspicious values (may over-redact)
-clean_html = sanitize_html(raw_html, heuristics=HeuristicMode.REDACT)
-
-# Sanitize HAR file
-from har_capture.sanitization import sanitize_har_file
-sanitize_har_file("capture.har")  # Creates capture.sanitized.har
-
-# Pass custom patterns as dict (e.g., from modem.yaml)
-custom_patterns = {
-    "patterns": {
-        "modem_serial": {
-            "regex": r"SN[0-9]{10}",
-            "replacement_prefix": "MODEM_SN"
-        }
-    }
-}
-sanitize_har_file("capture.har", custom_patterns=custom_patterns)
-```
-
-### CLI
+### Command Line
 
 ```bash
-# Capture HTTP traffic
-har-capture get <TARGET>
+# Capture and sanitize
+har-capture get https://example.com
 
-# Sanitize a HAR file (uses random salt by default)
+# Sanitize existing HAR
 har-capture sanitize capture.har
 
-# Sanitize with consistent salt
-har-capture sanitize capture.har --salt my-key
-
-# Sanitize with static placeholders
-har-capture sanitize capture.har --no-salt
-
-# Use custom patterns
-har-capture sanitize capture.har --patterns custom.json
+# Interactive mode (review suspicious values)
+har-capture sanitize capture.har --interactive
 
 # Validate for PII leaks
 har-capture validate capture.har
 ```
 
-## Correlation-Preserving Redaction
+[Full CLI reference →](docs/CLI_REFERENCE.md)
 
-By default, har-capture uses **format-preserving salted hashes** for redaction:
-
-- Same value → same hash (within a session)
-- Different values → different hashes
-- Output remains valid format (parseable by analysis tools)
-- Uses reserved/documentation ranges that won't collide with real data
-
-**Example:**
-
-```
-Before:
-  MAC: AA:BB:CC:DD:EE:FF (appears 3 times)
-  MAC: 11:22:33:44:55:66 (appears 2 times)
-
-With salted hash (default):
-  MAC: 02:a1:b2:c3:d4:e5 (appears 3 times - same device, valid MAC format)
-  MAC: 02:7f:8e:9d:2c:01 (appears 2 times - different device)
-
-With static placeholders (--no-salt):
-  MAC: XX:XX:XX:XX:XX:XX (appears 5 times - correlation lost)
-```
-
-**Format-preserving ranges used:**
-
-| Type       | Range                       | Standard                 |
-| ---------- | --------------------------- | ------------------------ |
-| MAC        | `02:xx:xx:xx:xx:xx`         | Locally administered bit |
-| Private IP | `10.255.x.x`                | RFC 1918                 |
-| Public IP  | `192.0.2.x`                 | RFC 5737 TEST-NET-1      |
-| IPv6       | `2001:db8::`                | RFC 3849 documentation   |
-| Email      | `user_xxx@redacted.invalid` | RFC 2606 .invalid TLD    |
-
-**Salt options:**
-
-- `--salt auto` (default): Random salt per session
-- `--salt my-key`: Consistent hashing across runs
-- `--no-salt`: Static placeholders (legacy mode)
-
-## Custom Patterns
-
-Patterns are stored in external JSON files for easy customization:
-
-```
-src/har_capture/patterns/
-├── pii.json          # PII detection patterns
-├── sensitive.json    # Sensitive headers/fields
-└── allowlist.json    # Safe placeholder values
-```
-
-**Add custom patterns via CLI:**
-
-```bash
-har-capture sanitize capture.har --patterns my_patterns.json
-har-capture validate capture.har --patterns my_patterns.json
-```
-
-**Add custom patterns via Python:**
+### Python API
 
 ```python
-from har_capture.sanitization import sanitize_html
+from har_capture.sanitization import sanitize_html, sanitize_har_file
+from har_capture.sanitization.report import HeuristicMode
 
-clean = sanitize_html(html, custom_patterns="my_patterns.json")
+# Sanitize HTML (correlation-preserving by default)
+clean_html = sanitize_html(raw_html)
+
+# Sanitize with consistent salt (correlate across captures)
+clean_html = sanitize_html(raw_html, salt="my-secret-key")
+
+# Enable heuristic detection for WiFi, SSIDs, device names
+clean_html = sanitize_html(raw_html, heuristics=HeuristicMode.REDACT)
+
+# Sanitize HAR file
+sanitize_har_file("capture.har")  # → capture.sanitized.har
+
+# Custom patterns (e.g., modem serials, customer IDs)
+custom = {"patterns": {"modem_sn": {"regex": r"SN[0-9]{10}", "replacement_prefix": "MODEM"}}}
+sanitize_har_file("capture.har", custom_patterns=custom)
 ```
 
-**Example custom patterns file:**
+______________________________________________________________________
 
-```json
-{
-  "patterns": {
-    "my_custom_id": {
-      "regex": "CUST-[A-Z0-9]{8}",
-      "replacement_prefix": "CUSTID",
-      "description": "Customer ID pattern"
-    }
-  }
-}
-```
+## Documentation
 
-## PII Categories Removed
+- **[Comparison with Other Tools](docs/COMPARISON.md)** - DevTools, Google, Cloudflare, Edgio
+- **[Correlation-Preserving Redaction](docs/CORRELATION.md)** - How format-preserving hashing works
+- **[PII Categories](docs/PII_CATEGORIES.md)** - What gets sanitized
+- **[Custom Patterns](docs/CUSTOM_PATTERNS.md)** - Add organization-specific patterns
+- **[CLI Reference](docs/CLI_REFERENCE.md)** - Detailed command documentation
+- **[Interactive Sanitization](docs/INTERACTIVE_SANITIZATION.md)** - Review edge cases manually
 
-The sanitization removes the following types of PII:
+______________________________________________________________________
 
-- **MAC Addresses**: `AA:BB:CC:DD:EE:FF` → `02:a1:b2:c3:d4:e5`
-- **Private IPs**: `192.168.1.100` → `10.255.42.17`
-- **Public IPs**: `8.8.8.8` → `192.0.2.42`
-- **IPv6 Addresses**: `fe80::1` → `2001:db8::a1b2:c3d4`
-- **Email Addresses**: `user@example.com` → `user_a1b2c3d4@redacted.invalid`
-- **Passwords/Credentials**: In forms, headers, and JavaScript → `PASS_a1b2c3d4`
-- **Session Tokens**: In cookies and headers → `TOKEN_a1b2c3d4`
-- **Serial Numbers**: → `SERIAL_a1b2c3d4`
-- **WiFi Credentials**: In JavaScript variables
-- **Device Names**: In network device lists
+## Use Cases
 
-## CLI Commands
+- **Support diagnostics** - Users submit sanitized HAR files without exposing credentials
+- **Security review** - Validate HAR files for PII leaks before sharing
+- **Test fixtures** - Generate reproducible traffic captures
+- **Modem debugging** - Capture router/modem traffic with sensitive data removed
 
-### get
+______________________________________________________________________
 
-Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
+## What Gets Sanitized
 
-```bash
-har-capture get <TARGET>                  # Outputs: <target>.sanitized.har.gz
-har-capture get <TARGET> --output out.har # Outputs: out.sanitized.har.gz
-har-capture get <TARGET> --keep-raw       # Also keeps the unsanitized .har file
-har-capture get <TARGET> --no-sanitize    # Skip sanitization (not recommended)
-har-capture get <TARGET> --no-compress    # Skip compression
-```
+| Category        | Examples              | Output                                               |
+| --------------- | --------------------- | ---------------------------------------------------- |
+| **Network**     | IPs, MACs             | `192.168.1.1` → `10.255.42.17`                       |
+| **Personal**    | Emails, phones        | `user@example.com` → `user_a1b2@redacted.invalid`    |
+| **Credentials** | Passwords, tokens     | `password=secret` → `password=PASS_a1b2c3d4`         |
+| **Device**      | Serials, WiFi, SSIDs  | `SN123456` → `SERIAL_a1b2c3d4`                       |
+| **HTTP**        | Auth headers, cookies | `Cookie: session=xyz` → `Cookie: session=TOKEN_a1b2` |
 
-**Default behavior:**
+[See complete PII categories list →](docs/PII_CATEGORIES.md)
 
-1. Captures all HTTP traffic to a raw `.har` file
-1. Sanitizes PII → creates `.sanitized.har`
-1. Compresses → creates `.sanitized.har.gz`
-1. Deletes intermediate files (raw and uncompressed sanitized)
-
-Use `--keep-raw` to preserve the original unsanitized file for debugging.
-
-### sanitize
-
-Remove PII from HAR files.
-
-```bash
-har-capture sanitize capture.har
-har-capture sanitize capture.har --output clean.har --compress
-har-capture sanitize capture.har --interactive      # Review suspicious values
-har-capture sanitize capture.har --report sanitize-report.json
-har-capture sanitize capture.har --salt my-key      # Consistent hash
-har-capture sanitize capture.har --no-salt          # Static placeholders
-har-capture sanitize capture.har --patterns custom.json
-har-capture sanitize capture.har --max-size 500     # Allow up to 500MB
-har-capture sanitize capture.har --compression-level 6  # Faster compression
-```
-
-**Interactive Mode**: Review edge cases like WiFi SSIDs, device names, or credentials that don't match standard patterns. See [Interactive Sanitization Guide](docs/INTERACTIVE_SANITIZATION.md) for details.
-
-### validate
-
-Check for PII leaks.
-
-```bash
-har-capture validate capture.har
-har-capture validate --dir ./captures --recursive
-har-capture validate capture.har --strict
-har-capture validate capture.har --patterns custom.json
-```
+______________________________________________________________________
 
 ## Platform Support
 
 | Component    | Windows | macOS | Linux |
 | ------------ | ------- | ----- | ----- |
-| Sanitization | Yes     | Yes   | Yes   |
-| Validation   | Yes     | Yes   | Yes   |
-| CLI          | Yes     | Yes   | Yes   |
-| Capture      | Yes     | Yes   | Yes   |
+| Sanitization | ✅      | ✅    | ✅    |
+| Validation   | ✅      | ✅    | ✅    |
+| CLI          | ✅      | ✅    | ✅    |
+| Capture      | ✅      | ✅    | ✅    |
 
-## Development
+______________________________________________________________________
 
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+## Contributing
 
-# Run tests
-pytest
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-# Run linting
-ruff check .
-
-# Type checking
-mypy src/har_capture
-```
+______________________________________________________________________
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

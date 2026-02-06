@@ -206,14 +206,15 @@ You can also use interactive sanitization programmatically:
 
 ```python
 from har_capture.sanitization import sanitize_har, apply_user_redactions
+from har_capture.sanitization.report import HeuristicMode
 from har_capture.cli.interactive import run_interactive_review
 import json
 
-# Pass 1: Auto-redact and flag
+# Pass 1: Auto-redact and flag suspicious values
 with open("device.har") as f:
     har_data = json.load(f)
 
-sanitized, report = sanitize_har(har_data, flag_suspicious=True)
+sanitized, report = sanitize_har(har_data, heuristics=HeuristicMode.FLAG)
 
 # Interactively review (if there are flagged values)
 if report.flagged:
@@ -268,5 +269,5 @@ For very large HAR files (>50MB), consider using `--report` to review flagged va
 
 ## Related Documentation
 
-- [Sanitization Overview](../README.md#sanitization) - Main sanitization features
-- [Custom Patterns](../README.md#custom-patterns) - Add your own redaction patterns
+- [Sanitization Overview](../README.md#usage) - Main sanitization features
+- [Custom Patterns](CUSTOM_PATTERNS.md) - Add your own redaction patterns
