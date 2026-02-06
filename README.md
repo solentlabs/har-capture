@@ -141,6 +141,7 @@ pip install har-capture[full]
 
 ```python
 from har_capture.sanitization import sanitize_html, sanitize_har
+from har_capture.sanitization.report import HeuristicMode
 
 # Sanitize HTML (correlation-preserving by default)
 clean_html = sanitize_html(raw_html)
@@ -151,9 +152,26 @@ clean_html = sanitize_html(raw_html, salt="my-secret-key")
 # Use static placeholders (legacy mode)
 clean_html = sanitize_html(raw_html, salt=None)
 
+# Enable heuristic detection for WiFi credentials, SSIDs, device names
+# DISABLED (default): Only redact known patterns
+# FLAG: Flag suspicious values for manual review
+# REDACT: Auto-redact suspicious values (may over-redact)
+clean_html = sanitize_html(raw_html, heuristics=HeuristicMode.REDACT)
+
 # Sanitize HAR file
 from har_capture.sanitization import sanitize_har_file
 sanitize_har_file("capture.har")  # Creates capture.sanitized.har
+
+# Pass custom patterns as dict (e.g., from modem.yaml)
+custom_patterns = {
+    "patterns": {
+        "modem_serial": {
+            "regex": r"SN[0-9]{10}",
+            "replacement_prefix": "MODEM_SN"
+        }
+    }
+}
+sanitize_har_file("capture.har", custom_patterns=custom_patterns)
 ```
 
 ### CLI

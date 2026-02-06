@@ -14,18 +14,18 @@
 
 ### Alternative Tools Evaluated
 
-| Project | Language | Type | Notes |
-|---------|----------|------|-------|
-| [Google har-sanitizer](https://github.com/google/har-sanitizer) | Python/JS | Web UI + REST API | No CLI, needs tests |
-| [Cloudflare har-sanitizer](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | JS | Web UI | JWT-focused |
-| [Edgio/har-tools](https://github.com/Edgio/har-tools) | JS | Web UI | Drag-drop interface |
-| [AbregaInc/har-cleaner](https://github.com/AbregaInc/har-cleaner) | TypeScript | Library | Jira integration |
-| [jfromaniello/har-sanitizer](https://github.com/jfromaniello/har-sanitizer) | JS | Library | Basic sanitization |
+| Project                                                                                               | Language   | Type              | Notes               |
+| ----------------------------------------------------------------------------------------------------- | ---------- | ----------------- | ------------------- |
+| [Google har-sanitizer](https://github.com/google/har-sanitizer)                                       | Python/JS  | Web UI + REST API | No CLI, needs tests |
+| [Cloudflare har-sanitizer](https://blog.cloudflare.com/introducing-har-sanitizer-secure-har-sharing/) | JS         | Web UI            | JWT-focused         |
+| [Edgio/har-tools](https://github.com/Edgio/har-tools)                                                 | JS         | Web UI            | Drag-drop interface |
+| [AbregaInc/har-cleaner](https://github.com/AbregaInc/har-cleaner)                                     | TypeScript | Library           | Jira integration    |
+| [jfromaniello/har-sanitizer](https://github.com/jfromaniello/har-sanitizer)                           | JS         | Library           | Basic sanitization  |
 
 ### Related Projects
 
-| Project | Purpose |
-|---------|---------|
+| Project                                                                                                                | Purpose                         |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | [GSMA TSG Diagnostic Interface](https://github.com/GSMATerminals/TSG-IoT-devices-Standard-Diagnostic-Interface-Public) | Modem logging for Cat-M1/NB-IoT |
-| [NYU IoT Inspector](https://github.com/nyu-mlab/iot-inspector-client) | Smart home traffic analysis |
-| [IoTShark](https://github.com/sahilmgandhi/IotShark) | IoT traffic monitoring |
+| [NYU IoT Inspector](https://github.com/nyu-mlab/iot-inspector-client)                                                  | Smart home traffic analysis     |
+| [IoTShark](https://github.com/sahilmgandhi/IotShark)                                                                   | IoT traffic monitoring          |

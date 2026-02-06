@@ -101,6 +101,51 @@ def sanitize_html(
     pii = load_pii_patterns(custom_patterns)
     sensitive = load_sensitive_patterns(custom_patterns)
 
+    # 0. Custom patterns (apply first so they take precedence over built-in patterns)
+    # Skip built-in patterns that have dedicated replacement logic below
+    BUILTIN_PATTERNS = {
+        "mac_address",
+        "serial_number",
+        "account_id",
+        "private_ip",
+        "public_ip",
+        "ipv6",
+        "email",
+        "password_field",
+        "password_input",
+        "session_token",
+        "csrf_token",
+        "config_path",
+        "motorola_password",
+    }
+
+    for pattern_name, pattern_def in pii.get("patterns", {}).items():
+        # Skip built-in patterns with special handling
+        if pattern_name in BUILTIN_PATTERNS:
+            continue
+
+        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
+            continue
+
+        regex = pattern_def["regex"]
+        prefix = pattern_def.get("replacement_prefix", "CUSTOM")
+
+        # Handle regex flags
+        flags = 0
+        if "flags" in pattern_def:
+            for flag_name in pattern_def["flags"]:
+                if flag_name == "IGNORECASE":
+                    flags |= re.IGNORECASE
+
+        def make_replacer(prefix: str, pname: str) -> Any:
+            def replace_custom(match: re.Match[str]) -> str:
+                collector.record_auto_redaction(pname)
+                return hasher.hash_generic(match.group(0), prefix)
+
+            return replace_custom
+
+        html = re.sub(regex, make_replacer(prefix, pattern_name), html, flags=flags)
+
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
         collector.record_auto_redaction("mac_address")
@@ -125,13 +170,19 @@ def sanitize_html(
 
     # 3. Account/Subscriber IDs
     def replace_account(match: re.Match[str]) -> str:
-        collector.record_auto_redaction("account")
         prefix = match.group(1)
         suffix = match.group(2)
+        value = match.group(3)
+
+        # Skip if value is already redacted (contains "_" indicating a hash prefix like TEST_xxxxx)
+        if "_" in value and re.match(r"^[A-Z]+_[a-f0-9]+$", value):
+            return match.group(0)  # Return unchanged
+
+        collector.record_auto_redaction("account")
         return f"{prefix} {suffix}: {hasher.hash_generic(match.group(0), 'ACCOUNT')}"
 
     html = re.sub(
-        r"(Account|Subscriber|Customer|Device)\s*(ID|Number)\s*[:\s=]+\S+",
+        r"(Account|Subscriber|Customer|Device)\s*(ID|Number)\s*[:\s=]+(\S+)",
         replace_account,
         html,
         flags=re.IGNORECASE,
@@ -369,10 +420,10 @@ def sanitize_html(
                 sanitized_values.append(val)
                 continue
 
-            # Skip already-redacted values
+            # Skip already-redacted values (e.g., MAC_xxxxx, MODEM_SN_xxxxx)
             if (
                 val_stripped.startswith("***")
-                or re.match(r"^[A-Z]+_[a-f0-9]{8}$", val_stripped)
+                or re.match(r"^[A-Z_]+_[a-f0-9]{8}$", val_stripped)
                 or val_stripped == "XX:XX:XX:XX:XX:XX"
             ):
                 sanitized_values.append(val)

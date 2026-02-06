@@ -38,6 +38,7 @@ from har_capture.sanitization.har import (
 from har_capture.sanitization.report import (
     ConfidenceLevel,
     FlaggedValue,
+    HeuristicMode,
     RedactionStatus,
 )
 
@@ -92,7 +93,7 @@ class TestFullSanitizationFlow:
         har_data = create_har_with_suspicious_values()
 
         # Pass 1: Auto-redact known patterns, flag suspicious values
-        sanitized, report = sanitize_har(har_data, salt="test-salt", flag_suspicious=True)
+        sanitized, report = sanitize_har(har_data, salt="test-salt", heuristics=HeuristicMode.FLAG)
 
         # Verify auto-redactions happened for KNOWN patterns
         content = sanitized["log"]["entries"][0]["response"]["content"]["text"]
@@ -281,10 +282,10 @@ class TestReportUsage:
 
 
 class TestFlagSuspiciousMode:
-    """Tests for flag_suspicious=True mode."""
+    """Tests for HeuristicMode.FLAG mode."""
 
     def test_flag_suspicious_enables_heuristics(self) -> None:
-        """Test flag_suspicious=True enables heuristic detection."""
+        """Test HeuristicMode.FLAG enables heuristic detection."""
         har_data = {
             "log": {
                 "version": "1.2",
@@ -306,13 +307,13 @@ class TestFlagSuspiciousMode:
             }
         }
 
-        # With flag_suspicious=True
-        _, report_with_flags = sanitize_har(har_data, salt="test", flag_suspicious=True)
+        # With HeuristicMode.FLAG
+        _, report_with_flags = sanitize_har(har_data, salt="test", heuristics=HeuristicMode.FLAG)
 
-        # Without flag_suspicious
-        _, report_without_flags = sanitize_har(har_data, salt="test", flag_suspicious=False)
+        # Without heuristics (DISABLED)
+        _, report_without_flags = sanitize_har(har_data, salt="test", heuristics=HeuristicMode.DISABLED)
 
-        # flag_suspicious=True should detect more suspicious values
+        # HeuristicMode.FLAG should detect more suspicious values
         # (or at least not fewer)
         assert len(report_with_flags.flagged) >= len(report_without_flags.flagged)
 
