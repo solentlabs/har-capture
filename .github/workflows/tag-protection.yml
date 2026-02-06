@@ -59,7 +59,7 @@ jobs:
 
           # Check if CI workflow passed
           CI_CONCLUSION=$(echo "${CHECK_RUNS}" | jq -r \
-            '.[] | select(.name == "CI" or .name | startswith("test")) | .conclusion' | \
+            '.[] | select(.name != null and (.name == "CI" or (.name | startswith("test")))) | .conclusion' | \
             head -1)
 
           if [ -z "${CI_CONCLUSION}" ]; then
