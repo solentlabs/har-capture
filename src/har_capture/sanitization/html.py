@@ -41,6 +41,68 @@ else:
     from har_capture.sanitization.report import HeuristicMode
 
 
+def is_valid_ip_address(value: str) -> bool:
+    """Check if dotted-decimal string is a valid IPv4 address (not a version string).
+
+    Validates both structure and heuristics to avoid false positives on version strings.
+
+    Args:
+        value: Dotted-decimal string (e.g., "192.168.1.1" or "5.7.1.5")
+
+    Returns:
+        True if valid IP address, False if likely version string or invalid
+
+    Examples:
+        >>> is_valid_ip_address("192.168.1.1")
+        True
+        >>> is_valid_ip_address("10.0.0.1")
+        True
+        >>> is_valid_ip_address("8.8.8.8")
+        True
+        >>> is_valid_ip_address("5.7.1.5")  # Version string
+        False
+        >>> is_valid_ip_address("2.4.6.8")  # Version string
+        False
+    """
+    try:
+        # Validate it's a structurally valid IPv4 address
+        ipaddress.IPv4Address(value)
+
+        octets = [int(x) for x in value.split(".")]
+        first_octet = octets[0]
+
+        # Heuristic: Distinguish between IP addresses and version strings
+        # Version strings typically have ALL small octets (e.g., 5.7.1.5, 2.4.6.8)
+        # Real IPs usually have some larger octets or follow known patterns
+
+        # Rule 1: Common IP patterns that should always be treated as IPs
+        # - 10.x.x.x (private range)
+        # - Any IP with first octet >= 20 (public ranges)
+        if first_octet == 10 or first_octet >= 20:
+            return True
+
+        # Rule 2: Special case for DNS servers with repeated octets
+        # 8.8.8.8 (Google), 1.1.1.1 (Cloudflare), 9.9.9.9 (Quad9)
+        # These have all identical octets, which is very rare for version strings
+        if len(set(octets)) == 1:
+            return True
+
+        # Rule 3: For IPs with low first octets (1-9, 11-19), analyze all octets
+        # Version strings typically have all or most small numbers (< 20)
+        small_octets = sum(1 for octet in octets if octet < 20)
+
+        # If all 4 octets are small (< 20), it's likely a version string
+        # (Already handled repeated octets above, so this won't affect 8.8.8.8)
+        if small_octets == 4:
+            return False
+
+        # If 3 or more octets are small, likely a version string
+        # Otherwise, treat as IP (has enough larger octets to be realistic)
+        return small_octets < 3
+    except (ipaddress.AddressValueError, ValueError, IndexError):
+        return False
+
+
 def sanitize_html(
     html: str,
     *,
@@ -195,19 +257,30 @@ def sanitize_html(
         ip = match.group(0)
         if ip in preserved_ips:
             return ip
+        # Validate it's actually an IP, not a version string
+        if not is_valid_ip_address(ip):
+            return ip  # Preserve version strings like "5.7.1.5"
         collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True)
 
     html = re.sub(
-        r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b",
+        r"\b(?:"
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"  # 10.x.x.x
+        r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|"  # 172.16-31.x.x
+        r"192\.168\.\d{1,3}\.\d{1,3}"  # 192.168.x.x
+        r")\b",
         replace_private_ip,
         html,
     )
 
     # 5. Public IP addresses (any non-private, non-localhost IP)
     def replace_public_ip(match: re.Match[str]) -> str:
+        ip = match.group(0)
+        # Validate it's actually an IP, not a version string
+        if not is_valid_ip_address(ip):
+            return ip  # Preserve version strings
         collector.record_auto_redaction("public_ip")
-        return hasher.hash_ip(match.group(0), is_private=False)
+        return hasher.hash_ip(ip, is_private=False)
 
     html = re.sub(
         r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
