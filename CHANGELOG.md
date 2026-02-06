@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **5-Octet IPv4 Corruption** - Private IP addresses now produce valid 4-octet format instead of invalid 5-octet format (e.g., `10.123.45.67` is correctly sanitized to `10.255.x.x` instead of `10.255.x.x.67`)
+- **Version String Preservation** - Firmware version strings like `5.7.1.5` are now correctly preserved instead of being sanitized as IP addresses. Version strings are not PII and must remain for diagnostics.
+
 ## [0.3.2] - 2026-02-06
 
 ### Added
