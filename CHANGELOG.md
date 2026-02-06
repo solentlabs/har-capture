@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## \[0.3.3\] - 2026-02-06
+
 ### Fixed
 
 - **5-Octet IPv4 Corruption** - Private IP addresses now produce valid 4-octet format instead of invalid 5-octet format (e.g., `10.123.45.67` is correctly sanitized to `10.255.x.x` instead of `10.255.x.x.67`)
