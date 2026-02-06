@@ -11,6 +11,7 @@ from typing import Annotated
 import typer
 
 from har_capture.patterns import PatternLoadError
+from har_capture.sanitization.report import HeuristicMode
 
 
 def sanitize(
@@ -163,8 +164,9 @@ def sanitize(
             else:
                 typer.echo("  (Non-interactive mode: proceeding anyway)")
 
-        # Enable flag_suspicious when interactive mode is requested (even without TTY)
-        flag_suspicious = run_heuristics
+        # Determine heuristics mode
+        # Interactive mode enables heuristics for flagging suspicious values
+        heuristics = HeuristicMode.FLAG if run_heuristics else HeuristicMode.DISABLED
 
         result_path, sanitization_report = sanitize_har_file(
             str(input_file),
@@ -172,7 +174,7 @@ def sanitize(
             salt=effective_salt,
             custom_patterns=custom_patterns,
             max_size=max_size_bytes,
-            flag_suspicious=flag_suspicious,
+            heuristics=heuristics,
         )
 
         # Interactive review mode (requires TTY)

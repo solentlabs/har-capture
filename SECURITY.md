@@ -7,6 +7,7 @@ If you discover a security vulnerability in har-capture, please report it privat
 **[Report a vulnerability](https://github.com/solentlabs/har-capture/security/advisories/new)**
 
 Please include:
+
 - Description of the vulnerability
 - Steps to reproduce
 - Potential impact
@@ -21,6 +22,7 @@ Please include:
 ## Scope
 
 This policy covers:
+
 - PII leakage in sanitization (patterns missing sensitive data)
 - Credential exposure in HAR files
 - Code injection via malicious HAR input

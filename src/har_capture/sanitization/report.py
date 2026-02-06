@@ -31,6 +31,37 @@ class RedactionStatus(Enum):
     USER_SKIPPED = "skipped"  # User chose to keep
 
 
+class HeuristicMode(Enum):
+    """Controls handling of heuristically-detected suspicious values.
+
+    Heuristics analyze pipe-delimited values (like tagValueList) that lack
+    field labels. They use patterns, entropy, and adjacency to guess what
+    might be PII.
+
+    The primary use case for heuristics is **interactive review** - flagging
+    suspicious values for manual confirmation. Auto-redaction (REDACT mode)
+    may cause false positives that corrupt diagnostic data.
+
+    Values:
+        DISABLED: Skip heuristic analysis entirely (default, safest, fastest).
+            Only redact known patterns (MACs, IPs, emails, etc.).
+            Use when you trust the data or have custom patterns that cover PII.
+
+        FLAG: Run heuristics and flag suspicious values for manual review.
+            Values are preserved in output but marked for user confirmation.
+            Use with --interactive CLI mode for human-in-the-loop sanitization.
+
+        REDACT: Run heuristics and auto-redact suspicious values.
+            May over-redact technical data (false positives).
+            Use only when manual review is impossible and best-effort
+            sanitization is acceptable.
+    """
+
+    DISABLED = "disabled"
+    FLAG = "flag"
+    REDACT = "redact"
+
+
 @dataclass
 class FlaggedValue:
     """A value flagged for user review.

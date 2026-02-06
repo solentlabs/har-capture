@@ -4,12 +4,12 @@ This directory contains JSON configuration files for PII detection, sanitization
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `pii.json` | PII detection patterns (MAC, IP, email, etc.) |
-| `sensitive.json` | Sensitive headers and form field patterns |
+| File             | Purpose                                          |
+| ---------------- | ------------------------------------------------ |
+| `pii.json`       | PII detection patterns (MAC, IP, email, etc.)    |
+| `sensitive.json` | Sensitive headers and form field patterns        |
 | `allowlist.json` | Patterns for recognizing already-redacted values |
-| `capture.json` | File extensions to filter during capture |
+| `capture.json`   | File extensions to filter during capture         |
 
 ## File Schemas
 
@@ -32,6 +32,7 @@ Defines regex patterns for detecting PII in content.
 ```
 
 **Fields:**
+
 - `regex`: Python regex pattern
 - `replacement_prefix`: Prefix for hashed replacement (e.g., `MAC` → `02:xx:xx:xx:xx:xx`)
 - `flags`: Optional list of regex flags (`IGNORECASE`, `MULTILINE`, `DOTALL`)
@@ -57,6 +58,7 @@ Defines sensitive HTTP headers and form fields to redact.
 ```
 
 **Fields:**
+
 - `headers.full_redact`: Headers to completely redact
 - `headers.cookie_redact`: Headers where cookie values are redacted but names preserved
 - `fields.patterns`: Regex patterns matching sensitive form field names
@@ -84,6 +86,7 @@ Defines patterns for recognizing already-redacted values (to avoid double-flaggi
 ```
 
 **Fields:**
+
 - `static_placeholders.values`: Exact values produced when `salt=None`
 - `format_preserving_patterns`: Regex patterns for RFC-reserved ranges
 - `hash_prefixes.values`: Prefixes for non-format-preserving hashes (`PREFIX_xxxxxxxx`)
@@ -104,6 +107,7 @@ Defines file extensions to filter during HAR capture.
 ```
 
 **Fields:**
+
 - Categories can be selectively included via CLI flags (`--include-fonts`, etc.)
 
 ## Custom Patterns
@@ -177,8 +181,8 @@ sanitize_har(har_data, custom_patterns="your_project/patterns/modem.json")
 To add patterns to the core library:
 
 1. Patterns should be **universally applicable** (not domain-specific)
-2. Include a clear `description` for each pattern
-3. Test patterns don't cause false positives on common data
-4. Submit a PR with examples of what the pattern matches
+1. Include a clear `description` for each pattern
+1. Test patterns don't cause false positives on common data
+1. Submit a PR with examples of what the pattern matches
 
 For vendor or domain-specific patterns, maintain them in your own project and pass via `custom_patterns`.

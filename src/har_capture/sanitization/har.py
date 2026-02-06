@@ -22,7 +22,9 @@ from har_capture.sanitization.html import sanitize_html
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from har_capture.sanitization.report import SanitizationReport
+    from har_capture.sanitization.report import HeuristicMode, SanitizationReport
+else:
+    from har_capture.sanitization.report import HeuristicMode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -485,16 +487,16 @@ def _sanitize_request(
 def _sanitize_response_content(
     content: dict[str, Any],
     collector: RedactionCollector | None = None,
-    custom_patterns: str | None = None,
-    flag_suspicious: bool = False,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> None:
     """Sanitize response content in-place.
 
     Args:
         content: HAR response content object with 'text' and 'mimeType' keys
         collector: Optional collector with hasher for redaction
-        custom_patterns: Optional path to custom patterns file
-        flag_suspicious: If True, flag suspicious values for user review
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for pipe-delimited value detection
     """
     if "text" not in content or not content["text"]:
         return
@@ -507,7 +509,7 @@ def _sanitize_response_content(
             content["text"],
             collector=collector,
             custom_patterns=custom_patterns,
-            flag_suspicious=flag_suspicious,
+            heuristics=heuristics,
         )
     elif "application/json" in mime_type:
         try:
@@ -520,16 +522,16 @@ def _sanitize_response_content(
 def _sanitize_response(
     resp: dict[str, Any],
     collector: RedactionCollector | None = None,
-    custom_patterns: str | None = None,
-    flag_suspicious: bool = False,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> None:
     """Sanitize a HAR response object in-place.
 
     Args:
         resp: HAR response object containing headers and content
         collector: Optional collector with hasher for redaction
-        custom_patterns: Optional path to custom patterns file
-        flag_suspicious: If True, flag suspicious values for user review
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for pipe-delimited value detection
     """
     hasher = collector.hasher if collector else None
 
@@ -539,25 +541,25 @@ def _sanitize_response(
 
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):
-        _sanitize_response_content(resp["content"], collector, custom_patterns, flag_suspicious)
+        _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics)
 
 
 def sanitize_entry(
     entry: dict[str, Any],
     *,
     salt: str | None = "auto",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     collector: RedactionCollector | None = None,
-    flag_suspicious: bool = False,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
     Args:
         entry: HAR entry object
         salt: Salt for hashed redaction (ignored if collector provided)
-        custom_patterns: Optional path to custom patterns file
+        custom_patterns: Optional custom patterns (file path or dict)
         collector: Optional collector for tracking redactions
-        flag_suspicious: If True, flag suspicious values for user review
+        heuristics: Heuristic mode for pipe-delimited value detection
 
     Returns:
         Sanitized entry
@@ -576,7 +578,7 @@ def sanitize_entry(
         _sanitize_request(result["request"], collector.hasher, collector)
 
     if "response" in result:
-        _sanitize_response(result["response"], collector, custom_patterns, flag_suspicious)
+        _sanitize_response(result["response"], collector, custom_patterns, heuristics)
 
     return result
 
@@ -585,8 +587,8 @@ def sanitize_har(
     har_data: dict[str, Any],
     *,
     salt: str | None = "auto",
-    custom_patterns: str | None = None,
-    flag_suspicious: bool = False,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> tuple[dict[str, Any], SanitizationReport]:
     """Sanitize an entire HAR file.
 
@@ -596,8 +598,8 @@ def sanitize_har(
             - "auto" (default): Random salt, correlates within this call
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
-        custom_patterns: Optional path to custom patterns JSON file
-        flag_suspicious: If True, flag suspicious values for user review (Phase 2)
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for pipe-delimited value detection
 
     Returns:
         Tuple of (sanitized HAR data, sanitization report)
@@ -645,7 +647,7 @@ def sanitize_har(
                     entry,
                     custom_patterns=custom_patterns,
                     collector=collector,
-                    flag_suspicious=flag_suspicious,
+                    heuristics=heuristics,
                 )
             )
         log["entries"] = sanitized_entries
@@ -658,7 +660,7 @@ def sanitize_har(
                     page["title"],
                     collector=collector,
                     custom_patterns=custom_patterns,
-                    flag_suspicious=flag_suspicious,
+                    heuristics=heuristics,
                 )
 
     # Create report with all collected data
@@ -672,10 +674,10 @@ def sanitize_har_file(
     output_path: str | Path | None = None,
     *,
     salt: str | None = "auto",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     max_size: int | None = DEFAULT_MAX_HAR_SIZE,
     validate: bool = True,
-    flag_suspicious: bool = False,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> tuple[str, SanitizationReport]:
     """Sanitize a HAR file and write to a new file.
 
@@ -683,10 +685,10 @@ def sanitize_har_file(
         input_path: Path to input HAR file
         output_path: Path to output file (default: input_path with .sanitized.har suffix)
         salt: Salt for hashed redaction
-        custom_patterns: Optional path to custom patterns JSON file
+        custom_patterns: Optional custom patterns (file path or dict)
         max_size: Maximum file size in bytes (default: 100MB). Set to None to disable.
         validate: If True, validate HAR structure before processing (default: True)
-        flag_suspicious: If True, flag suspicious values for user review (Phase 2)
+        heuristics: Heuristic mode for pipe-delimited value detection
 
     Returns:
         Tuple of (output_path, sanitization report)
@@ -740,7 +742,7 @@ def sanitize_har_file(
         har_data,
         salt=salt,
         custom_patterns=custom_patterns,
-        flag_suspicious=flag_suspicious,
+        heuristics=heuristics,
     )
 
     # Fill in file paths in report

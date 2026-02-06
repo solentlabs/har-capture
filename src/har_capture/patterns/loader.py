@@ -97,11 +97,31 @@ def load_json_file(path: Path | str) -> dict[str, Any]:
         raise PatternLoadError(f"Invalid JSON in pattern file {path_str}: {e}") from e
 
 
-def load_pii_patterns(custom_path: Path | str | None = None) -> dict[str, Any]:
+def _load_custom_patterns(custom: Path | str | dict[str, Any]) -> dict[str, Any]:
+    """Load custom patterns from file path or dict.
+
+    Args:
+        custom: Either a file path (Path/str) or pattern dict
+
+    Returns:
+        Pattern data as dict
+
+    Raises:
+        PatternLoadError: If file cannot be loaded
+    """
+    if isinstance(custom, dict):
+        return custom
+    return load_json_file(custom)
+
+
+def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:
     """Load PII detection patterns.
 
     Args:
-        custom_path: Optional path to custom patterns file to merge
+        custom_path: Optional custom patterns to merge. Can be:
+            - Path/str: Path to JSON file
+            - dict: Pattern definitions directly (e.g., from modem.yaml)
+            - None: Use built-in patterns only
 
     Returns:
         Dict with 'patterns' and 'preserved_gateway_ips' keys
@@ -109,33 +129,41 @@ def load_pii_patterns(custom_path: Path | str | None = None) -> dict[str, Any]:
     Raises:
         PatternLoadError: If custom patterns file cannot be loaded
     """
-    normalized = _normalize_path(custom_path)
-    cache_key = f"pii:{normalized}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        result: dict[str, Any] = cached
-        return result
+    # Only cache file-based patterns (dicts are ephemeral)
+    if isinstance(custom_path, dict):
+        cache_key = None
+    else:
+        normalized = _normalize_path(custom_path)
+        cache_key = f"pii:{normalized}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            result: dict[str, Any] = cached
+            return result
 
     # Load built-in patterns
     builtin = load_json_file(_get_builtin_path("pii.json"))
 
     # Merge custom patterns if provided
     if custom_path:
-        custom = load_json_file(custom_path)
+        custom = _load_custom_patterns(custom_path)
         if "patterns" in custom and isinstance(custom["patterns"], dict):
             builtin["patterns"].update(custom["patterns"])
         if "preserved_gateway_ips" in custom and isinstance(custom["preserved_gateway_ips"], list):
             builtin["preserved_gateway_ips"].extend(custom["preserved_gateway_ips"])
 
-    _cache_set(cache_key, builtin)
+    if cache_key:
+        _cache_set(cache_key, builtin)
     return builtin
 
 
-def load_sensitive_patterns(custom_path: Path | str | None = None) -> dict[str, Any]:
+def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:
     """Load sensitive field and header patterns.
 
     Args:
-        custom_path: Optional path to custom patterns file to merge
+        custom_path: Optional custom patterns to merge. Can be:
+            - Path/str: Path to JSON file
+            - dict: Pattern definitions directly (e.g., from modem.yaml)
+            - None: Use built-in patterns only
 
     Returns:
         Dict with 'headers', 'fields', and 'tagValueList' keys
@@ -143,17 +171,20 @@ def load_sensitive_patterns(custom_path: Path | str | None = None) -> dict[str, 
     Raises:
         PatternLoadError: If custom patterns file cannot be loaded
     """
-    normalized = _normalize_path(custom_path)
-    cache_key = f"sensitive:{normalized}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        result: dict[str, Any] = cached
-        return result
+    if isinstance(custom_path, dict):
+        cache_key = None
+    else:
+        normalized = _normalize_path(custom_path)
+        cache_key = f"sensitive:{normalized}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            result: dict[str, Any] = cached
+            return result
 
     builtin = load_json_file(_get_builtin_path("sensitive.json"))
 
     if custom_path:
-        custom = load_json_file(custom_path)
+        custom = _load_custom_patterns(custom_path)
         if "headers" in custom:
             if "full_redact" in custom["headers"]:
                 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
@@ -164,7 +195,8 @@ def load_sensitive_patterns(custom_path: Path | str | None = None) -> dict[str, 
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
 
-    _cache_set(cache_key, builtin)
+    if cache_key:
+        _cache_set(cache_key, builtin)
     return builtin
 
 
@@ -241,11 +273,14 @@ def get_bloat_extensions(
     return extensions
 
 
-def load_allowlist(custom_path: Path | str | None = None) -> dict[str, Any]:
+def load_allowlist(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:
     """Load allowlist of safe placeholder values.
 
     Args:
-        custom_path: Optional path to custom allowlist file to merge
+        custom_path: Optional custom allowlist to merge. Can be:
+            - Path/str: Path to JSON file
+            - dict: Allowlist definitions directly
+            - None: Use built-in allowlist only
 
     Returns:
         Dict with 'static_placeholders', 'format_preserving_patterns', and 'hash_prefixes' keys
@@ -253,17 +288,20 @@ def load_allowlist(custom_path: Path | str | None = None) -> dict[str, Any]:
     Raises:
         PatternLoadError: If custom allowlist file cannot be loaded
     """
-    normalized = _normalize_path(custom_path)
-    cache_key = f"allowlist:{normalized}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        result: dict[str, Any] = cached
-        return result
+    if isinstance(custom_path, dict):
+        cache_key = None
+    else:
+        normalized = _normalize_path(custom_path)
+        cache_key = f"allowlist:{normalized}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            result: dict[str, Any] = cached
+            return result
 
     builtin = load_json_file(_get_builtin_path("allowlist.json"))
 
     if custom_path:
-        custom = load_json_file(custom_path)
+        custom = _load_custom_patterns(custom_path)
         if "static_placeholders" in custom and "values" in custom["static_placeholders"]:
             builtin["static_placeholders"]["values"].extend(custom["static_placeholders"]["values"])
         if "hash_prefixes" in custom and "values" in custom["hash_prefixes"]:
@@ -279,7 +317,8 @@ def load_allowlist(custom_path: Path | str | None = None) -> dict[str, Any]:
                 builtin["redaction_patterns"] = {"values": []}
             builtin["redaction_patterns"]["values"].extend(custom["redaction_patterns"]["values"])
 
-    _cache_set(cache_key, builtin)
+    if cache_key:
+        _cache_set(cache_key, builtin)
     return builtin
 
 

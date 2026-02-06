@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-02-06
+
+### Added
+
+- **HeuristicMode Enum** - Fine-grained control over heuristic behavior with three modes:
+  - `DISABLED` (default) - Skip heuristics, only redact known patterns (safe, backward compatible)
+  - `FLAG` - Flag suspicious values for manual review (interactive mode)
+  - `REDACT` - Auto-redact suspicious values (automated workflows)
+- **Custom Patterns from Dict** - `custom_patterns` now accepts dict or file path
+  - Enables passing patterns directly from modem.yaml or other configs
+  - No need to write temporary files for API integration
+- **Category-Aware Hashing** - New `hash_sensitive_value()` method for heuristically-detected values
+  - Generates prefixed hashes: `WIFI_xxxxx`, `CRED_xxxxx`, `DEVICE_xxxxx`
+  - Preserves correlation while indicating detection category
+
+### Changed
+
+- **BREAKING**: Replaced `flag_suspicious` boolean with `heuristics: HeuristicMode` parameter
+  - Old: `sanitize_har(data, flag_suspicious=True)`
+  - New: `sanitize_har(data, heuristics=HeuristicMode.FLAG)`
+  - Affects: `sanitize_html()`, `sanitize_har()`, `sanitize_har_file()`, CLI, browser capture
+- **Custom Pattern Precedence** - Custom patterns now applied first, preventing generic patterns from overriding them
+- **Already-Redacted Protection** - Account ID and heuristic patterns skip already-redacted values (e.g., `MODEM_SN_xxxxx`)
+
+### Fixed
+
+- **Custom Patterns Not Applied** - Custom patterns were loaded but never applied during sanitization
+- **Pattern Re-Redaction** - Account ID pattern no longer re-hashes custom-redacted values
+- **Multi-Underscore Prefixes** - Heuristics now correctly skip prefixes with underscores (e.g., `MODEM_SN_`)
+
+### Migration Guide
+
+**For API Users:**
+
+```python
+# Before (v0.3.1)
+from har_capture.sanitization.har import sanitize_har_file
+sanitize_har_file(path, flag_suspicious=True)
+
+# After (v0.3.2)
+from har_capture.sanitization.har import sanitize_har_file
+from har_capture.sanitization.report import HeuristicMode
+
+# Interactive mode (manual review)
+sanitize_har_file(path, heuristics=HeuristicMode.FLAG)
+
+# Automated mode (auto-redact, may over-redact)
+sanitize_har_file(path, heuristics=HeuristicMode.REDACT)
+
+# Safe mode (default, only known patterns)
+sanitize_har_file(path, heuristics=HeuristicMode.DISABLED)
+# or simply: sanitize_har_file(path)
+```
+
+**For cable_modem_monitor Integration:**
+
+```python
+# Pass custom patterns as dict
+modem_patterns = {
+    "patterns": {
+        "modem_serial": {
+            "regex": r"SN[0-9]{10}",
+            "replacement_prefix": "MODEM_SN"
+        }
+    }
+}
+sanitize_har_file(
+    path,
+    heuristics=HeuristicMode.REDACT,
+    custom_patterns=modem_patterns  # Dict instead of file path
+)
+```
+
 ## [0.3.1] - 2026-02-04
 
 ### Fixed
@@ -26,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Improved Instructions** - Clearer checkbox prompts ("Enter when done", pre-selected items noted)
 - **Better UX** - Simplified keybindings (A/N for all/none work now), removed redundant Ctrl+C mention
 
-## \[0.3.0\] - 2026-02-04
+## [0.3.0] - 2026-02-04
 
 ### Added
 
@@ -210,4 +283,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.2.3]: https://github.com/solentlabs/har-capture/compare/v0.2.2...v0.2.3
 [0.2.4]: https://github.com/solentlabs/har-capture/compare/v0.2.3...v0.2.4
 [0.2.5]: https://github.com/solentlabs/har-capture/compare/v0.2.4...v0.2.5
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.2.5...HEAD
+[0.3.0]: https://github.com/solentlabs/har-capture/compare/v0.2.5...v0.3.0
+[0.3.1]: https://github.com/solentlabs/har-capture/compare/v0.3.0...v0.3.1
+[0.3.2]: https://github.com/solentlabs/har-capture/compare/v0.3.1...v0.3.2
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.3.2...HEAD
