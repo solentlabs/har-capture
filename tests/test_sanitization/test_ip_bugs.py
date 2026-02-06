@@ -249,5 +249,40 @@ def test_version_string_with_prefix():
     assert "2.4.6.8" in result
 
 
+@pytest.mark.parametrize(
+    ("value", "expected", "reason"),
+    [
+        # Valid IPs that should be sanitized (return True)
+        ("192.168.1.100", True, "Private IP"),
+        ("8.8.8.8", True, "Repeated octets (DNS)"),
+        ("1.1.1.1", True, "Repeated octets (DNS)"),
+        ("50.60.70.80", True, "All octets >= 20"),
+        ("20.0.0.1", True, "First octet == 20 (boundary)"),
+        ("10.50.100.200", True, "First octet == 10"),
+        ("11.12.200.201", True, "2 small octets (< 3)"),
+        ("5.50.60.70", True, "1 small octet (< 3)"),
+        # Version strings that should be preserved (return False)
+        ("5.7.1.5", False, "4 small octets (version)"),
+        ("2.4.6.8", False, "4 small octets (version)"),
+        ("1.2.3.4", False, "4 small octets (version)"),
+        ("11.12.13.200", False, "3 small octets (version)"),
+        # Invalid IP strings (return False via exception)
+        ("not.an.ip.address", False, "Invalid format"),
+        ("999.999.999.999", False, "Out of range"),
+        ("1.2.3", False, "Too few octets"),
+        ("", False, "Empty string"),
+        ("invalid", False, "Not an IP"),
+    ],
+)
+def test_is_valid_ip_address_edge_cases(value, expected, reason):
+    """Test edge cases for is_valid_ip_address() helper function.
+
+    This ensures full coverage of the heuristic logic.
+    """
+    from har_capture.sanitization.html import is_valid_ip_address
+
+    assert is_valid_ip_address(value) is expected, f"{value} ({reason})"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
