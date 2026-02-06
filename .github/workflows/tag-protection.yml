@@ -1,0 +1,117 @@
+name: Tag Protection
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get tagged commit
+        id: commit
+        run: |
+          TAG_COMMIT=$(git rev-parse ${{ github.ref_name }}^{commit})
+          echo "sha=${TAG_COMMIT}" >> $GITHUB_OUTPUT
+          echo "Tagged commit: ${TAG_COMMIT}"
+
+      - name: Verify commit is on main branch
+        env:
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          if ! git merge-base --is-ancestor "${COMMIT_SHA}" origin/main; then
+            echo "❌ ERROR: Tag points to commit not on main branch"
+            echo "   Commit: ${COMMIT_SHA}"
+            echo ""
+            echo "Tags should only be created from commits on main."
+            exit 1
+          fi
+          echo "✅ Tag points to commit on main branch"
+
+      - name: Check CI status on tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          echo "Checking CI status for commit: ${COMMIT_SHA}"
+
+          # Get all check runs for this commit
+          CHECK_RUNS=$(gh api \
+            "/repos/${{ github.repository }}/commits/${COMMIT_SHA}/check-runs" \
+            --jq '.check_runs')
+
+          # Check if any CI workflows ran
+          TOTAL_CHECKS=$(echo "${CHECK_RUNS}" | jq 'length')
+          if [ "${TOTAL_CHECKS}" -eq 0 ]; then
+            echo "❌ ERROR: No CI checks found on commit ${COMMIT_SHA}"
+            echo "Cannot tag a commit that hasn't passed CI!"
+            exit 1
+          fi
+
+          echo "Found ${TOTAL_CHECKS} check runs"
+
+          # Check if CI workflow passed
+          CI_CONCLUSION=$(echo "${CHECK_RUNS}" | jq -r \
+            '.[] | select(.name == "CI" or .name | startswith("test")) | .conclusion' | \
+            head -1)
+
+          if [ -z "${CI_CONCLUSION}" ]; then
+            echo "❌ ERROR: No CI workflow found on commit ${COMMIT_SHA}"
+            exit 1
+          fi
+
+          if [ "${CI_CONCLUSION}" != "success" ]; then
+            echo "❌ ERROR: CI workflow status: ${CI_CONCLUSION}"
+            echo "Cannot tag a commit with failing CI!"
+            exit 1
+          fi
+
+          echo "✅ CI passed on commit ${COMMIT_SHA}"
+
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION=${{ github.ref_name }}
+          TAG_VERSION=${TAG_VERSION#v}  # Remove 'v' prefix
+
+          # Check version in pyproject.toml
+          PKG_VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
+
+          if [ "${PKG_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "❌ ERROR: Version mismatch!"
+            echo "   Tag version: ${TAG_VERSION}"
+            echo "   Package version: ${PKG_VERSION}"
+            echo ""
+            echo "Update pyproject.toml and __init__.py with the correct version."
+            exit 1
+          fi
+
+          echo "✅ Version matches: ${TAG_VERSION}"
+
+      - name: Verify __init__.py version matches
+        run: |
+          TAG_VERSION=${{ github.ref_name }}
+          TAG_VERSION=${TAG_VERSION#v}
+
+          INIT_VERSION=$(grep '^__version__ = ' src/har_capture/__init__.py | cut -d'"' -f2)
+
+          if [ "${INIT_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "❌ ERROR: __init__.py version mismatch!"
+            echo "   Tag version: ${TAG_VERSION}"
+            echo "   __init__.py version: ${INIT_VERSION}"
+            exit 1
+          fi
+
+          echo "✅ __init__.py version matches: ${INIT_VERSION}"
+
+      - name: Success
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Tag ${{ github.ref_name }} passed all validation checks!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

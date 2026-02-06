@@ -77,10 +77,18 @@ repos:
         stages: [commit-msg]
 
   # ==========================================================================
-  # Pre-push: Run full CI checks (mirrors GitHub Actions)
+  # Pre-push: Tag protection & CI checks
   # ==========================================================================
   - repo: local
     hooks:
+      - id: verify-tag-ci
+        name: Verify CI passed before tag push
+        entry: ./scripts/verify-tag-ci.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
       - id: ci-local
         name: ci-local
         entry: ./scripts/ci-local.sh
