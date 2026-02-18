@@ -395,20 +395,14 @@ def run_interactive_review(
     Returns:
         True if review completed normally, False if cancelled
     """
-    import os
-    import sys
-
     from rich.console import Console
 
     from har_capture.sanitization.report import ConfidenceLevel, RedactionStatus
 
     console = Console()
 
-    # Clear screen and scrollback buffer before starting interactive mode
-    if sys.platform == "win32":
-        os.system("cls")
-    else:
-        os.system("clear")
+    # Clear screen before starting interactive mode
+    console.clear()
 
     flagged = report.flagged
 
@@ -429,7 +423,7 @@ def run_interactive_review(
             display_sanitization_summary(report, input_path, output_path, salt_mode)
         display_flagged_table(flagged)
 
-    # Show initial screen (already cleared with os.system)
+    # Show initial screen (already cleared above)
     display_full_screen(clear=False)
 
     # Main action loop - allows going back from individual selection

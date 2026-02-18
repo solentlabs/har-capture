@@ -20,14 +20,21 @@
       "password",
       "passwd",
       "pwd",
-      "pass",
+      "\\bpass",
       "secret",
       "token",
-      "key",
-      "auth",
+      "\\b(?:api[_-]?key|secret[_-]?key|access[_-]?key|private[_-]?key)\\b",
+      "\\bauth(?:orization|_token|entication)?\\b",
       "credential",
       "apikey",
-      "api_key"
+      "api_key",
+      "\\buser(?:_?name)?\\b",
+      "login",
+      "\\bdomain\\b",
+      "tenant",
+      "\\bclient_id\\b",
+      "\\baccount_id\\b",
+      "\\borg(?:anization)?\\b"
     ]
   },
   "tagValueList": {

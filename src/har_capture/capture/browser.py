@@ -14,7 +14,7 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +121,7 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
     har["log"]["_har_capture"] = {
         "tool": tool_name,
         "version": __version__,
-        "captured_at": datetime.now().isoformat(),
+        "captured_at": datetime.now(tz=timezone.utc).isoformat(),
         "cache_disabled": True,
         "service_workers_blocked": True,
     }

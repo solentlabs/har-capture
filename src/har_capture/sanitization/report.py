@@ -91,6 +91,12 @@ class FlaggedValue:
 class SanitizationReport:
     """Report of a sanitization operation.
 
+    Security Note:
+        This report contains the hashing salt used for redaction. The salt
+        enables reversing hashed values back to originals if combined with
+        a dictionary attack. Treat the report as sensitive data — do not
+        log, commit, or transmit it without appropriate access controls.
+
     Attributes:
         input_file: Path to the input HAR file
         output_file: Path to the output (sanitized) HAR file
@@ -129,6 +135,10 @@ class SanitizationReport:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize report for JSON output.
+
+        Security Note:
+            The returned dict includes the hashing salt. Ensure the
+            serialized output is stored securely and not exposed publicly.
 
         Returns:
             Dictionary suitable for JSON serialization

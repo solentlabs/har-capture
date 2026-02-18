@@ -13,6 +13,7 @@ from har_capture.patterns.loader import (
     _cache_get,
     _cache_set,
     clear_pattern_cache,
+    compile_pattern,
     load_json_file,
     load_pii_patterns,
 )
@@ -164,3 +165,32 @@ class TestCustomPatternsLoading:
         """Test nonexistent custom patterns file raises error."""
         with pytest.raises(PatternLoadError, match="not found"):
             load_pii_patterns("/nonexistent/path/patterns.json")
+
+
+class TestCompilePattern:
+    """Tests for compile_pattern function."""
+
+    @pytest.mark.parametrize(
+        ("pattern_def", "desc"),
+        [
+            ({"regex": "[invalid(regex", "replacement_prefix": "BAD"}, "unclosed_bracket"),
+            ({"regex": "*bad", "replacement_prefix": "BAD"}, "quantifier_at_start"),
+            ({"regex": "(((unclosed", "replacement_prefix": "BAD"}, "unclosed_paren"),
+        ],
+    )
+    def test_invalid_regex_returns_none(self, pattern_def: dict, desc: str) -> None:
+        """Test that invalid regex patterns return None instead of raising."""
+        result = compile_pattern(pattern_def)
+        assert result is None, f"{desc}: invalid regex should return None"
+
+    def test_valid_regex_returns_pattern(self) -> None:
+        """Test that valid regex patterns compile successfully."""
+        result = compile_pattern({"regex": r"\d{3}-\d{2}-\d{4}", "replacement_prefix": "SSN"})
+        assert result is not None
+        assert result.pattern == r"\d{3}-\d{2}-\d{4}"
+
+    def test_valid_regex_with_flags(self) -> None:
+        """Test that valid regex with flags compiles successfully."""
+        result = compile_pattern({"regex": "test", "flags": ["IGNORECASE"], "replacement_prefix": "T"})
+        assert result is not None
+        assert result.flags & __import__("re").IGNORECASE

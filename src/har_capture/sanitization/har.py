@@ -13,11 +13,12 @@ import copy
 import json
 import logging
 import re
+import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import Hasher, load_sensitive_patterns
 from har_capture.sanitization.collector import RedactionCollector
-from har_capture.sanitization.html import sanitize_html
+from har_capture.sanitization.html import is_valid_ip_address, sanitize_html
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -147,10 +148,8 @@ def _load_sensitive_field_patterns() -> re.Pattern[str]:
     sensitive = load_sensitive_patterns()
     patterns = sensitive.get("fields", {}).get("patterns", [])
     if not patterns:
-        patterns = ["password", "secret", "token", "key", "auth"]
-    # Escape patterns to prevent regex injection
-    escaped = [re.escape(p) for p in patterns]
-    return re.compile("|".join(escaped), re.IGNORECASE)
+        patterns = ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]
+    return re.compile("|".join(patterns), re.IGNORECASE)
 
 
 # Load patterns at module level for efficiency
@@ -198,6 +197,8 @@ def is_sensitive_field(field_name: str) -> bool:
         >>> is_sensitive_field("loginPassword")
         True
         >>> is_sensitive_field("username")
+        True
+        >>> is_sensitive_field("channel_id")
         False
     """
     return bool(_SENSITIVE_FIELD_RE.search(field_name))
@@ -288,11 +289,8 @@ def _sanitize_json_text(
     """
     try:
         data = json.loads(text)
-        if isinstance(data, dict):
-            for key in data:
-                if is_sensitive_field(key) and isinstance(data[key], str):
-                    data[key] = _redact_value(data[key], hasher, "FIELD", collector)
-        return json.dumps(data)
+        sanitized = _sanitize_json_recursive(data, hasher, collector)
+        return json.dumps(sanitized)
     except json.JSONDecodeError:
         return text
 
@@ -382,10 +380,38 @@ def _sanitize_json_recursive(
     return data
 
 
+# Regex patterns for URL path segment sanitization
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_API_KEY_PREFIX_PATTERN = re.compile(r"^(?:sk|pk|key)-[a-zA-Z0-9]{16,}$")
+_LONG_TOKEN_PATTERN = re.compile(r"^(?=[a-zA-Z]*\d)(?=\d*[a-zA-Z])[a-zA-Z0-9]{32,}$")
+
 # Regex patterns for value-based sanitization
 _MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 _PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
+_CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
+_CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
+
+
+def _luhn_check(number: str) -> bool:
+    """Validate a number string using the Luhn algorithm.
+
+    Args:
+        number: Digit-only string to validate
+
+    Returns:
+        True if the number passes Luhn validation
+    """
+    digits = [int(c) for c in number]
+    checksum = 0
+    for i, digit in enumerate(reversed(digits)):
+        value = digit * 2 if i % 2 == 1 else digit
+        if value > 9:
+            value -= 9
+        checksum += value
+    return checksum % 10 == 0
 
 
 def _sanitize_string_patterns(
@@ -405,7 +431,10 @@ def _sanitize_string_patterns(
     Returns:
         Sanitized string
     """
-    if not value or len(value) > 10000:  # Skip very long strings for performance
+    if not value:
+        return value
+    if len(value) > 10000:  # Skip very long strings for performance
+        _LOGGER.debug("Skipping pattern sanitization for long string (length=%d)", len(value))
         return value
 
     # MAC addresses
@@ -423,6 +452,8 @@ def _sanitize_string_patterns(
         ip = match.group(0)
         if ip in preserved_ips:
             return ip
+        if not is_valid_ip_address(ip):
+            return ip
         if collector:
             collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
@@ -436,6 +467,27 @@ def _sanitize_string_patterns(
         return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
 
     value = _EMAIL_PATTERN.sub(replace_email, value)
+
+    # SSN
+    def replace_ssn(match: re.Match[str]) -> str:
+        if collector:
+            collector.record_auto_redaction("ssn")
+        return _redact_value(match.group(0), hasher, "SSN", None)
+
+    value = _SSN_PATTERN.sub(replace_ssn, value)
+
+    # Credit cards (with Luhn validation to reduce false positives)
+    def replace_cc(match: re.Match[str]) -> str:
+        number = match.group(0)
+        if not _luhn_check(number):
+            return number
+        if collector:
+            collector.record_auto_redaction("credit_card")
+        return _redact_value(number, hasher, "CC", None)
+
+    value = _CC_VISA_PATTERN.sub(replace_cc, value)
+    value = _CC_MC_PATTERN.sub(replace_cc, value)
+    value = _CC_AMEX_PATTERN.sub(replace_cc, value)
 
     return value
 
@@ -455,6 +507,83 @@ def _sanitize_headers(
     for header in headers:
         if isinstance(header, dict) and "name" in header and "value" in header:
             header["value"] = sanitize_header_value(header["name"], header["value"], hasher, collector)
+
+
+def _sanitize_url_path(
+    url: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Sanitize sensitive path segments in a URL (UUIDs, API keys, long tokens).
+
+    Args:
+        url: Full URL string
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        URL with sensitive path segments redacted
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.path or parsed.path == "/":
+        return url
+
+    segments = parsed.path.split("/")
+    changed = False
+    for i, segment in enumerate(segments):
+        if not segment:
+            continue
+        if _UUID_PATTERN.match(segment):
+            segments[i] = _redact_value(segment, hasher, "UUID", collector)
+            changed = True
+        elif _API_KEY_PREFIX_PATTERN.match(segment):
+            segments[i] = _redact_value(segment, hasher, "API_KEY", collector)
+            changed = True
+        elif _LONG_TOKEN_PATTERN.match(segment):
+            segments[i] = _redact_value(segment, hasher, "TOKEN", collector)
+            changed = True
+
+    if not changed:
+        return url
+
+    new_path = "/".join(segments)
+    return urllib.parse.urlunparse(parsed._replace(path=new_path))
+
+
+def _sanitize_url_query_params(
+    url: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Sanitize sensitive query parameters in a URL string.
+
+    Args:
+        url: Full URL string
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        URL with sensitive query parameter values redacted
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.query:
+        return url
+
+    params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    sanitized_params = []
+    changed = False
+    for name, value in params:
+        if is_sensitive_field(name) and value:
+            sanitized_params.append((name, _redact_value(value, hasher, "FIELD", collector)))
+            changed = True
+        else:
+            sanitized_params.append((name, value))
+
+    if not changed:
+        return url
+
+    new_query = urllib.parse.urlencode(sanitized_params)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
 def _sanitize_request(
@@ -482,6 +611,11 @@ def _sanitize_request(
         for param in req["queryString"]:
             if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
                 param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+
+    # Sanitize the URL string itself (query params and path segments)
+    if "url" in req and isinstance(req["url"], str):
+        req["url"] = _sanitize_url_query_params(req["url"], hasher, collector)
+        req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
 def _sanitize_response_content(
@@ -517,6 +651,12 @@ def _sanitize_response_content(
             content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
         except json.JSONDecodeError:
             _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
+    elif (
+        mime_type.startswith("text/")
+        or not mime_type
+    ) and content.get("encoding") != "base64":
+        # Fallback: apply pattern-based sanitization to text content
+        content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
 
 
 def _sanitize_response(
@@ -551,6 +691,7 @@ def sanitize_entry(
     custom_patterns: str | dict[str, Any] | None = None,
     collector: RedactionCollector | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    _skip_copy: bool = False,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
@@ -560,11 +701,12 @@ def sanitize_entry(
         custom_patterns: Optional custom patterns (file path or dict)
         collector: Optional collector for tracking redactions
         heuristics: Heuristic mode for pipe-delimited value detection
+        _skip_copy: If True, skip deep copy (caller already copied). Internal use only.
 
     Returns:
         Sanitized entry
     """
-    result = copy.deepcopy(entry)
+    result = entry if _skip_copy else copy.deepcopy(entry)
 
     # Use collector's hasher if provided, otherwise create one
     if collector is None and salt:
@@ -648,6 +790,7 @@ def sanitize_har(
                     custom_patterns=custom_patterns,
                     collector=collector,
                     heuristics=heuristics,
+                    _skip_copy=True,
                 )
             )
         log["entries"] = sanitized_entries
@@ -840,7 +983,7 @@ def apply_user_redactions(
             content = content.replace(escaped_original, escaped_redacted)
 
         except Exception as e:  # noqa: PERF203 - intentional: continue with other redactions on error
-            _LOGGER.warning("Failed to redact value '%s...': %s", item.original_value[:20], e)
+            _LOGGER.warning("Failed to redact flagged item (category=%s): %s", item.category, e)
             # Continue with other redactions
             continue
 

@@ -291,7 +291,7 @@ addopts = [
     "--cov=har_capture",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=60",
+    "--cov-fail-under=75",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -315,7 +315,7 @@ parallel = true
 source = ["src/har_capture"]
 
 [tool.coverage.report]
-fail_under = 60
+fail_under = 80
 show_missing = true
 skip_covered = false
 exclude_lines = [

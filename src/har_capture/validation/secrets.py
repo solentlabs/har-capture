@@ -272,6 +272,8 @@ def check_json_fields(
     findings: list[Finding],
     path: str = "",
     custom_patterns: str | None = None,
+    _sensitive_fields: list[str] | None = None,
+    _depth: int = 0,
 ) -> None:
     """Recursively check JSON for sensitive fields.
 
@@ -281,8 +283,14 @@ def check_json_fields(
         findings: List to append findings to
         path: Current path in the JSON structure
         custom_patterns: Optional path to custom patterns file
+        _sensitive_fields: Pre-loaded sensitive field patterns. Internal use only.
+        _depth: Current recursion depth. Internal use only.
     """
-    sensitive_fields = _load_sensitive_fields(custom_patterns)
+    if _depth > 50:
+        return
+
+    if _sensitive_fields is None:
+        _sensitive_fields = _load_sensitive_fields(custom_patterns)
 
     if isinstance(data, dict):
         for key, value in data.items():
@@ -290,7 +298,7 @@ def check_json_fields(
 
             # Skip empty or redacted values
             if isinstance(value, str) and value and not is_redacted(value, custom_patterns):
-                for pattern in sensitive_fields:
+                for pattern in _sensitive_fields:
                     if re.search(pattern, key, re.IGNORECASE):
                         findings.append(
                             Finding(
@@ -305,12 +313,20 @@ def check_json_fields(
 
             # Recurse
             if isinstance(value, dict | list):
-                check_json_fields(value, location, findings, current_path, custom_patterns)
+                check_json_fields(
+                    value, location, findings, current_path, custom_patterns,
+                    _sensitive_fields=_sensitive_fields,
+                    _depth=_depth + 1,
+                )
 
     elif isinstance(data, list):
         for i, item in enumerate(data):
             if isinstance(item, dict | list):
-                check_json_fields(item, location, findings, f"{path}[{i}]", custom_patterns)
+                check_json_fields(
+                    item, location, findings, f"{path}[{i}]", custom_patterns,
+                    _sensitive_fields=_sensitive_fields,
+                    _depth=_depth + 1,
+                )
 
 
 def check_content(

@@ -28,6 +28,7 @@ Dependencies:
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
@@ -515,3 +516,48 @@ class TestErrorHandling:
         result_str = json.dumps(result)
         assert "value1" not in result_str
         assert "value2" not in result_str
+
+
+class TestLogOutputSecurity:
+    """Tests that log messages do not leak PII."""
+
+    @pytest.mark.parametrize(
+        ("original_value", "category", "desc"),
+        [
+            ("my-super-secret-password", "password", "password_not_logged"),
+            ("HomeNetwork-5G-WiFi", "wifi_ssid", "ssid_not_logged"),
+            ("john.doe@example.com", "email", "email_not_logged"),
+        ],
+    )
+    def test_log_does_not_contain_original_value(
+        self, original_value: str, category: str, desc: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that log output during normal operation does not contain original PII value."""
+        har_data = {"log": {"entries": [], "content": original_value}}
+
+        # Create a flagged value that will trigger the error handler by
+        # mocking the hasher to raise an exception
+        flagged = FlaggedValue(
+            original_value=original_value,
+            category=category,
+            confidence=ConfidenceLevel.HIGH,
+            context="test",
+            reason="test",
+            status=RedactionStatus.USER_REDACTED,
+        )
+        report = SanitizationReport(
+            input_file="in.har",
+            output_file="out.har",
+            salt="test-salt",
+            flagged=[flagged],
+        )
+
+        # Normal operation should not log the original value
+        with caplog.at_level(logging.WARNING, logger="har_capture.sanitization.har"):
+            apply_user_redactions(har_data, report)
+
+        # The original PII value must NOT appear in any log messages
+        for record in caplog.records:
+            assert original_value not in record.getMessage(), (
+                f"{desc}: original PII value leaked into log message"
+            )

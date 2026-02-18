@@ -57,13 +57,13 @@ fi
 
 # Step 2: Unit tests (same as CI: pytest -m "not integration")
 echo -e "\n${YELLOW}[2/3] Running unit tests...${NC}"
-PYTEST_ARGS="--tb=short -q -m 'not integration'"
+MARKER="not integration"
 if [ "$QUICK" = true ]; then
-    PYTEST_ARGS="$PYTEST_ARGS -m 'not integration and not slow'"
+    MARKER="not integration and not slow"
     echo -e "${YELLOW}  (quick mode - skipping slow tests)${NC}"
 fi
 
-if pytest --tb=short -q -m "not integration"; then
+if pytest --tb=short -q -m "$MARKER"; then
     echo -e "${GREEN}✓ Unit tests passed${NC}"
 else
     echo -e "${RED}✗ Unit tests failed${NC}"

@@ -303,15 +303,40 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
         typer.echo("Applying user redactions...")
 
         # Read the sanitized file back
-        with open(sanitized_path, encoding="utf-8") as f:
-            sanitized_data = json.load(f)
+        try:
+            with open(sanitized_path, encoding="utf-8") as f:
+                sanitized_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
+            raise typer.Exit(1) from None
 
         # Apply user redactions
-        final_data = apply_user_redactions(sanitized_data, report)
+        try:
+            final_data = apply_user_redactions(sanitized_data, report)
+        except Exception as e:
+            typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
+            raise typer.Exit(1) from None
 
-        # Write back
-        with open(sanitized_path, "w", encoding="utf-8") as f:
-            json.dump(final_data, f, indent=2)
+        # Write atomically using temp file + rename
+        import tempfile
+
+        try:
+            result_dir = Path(sanitized_path).parent
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
+            ) as tmp_file:
+                json.dump(final_data, tmp_file, indent=2)
+                tmp_path = tmp_file.name
+
+            Path(tmp_path).replace(sanitized_path)
+        except OSError as e:
+            typer.echo(f"Error: Failed to write output file: {e}", err=True)
+            try:
+                if "tmp_path" in locals():
+                    Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise typer.Exit(1) from None
 
         typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
 

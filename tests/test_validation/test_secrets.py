@@ -408,7 +408,7 @@ class TestFindingDataclass:
 #
 # fmt: off
 CHECK_JSON_FIELDS_CASES = [
-    ({"username": "admin", "password": "secret123"},              1, "password field detected"),
+    ({"username": "admin", "password": "secret123"},              2, "username and password fields detected"),
     ({"user": {"credentials": {"api_key": "abc123xyz"}}},         1, "nested api_key field"),
     ({"password": "[REDACTED]"},                                  0, "redacted value ignored"),
     ({"password": ""},                                            0, "empty value ignored"),
