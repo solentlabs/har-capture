@@ -34,11 +34,13 @@ from har_capture.capture.workflow import (
     CaptureResult,
     CaptureWorkflowResult,
     ConnectivityResult,
+    ProbeResult,
     check_auth_phase,
     check_browser_phase,
     check_connectivity_phase,
     run_capture_phase,
     run_capture_workflow,
+    run_probes_phase,
 )
 
 # =============================================================================
@@ -126,6 +128,21 @@ class TestCaptureResult:
         assert result.stats == {"entries": 10}
 
 
+class TestProbeResult:
+    """Tests for ProbeResult dataclass."""
+
+    def test_default_values(self) -> None:
+        """Test default values."""
+        result = ProbeResult()
+        assert result.data == {}
+
+    def test_custom_data(self) -> None:
+        """Test custom data."""
+        data = {"ran_at": "2026-01-01T00:00:00", "target_url": "http://test/"}
+        result = ProbeResult(data=data)
+        assert result.data == data
+
+
 # =============================================================================
 # Test CaptureWorkflowResult
 # =============================================================================
@@ -155,6 +172,7 @@ class TestCaptureWorkflowResult:
         assert result.connectivity_error is None
         assert result.target_url == ""
         assert result.scheme == "http"
+        assert result.probe_data == {}
         assert result.requires_basic_auth is False
         assert result.auth_realm is None
         assert result.capture_success is False
@@ -372,6 +390,61 @@ class TestCheckAuthPhase:
 
 
 # =============================================================================
+# Test run_probes_phase
+# =============================================================================
+
+
+class TestRunProbesPhase:
+    """Tests for run_probes_phase function."""
+
+    @patch("har_capture.capture.probes.run_probes")
+    def test_runs_probes(self, mock_probes: MagicMock) -> None:
+        """Test probes are run and result is stored."""
+        mock_probes.return_value = {"ran_at": "2026-01-01", "target_url": "http://test/"}
+
+        result = run_probes_phase("http://test/")
+
+        assert result.phase == "probes"
+        assert result.probes is not None
+        assert result.probes.data["ran_at"] == "2026-01-01"
+        mock_probes.assert_called_once_with("http://test/", timeout=10)
+
+    @patch("har_capture.capture.probes.run_probes")
+    def test_updates_existing_result(self, mock_probes: MagicMock) -> None:
+        """Test existing result is updated."""
+        mock_probes.return_value = {}
+
+        existing = CaptureWorkflowResult(
+            browser=BrowserCheckResult(browser="firefox"),
+            connectivity=ConnectivityResult(ok=True, target_url="http://test/"),
+        )
+        result = run_probes_phase("http://test/", result=existing)
+
+        assert result.browser.browser == "firefox"
+        assert result.connectivity is not None
+        assert result.probes is not None
+
+    @patch("har_capture.capture.probes.run_probes")
+    def test_creates_new_result_if_none(self, mock_probes: MagicMock) -> None:
+        """Test new result is created if None passed."""
+        mock_probes.return_value = {}
+
+        result = run_probes_phase("http://test/", result=None)
+
+        assert result.phase == "probes"
+        assert result.probes is not None
+
+    @patch("har_capture.capture.probes.run_probes")
+    def test_custom_timeout(self, mock_probes: MagicMock) -> None:
+        """Test custom timeout is passed through."""
+        mock_probes.return_value = {}
+
+        run_probes_phase("http://test/", timeout=30)
+
+        mock_probes.assert_called_once_with("http://test/", timeout=30)
+
+
+# =============================================================================
 # Test run_capture_phase
 # =============================================================================
 
@@ -469,6 +542,7 @@ class TestRunCapturePhase:
             headless=True,
             timeout=30,
             interactive=True,
+            probes=None,
         )
 
     @patch("har_capture.capture.browser.capture_device_har")
@@ -511,6 +585,7 @@ class TestRunCaptureWorkflow:
 
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -519,6 +594,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
         tmp_path: Path,
@@ -571,6 +647,7 @@ class TestRunCaptureWorkflow:
         assert result.capture_success is False
 
     @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -579,6 +656,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_probes: MagicMock,
         mock_auth: MagicMock,
     ) -> None:
         """Test workflow stops if auth required but no credentials."""
@@ -596,6 +674,7 @@ class TestRunCaptureWorkflow:
 
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -604,6 +683,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
     ) -> None:
@@ -632,6 +712,7 @@ class TestRunCaptureWorkflow:
 
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -640,6 +721,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
     ) -> None:
@@ -664,6 +746,7 @@ class TestRunCaptureWorkflow:
 
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -672,6 +755,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
         tmp_path: Path,

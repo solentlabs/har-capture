@@ -64,6 +64,9 @@ def _load_sensitive_headers(custom_patterns: str | None = None) -> list[str]:
 def _load_sensitive_fields(custom_patterns: str | None = None) -> list[str]:
     """Load sensitive field patterns from patterns file.
 
+    Pre-commit validation should warn about ALL sensitive patterns
+    (both auto-redact and flag), not just auto-redact ones.
+
     Args:
         custom_patterns: Optional path to custom patterns file
 
@@ -71,7 +74,12 @@ def _load_sensitive_fields(custom_patterns: str | None = None) -> list[str]:
         List of sensitive field regex patterns
     """
     sensitive = load_sensitive_patterns(custom_patterns)
-    patterns: list[str] = sensitive.get("fields", {}).get("patterns", [])
+    fields = sensitive.get("fields", {})
+    # Combine both tiers for validation — pre-commit should catch all sensitive fields
+    patterns: list[str] = fields.get("auto_redact_patterns", []) + fields.get("flag_patterns", [])
+    # Fallback for legacy format
+    if not patterns:
+        patterns = fields.get("patterns", [])
     return patterns
 
 

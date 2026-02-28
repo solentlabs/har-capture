@@ -32,16 +32,24 @@ from har_capture.capture.deps import (
     install_browser_deps,
     install_playwright,
 )
+from har_capture.capture.probes import (
+    probe_auth_challenge,
+    probe_head_support,
+    probe_icmp,
+    run_probes,
+)
 from har_capture.capture.workflow import (
     AuthResult,
     BrowserCheckResult,
     CaptureWorkflowResult,
     ConnectivityResult,
+    ProbeResult,
     check_auth_phase,
     check_browser_phase,
     check_connectivity_phase,
     run_capture_phase,
     run_capture_workflow,
+    run_probes_phase,
 )
 from har_capture.capture.workflow import CaptureResult as WorkflowCaptureResult
 
@@ -60,6 +68,13 @@ __all__ = [
     "install_playwright",
     "install_browser",
     "install_browser_deps",
+    # Probes
+    "run_probes",
+    "probe_auth_challenge",
+    "probe_head_support",
+    "probe_icmp",
+    "ProbeResult",
+    "run_probes_phase",
     # Workflow orchestration
     "CaptureWorkflowResult",
     "BrowserCheckResult",

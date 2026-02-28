@@ -28,6 +28,7 @@ import json
 import pytest
 
 from har_capture.sanitization.har import (
+    is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
     sanitize_har,
@@ -91,8 +92,8 @@ SENSITIVE_FIELD_CASES = [
     ("oauth_token",         True,   "oauth_token"),
     ("oauthToken",          True,   "oauth_token_camel"),
     ("oauth_secret",        True,   "oauth_secret"),
-    # Identity fields (now detected as sensitive)
-    ("client_id",           True,   "client_id_detected"),
+    # Identity fields (flagged, not auto-redacted)
+    ("client_id",           False,  "client_id_flagged_not_redacted"),
     ("clientId",            False,  "client_id_camel_not_detected"),
     # Session variations (only *token detected, not bare "session" or generic "key")
     ("session",             False,  "session_not_detected"),
@@ -108,11 +109,13 @@ SENSITIVE_FIELD_CASES = [
     # Note: nonce not currently detected (could be added)
     ("nonce",               False,  "nonce_not_detected"),
     ("form_nonce",          False,  "form_nonce_not_detected"),
-    # User identity fields (now detected as sensitive)
-    ("username",            True,   "username_detected"),
-    ("loginName",           True,   "login_name_detected"),
-    ("user",                True,   "user_detected"),
-    ("login",               True,   "login_detected"),
+    # User identity fields (flagged for review, not auto-redacted)
+    ("username",            False,  "username_flagged_not_redacted"),
+    ("loginName",           False,  "login_name_flagged_not_redacted"),
+    ("user",                False,  "user_flagged_not_redacted"),
+    ("login",               False,  "login_flagged_not_redacted"),
+    ("env",                 False,  "env_flagged_not_redacted"),
+    ("environment",         False,  "environment_flagged_not_redacted"),
     # Safe fields (should NOT be flagged)
     ("email",               False,  "email_safe"),
     ("channel_id",          False,  "channel_id_safe"),
@@ -253,7 +256,7 @@ class TestPostDataSanitization:
         ("loginPassword",   "secret123",    True,   "password_redacted"),
         ("userPassword",    "mypass",       True,   "user_password_redacted"),
         ("auth_token",      "tok123",       True,   "auth_token_redacted"),
-        ("loginName",       "admin",        True,   "login_name_redacted"),
+        ("loginName",       "admin",        False,  "login_name_flagged_not_redacted"),
         ("email",           "a@b.com",      False,  "email_preserved"),
         ("channel",         "123",          False,  "channel_preserved"),
     ]
@@ -539,36 +542,35 @@ class TestURLStringSanitization:
 
 
 class TestURLPathSanitization:
-    """Tests for URL path segment sanitization."""
+    """Tests for URL path segment sanitization (flagged, not auto-redacted)."""
 
     # fmt: off
     URL_PATH_CASES = [
-        ("http://api.example.com/users/550e8400-e29b-41d4-a716-446655440000/profile", "550e8400-e29b-41d4-a716-446655440000", "uuid_in_path"),
-        ("http://api.example.com/keys/sk-1234567890abcdefghij/verify", "sk-1234567890abcdefghij", "api_key_prefix_in_path"),
-        ("http://api.example.com/tokens/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/refresh", "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6", "long_mixed_token_in_path"),
-        ("http://example.com/api/v1/status", None, "normal_path_preserved"),
-        ("http://example.com/api/GetDeviceInformation/details", None, "long_alpha_path_preserved"),
-        ("http://example.com/api/configurationSettings/list", None, "camelcase_path_preserved"),
+        ("http://api.example.com/users/550e8400-e29b-41d4-a716-446655440000/profile", "uuid_in_path"),
+        ("http://api.example.com/keys/sk-1234567890abcdefghij/verify", "api_key_prefix_in_path"),
+        ("http://api.example.com/tokens/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/refresh", "long_mixed_token_in_path"),
+        ("http://api.example.com/devices/DEV-ABC123456/status", "device_serial_in_path"),
+        ("http://api.example.com/customers/CUST-67890/profile", "customer_id_in_path"),
+        ("http://example.com/api/v1/status", "normal_path_preserved"),
+        ("http://example.com/api/GetDeviceInformation/details", "long_alpha_path_preserved"),
+        ("http://example.com/api/configurationSettings/list", "camelcase_path_preserved"),
     ]
     # fmt: on
 
     @pytest.mark.parametrize(
-        ("url", "sensitive_segment", "desc"),
+        ("url", "desc"),
         URL_PATH_CASES,
-        ids=[c[2] for c in URL_PATH_CASES],
+        ids=[c[1] for c in URL_PATH_CASES],
     )
-    def test_url_path_segment_sanitization(self, url: str, sensitive_segment: str | None, desc: str) -> None:
-        """Test sensitive path segments are redacted."""
+    def test_url_path_segments_preserved(self, url: str, desc: str) -> None:
+        """Test path segments are preserved (flagged for review, not auto-redacted)."""
         entry = {
             "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
             "response": {"status": 200, "headers": [], "content": {}},
         }
         result = sanitize_entry(entry, salt=None)
         result_url = result["request"]["url"]
-        if sensitive_segment:
-            assert sensitive_segment not in result_url, f"{desc}: segment should be redacted"
-        else:
-            assert result_url == url, f"{desc}: URL should be unchanged"
+        assert result_url == url, f"{desc}: URL should be preserved (flagged, not redacted)"
 
 
 class TestResponseContentFallback:
@@ -669,14 +671,14 @@ class TestSensitiveFieldPatterns:
         ("reorganize",     False,  "reorganize_not_matched"),
         ("domain_name",   False,  "domain_name_not_matched"),
         ("password",       True,   "password_still_matched"),
-        ("username",       True,   "username_now_matched"),
-        ("user",           True,   "user_matched"),
-        ("user_name",     True,   "user_name_matched"),
-        ("login",          True,   "login_matched"),
-        ("loginName",      True,   "login_name_matched"),
-        ("domain",         True,   "domain_matched"),
-        ("organization",   True,   "organization_matched"),
-        ("org",            True,   "org_matched"),
+        ("username",       False,  "username_flagged_not_sensitive"),
+        ("user",           False,  "user_flagged_not_sensitive"),
+        ("user_name",     False,  "user_name_flagged_not_sensitive"),
+        ("login",          False,  "login_flagged_not_sensitive"),
+        ("loginName",      False,  "login_name_flagged_not_sensitive"),
+        ("domain",         False,  "domain_flagged_not_sensitive"),
+        ("organization",   False,  "organization_flagged_not_sensitive"),
+        ("org",            False,  "org_flagged_not_sensitive"),
         ("api_key",        True,   "api_key_still_matched"),
         ("auth_token",     True,   "auth_token_still_matched"),
     ]
@@ -693,12 +695,12 @@ class TestSensitiveFieldPatterns:
 
 
 class TestSSNAndCreditCardPatterns:
-    """Tests for SSN and credit card pattern detection."""
+    """Tests for SSN (flagged) and credit card (auto-redacted) pattern detection."""
 
     @pytest.mark.parametrize(
         ("input_text", "should_redact", "desc"),
         [
-            ("SSN: 123-45-6789", True, "ssn_detected"),
+            ("SSN: 123-45-6789", False, "ssn_flagged_not_redacted"),
             ("Date: 2024-01-15", False, "date_not_matched"),
             ("Card: 4111111111111111", True, "visa_detected"),
             ("Card: 5500000000000004", True, "mastercard_detected"),
@@ -707,7 +709,7 @@ class TestSSNAndCreditCardPatterns:
         ],
     )
     def test_financial_pii_detection(self, input_text: str, should_redact: bool, desc: str) -> None:
-        """Test SSN and credit card patterns with Luhn validation."""
+        """Test credit card auto-redaction and SSN preservation (flagged only)."""
         from har_capture.sanitization.har import _sanitize_string_patterns
 
         result = _sanitize_string_patterns(input_text)
@@ -715,7 +717,264 @@ class TestSSNAndCreditCardPatterns:
             # Extract the value that should be redacted
             original_numbers = [w for w in input_text.split() if any(c.isdigit() for c in w)]
             for num in original_numbers:
-                if len(num) > 8:  # Only check long numbers (SSN, CC)
+                if len(num) > 8:  # Only check long numbers (CC)
                     assert num not in result, f"{desc}: {num} should be redacted"
         else:
             assert result == input_text, f"{desc}: text should be unchanged"
+
+
+class TestFlaggableFieldDetection:
+    """Tests for is_flaggable_field() — fields flagged for review, not auto-redacted."""
+
+    # fmt: off
+    FLAGGABLE_FIELD_CASES = [
+        # Fields that should be flaggable (review tier)
+        ("username",        True,   "username_flaggable"),
+        ("user_name",       True,   "user_name_flaggable"),
+        ("user",            True,   "user_flaggable"),
+        ("login",           True,   "login_flaggable"),
+        ("loginName",       True,   "login_name_flaggable"),
+        ("domain",          True,   "domain_flaggable"),
+        ("tenant",          True,   "tenant_flaggable"),
+        ("client_id",       True,   "client_id_flaggable"),
+        ("account_id",      True,   "account_id_flaggable"),
+        ("org",             True,   "org_flaggable"),
+        ("organization",    True,   "organization_flaggable"),
+        ("env",             True,   "env_flaggable"),
+        ("environment",     True,   "environment_flaggable"),
+        # Fields that are auto-redact (NOT flaggable)
+        ("password",        False,  "password_not_flaggable"),
+        ("secret",          False,  "secret_not_flaggable"),
+        ("token",           False,  "token_not_flaggable"),
+        ("api_key",         False,  "api_key_not_flaggable"),
+        ("auth_token",      False,  "auth_token_not_flaggable"),
+        # Safe fields (neither sensitive nor flaggable)
+        ("email",           False,  "email_not_flaggable"),
+        ("channel_id",      False,  "channel_id_not_flaggable"),
+        ("status",          False,  "status_not_flaggable"),
+        ("name",            False,  "name_not_flaggable"),
+        # Over-matching prevention
+        ("domain_name",     False,  "domain_name_not_flaggable"),
+        ("user_agent",      False,  "user_agent_not_flaggable"),
+        ("organic",         False,  "organic_not_flaggable"),
+        ("reorganize",      False,  "reorganize_not_flaggable"),
+        ("envelope",        False,  "envelope_not_flaggable"),
+        ("environmental",   False,  "environmental_not_flaggable"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("field_name", "expected", "desc"),
+        FLAGGABLE_FIELD_CASES,
+        ids=[c[2] for c in FLAGGABLE_FIELD_CASES],
+    )
+    def test_flaggable_field_detection(self, field_name: str, expected: bool, desc: str) -> None:
+        """Test detection of flaggable vs non-flaggable field names."""
+        result = is_flaggable_field(field_name)
+        assert result is expected, f"{desc}: '{field_name}' should be {'flaggable' if expected else 'not flaggable'}"
+
+
+class TestFlaggingBehavior:
+    """Tests that flaggable fields, SSNs, and URL paths are flagged (not auto-redacted)."""
+
+    def test_ssn_flagged_not_redacted(self) -> None:
+        """Test SSN patterns are flagged for review, not auto-redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns("SSN: 123-45-6789", collector=collector)
+        assert "123-45-6789" in result, "SSN should be preserved in output"
+        assert any(f.category == "ssn" for f in collector.flagged), "SSN should be in flagged list"
+
+    def test_url_path_uuid_flagged(self) -> None:
+        """Test UUID in URL path is flagged, not redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_url_path
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        url = "http://api.example.com/users/550e8400-e29b-41d4-a716-446655440000/profile"
+        result = _sanitize_url_path(url, hasher, collector)
+        assert "550e8400-e29b-41d4-a716-446655440000" in result, "UUID should be preserved"
+        assert any(f.category == "uuid" for f in collector.flagged), "UUID should be flagged"
+
+    def test_url_path_api_key_flagged(self) -> None:
+        """Test API key prefix in URL path is flagged, not redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_url_path
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        url = "http://api.example.com/keys/sk-1234567890abcdefghij/verify"
+        result = _sanitize_url_path(url, hasher, collector)
+        assert "sk-1234567890abcdefghij" in result, "API key should be preserved"
+        assert any(f.category == "api_key" for f in collector.flagged), "API key should be flagged"
+
+    def test_url_path_long_token_flagged(self) -> None:
+        """Test long token in URL path is flagged, not redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_url_path
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        url = "http://api.example.com/tokens/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/refresh"
+        result = _sanitize_url_path(url, hasher, collector)
+        assert "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6" in result, "Token should be preserved"
+        assert any(f.category == "token" for f in collector.flagged), "Token should be flagged"
+
+    def test_url_path_device_serial_flagged(self) -> None:
+        """Test device/serial number in URL path is flagged, not redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_url_path
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        url = "http://api.example.com/devices/DEV-ABC123456/status"
+        result = _sanitize_url_path(url, hasher, collector)
+        assert "DEV-ABC123456" in result, "Device serial should be preserved"
+        assert any(f.category == "device_serial" for f in collector.flagged), "Device serial should be flagged"
+
+    @pytest.mark.parametrize(
+        ("segment", "desc"),
+        [
+            ("DEV-ABC123456", "device_prefix"),
+            ("CUST-67890", "customer_prefix"),
+            ("SN-XY12345678", "serial_number_prefix"),
+            ("HW-ABCDE12345", "hardware_prefix"),
+        ],
+        ids=["device_prefix", "customer_prefix", "serial_number_prefix", "hardware_prefix"],
+    )
+    def test_url_path_device_serial_variants_flagged(self, segment: str, desc: str) -> None:
+        """Test various device/serial number patterns are flagged."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_url_path
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        url = f"http://api.example.com/items/{segment}/info"
+        result = _sanitize_url_path(url, hasher, collector)
+        assert segment in result, f"{desc}: segment should be preserved"
+        assert any(f.category == "device_serial" for f in collector.flagged), f"{desc}: should be flagged"
+
+    def test_flaggable_field_in_json_flagged(self) -> None:
+        """Test flaggable fields in JSON are flagged, value preserved."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_json_recursive
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        data = {"username": "admin", "password": "secret123"}
+        result = _sanitize_json_recursive(data, hasher, collector)
+        assert result["username"] == "admin", "Flaggable field value should be preserved"
+        assert result["password"] in ("[REDACTED]", "***FIELD***"), "Sensitive field should be auto-redacted"
+        assert any(f.original_value == "admin" and f.category == "field" for f in collector.flagged)
+
+    def test_flaggable_field_in_post_params_flagged(self) -> None:
+        """Test flaggable fields in POST params are flagged, value preserved."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "loginName", "value": "admin"},
+                {"name": "password", "value": "secret"},
+            ],
+        }
+        result = sanitize_post_data(post_data, hasher, collector)
+        assert result is not None
+        login_param = next(p for p in result["params"] if p["name"] == "loginName")
+        password_param = next(p for p in result["params"] if p["name"] == "password")
+        assert login_param["value"] == "admin", "Flaggable field should be preserved"
+        assert password_param["value"] in ("[REDACTED]", "***FIELD***"), "Sensitive field should be redacted"
+        assert any(f.original_value == "admin" for f in collector.flagged)
+
+    def test_flaggable_field_in_query_string_flagged(self) -> None:
+        """Test flaggable fields in queryString are flagged, value preserved."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_request
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        req = {
+            "method": "GET",
+            "url": "http://test/?username=admin&password=secret",
+            "headers": [],
+            "queryString": [
+                {"name": "username", "value": "admin"},
+                {"name": "password", "value": "secret"},
+            ],
+        }
+        _sanitize_request(req, hasher, collector)
+        username_param = next(p for p in req["queryString"] if p["name"] == "username")
+        password_param = next(p for p in req["queryString"] if p["name"] == "password")
+        assert username_param["value"] == "admin", "Flaggable queryString param should be preserved"
+        assert password_param["value"] in ("[REDACTED]", "***FIELD***"), "Sensitive queryString param should be redacted"
+        assert any(f.original_value == "admin" for f in collector.flagged)
+
+
+class TestPhoneNumberPatterns:
+    """Tests for phone number pattern detection (flagged, not auto-redacted)."""
+
+    # fmt: off
+    PHONE_FLAGGED_CASES = [
+        ("Call: (555) 123-4567",            "(555) 123-4567",   "us_parens_format"),
+        ("Phone: 555-123-4567",             "555-123-4567",     "us_dash_format"),
+        ("Tel: +1 555 123 4567",            "+1 555 123 4567",  "us_intl_format"),
+        ("Contact: +1-555-123-4567",        "+1-555-123-4567",  "us_intl_dash_format"),
+        ("Fax: 555.123.4567",               "555.123.4567",     "us_dot_format"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("input_text", "expected_phone", "desc"),
+        PHONE_FLAGGED_CASES,
+        ids=[c[2] for c in PHONE_FLAGGED_CASES],
+    )
+    def test_phone_flagged_not_redacted(self, input_text: str, expected_phone: str, desc: str) -> None:
+        """Test phone number patterns are flagged for review, not auto-redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns(input_text, collector=collector)
+        assert expected_phone in result, f"{desc}: phone number should be preserved in output"
+        assert any(f.category == "phone" for f in collector.flagged), f"{desc}: phone should be flagged"
+
+    # fmt: off
+    PHONE_NOT_MATCHED_CASES = [
+        ("ID: 12345",               "short_number"),
+        ("Code: 123-45",            "too_short_with_dash"),
+        ("Version: 1.2.3",          "version_number"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("input_text", "desc"),
+        PHONE_NOT_MATCHED_CASES,
+        ids=[c[1] for c in PHONE_NOT_MATCHED_CASES],
+    )
+    def test_non_phone_not_flagged(self, input_text: str, desc: str) -> None:
+        """Test non-phone patterns are not flagged."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        _sanitize_string_patterns(input_text, collector=collector)
+        assert not any(f.category == "phone" for f in collector.flagged), f"{desc}: should not flag as phone"

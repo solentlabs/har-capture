@@ -95,6 +95,7 @@ def capture(
             check_browser_phase,
             check_connectivity_phase,
             run_capture_phase,
+            run_probes_phase,
         )
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
@@ -131,7 +132,22 @@ def capture(
         raise typer.Exit(1)
     typer.echo(f"  Connected:  {result.target_url}")
 
-    # Phase 3: Check authentication
+    # Phase 3: Pre-capture diagnostic probes
+    typer.echo()
+    typer.echo("Running diagnostic probes...")
+    result = run_probes_phase(result.target_url, result=result)
+    if result.probe_data:
+        auth_probe = result.probe_data.get("auth_challenge", {})
+        head_probe = result.probe_data.get("head_support", {})
+        icmp_probe = result.probe_data.get("icmp", {})
+        auth_status = auth_probe.get("status_code", "?")
+        head_ok = "yes" if head_probe.get("supported") else "no"
+        icmp_ok = "yes" if icmp_probe.get("reachable") else "no"
+        latency = icmp_probe.get("latency_ms")
+        latency_str = f" ({latency}ms)" if latency is not None else ""
+        typer.echo(f"  Auth status: {auth_status}  HEAD: {head_ok}  ICMP: {icmp_ok}{latency_str}")
+
+    # Phase 4: Check authentication
     typer.echo()
     typer.echo("Checking authentication type...")
     result = check_auth_phase(result.target_url, result)

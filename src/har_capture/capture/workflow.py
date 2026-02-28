@@ -59,6 +59,17 @@ class AuthResult:
 
 
 @dataclass
+class ProbeResult:
+    """Result of pre-capture diagnostic probes.
+
+    Attributes:
+        data: Probe data dict from ``run_probes()``
+    """
+
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class CaptureResult:
     """Result of the capture operation.
 
@@ -104,6 +115,7 @@ class CaptureWorkflowResult:
     phase: str = "init"
     browser: BrowserCheckResult = field(default_factory=BrowserCheckResult)
     connectivity: ConnectivityResult | None = None
+    probes: ProbeResult | None = None
     auth: AuthResult | None = None
     capture: CaptureResult | None = None
 
@@ -132,6 +144,11 @@ class CaptureWorkflowResult:
     def scheme(self) -> str:
         """Detected scheme (http/https)."""
         return self.connectivity.scheme if self.connectivity else "http"
+
+    @property
+    def probe_data(self) -> dict[str, Any]:
+        """Probe data dict from pre-capture probes."""
+        return self.probes.data if self.probes else {}
 
     @property
     def requires_basic_auth(self) -> bool:
@@ -261,6 +278,33 @@ def check_auth_phase(
     return result
 
 
+def run_probes_phase(
+    target_url: str,
+    timeout: int = 10,
+    result: CaptureWorkflowResult | None = None,
+) -> CaptureWorkflowResult:
+    """Run pre-capture diagnostic probes.
+
+    Args:
+        target_url: Full URL to probe
+        timeout: Timeout for HTTP probes
+        result: Existing result to update, or None to create new
+
+    Returns:
+        CaptureWorkflowResult with probe data
+    """
+    from har_capture.capture.probes import run_probes
+
+    if result is None:
+        result = CaptureWorkflowResult()
+    result.phase = "probes"
+
+    probe_data = run_probes(target_url, timeout=timeout)
+    result.probes = ProbeResult(data=probe_data)
+
+    return result
+
+
 def run_capture_phase(
     target: str,
     output: Path | None = None,
@@ -304,6 +348,8 @@ def run_capture_phase(
         result = CaptureWorkflowResult()
     result.phase = "capture"
 
+    probe_data = result.probe_data if result.probe_data else None
+
     capture_result = capture_device_har(
         ip=target,
         output=output,
@@ -318,6 +364,7 @@ def run_capture_phase(
         headless=headless,
         timeout=timeout,
         interactive=interactive,
+        probes=probe_data,
     )
 
     result.capture = CaptureResult(
@@ -356,8 +403,9 @@ def run_capture_workflow(
     This function orchestrates all phases of the capture workflow:
     1. Check if browser is installed
     2. Check connectivity to target
-    3. Detect authentication requirements
-    4. Run the capture
+    3. Run pre-capture diagnostic probes
+    4. Detect authentication requirements
+    5. Run the capture
 
     Args:
         target: URL, hostname, or IP to capture
@@ -403,13 +451,16 @@ def run_capture_workflow(
     if not result.connectivity_ok:
         return result
 
-    # Phase 3: Auth detection
+    # Phase 3: Pre-capture diagnostic probes
+    result = run_probes_phase(result.target_url, result=result)
+
+    # Phase 4: Auth detection
     result = check_auth_phase(result.target_url, result)
     if result.requires_basic_auth and not http_credentials:
         # Return early so CLI can prompt for credentials
         return result
 
-    # Phase 4: Capture
+    # Phase 5: Capture
     result = run_capture_phase(
         target=target,
         output=output,

@@ -227,6 +227,7 @@ def capture_device_har(
     headless: bool = False,
     timeout: int | None = None,
     interactive: bool = False,
+    probes: dict[str, Any] | None = None,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -445,6 +446,19 @@ def capture_device_har(
                 success=False,
                 error=error_str,
             )
+
+    # Inject probe data into the raw HAR before any downstream processing.
+    # This ensures probes appear in all output paths (sanitized, compressed, raw).
+    # Safe: sanitizer only walks log.entries and log.pages, not log._probes.
+    if probes:
+        try:
+            with open(temp_path, encoding="utf-8") as f:
+                raw_har = json.load(f)
+            raw_har["log"]["_probes"] = probes
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(raw_har, f)
+        except Exception as e:
+            _LOGGER.warning("Failed to inject probe data into HAR: %s", e)
 
     # Determine sanitized output path based on user's output_path
     if str(output_path).endswith(".har"):
