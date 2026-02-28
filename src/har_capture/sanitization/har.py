@@ -425,6 +425,14 @@ def _sanitize_json_recursive(
                     result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
                 else:
                     result[key] = value
+            elif key_lower in ("serial", "serial_number", "serialnumber", "serialnum", "sn"):
+                # Explicit serial number field - always redact
+                if isinstance(value, str) and value:
+                    if collector:
+                        collector.record_auto_redaction("serial_number")
+                    result[key] = hasher.hash_generic(value, "SERIAL") if hasher else "***SERIAL***"
+                else:
+                    result[key] = value
             else:
                 result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
         return result
@@ -445,19 +453,28 @@ _DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
 # Regex patterns for value-based sanitization
 _MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 _PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
+# Public IPs: any non-private, non-localhost, non-reserved first octet
+_PUBLIC_IP_PATTERN = re.compile(
+    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
+    r"(?!127\.)(?!0\.)(?!255\.)"
+    r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
+)
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 _SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
 _CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
 _CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
 _PHONE_PATTERN = re.compile(
-    r"(?<!\d)"  # Not preceded by a digit
+    r"(?<!\w)"  # Not preceded by a word character (prevents matching inside tokens like tok_123...)
     r"(?:"
     r"\+?1[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # US/CA: +1 (555) 123-4567
     r"|"
     r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # (555) 123-4567 or 555-123-4567
     r")"
-    r"(?!\d)"  # Not followed by a digit
+    r"(?!\w)"  # Not followed by a word character (prevents matching inside tokens)
 )
 
 
@@ -525,6 +542,17 @@ def _sanitize_string_patterns(
         return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
 
     value = _PRIVATE_IP_PATTERN.sub(replace_private_ip, value)
+
+    # Public IPs (non-private, non-localhost, non-reserved)
+    def replace_public_ip(match: re.Match[str]) -> str:
+        ip = match.group(0)
+        if not is_valid_ip_address(ip):
+            return ip
+        if collector:
+            collector.record_auto_redaction("public_ip")
+        return hasher.hash_ip(ip, is_private=False) if hasher else "***IP***"
+
+    value = _PUBLIC_IP_PATTERN.sub(replace_public_ip, value)
 
     # Email addresses
     def replace_email(match: re.Match[str]) -> str:
@@ -695,6 +723,12 @@ def _sanitize_request(
     if "headers" in req and isinstance(req["headers"], list):
         _sanitize_headers(req["headers"], hasher, collector)
 
+    # Sanitize cookie objects (Playwright parses cookies into structured objects)
+    if "cookies" in req and isinstance(req["cookies"], list):
+        for cookie in req["cookies"]:
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
+
     # Sanitize POST data
     if "postData" in req:
         req["postData"] = sanitize_post_data(req["postData"], hasher, collector)
@@ -778,6 +812,12 @@ def _sanitize_response(
     # Sanitize headers
     if "headers" in resp and isinstance(resp["headers"], list):
         _sanitize_headers(resp["headers"], hasher, collector)
+
+    # Sanitize cookie objects (Playwright parses Set-Cookie into structured objects)
+    if "cookies" in resp and isinstance(resp["cookies"], list):
+        for cookie in resp["cookies"]:
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
 
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):

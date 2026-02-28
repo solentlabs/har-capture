@@ -56,9 +56,9 @@ def capture(
         bool,
         typer.Option("--include-media", help="Include media files in capture (.mp3, .mp4, etc.)"),
     ] = False,
-    interactive: Annotated[
+    no_interactive: Annotated[
         bool,
-        typer.Option("--interactive", "-i", help="Interactively review flagged values during sanitization"),
+        typer.Option("--no-interactive", help="Skip interactive review of flagged values"),
     ] = False,
 ) -> None:
     """Capture HTTP traffic using Playwright browser.
@@ -81,7 +81,7 @@ def capture(
         include_fonts: Include font files in capture
         include_images: Include image files in capture
         include_media: Include media files in capture
-        interactive: Enable interactive review of flagged values during sanitization
+        no_interactive: Skip interactive review of flagged values
 
     Example:
         har-capture get https://example.com
@@ -169,7 +169,7 @@ def capture(
         include_fonts=include_fonts,
         include_images=include_images,
         include_media=include_media,
-        interactive=interactive,
+        interactive=not no_interactive,
         result=result,
     )
 
@@ -180,8 +180,8 @@ def capture(
     # Display results
     _display_results(result)
 
-    # Interactive review if requested
-    if interactive and result.capture and result.capture.sanitization_report:
+    # Interactive review (enabled by default, skip with --no-interactive)
+    if not no_interactive and result.capture and result.capture.sanitization_report:
         _run_interactive_review(result)
 
 

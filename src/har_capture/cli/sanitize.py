@@ -49,9 +49,9 @@ def sanitize(
         int,
         typer.Option("--compression-level", help="Gzip compression level 1-9 (default: 9)"),
     ] = 9,
-    interactive: Annotated[
+    no_interactive: Annotated[
         bool,
-        typer.Option("--interactive", "-i", help="Review suspicious values interactively"),
+        typer.Option("--no-interactive", help="Skip interactive review of suspicious values"),
     ] = False,
     report: Annotated[
         Path | None,
@@ -75,7 +75,7 @@ def sanitize(
         patterns: Custom patterns JSON file to merge with defaults
         max_size: Maximum file size in MB (default: 100, 0=unlimited)
         compression_level: Gzip compression level 1-9 (default: 9)
-        interactive: Review suspicious values interactively
+        no_interactive: Skip interactive review of suspicious values
         report: Write JSON report to file
 
     Example:
@@ -85,7 +85,7 @@ def sanitize(
         har-capture sanitize device.har --no-salt  # Static placeholders
         har-capture sanitize device.har --max-size 500  # Allow up to 500MB
         har-capture sanitize device.har --max-size 0  # No size limit
-        har-capture sanitize device.har --interactive  # Review suspicious values
+        har-capture sanitize device.har --no-interactive  # Skip interactive review
         har-capture sanitize device.har --report sanitize-report.json
     """
     import sys
@@ -107,13 +107,14 @@ def sanitize(
         raise typer.Exit(1)
 
     # Handle interactive mode TTY check
-    # Always run heuristics when -i is passed, even without TTY
+    # Interactive is on by default; skip with --no-interactive
+    interactive = not no_interactive
     run_heuristics = interactive
     interactive_terminal = interactive and sys.stdin.isatty()
 
     if interactive and not sys.stdin.isatty():
         typer.echo(
-            "Warning: --interactive requires a terminal. Writing flagged values to report instead.",
+            "Note: No terminal detected. Writing flagged values to report instead.",
             err=True,
         )
         if report is None:

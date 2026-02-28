@@ -51,6 +51,16 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^192\.0\.2\.\d+$"),
     # Common protocol/interface names
     re.compile(r"^(eth\d*|wlan\d*|lo|br\d*|vlan\d*|lan|wan)$", re.IGNORECASE),
+    # Common plan/tier/role words (not PII)
+    re.compile(
+        r"^(premium|basic|standard|pro|enterprise|starter|free|trial|"
+        r"admin|guest|user|default|custom|auto|retail|primary|backup|both)$",
+        re.IGNORECASE,
+    ),
+    # Already-redacted values with label prefixes (from serial pattern in HTML sanitizer)
+    re.compile(r"^(?:SN|S/N|Serial\w*):\s*[A-Z_]+_[a-f0-9]{8}$", re.IGNORECASE),
+    # Redacted emails
+    re.compile(r"^user_[a-f0-9]+@redacted\.invalid$"),
 ]
 
 # =============================================================================
@@ -161,13 +171,13 @@ def is_ssid_like(value: str) -> tuple[bool, str]:
         if re.search(pattern, value, re.IGNORECASE):
             return True, f"SSID-like pattern: {reason}"
 
-    # Check for typical SSID character composition
-    # Letters + optional hyphens/underscores/spaces, no special chars
-    # SECURITY: Length check prevents ReDoS on malicious input
-    if len(value) <= _SSID_NAME_MAX_LENGTH and re.match(r"^[a-zA-Z0-9][-_\w\s]*[a-zA-Z0-9]$", value):
-        # Has mix of letters and is reasonable length
-        if _SSID_TYPICAL_MIN <= len(value) <= _SSID_TYPICAL_MAX and re.search(r"[a-zA-Z]", value):
-            return True, "Alphanumeric string in typical SSID length range"
+    # CamelCase pattern (no separator needed): HomeNetwork, MyWiFi, GuestAccess
+    # Must start with uppercase, transition to lowercase, then back to uppercase.
+    # Catches human-named network names while excluding single words like "admin"
+    # and all-caps model strings like "NETGEAR-C7000".
+    if _SSID_TYPICAL_MIN <= len(value) <= _SSID_TYPICAL_MAX:
+        if re.match(r"^[A-Z][a-z]+[A-Z][a-zA-Z0-9]*$", value):
+            return True, "CamelCase pattern suggesting network name"
 
     return False, ""
 
@@ -201,12 +211,39 @@ def is_device_name_like(value: str) -> tuple[bool, str]:
         (r"(?i)(iphone|ipad|macbook|android|galaxy|pixel|surface|kindle)", "device brand/type"),
         (r"(?i)(laptop|desktop|phone|tablet|tv|speaker|printer|camera)", "device category"),
         (r"(?i)(living|bed|bath|kitchen|office|garage|basement)[-_\s]?room", "room name"),
+        (r"(?i)(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)", "router/modem brand"),
     ]
 
     for pattern, reason in device_patterns:
         if re.search(pattern, value):
             return True, f"Device name pattern: {reason}"
 
+    return False, ""
+
+
+_CREDENTIAL_PREFIX_PATTERN = re.compile(
+    r"^(?:pass(?:word|wd)?|pwd|secret|token|key|auth)[\d!@#$%^&*]+$",
+    re.IGNORECASE,
+)
+
+
+def is_credential_like(value: str) -> tuple[bool, str]:
+    """Check if a value looks like a short credential (too short for entropy detection).
+
+    Catches values like 'pass123', 'token42', 'key!2024' that start with common
+    credential keywords followed by digits or special characters.
+
+    Args:
+        value: The value to check
+
+    Returns:
+        Tuple of (is_credential, reason)
+    """
+    value = value.strip()
+    if len(value) < 4 or len(value) > 32:
+        return False, ""
+    if _CREDENTIAL_PREFIX_PATTERN.match(value):
+        return True, "Credential-like prefix pattern (keyword + digits/special)"
     return False, ""
 
 
@@ -260,7 +297,11 @@ def is_high_entropy(value: str, threshold: float = _ENTROPY_THRESHOLD_DEFAULT) -
 def is_adjacent_to_redacted(
     values: list[str],
     index: int,
-    redacted_prefixes: tuple[str, ...] = ("***", "MAC_", "PASS_", "PRIV_IP_", "TOKEN_"),
+    redacted_prefixes: tuple[str, ...] = (
+        "***", "MAC_", "PASS_", "PRIV_IP_", "TOKEN_", "SERIAL_",
+        "FIELD_", "CREDENTIAL_", "AUTH_", "COOKIE_", "WIFI_SSID_",
+        "WIFI_", "DEVICE_", "CC_",
+    ),
 ) -> tuple[bool, str]:
     """Check if a value is adjacent to an already-redacted value.
 
@@ -362,6 +403,7 @@ def analyze_value(
     is_ssid, ssid_reason = is_ssid_like(value)
     is_device, device_reason = is_device_name_like(value)
     is_entropy, entropy_reason = is_high_entropy(value)
+    is_cred, cred_reason = is_credential_like(value)
 
     is_adjacent = False
     adjacent_reason = ""
@@ -369,13 +411,16 @@ def analyze_value(
         is_adjacent, adjacent_reason = is_adjacent_to_redacted(values_context, value_index)
 
     # Determine if we should flag
-    should_flag = is_ssid or is_device or is_entropy or is_adjacent
+    should_flag = is_ssid or is_device or is_entropy or is_cred or is_adjacent
 
     if not should_flag:
         return False, ConfidenceLevel.LOW, "", ""
 
-    # Determine category and reason
-    if is_ssid:
+    # Determine category and reason (credential prefix takes priority over SSID)
+    if is_cred:
+        category = "credential"
+        reason = cred_reason
+    elif is_ssid:
         category = "wifi_ssid"
         reason = ssid_reason
     elif is_device:
@@ -396,7 +441,7 @@ def analyze_value(
         value,
         is_ssid=is_ssid,
         is_device=is_device,
-        is_entropy=is_entropy,
+        is_entropy=is_entropy or is_cred,
         is_adjacent=is_adjacent,
     )
 

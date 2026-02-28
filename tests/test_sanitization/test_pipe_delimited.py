@@ -61,11 +61,11 @@ HEURISTIC_FLAGGED_PASSWORDS = [
 ]
 
 # Short passwords (< 8 chars) - below entropy detection threshold
-# These get flagged as SSID-like due to alphanumeric pattern, which is acceptable
-# because they'll still appear in interactive review for user confirmation
-SHORT_PASSWORD_FLAGGED_AS_SSID = [
-    ("pass123", "wifi_ssid", "short_password_7chars"),
-    ("abc1234", "wifi_ssid", "short_password_7chars_mixed"),
+# Caught by credential-prefix heuristic (pass*, pwd*, token*, key*, etc.)
+SHORT_PASSWORD_FLAGGED = [
+    ("pass123", "credential", "short_password_prefix_pass"),
+    ("token42", "credential", "short_password_prefix_token"),
+    ("key!2024", "credential", "short_password_prefix_key"),
 ]
 # fmt: on
 
@@ -156,22 +156,25 @@ class TestPipeDelimitedCredentialGaps:
 
     @pytest.mark.parametrize(
         ("password", "expected_category", "desc"),
-        SHORT_PASSWORD_FLAGGED_AS_SSID,
-        ids=[c[2] for c in SHORT_PASSWORD_FLAGGED_AS_SSID],
+        SHORT_PASSWORD_FLAGGED,
+        ids=[c[2] for c in SHORT_PASSWORD_FLAGGED],
     )
     def test_short_passwords_flagged_for_review(
         self, password: str, expected_category: str, desc: str
     ) -> None:
-        """Test short passwords are flagged for interactive review.
+        """Test short passwords with credential prefixes are flagged.
 
         Passwords under 8 characters are below the entropy detection threshold.
-        However, they match SSID-like patterns and are still flagged for
-        user review in interactive mode, which is the desired behavior.
+        The credential-prefix heuristic catches values starting with common
+        credential keywords (pass, pwd, token, key, etc.) followed by digits.
         """
         flagged, _confidence, category, reason = analyze_value(password)
         assert flagged, (
             f"{desc}: short password '{password}' should be flagged for review. "
             f"Got: flagged={flagged}, category={category}, reason={reason}"
+        )
+        assert category == expected_category, (
+            f"{desc}: expected category '{expected_category}', got '{category}'"
         )
 
     @pytest.mark.parametrize(

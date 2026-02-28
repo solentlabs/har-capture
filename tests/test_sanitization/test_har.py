@@ -960,6 +960,8 @@ class TestPhoneNumberPatterns:
         ("ID: 12345",               "short_number"),
         ("Code: 123-45",            "too_short_with_dash"),
         ("Version: 1.2.3",          "version_number"),
+        ("tok_1234567890",          "token_with_digits"),
+        ("abc1234567890xyz",        "digits_inside_word"),
     ]
     # fmt: on
 
@@ -978,3 +980,363 @@ class TestPhoneNumberPatterns:
         collector = RedactionCollector(hasher=hasher)
         _sanitize_string_patterns(input_text, collector=collector)
         assert not any(f.category == "phone" for f in collector.flagged), f"{desc}: should not flag as phone"
+
+
+# =============================================================================
+# Public IP Sanitization in JSON/String Patterns
+# =============================================================================
+
+
+class TestPublicIpSanitization:
+    """Tests for public IP address sanitization in string patterns.
+
+    Public IPs should be redacted anywhere they appear in HAR content
+    (JSON values, HTML bodies, headers) while private IPs get separate handling.
+    """
+
+    # fmt: off
+    PUBLIC_IP_REDACTED_CASES = [
+        ("73.158.42.197",                 "bare_public_ip"),
+        ("WAN IP: 73.158.42.197",        "public_ip_in_text"),
+        ('{"wanIp": "73.158.42.197"}',   "public_ip_in_json_string"),
+        ("IP=8.8.8.8&dns=1.1.1.1",       "multiple_public_ips"),
+        ("203.0.113.42",                  "documentation_range_ip"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("input_text", "desc"),
+        PUBLIC_IP_REDACTED_CASES,
+        ids=[c[1] for c in PUBLIC_IP_REDACTED_CASES],
+    )
+    def test_public_ip_redacted(self, input_text: str, desc: str) -> None:
+        """Test public IPs are redacted in string patterns."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns(input_text, collector=collector)
+        # Extract the IP from input to verify it's gone
+        import re
+
+        ips = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", input_text)
+        for ip in ips:
+            first_octet = int(ip.split(".")[0])
+            # Only check non-private IPs
+            if not ip.startswith(("10.", "192.168.", "127.")) and first_octet not in (0, 255):
+                assert ip not in result, f"{desc}: public IP {ip} should be redacted"
+
+    # fmt: off
+    PRIVATE_IP_REDACTED_CASES = [
+        ("192.168.5.100",  "private_192_168"),
+        ("172.16.0.50",    "private_172_16"),
+    ]
+    PRIVATE_IP_PRESERVED_CASES = [
+        ("192.168.1.1",    "gateway_192_168_1_1"),
+        ("10.0.0.1",       "gateway_10_0_0_1"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("input_text", "desc"),
+        PRIVATE_IP_REDACTED_CASES,
+        ids=[c[1] for c in PRIVATE_IP_REDACTED_CASES],
+    )
+    def test_private_ip_redacted(self, input_text: str, desc: str) -> None:
+        """Test non-gateway private IPs are redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns(input_text, collector=collector)
+        assert input_text not in result, f"{desc}: private IP should be redacted"
+
+    @pytest.mark.parametrize(
+        ("input_text", "desc"),
+        PRIVATE_IP_PRESERVED_CASES,
+        ids=[c[1] for c in PRIVATE_IP_PRESERVED_CASES],
+    )
+    def test_gateway_ips_preserved(self, input_text: str, desc: str) -> None:
+        """Test common gateway IPs are preserved (not redacted)."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns(input_text, collector=collector)
+        assert input_text in result, f"{desc}: gateway IP should be preserved"
+
+    def test_public_ip_in_json_response(self) -> None:
+        """Test public IP in JSON response body is sanitized end-to-end."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/api/status",
+                "headers": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"wanIp": "73.158.42.197", "status": "connected"}),
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        content = json.loads(result["response"]["content"]["text"])
+        assert "73.158.42.197" not in content["wanIp"], "Public IP should be redacted in JSON response"
+        assert content["status"] == "connected", "Non-sensitive value should be preserved"
+
+    def test_public_ip_collector_records(self) -> None:
+        """Test that public IP redactions are recorded in collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_string_patterns
+
+        hasher = Hasher.create(None)
+        collector = RedactionCollector(hasher=hasher)
+        _sanitize_string_patterns("WAN: 73.158.42.197", collector=collector)
+        assert collector.auto_redacted_counts.get("public_ip", 0) > 0, "Should record public_ip redaction"
+
+
+# =============================================================================
+# Cookie Object Sanitization
+# =============================================================================
+
+
+class TestCookieObjectSanitization:
+    """Tests for cookie object sanitization in request/response.
+
+    Playwright parses Cookie and Set-Cookie headers into structured objects
+    under request.cookies and response.cookies. These need sanitization
+    alongside the header string sanitization.
+    """
+
+    def test_request_cookie_objects_sanitized(self) -> None:
+        """Test request cookie objects have values redacted."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/",
+                "headers": [],
+                "cookies": [
+                    {"name": "session_id", "value": "abc123secret"},
+                    {"name": "tracking", "value": "xyz789token"},
+                ],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"mimeType": "text/html", "text": "<html></html>"},
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        for cookie in result["request"]["cookies"]:
+            assert cookie["value"] != "abc123secret", f"Cookie {cookie['name']} value should be redacted"
+            assert cookie["value"] != "xyz789token", f"Cookie {cookie['name']} value should be redacted"
+
+    def test_response_cookie_objects_sanitized(self) -> None:
+        """Test response cookie objects have values redacted."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/",
+                "headers": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "cookies": [
+                    {"name": "PHPSESSID", "value": "sess_abc123456"},
+                    {"name": "auth_token", "value": "tok_secret789"},
+                ],
+                "content": {"mimeType": "text/html", "text": "<html></html>"},
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        for cookie in result["response"]["cookies"]:
+            assert cookie["value"] != "sess_abc123456", f"Cookie {cookie['name']} value should be redacted"
+            assert cookie["value"] != "tok_secret789", f"Cookie {cookie['name']} value should be redacted"
+
+    def test_cookie_names_preserved(self) -> None:
+        """Test cookie names are not modified during sanitization."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/",
+                "headers": [],
+                "cookies": [
+                    {"name": "session_id", "value": "secret123"},
+                ],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "cookies": [
+                    {"name": "PHPSESSID", "value": "secret456"},
+                ],
+                "content": {"mimeType": "text/html", "text": "<html></html>"},
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        assert result["request"]["cookies"][0]["name"] == "session_id"
+        assert result["response"]["cookies"][0]["name"] == "PHPSESSID"
+
+    def test_empty_cookie_list_no_error(self) -> None:
+        """Test empty cookie lists don't cause errors."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/",
+                "headers": [],
+                "cookies": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "cookies": [],
+                "content": {"mimeType": "text/html", "text": "<html></html>"},
+            },
+        }
+        sanitize_entry(entry, salt=None)  # Should not raise  # noqa: B018
+
+    def test_cookie_hash_consistency(self) -> None:
+        """Test same cookie value produces same hash across request and response."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/",
+                "headers": [],
+                "cookies": [
+                    {"name": "token", "value": "shared_secret_value"},
+                ],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "cookies": [
+                    {"name": "token", "value": "shared_secret_value"},
+                ],
+                "content": {"mimeType": "text/html", "text": "<html></html>"},
+            },
+        }
+        result = sanitize_entry(entry, salt="test-salt")
+        req_hash = result["request"]["cookies"][0]["value"]
+        resp_hash = result["response"]["cookies"][0]["value"]
+        assert req_hash == resp_hash, "Same cookie value should produce same hash"
+
+
+# =============================================================================
+# Serial Number Field Detection in JSON
+# =============================================================================
+
+
+class TestSerialNumberJsonSanitization:
+    """Tests for serial number field detection in JSON recursive sanitizer.
+
+    JSON responses from device APIs often contain serial number fields
+    that need redaction. These are detected by field name matching.
+    """
+
+    # fmt: off
+    SERIAL_FIELD_CASES = [
+        ("serial",        "SN827194729",   "lowercase_serial"),
+        ("serial_number", "ABC123XYZ",     "snake_case"),
+        ("serialNumber",  "DEF456",        "camelCase"),
+        ("serialnum",     "GHI789",        "abbreviated"),
+        ("sn",            "JKL012",        "two_letter"),
+        ("Serial",        "MNO345",        "capitalized"),
+        ("SERIAL_NUMBER", "PQR678",        "upper_snake"),
+        ("SN",            "STU901",        "upper_two_letter"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("field_name", "serial_value", "desc"),
+        SERIAL_FIELD_CASES,
+        ids=[c[2] for c in SERIAL_FIELD_CASES],
+    )
+    def test_serial_field_redacted(self, field_name: str, serial_value: str, desc: str) -> None:
+        """Test serial number fields are redacted in JSON."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/api/info",
+                "headers": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({field_name: serial_value, "model": "C7000"}),
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        content = json.loads(result["response"]["content"]["text"])
+        assert content[field_name] != serial_value, f"{desc}: serial should be redacted"
+        assert "SERIAL" in content[field_name], f"{desc}: should use SERIAL prefix"
+
+    def test_serial_empty_value_preserved(self) -> None:
+        """Test empty serial number values are not modified."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/api/info",
+                "headers": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"serial": "", "model": "C7000"}),
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        content = json.loads(result["response"]["content"]["text"])
+        assert content["serial"] == "", "Empty serial should be preserved"
+
+    def test_serial_hash_consistency(self) -> None:
+        """Test same serial value produces same hash."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.har import _sanitize_json_recursive
+
+        hasher = Hasher.create("test-salt")
+        collector = RedactionCollector(hasher=hasher)
+        data1 = {"serial": "SN827194729"}
+        data2 = {"sn": "SN827194729"}
+        result1 = _sanitize_json_recursive(data1, hasher, collector)
+        result2 = _sanitize_json_recursive(data2, hasher, collector)
+        assert result1["serial"] == result2["sn"], "Same serial value should produce same hash"
+
+    def test_non_serial_field_not_affected(self) -> None:
+        """Test non-serial fields are not treated as serial numbers."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://192.168.1.1/api/info",
+                "headers": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"model": "C7000", "firmware": "V1.03.08"}),
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt=None)
+        content = json.loads(result["response"]["content"]["text"])
+        assert content["model"] == "C7000", "Model should be preserved"
+        assert content["firmware"] == "V1.03.08", "Firmware should be preserved"
