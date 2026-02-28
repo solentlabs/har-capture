@@ -110,13 +110,14 @@ def capture(
             typer.echo(f"Installing {browser}...")
             if not install_browser(browser):
                 typer.echo(
-                    f"Failed to install {browser}. Try manually: playwright install {browser}", err=True
+                    f"Failed to install {browser}. Try manually: python -m playwright install {browser}",
+                    err=True,
                 )
                 raise typer.Exit(1)
             typer.echo(f"  ✓ {browser.capitalize()} installed successfully!")
             typer.echo()
         else:
-            typer.echo(f"Run manually: playwright install {browser}")
+            typer.echo(f"Run manually: python -m playwright install {browser}")
             raise typer.Exit(1)
 
     # Display header

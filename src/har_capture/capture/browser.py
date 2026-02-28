@@ -41,6 +41,13 @@ _MISSING_DEPS_PATTERNS = (
     "host system is missing dependencies",
 )
 
+# Error patterns indicating the browser executable is missing or corrupted
+# Distinct from _MISSING_DEPS_PATTERNS: fix is reinstalling the browser, not apt-get
+_MISSING_BROWSER_PATTERNS = (
+    "executable doesn't exist",
+    "executable does not exist",
+)
+
 
 def _sanitize_error_message(error: str, credentials: dict[str, str] | None) -> str:
     """Remove credentials from error messages to prevent leakage.
@@ -276,7 +283,7 @@ def capture_device_har(
             return CaptureResult(
                 har_path=Path(),
                 success=False,
-                error=f"Failed to install {browser}. Run: playwright install {browser}",
+                error=f"Failed to install {browser}. Run: python -m playwright install {browser}",
             )
         _LOGGER.info("Browser %s installed successfully.", browser)
 
@@ -376,6 +383,11 @@ def capture_device_har(
                 # Continue cleanup anyway
         return True
 
+    def _is_missing_browser_error(error_msg: str) -> bool:
+        """Check if error indicates the browser executable is missing."""
+        error_lower = error_msg.lower()
+        return any(pattern in error_lower for pattern in _MISSING_BROWSER_PATTERNS)
+
     def _is_missing_deps_error(error_msg: str) -> bool:
         """Check if error indicates missing browser dependencies."""
         error_lower = error_msg.lower()
@@ -389,30 +401,43 @@ def capture_device_har(
             _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
             # Not critical, continue anyway
 
-    try:
-        launch_browser_and_capture()
-    except Exception as e:
-        error_str = _sanitize_error_message(str(e), http_credentials)
-        if _is_missing_deps_error(error_str):
-            _LOGGER.warning("Browser dependencies missing. Installing...")
-            if install_browser_deps():
-                _LOGGER.info("Dependencies installed. Retrying...")
-                try:
-                    launch_browser_and_capture()
-                except Exception as e2:
-                    _cleanup_temp()
-                    return CaptureResult(
-                        har_path=Path(),
-                        success=False,
-                        error=_sanitize_error_message(str(e2), http_credentials),
-                    )
-            else:
+    def _try_fix_and_retry(fix_fn: callable, fix_fail_msg: str) -> CaptureResult | None:
+        """Run a fix function and retry the capture. Returns CaptureResult on failure, None on success."""
+        if fix_fn():
+            _LOGGER.info("Fix applied. Retrying capture...")
+            try:
+                launch_browser_and_capture()
+                return None  # success
+            except Exception as e2:
                 _cleanup_temp()
                 return CaptureResult(
                     har_path=Path(),
                     success=False,
-                    error="Failed to install browser dependencies",
+                    error=_sanitize_error_message(str(e2), http_credentials),
                 )
+        _cleanup_temp()
+        return CaptureResult(har_path=Path(), success=False, error=fix_fail_msg)
+
+    try:
+        launch_browser_and_capture()
+    except Exception as e:
+        error_str = _sanitize_error_message(str(e), http_credentials)
+        if _is_missing_browser_error(error_str):
+            _LOGGER.warning("Browser executable missing. Reinstalling %s...", browser)
+            fail = _try_fix_and_retry(
+                lambda: install_browser(browser),
+                f"Failed to install {browser}. Run: python -m playwright install {browser}",
+            )
+            if fail:
+                return fail
+        elif _is_missing_deps_error(error_str):
+            _LOGGER.warning("Browser dependencies missing. Installing...")
+            fail = _try_fix_and_retry(
+                install_browser_deps,
+                "Failed to install browser dependencies",
+            )
+            if fail:
+                return fail
         else:
             _cleanup_temp()
             return CaptureResult(

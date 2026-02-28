@@ -734,6 +734,97 @@ class TestBrowserAutoInstall:
                 assert error_contains in result.error
 
 
+# ┌──────────────────────────────────────────────────┬─────────────────┬─────────────┬─────────────────────────────┐
+# │ error_message                                    │ install_result  │ expect_ok   │ error_contains              │
+# ├──────────────────────────────────────────────────┼─────────────────┼─────────────┼─────────────────────────────┤
+# │ Error from browser launch                        │ reinstall ok?   │ success?    │ error substring             │
+# └──────────────────────────────────────────────────┴─────────────────┴─────────────┴─────────────────────────────┘
+#
+# fmt: off
+MISSING_BROWSER_CASES = [
+    # Browser executable missing, reinstall succeeds → retry succeeds
+    ("Executable doesn't exist at /home/user/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome",
+     True,  True,  None,                               "reinstall_succeeds"),
+    # Browser executable missing, reinstall fails → error with python -m suggestion
+    ("Executable doesn't exist at /path/to/chrome",
+     False, False, "python -m playwright install",      "reinstall_fails"),
+    # Case-insensitive matching
+    ("executable doesn't exist at /some/path",
+     True,  True,  None,                               "case_insensitive"),
+    # Unrelated error → no reinstall, returns original error
+    ("Connection refused",
+     None,  False, "Connection refused",                "unrelated_error"),
+]
+# fmt: on
+
+
+class TestBrowserExecutableMissing:
+    """Tests for automatic browser reinstall when executable is missing."""
+
+    @pytest.mark.parametrize(
+        ("error_message", "install_result", "expect_ok", "error_contains", "desc"),
+        MISSING_BROWSER_CASES,
+        ids=[c[4] for c in MISSING_BROWSER_CASES],
+    )
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_browser_installed", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_missing_browser_recovery(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_installed: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+        error_message: str,
+        install_result: bool | None,
+        expect_ok: bool,
+        error_contains: str | None,
+        desc: str,
+    ) -> None:
+        """Test browser executable missing detection and recovery."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        # First call raises the error, second call (retry) succeeds
+        if install_result:
+            mock_pw.chromium.launch.side_effect = [
+                Exception(error_message),
+                MagicMock(),  # retry succeeds
+            ]
+        else:
+            mock_pw.chromium.launch.side_effect = Exception(error_message)
+
+        with patch(
+            "har_capture.capture.browser.install_browser",
+            return_value=install_result,
+        ) as mock_install:
+            output = tmp_path / "test.har"
+
+            result = capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                browser="chromium",
+                headless=True,
+                timeout=1,
+                sanitize=False,
+                compress=False,
+            )
+
+            assert result.success is expect_ok
+
+            if error_contains:
+                assert error_contains in result.error
+
+            # Unrelated errors should not trigger reinstall
+            if install_result is None:
+                mock_install.assert_not_called()
+            else:
+                mock_install.assert_called_once_with("chromium")
+
+
 class TestBrowserCleanupErrorHandling:
     """Tests for graceful handling of browser cleanup failures."""
 
