@@ -314,6 +314,31 @@ class TestIntegrationWithValidationModule:
             Path(custom_path).unlink(missing_ok=True)
 
 
+class TestMalformedRegexHandling:
+    """Tests that malformed regex patterns in allowlist are handled gracefully."""
+
+    @pytest.mark.parametrize(
+        ("pattern", "desc"),
+        [
+            ("[invalid(regex", "unclosed_bracket"),
+            ("*bad", "quantifier_at_start"),
+            ("(?P<dup>a)(?P<dup>b)", "duplicate_group_name"),
+        ],
+    )
+    def test_malformed_regex_in_allowlist_is_skipped(self, pattern: str, desc: str) -> None:
+        """Test that invalid regex patterns in redaction_patterns are skipped."""
+        allowlist = {
+            "static_placeholders": {"values": []},
+            "hash_prefixes": {"values": []},
+            "redaction_patterns": {"values": [pattern, "VALID_PATTERN"]},
+        }
+
+        # Should not raise, and should still match the valid pattern
+        assert is_allowlisted("VALID_PATTERN", allowlist), f"{desc}: valid pattern should still match"
+        # Should not crash on the invalid pattern
+        assert not is_allowlisted("unmatched_value", allowlist), f"{desc}: should return False for non-match"
+
+
 class TestErrorHandling:
     """Test error handling in redaction checking."""
 

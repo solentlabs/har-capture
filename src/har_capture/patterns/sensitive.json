@@ -16,18 +16,28 @@
   },
   "fields": {
     "_comment": "Form field name patterns that indicate sensitive data",
-    "patterns": [
+    "auto_redact_patterns": [
       "password",
       "passwd",
       "pwd",
-      "pass",
+      "\\bpass",
       "secret",
       "token",
-      "key",
-      "auth",
+      "\\b(?:api[_-]?key|secret[_-]?key|access[_-]?key|private[_-]?key)\\b",
+      "\\bauth(?:orization|_token|entication)?\\b",
       "credential",
       "apikey",
       "api_key"
+    ],
+    "flag_patterns": [
+      "\\buser(?:_?name)?\\b",
+      "login",
+      "\\bdomain\\b",
+      "tenant",
+      "\\bclient_id\\b",
+      "\\baccount_id\\b",
+      "\\borg(?:anization)?\\b",
+      "\\benv(?:ironment)?\\b"
     ]
   },
   "tagValueList": {

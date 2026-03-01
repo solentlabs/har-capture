@@ -13,16 +13,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Auto-activate virtual environment if not already active
+# Resolve repo root and venv python
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -z "$VIRTUAL_ENV" ]; then
-    if [ -f "$REPO_ROOT/.venv/bin/activate" ]; then
-        source "$REPO_ROOT/.venv/bin/activate"
-    elif [ -f "$REPO_ROOT/venv/bin/activate" ]; then
-        source "$REPO_ROOT/venv/bin/activate"
-    fi
+# Use venv python directly (works in hook context where source activate fails)
+if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then
+    PYTHON="$REPO_ROOT/.venv/bin/python3"
+elif [ -x "$REPO_ROOT/venv/bin/python3" ]; then
+    PYTHON="$REPO_ROOT/venv/bin/python3"
+else
+    PYTHON="python3"
 fi
 
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -48,7 +49,7 @@ FAILED=0
 
 # Step 1: Ruff lint (same as CI)
 echo -e "\n${YELLOW}[1/3] Running ruff check...${NC}"
-if ruff check .; then
+if "$PYTHON" -m ruff check .; then
     echo -e "${GREEN}✓ Ruff check passed${NC}"
 else
     echo -e "${RED}✗ Ruff check failed${NC}"
@@ -57,13 +58,13 @@ fi
 
 # Step 2: Unit tests (same as CI: pytest -m "not integration")
 echo -e "\n${YELLOW}[2/3] Running unit tests...${NC}"
-PYTEST_ARGS="--tb=short -q -m 'not integration'"
+MARKER="not integration"
 if [ "$QUICK" = true ]; then
-    PYTEST_ARGS="$PYTEST_ARGS -m 'not integration and not slow'"
+    MARKER="not integration and not slow"
     echo -e "${YELLOW}  (quick mode - skipping slow tests)${NC}"
 fi
 
-if pytest --tb=short -q -m "not integration"; then
+if "$PYTHON" -m pytest --tb=short -q -m "$MARKER"; then
     echo -e "${GREEN}✓ Unit tests passed${NC}"
 else
     echo -e "${RED}✗ Unit tests failed${NC}"

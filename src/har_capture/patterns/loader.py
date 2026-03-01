@@ -330,17 +330,14 @@ def clear_pattern_cache() -> None:
     _pattern_cache.clear()
 
 
-def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str]:
+def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:
     """Compile a pattern definition into a regex.
 
     Args:
         pattern_def: Pattern definition with 'regex' and optional 'flags'
 
     Returns:
-        Compiled regex pattern
-
-    Raises:
-        re.error: If regex pattern is invalid
+        Compiled regex pattern, or None if the regex is invalid
     """
     regex = pattern_def["regex"]
     flags = 0
@@ -354,4 +351,9 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str]:
             else:
                 _LOGGER.warning("Unknown regex flag: %s", flag_name)
 
-    return re.compile(regex, flags)
+    try:
+        return re.compile(regex, flags)
+    except re.error:
+        pattern_name = pattern_def.get("replacement_prefix", "unknown")
+        _LOGGER.warning("Skipping invalid regex in pattern '%s'", pattern_name)
+        return None

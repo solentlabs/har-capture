@@ -34,6 +34,7 @@ from har_capture.sanitization.heuristics import (
     calculate_entropy,
     get_confidence_for_value,
     is_adjacent_to_redacted,
+    is_credential_like,
     is_device_name_like,
     is_high_entropy,
     is_safe_value,
@@ -125,6 +126,16 @@ SAFE_VALUE_CASES = [
     # Empty
     ("", True, "empty_string"),
     ("  ", True, "whitespace_only"),
+    # Common plan/tier/role words (new)
+    ("premium", True, "safe_plan_premium"),
+    ("admin", True, "safe_role_admin"),
+    ("guest", True, "safe_role_guest"),
+    ("default", True, "safe_role_default"),
+    ("retail", True, "safe_category_retail"),
+    ("primary", True, "safe_category_primary"),
+    # Already-redacted values with prefixes (new)
+    ("SN: SERIAL_0ad826ed", True, "safe_redacted_serial_with_prefix"),
+    ("user_70a438cb@redacted.invalid", True, "safe_redacted_email"),
     # Values that should NOT be safe (will fail - flagged as suspicious)
     ("HomeNetwork-5G", False, "ssid_like_not_safe"),
     ("Johns-iPhone", False, "device_name_not_safe"),
@@ -143,14 +154,38 @@ SSID_LIKE_CASES = [
     ("office-wifi", True, "contains_wifi"),
     ("guest-network", True, "starts_with_guest"),
     ("Network-123", True, "name_number_pattern"),
-    ("MyRouter", True, "alphanumeric_ssid_length"),
-    ("FamilyWiFi", True, "typical_ssid_pattern"),
-    # Should NOT be detected as SSID-like
-    # Note: is_ssid_like checks patterns only, not safe values (that's done in analyze_value)
+    ("MyRouter", True, "camelcase_ssid"),
+    ("FamilyWiFi", True, "camelcase_ssid_multi"),
+    ("HomeNetwork", True, "camelcase_no_separator"),
+    # Should NOT be detected as SSID-like (false positives fixed)
     ("AB", False, "too_short"),
     ("123456", False, "numeric_only"),
     ("", False, "empty"),
     ("a" * 35, False, "too_long"),
+    ("admin", False, "common_word_not_ssid"),
+    ("premium", False, "plan_tier_not_ssid"),
+    ("NETGEAR-C7000", False, "device_model_not_ssid"),
+    ("enabled", False, "status_word_not_ssid"),
+    ("active", False, "status_word_not_ssid_2"),
+    ("retail", False, "category_word_not_ssid"),
+]
+
+CREDENTIAL_LIKE_CASES = [
+    # (value, is_credential, description)
+    # Should be detected as credential-like
+    ("pass123", True, "pass_prefix_digits"),
+    ("password42", True, "password_prefix_digits"),
+    ("token99", True, "token_prefix_digits"),
+    ("key!2024", True, "key_prefix_special"),
+    ("secret789", True, "secret_prefix_digits"),
+    ("auth42", True, "auth_prefix_digits"),
+    ("pwd!123", True, "pwd_prefix_special"),
+    # Should NOT be detected
+    ("abc1234", False, "no_credential_prefix"),
+    ("admin", False, "too_short_no_digits"),
+    ("password", False, "no_trailing_digits"),
+    ("pass", False, "prefix_only_no_digits"),
+    ("", False, "empty"),
 ]
 
 DEVICE_NAME_LIKE_CASES = [
@@ -165,6 +200,11 @@ DEVICE_NAME_LIKE_CASES = [
     ("Pixel-7", True, "pixel_model"),
     ("MacBook Pro", True, "macbook_pro"),
     ("Android Phone", True, "android_phone"),
+    # Router/modem brands (new)
+    ("NETGEAR-C7000", True, "netgear_model"),
+    ("Linksys-WRT", True, "linksys_model"),
+    ("TP-Link Archer", True, "tplink_model"),
+    ("ARRIS-SB8200", True, "arris_model"),
     # Should NOT be detected as device names
     ("Good", False, "status_value"),
     ("WPA2", False, "security_type"),
@@ -204,13 +244,15 @@ ADJACENT_TO_REDACTED_CASES = [
 ANALYZE_VALUE_CASES = [
     # (value, values_context, value_index, should_flag, expected_category, description)
     ("HomeNetwork-5G", None, None, True, "wifi_ssid", "ssid_like_flagged"),
-    # Note: Johns-iPhone matches SSID pattern (alphanumeric with common suffix) before device check
-    # and also matches device_name_like, so it's categorized by the first matching heuristic
     ("John's MacBook", None, None, True, "device_name", "device_name_flagged"),
+    ("pass123", None, None, True, "credential", "credential_prefix_flagged"),
+    ("NETGEAR-C7000", None, None, True, "device_name", "router_brand_flagged"),
     ("Good", None, None, False, "", "safe_value_not_flagged"),
     ("WPA2", None, None, False, "", "security_type_not_flagged"),
     ("123", None, None, False, "", "numeric_not_flagged"),
     ("", None, None, False, "", "empty_not_flagged"),
+    ("admin", None, None, False, "", "safe_role_not_flagged"),
+    ("premium", None, None, False, "", "safe_plan_not_flagged"),
     # With context (adjacency) - note: value "cfg" doesn't match SSID/device patterns
     ("cfg", ["cfg", "MAC_12345678"], 0, True, "suspicious", "adjacent_to_redacted"),
 ]
@@ -284,6 +326,24 @@ class TestIsDeviceNameLike:
         )
         if is_device:
             assert reason, "Device-like values should have a reason"
+
+
+class TestIsCredentialLike:
+    """Tests for credential-prefix detection."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected_cred", "desc"),
+        CREDENTIAL_LIKE_CASES,
+        ids=[c[2] for c in CREDENTIAL_LIKE_CASES],
+    )
+    def test_is_credential_like(self, value: str, expected_cred: bool, desc: str) -> None:
+        """Test credential-like detection."""
+        is_cred, reason = is_credential_like(value)
+        assert is_cred is expected_cred, (
+            f"{desc}: '{value}' should {'be' if expected_cred else 'not be'} credential-like"
+        )
+        if is_cred:
+            assert reason, "Credential-like values should have a reason"
 
 
 class TestIsHighEntropy:

@@ -13,11 +13,13 @@ import copy
 import json
 import logging
 import re
+import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import Hasher, load_sensitive_patterns
 from har_capture.sanitization.collector import RedactionCollector
-from har_capture.sanitization.html import sanitize_html
+from har_capture.sanitization.html import is_valid_ip_address, sanitize_html
+from har_capture.sanitization.report import ConfidenceLevel
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -138,24 +140,34 @@ def _load_sensitive_headers() -> tuple[set[str], set[str]]:
     return full_redact, cookie_redact
 
 
-def _load_sensitive_field_patterns() -> re.Pattern[str]:
+def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] | None]:
     """Load sensitive field patterns from patterns file.
 
     Returns:
-        Compiled regex pattern for matching sensitive field names
+        Tuple of (auto_redact_pattern, flag_pattern) compiled regexes.
+        flag_pattern is None if no flag patterns are defined.
     """
     sensitive = load_sensitive_patterns()
-    patterns = sensitive.get("fields", {}).get("patterns", [])
-    if not patterns:
-        patterns = ["password", "secret", "token", "key", "auth"]
-    # Escape patterns to prevent regex injection
-    escaped = [re.escape(p) for p in patterns]
-    return re.compile("|".join(escaped), re.IGNORECASE)
+    fields = sensitive.get("fields", {})
+    auto_patterns = fields.get("auto_redact_patterns", [])
+    flag_patterns = fields.get("flag_patterns", [])
+
+    # Fallback for legacy format
+    if not auto_patterns:
+        legacy = fields.get("patterns", [])
+        if legacy:
+            auto_patterns = legacy
+        else:
+            auto_patterns = ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]
+
+    auto_re = re.compile("|".join(auto_patterns), re.IGNORECASE)
+    flag_re = re.compile("|".join(flag_patterns), re.IGNORECASE) if flag_patterns else None
+    return auto_re, flag_re
 
 
 # Load patterns at module level for efficiency
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS = _load_sensitive_headers()
-_SENSITIVE_FIELD_RE = _load_sensitive_field_patterns()
+_SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
 
 # Redaction placeholder - single source of truth
 REDACTED = "[REDACTED]"
@@ -186,21 +198,48 @@ def _redact_value(
 
 
 def is_sensitive_field(field_name: str) -> bool:
-    """Check if a form field name is sensitive.
+    """Check if a form field name matches auto-redact patterns (100% confidence).
 
     Args:
         field_name: Name of the form field
 
     Returns:
-        True if the field likely contains sensitive data
+        True if the field matches high-confidence sensitive patterns
 
     Example:
         >>> is_sensitive_field("loginPassword")
         True
         >>> is_sensitive_field("username")
         False
+        >>> is_sensitive_field("channel_id")
+        False
     """
     return bool(_SENSITIVE_FIELD_RE.search(field_name))
+
+
+def is_flaggable_field(field_name: str) -> bool:
+    """Check if a form field name matches flag-for-review patterns.
+
+    These are fields that may contain sensitive data but are not certain
+    enough for auto-redaction. They are flagged for interactive user review.
+
+    Args:
+        field_name: Name of the form field
+
+    Returns:
+        True if the field should be flagged for review
+
+    Example:
+        >>> is_flaggable_field("username")
+        True
+        >>> is_flaggable_field("password")
+        False
+        >>> is_flaggable_field("channel_id")
+        False
+    """
+    if _SENSITIVE_FLAG_FIELD_RE is None:
+        return False
+    return bool(_SENSITIVE_FLAG_FIELD_RE.search(field_name))
 
 
 def sanitize_header_value(
@@ -265,6 +304,11 @@ def _sanitize_form_urlencoded(
             key, value = pair.split("=", 1)
             if is_sensitive_field(key):
                 value = _redact_value(value, hasher, "FIELD", collector)
+            elif is_flaggable_field(key) and collector and value:
+                collector.flag_value(
+                    value, "field", ConfidenceLevel.MEDIUM,
+                    f"form field '{key}'", f"Flaggable field name '{key}' in form data",
+                )
             pairs.append(f"{key}={value}")
         else:
             pairs.append(pair)
@@ -288,11 +332,8 @@ def _sanitize_json_text(
     """
     try:
         data = json.loads(text)
-        if isinstance(data, dict):
-            for key in data:
-                if is_sensitive_field(key) and isinstance(data[key], str):
-                    data[key] = _redact_value(data[key], hasher, "FIELD", collector)
-        return json.dumps(data)
+        sanitized = _sanitize_json_recursive(data, hasher, collector)
+        return json.dumps(sanitized)
     except json.JSONDecodeError:
         return text
 
@@ -320,8 +361,15 @@ def sanitize_post_data(
     # Sanitize params array
     if "params" in result and isinstance(result["params"], list):
         for param in result["params"]:
-            if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+            if isinstance(param, dict) and "name" in param:
+                if is_sensitive_field(param["name"]):
+                    param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+                elif is_flaggable_field(param["name"]) and collector and param.get("value"):
+                    collector.flag_value(
+                        param["value"], "field", ConfidenceLevel.MEDIUM,
+                        f"POST param '{param['name']}'",
+                        f"Flaggable field name '{param['name']}' in POST params",
+                    )
 
     # Sanitize raw text (form-urlencoded or JSON)
     if result.get("text"):
@@ -363,12 +411,26 @@ def _sanitize_json_recursive(
             key_lower = key.lower()
             if is_sensitive_field(key) and isinstance(value, str):
                 result[key] = _redact_value(value, hasher, "FIELD", collector)
+            elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
+                collector.flag_value(
+                    value, "field", ConfidenceLevel.MEDIUM,
+                    f"JSON key '{key}'", f"Flaggable field name '{key}' in JSON",
+                )
+                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
             elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
                 # Explicit MAC address field - always redact
                 if isinstance(value, str) and value:
                     if collector:
                         collector.record_auto_redaction("mac_address")
                     result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
+                else:
+                    result[key] = value
+            elif key_lower in ("serial", "serial_number", "serialnumber", "serialnum", "sn"):
+                # Explicit serial number field - always redact
+                if isinstance(value, str) and value:
+                    if collector:
+                        collector.record_auto_redaction("serial_number")
+                    result[key] = hasher.hash_generic(value, "SERIAL") if hasher else "***SERIAL***"
                 else:
                     result[key] = value
             else:
@@ -382,10 +444,57 @@ def _sanitize_json_recursive(
     return data
 
 
+# Regex patterns for URL path segment sanitization
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_API_KEY_PREFIX_PATTERN = re.compile(r"^(?:sk|pk|key)-[a-zA-Z0-9]{16,}$")
+_LONG_TOKEN_PATTERN = re.compile(r"^(?=[a-zA-Z]*\d)(?=\d*[a-zA-Z])[a-zA-Z0-9]{32,}$")
+_DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
+
 # Regex patterns for value-based sanitization
 _MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 _PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
+# Public IPs: any non-private, non-localhost, non-reserved first octet
+_PUBLIC_IP_PATTERN = re.compile(
+    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
+    r"(?!127\.)(?!0\.)(?!255\.)"
+    r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
+)
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
+_CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
+_CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
+_PHONE_PATTERN = re.compile(
+    r"(?<!\w)"  # Not preceded by a word character (prevents matching inside tokens like tok_123...)
+    r"(?:"
+    r"\+?1[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # US/CA: +1 (555) 123-4567
+    r"|"
+    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # (555) 123-4567 or 555-123-4567
+    r")"
+    r"(?!\w)"  # Not followed by a word character (prevents matching inside tokens)
+)
+
+
+def _luhn_check(number: str) -> bool:
+    """Validate a number string using the Luhn algorithm.
+
+    Args:
+        number: Digit-only string to validate
+
+    Returns:
+        True if the number passes Luhn validation
+    """
+    digits = [int(c) for c in number]
+    checksum = 0
+    for i, digit in enumerate(reversed(digits)):
+        value = digit * 2 if i % 2 == 1 else digit
+        if value > 9:
+            value -= 9
+        checksum += value
+    return checksum % 10 == 0
 
 
 def _sanitize_string_patterns(
@@ -405,7 +514,10 @@ def _sanitize_string_patterns(
     Returns:
         Sanitized string
     """
-    if not value or len(value) > 10000:  # Skip very long strings for performance
+    if not value:
+        return value
+    if len(value) > 10000:  # Skip very long strings for performance
+        _LOGGER.debug("Skipping pattern sanitization for long string (length=%d)", len(value))
         return value
 
     # MAC addresses
@@ -423,11 +535,24 @@ def _sanitize_string_patterns(
         ip = match.group(0)
         if ip in preserved_ips:
             return ip
+        if not is_valid_ip_address(ip):
+            return ip
         if collector:
             collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
 
     value = _PRIVATE_IP_PATTERN.sub(replace_private_ip, value)
+
+    # Public IPs (non-private, non-localhost, non-reserved)
+    def replace_public_ip(match: re.Match[str]) -> str:
+        ip = match.group(0)
+        if not is_valid_ip_address(ip):
+            return ip
+        if collector:
+            collector.record_auto_redaction("public_ip")
+        return hasher.hash_ip(ip, is_private=False) if hasher else "***IP***"
+
+    value = _PUBLIC_IP_PATTERN.sub(replace_public_ip, value)
 
     # Email addresses
     def replace_email(match: re.Match[str]) -> str:
@@ -436,6 +561,37 @@ def _sanitize_string_patterns(
         return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
 
     value = _EMAIL_PATTERN.sub(replace_email, value)
+
+    # SSN — flag for review instead of auto-redacting
+    if collector:
+        for match in _SSN_PATTERN.finditer(value):
+            collector.flag_value(
+                match.group(0), "ssn", ConfidenceLevel.MEDIUM,
+                value[max(0, match.start() - 20):match.end() + 20],
+                "Possible SSN pattern (###-##-####)",
+            )
+
+    # Phone numbers — flag for review instead of auto-redacting
+    if collector:
+        for match in _PHONE_PATTERN.finditer(value):
+            collector.flag_value(
+                match.group(0), "phone", ConfidenceLevel.LOW,
+                value[max(0, match.start() - 20):match.end() + 20],
+                "Possible phone number pattern",
+            )
+
+    # Credit cards (with Luhn validation to reduce false positives)
+    def replace_cc(match: re.Match[str]) -> str:
+        number = match.group(0)
+        if not _luhn_check(number):
+            return number
+        if collector:
+            collector.record_auto_redaction("credit_card")
+        return _redact_value(number, hasher, "CC", None)
+
+    value = _CC_VISA_PATTERN.sub(replace_cc, value)
+    value = _CC_MC_PATTERN.sub(replace_cc, value)
+    value = _CC_AMEX_PATTERN.sub(replace_cc, value)
 
     return value
 
@@ -457,6 +613,100 @@ def _sanitize_headers(
             header["value"] = sanitize_header_value(header["name"], header["value"], hasher, collector)
 
 
+def _sanitize_url_path(
+    url: str,
+    hasher: Hasher | None = None,  # noqa: ARG001
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Flag suspicious path segments in a URL for interactive review.
+
+    Detects UUIDs, API key prefixes (sk-/pk-/key-), and long mixed tokens
+    in URL path segments and flags them via the collector. The URL is
+    returned unchanged — redaction happens in Pass 2 if the user confirms.
+
+    Args:
+        url: Full URL string
+        hasher: Optional hasher (unused, kept for call-site consistency)
+        collector: Optional collector to record flagged values
+
+    Returns:
+        The original URL, unchanged
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.path or parsed.path == "/":
+        return url
+
+    # Flag suspicious path segments for review instead of auto-redacting
+    if collector:
+        for segment in parsed.path.split("/"):
+            if not segment:
+                continue
+            if _UUID_PATTERN.match(segment):
+                collector.flag_value(
+                    segment, "uuid", ConfidenceLevel.LOW,
+                    url, "UUID in URL path segment",
+                )
+            elif _API_KEY_PREFIX_PATTERN.match(segment):
+                collector.flag_value(
+                    segment, "api_key", ConfidenceLevel.HIGH,
+                    url, "API key prefix pattern in URL path segment",
+                )
+            elif _DEVICE_SERIAL_PATTERN.match(segment):
+                collector.flag_value(
+                    segment, "device_serial", ConfidenceLevel.MEDIUM,
+                    url, "Device/serial number pattern in URL path segment",
+                )
+            elif _LONG_TOKEN_PATTERN.match(segment):
+                collector.flag_value(
+                    segment, "token", ConfidenceLevel.MEDIUM,
+                    url, "Long mixed-case token in URL path segment",
+                )
+
+    return url
+
+
+def _sanitize_url_query_params(
+    url: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Sanitize sensitive query parameters in a URL string.
+
+    Args:
+        url: Full URL string
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        URL with sensitive query parameter values redacted
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.query:
+        return url
+
+    params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    sanitized_params = []
+    changed = False
+    for name, value in params:
+        if is_sensitive_field(name) and value:
+            sanitized_params.append((name, _redact_value(value, hasher, "FIELD", collector)))
+            changed = True
+        elif is_flaggable_field(name) and collector and value:
+            collector.flag_value(
+                value, "field", ConfidenceLevel.MEDIUM,
+                f"query param '{name}'", f"Flaggable field name '{name}' in URL query",
+            )
+            sanitized_params.append((name, value))
+        else:
+            sanitized_params.append((name, value))
+
+    if not changed:
+        return url
+
+    new_query = urllib.parse.urlencode(sanitized_params)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
+
+
 def _sanitize_request(
     req: dict[str, Any],
     hasher: Hasher | None = None,
@@ -473,6 +723,12 @@ def _sanitize_request(
     if "headers" in req and isinstance(req["headers"], list):
         _sanitize_headers(req["headers"], hasher, collector)
 
+    # Sanitize cookie objects (Playwright parses cookies into structured objects)
+    if "cookies" in req and isinstance(req["cookies"], list):
+        for cookie in req["cookies"]:
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
+
     # Sanitize POST data
     if "postData" in req:
         req["postData"] = sanitize_post_data(req["postData"], hasher, collector)
@@ -480,8 +736,20 @@ def _sanitize_request(
     # Sanitize query string params (in case password is in URL)
     if "queryString" in req and isinstance(req["queryString"], list):
         for param in req["queryString"]:
-            if isinstance(param, dict) and "name" in param and is_sensitive_field(param["name"]):
-                param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+            if isinstance(param, dict) and "name" in param:
+                if is_sensitive_field(param["name"]):
+                    param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+                elif is_flaggable_field(param["name"]) and collector and param.get("value"):
+                    collector.flag_value(
+                        param["value"], "field", ConfidenceLevel.MEDIUM,
+                        f"queryString param '{param['name']}'",
+                        f"Flaggable field name '{param['name']}' in queryString",
+                    )
+
+    # Sanitize the URL string itself (query params and path segments)
+    if "url" in req and isinstance(req["url"], str):
+        req["url"] = _sanitize_url_query_params(req["url"], hasher, collector)
+        req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
 def _sanitize_response_content(
@@ -517,6 +785,12 @@ def _sanitize_response_content(
             content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
         except json.JSONDecodeError:
             _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
+    elif (
+        mime_type.startswith("text/")
+        or not mime_type
+    ) and content.get("encoding") != "base64":
+        # Fallback: apply pattern-based sanitization to text content
+        content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
 
 
 def _sanitize_response(
@@ -539,6 +813,12 @@ def _sanitize_response(
     if "headers" in resp and isinstance(resp["headers"], list):
         _sanitize_headers(resp["headers"], hasher, collector)
 
+    # Sanitize cookie objects (Playwright parses Set-Cookie into structured objects)
+    if "cookies" in resp and isinstance(resp["cookies"], list):
+        for cookie in resp["cookies"]:
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
+
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):
         _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics)
@@ -551,6 +831,7 @@ def sanitize_entry(
     custom_patterns: str | dict[str, Any] | None = None,
     collector: RedactionCollector | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    _skip_copy: bool = False,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
@@ -560,11 +841,12 @@ def sanitize_entry(
         custom_patterns: Optional custom patterns (file path or dict)
         collector: Optional collector for tracking redactions
         heuristics: Heuristic mode for pipe-delimited value detection
+        _skip_copy: If True, skip deep copy (caller already copied). Internal use only.
 
     Returns:
         Sanitized entry
     """
-    result = copy.deepcopy(entry)
+    result = entry if _skip_copy else copy.deepcopy(entry)
 
     # Use collector's hasher if provided, otherwise create one
     if collector is None and salt:
@@ -648,6 +930,7 @@ def sanitize_har(
                     custom_patterns=custom_patterns,
                     collector=collector,
                     heuristics=heuristics,
+                    _skip_copy=True,
                 )
             )
         log["entries"] = sanitized_entries
@@ -840,7 +1123,7 @@ def apply_user_redactions(
             content = content.replace(escaped_original, escaped_redacted)
 
         except Exception as e:  # noqa: PERF203 - intentional: continue with other redactions on error
-            _LOGGER.warning("Failed to redact value '%s...': %s", item.original_value[:20], e)
+            _LOGGER.warning("Failed to redact flagged item (category=%s): %s", item.category, e)
             # Continue with other redactions
             continue
 
@@ -896,4 +1179,7 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
 
 # Legacy exports for backwards compatibility
 SENSITIVE_HEADERS: set[str] = _FULL_REDACT_HEADERS | _COOKIE_REDACT_HEADERS
-SENSITIVE_FIELD_PATTERNS: list[str] = load_sensitive_patterns().get("fields", {}).get("patterns", [])
+_fields = load_sensitive_patterns().get("fields", {})
+SENSITIVE_FIELD_PATTERNS: list[str] = _fields.get("auto_redact_patterns", []) + _fields.get(
+    "flag_patterns", []
+)

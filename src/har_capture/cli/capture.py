@@ -56,9 +56,9 @@ def capture(
         bool,
         typer.Option("--include-media", help="Include media files in capture (.mp3, .mp4, etc.)"),
     ] = False,
-    interactive: Annotated[
+    no_interactive: Annotated[
         bool,
-        typer.Option("--interactive", "-i", help="Interactively review flagged values during sanitization"),
+        typer.Option("--no-interactive", help="Skip interactive review of flagged values"),
     ] = False,
 ) -> None:
     """Capture HTTP traffic using Playwright browser.
@@ -81,7 +81,7 @@ def capture(
         include_fonts: Include font files in capture
         include_images: Include image files in capture
         include_media: Include media files in capture
-        interactive: Enable interactive review of flagged values during sanitization
+        no_interactive: Skip interactive review of flagged values
 
     Example:
         har-capture get https://example.com
@@ -95,6 +95,7 @@ def capture(
             check_browser_phase,
             check_connectivity_phase,
             run_capture_phase,
+            run_probes_phase,
         )
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
@@ -110,13 +111,14 @@ def capture(
             typer.echo(f"Installing {browser}...")
             if not install_browser(browser):
                 typer.echo(
-                    f"Failed to install {browser}. Try manually: playwright install {browser}", err=True
+                    f"Failed to install {browser}. Try manually: python -m playwright install {browser}",
+                    err=True,
                 )
                 raise typer.Exit(1)
             typer.echo(f"  ✓ {browser.capitalize()} installed successfully!")
             typer.echo()
         else:
-            typer.echo(f"Run manually: playwright install {browser}")
+            typer.echo(f"Run manually: python -m playwright install {browser}")
             raise typer.Exit(1)
 
     # Display header
@@ -130,7 +132,22 @@ def capture(
         raise typer.Exit(1)
     typer.echo(f"  Connected:  {result.target_url}")
 
-    # Phase 3: Check authentication
+    # Phase 3: Pre-capture diagnostic probes
+    typer.echo()
+    typer.echo("Running diagnostic probes...")
+    result = run_probes_phase(result.target_url, result=result)
+    if result.probe_data:
+        auth_probe = result.probe_data.get("auth_challenge", {})
+        head_probe = result.probe_data.get("head_support", {})
+        icmp_probe = result.probe_data.get("icmp", {})
+        auth_status = auth_probe.get("status_code", "?")
+        head_ok = "yes" if head_probe.get("supported") else "no"
+        icmp_ok = "yes" if icmp_probe.get("reachable") else "no"
+        latency = icmp_probe.get("latency_ms")
+        latency_str = f" ({latency}ms)" if latency is not None else ""
+        typer.echo(f"  Auth status: {auth_status}  HEAD: {head_ok}  ICMP: {icmp_ok}{latency_str}")
+
+    # Phase 4: Check authentication
     typer.echo()
     typer.echo("Checking authentication type...")
     result = check_auth_phase(result.target_url, result)
@@ -152,7 +169,7 @@ def capture(
         include_fonts=include_fonts,
         include_images=include_images,
         include_media=include_media,
-        interactive=interactive,
+        interactive=not no_interactive,
         result=result,
     )
 
@@ -163,8 +180,8 @@ def capture(
     # Display results
     _display_results(result)
 
-    # Interactive review if requested
-    if interactive and result.capture and result.capture.sanitization_report:
+    # Interactive review (enabled by default, skip with --no-interactive)
+    if not no_interactive and result.capture and result.capture.sanitization_report:
         _run_interactive_review(result)
 
 
@@ -303,15 +320,40 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
         typer.echo("Applying user redactions...")
 
         # Read the sanitized file back
-        with open(sanitized_path, encoding="utf-8") as f:
-            sanitized_data = json.load(f)
+        try:
+            with open(sanitized_path, encoding="utf-8") as f:
+                sanitized_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
+            raise typer.Exit(1) from None
 
         # Apply user redactions
-        final_data = apply_user_redactions(sanitized_data, report)
+        try:
+            final_data = apply_user_redactions(sanitized_data, report)
+        except Exception as e:
+            typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
+            raise typer.Exit(1) from None
 
-        # Write back
-        with open(sanitized_path, "w", encoding="utf-8") as f:
-            json.dump(final_data, f, indent=2)
+        # Write atomically using temp file + rename
+        import tempfile
+
+        try:
+            result_dir = Path(sanitized_path).parent
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
+            ) as tmp_file:
+                json.dump(final_data, tmp_file, indent=2)
+                tmp_path = tmp_file.name
+
+            Path(tmp_path).replace(sanitized_path)
+        except OSError as e:
+            typer.echo(f"Error: Failed to write output file: {e}", err=True)
+            try:
+                if "tmp_path" in locals():
+                    Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise typer.Exit(1) from None
 
         typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
 

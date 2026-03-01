@@ -553,9 +553,9 @@ def sanitize_html(
         html,
     )
 
-    # 15. Other pipe-delimited variables (connectedDevices, deviceList, etc.)
+    # 15. Other pipe-delimited variables (connectedDevices, deviceList, systemInfo, etc.)
     html = re.sub(
-        r"(var\s+(?:connected)?[Dd]evice(?:s|List)?\s*=\s*['\"])([^'\"]+)(['\"])",
+        r"(var\s+(?:(?:connected)?[Dd]evice(?:s|List)?|(?:system|wifi|network|modem|router|wan|lan)[Ii]nfo)\s*=\s*['\"])([^'\"]+)(['\"])",
         sanitize_tag_value_list,
         html,
     )

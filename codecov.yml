@@ -12,8 +12,8 @@ coverage:
         threshold: 5%  # Allow 5% drop
     patch:
       default:
-        # New code coverage - informational only for new projects
-        informational: true  # Won't block PRs
+        target: 80%
+        informational: true  # Report but don't block (CLI entrypoints have low patch coverage)
 
 comment:
   layout: "reach,diff,files"

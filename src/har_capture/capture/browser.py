@@ -13,8 +13,9 @@ import os
 import shutil
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,13 @@ _MISSING_DEPS_PATTERNS = (
     "libnss3",
     "libnspr4",
     "host system is missing dependencies",
+)
+
+# Error patterns indicating the browser executable is missing or corrupted
+# Distinct from _MISSING_DEPS_PATTERNS: fix is reinstalling the browser, not apt-get
+_MISSING_BROWSER_PATTERNS = (
+    "executable doesn't exist",
+    "executable does not exist",
 )
 
 
@@ -121,7 +129,7 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
     har["log"]["_har_capture"] = {
         "tool": tool_name,
         "version": __version__,
-        "captured_at": datetime.now().isoformat(),
+        "captured_at": datetime.now(tz=timezone.utc).isoformat(),
         "cache_disabled": True,
         "service_workers_blocked": True,
     }
@@ -220,6 +228,7 @@ def capture_device_har(
     headless: bool = False,
     timeout: int | None = None,
     interactive: bool = False,
+    probes: dict[str, Any] | None = None,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -241,6 +250,7 @@ def capture_device_har(
         headless: If True, run browser in headless mode (for automated capture)
         timeout: Seconds to wait before closing browser (None = wait for user to close)
         interactive: If True, flag suspicious values for interactive review
+        probes: Pre-capture diagnostic probe results to include in output
 
     Returns:
         CaptureResult with paths to generated files
@@ -276,7 +286,7 @@ def capture_device_har(
             return CaptureResult(
                 har_path=Path(),
                 success=False,
-                error=f"Failed to install {browser}. Run: playwright install {browser}",
+                error=f"Failed to install {browser}. Run: python -m playwright install {browser}",
             )
         _LOGGER.info("Browser %s installed successfully.", browser)
 
@@ -376,6 +386,11 @@ def capture_device_har(
                 # Continue cleanup anyway
         return True
 
+    def _is_missing_browser_error(error_msg: str) -> bool:
+        """Check if error indicates the browser executable is missing."""
+        error_lower = error_msg.lower()
+        return any(pattern in error_lower for pattern in _MISSING_BROWSER_PATTERNS)
+
     def _is_missing_deps_error(error_msg: str) -> bool:
         """Check if error indicates missing browser dependencies."""
         error_lower = error_msg.lower()
@@ -389,30 +404,43 @@ def capture_device_har(
             _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
             # Not critical, continue anyway
 
-    try:
-        launch_browser_and_capture()
-    except Exception as e:
-        error_str = _sanitize_error_message(str(e), http_credentials)
-        if _is_missing_deps_error(error_str):
-            _LOGGER.warning("Browser dependencies missing. Installing...")
-            if install_browser_deps():
-                _LOGGER.info("Dependencies installed. Retrying...")
-                try:
-                    launch_browser_and_capture()
-                except Exception as e2:
-                    _cleanup_temp()
-                    return CaptureResult(
-                        har_path=Path(),
-                        success=False,
-                        error=_sanitize_error_message(str(e2), http_credentials),
-                    )
-            else:
+    def _try_fix_and_retry(fix_fn: Callable[[], bool], fix_fail_msg: str) -> CaptureResult | None:
+        """Run a fix function and retry the capture. Returns CaptureResult on failure, None on success."""
+        if fix_fn():
+            _LOGGER.info("Fix applied. Retrying capture...")
+            try:
+                launch_browser_and_capture()
+                return None  # success
+            except Exception as e2:
                 _cleanup_temp()
                 return CaptureResult(
                     har_path=Path(),
                     success=False,
-                    error="Failed to install browser dependencies",
+                    error=_sanitize_error_message(str(e2), http_credentials),
                 )
+        _cleanup_temp()
+        return CaptureResult(har_path=Path(), success=False, error=fix_fail_msg)
+
+    try:
+        launch_browser_and_capture()
+    except Exception as e:
+        error_str = _sanitize_error_message(str(e), http_credentials)
+        if _is_missing_browser_error(error_str):
+            _LOGGER.warning("Browser executable missing. Reinstalling %s...", browser)
+            fail = _try_fix_and_retry(
+                lambda: install_browser(browser),
+                f"Failed to install {browser}. Run: python -m playwright install {browser}",
+            )
+            if fail:
+                return fail
+        elif _is_missing_deps_error(error_str):
+            _LOGGER.warning("Browser dependencies missing. Installing...")
+            fail = _try_fix_and_retry(
+                install_browser_deps,
+                "Failed to install browser dependencies",
+            )
+            if fail:
+                return fail
         else:
             _cleanup_temp()
             return CaptureResult(
@@ -420,6 +448,19 @@ def capture_device_har(
                 success=False,
                 error=error_str,
             )
+
+    # Inject probe data into the raw HAR before any downstream processing.
+    # This ensures probes appear in all output paths (sanitized, compressed, raw).
+    # Safe: sanitizer only walks log.entries and log.pages, not log._probes.
+    if probes:
+        try:
+            with open(temp_path, encoding="utf-8") as f:
+                raw_har = json.load(f)
+            raw_har["log"]["_probes"] = probes
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(raw_har, f)
+        except Exception as e:
+            _LOGGER.warning("Failed to inject probe data into HAR: %s", e)
 
     # Determine sanitized output path based on user's output_path
     if str(output_path).endswith(".har"):

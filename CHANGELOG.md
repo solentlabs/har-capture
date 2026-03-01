@@ -7,7 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## \[0.3.3\] - 2026-02-06
+## [0.4.0] - 2026-02-28
+
+### Added
+
+- **Pre-Capture Diagnostic Probes** - Unauthenticated HTTP and ICMP probes run before the Playwright session
+  - Auth challenge probe: captures `WWW-Authenticate` headers and Set-Cookie values
+  - HEAD support probe: checks if the target server supports HEAD requests
+  - ICMP probe: pings the host and reports latency
+  - Results stored as `log._probes` metadata in HAR output
+- **Public IP Sanitization** - Detects and redacts public IPv4 addresses (preserves private/loopback/link-local)
+- **Serial Number Field Detection** - JSON fields named `serial`, `serial_number`, `serialnumber`, `serialnum`, `sn` are now redacted
+- **Cookie Object Sanitization** - Structured cookie objects in request/response entries are now sanitized
+- **Credential-Like Value Detection** - New heuristic for short passwords (`pass123`, `token42`, `key!2024`)
+- **Router/Modem Brand Detection** - Heuristics now flag values containing device brand names (NETGEAR, Linksys, ASUS, etc.)
+- **PII Test Server** - `scripts/pii_test_server.py` replaces `mock_modem.py` as a standalone PII-laden web server for dogfooding sanitization, with mixed sci-fi references from the '70s through '90s (Blade Runner, TRON, Alien, WarGames, The Matrix, and more)
+- **Browser Auto-Reinstall** - Detects missing browser executable and auto-reinstalls before retry
+
+### Changed
+
+- **BREAKING**: `--interactive` flag replaced with `--no-interactive` (interactive mode is now the default for both `capture` and `sanitize` commands)
+- SSID heuristic tightened: broad alphanumeric matching replaced with CamelCase-only pattern to reduce false positives
+- Safe value patterns expanded: common words (`premium`, `admin`, `guest`, etc.) and already-redacted values are no longer flagged
+- Phone number pattern boundary changed from `(?<!\d)` to `(?<!\w)` to prevent matching inside tokens
+- `systemInfo`, `wifiInfo`, `networkInfo` now matched by pipe-delimited variable sanitization
+- Codecov patch coverage check set to informational (reports but doesn't block)
+
+### Fixed
+
+- **Security Hardening** - Sanitization coverage improvements across HAR, HTML, and heuristic analysis
+- Pre-commit hooks fixed for relocated repository (stale venv paths)
+- `ci-local.sh` now uses venv Python directly instead of bare `ruff`/`pytest` commands
+- Various ruff and mypy errors resolved (type annotations, import sorting, unused suppressions)
+
+### Migration Guide
+
+**CLI flag change:**
+
+```bash
+# Before (v0.3.x)
+har-capture get http://device --interactive
+
+# After (v0.4.0) — interactive is now the default
+har-capture get http://device
+har-capture get http://device --no-interactive  # to disable
+```
+
+## [0.3.3] - 2026-02-06
 
 ### Fixed
 
@@ -293,4 +339,6 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.3.0]: https://github.com/solentlabs/har-capture/compare/v0.2.5...v0.3.0
 [0.3.1]: https://github.com/solentlabs/har-capture/compare/v0.3.0...v0.3.1
 [0.3.2]: https://github.com/solentlabs/har-capture/compare/v0.3.1...v0.3.2
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.3.2...HEAD
+[0.3.3]: https://github.com/solentlabs/har-capture/compare/v0.3.2...v0.3.3
+[0.4.0]: https://github.com/solentlabs/har-capture/compare/v0.3.3...v0.4.0
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.0...HEAD

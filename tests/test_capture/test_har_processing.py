@@ -402,3 +402,43 @@ class TestFilterAndCompressHar:
         compressed_path, _stats = filter_and_compress_har(basic_har, options=None)
 
         assert compressed_path.exists()
+
+    def test_probes_preserved_through_filter_compress(self, tmp_path: Path) -> None:
+        """Test _probes key in HAR survives filter+compress round-trip."""
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "_probes": {
+                    "ran_at": "2026-02-28T00:00:00+00:00",
+                    "target_url": "http://192.168.1.1/",
+                    "auth_challenge": {"status_code": 401},
+                },
+                "entries": [
+                    {
+                        "request": {"method": "GET", "url": "http://example.com/page", "headers": []},
+                        "response": {"status": 200, "headers": [], "content": {"text": "OK"}},
+                    },
+                ],
+            }
+        }
+        har_file = tmp_path / "probes.har"
+        har_file.write_text(json.dumps(har_data))
+
+        compressed_path, _stats = filter_and_compress_har(har_file)
+
+        with gzip.open(compressed_path, "rt") as f:
+            har = json.load(f)
+
+        assert "_probes" in har["log"]
+        assert har["log"]["_probes"]["target_url"] == "http://192.168.1.1/"
+        assert har["log"]["_probes"]["auth_challenge"]["status_code"] == 401
+
+    def test_no_probes_key_when_absent(self, basic_har: Path) -> None:
+        """Test no _probes key when HAR doesn't contain probes."""
+        compressed_path, _stats = filter_and_compress_har(basic_har)
+
+        with gzip.open(compressed_path, "rt") as f:
+            har = json.load(f)
+
+        assert "_probes" not in har["log"]
