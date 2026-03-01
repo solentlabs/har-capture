@@ -64,7 +64,7 @@ def _read_body_preview(fp: Any) -> str:
         raw = fp.read(_BODY_PREVIEW_CAP + 256)
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="replace")
-        return raw[:_BODY_PREVIEW_CAP]
+        return str(raw[:_BODY_PREVIEW_CAP])
     except Exception:
         return ""
 

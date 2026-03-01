@@ -13,6 +13,7 @@ import os
 import shutil
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -403,7 +404,7 @@ def capture_device_har(
             _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
             # Not critical, continue anyway
 
-    def _try_fix_and_retry(fix_fn: callable, fix_fail_msg: str) -> CaptureResult | None:
+    def _try_fix_and_retry(fix_fn: Callable[[], bool], fix_fail_msg: str) -> CaptureResult | None:
         """Run a fix function and retry the capture. Returns CaptureResult on failure, None on success."""
         if fix_fn():
             _LOGGER.info("Fix applied. Retrying capture...")

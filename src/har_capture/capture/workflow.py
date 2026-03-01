@@ -348,7 +348,7 @@ def run_capture_phase(
         result = CaptureWorkflowResult()
     result.phase = "capture"
 
-    probe_data = result.probe_data if result.probe_data else None
+    probe_data = result.probe_data or None
 
     capture_result = capture_device_har(
         ip=target,

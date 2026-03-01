@@ -166,7 +166,14 @@ class TestProbeAuthChallenge:
     """Tests for probe_auth_challenge function."""
 
     @pytest.mark.parametrize(
-        ("desc", "side_effect_factory", "expected_status", "expected_www_auth", "expected_cookies", "expected_error_is_none"),
+        (
+            "desc",
+            "side_effect_factory",
+            "expected_status",
+            "expected_www_auth",
+            "expected_cookies",
+            "expected_error_is_none",
+        ),
         AUTH_CHALLENGE_CASES,
         ids=[c[0] for c in AUTH_CHALLENGE_CASES],
     )
@@ -183,7 +190,9 @@ class TestProbeAuthChallenge:
         side_effect = side_effect_factory() if callable(side_effect_factory) else side_effect_factory
 
         with patch.object(
-            urllib.request.OpenerDirector, "open", side_effect=side_effect if isinstance(side_effect, Exception) else None
+            urllib.request.OpenerDirector,
+            "open",
+            side_effect=side_effect if isinstance(side_effect, Exception) else None,
         ) as mock_open:
             if not isinstance(side_effect, Exception):
                 mock_open.return_value = side_effect
@@ -220,9 +229,9 @@ class TestProbeAuthChallenge:
         # Verify context kwarg was passed
         call_kwargs = mock_open.call_args
         # The open call may have positional or keyword args; check for context
-        assert any(
-            hasattr(arg, "check_hostname") for arg in (call_kwargs.args if call_kwargs.args else [])
-        ) or "context" in (call_kwargs.kwargs or {})
+        assert any(hasattr(arg, "check_hostname") for arg in (call_kwargs.args or [])) or "context" in (
+            call_kwargs.kwargs or {}
+        )
 
 
 class TestProbeHeadSupport:
@@ -264,7 +273,16 @@ class TestProbeIcmp:
     """Tests for probe_icmp function."""
 
     @pytest.mark.parametrize(
-        ("desc", "returncode", "stdout", "timeout_expired", "file_not_found", "expected_reachable", "expected_latency", "expected_error_is_none"),
+        (
+            "desc",
+            "returncode",
+            "stdout",
+            "timeout_expired",
+            "file_not_found",
+            "expected_reachable",
+            "expected_latency",
+            "expected_error_is_none",
+        ),
         ICMP_CASES,
         ids=[c[0] for c in ICMP_CASES],
     )

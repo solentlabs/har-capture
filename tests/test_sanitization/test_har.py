@@ -241,7 +241,7 @@ class TestHeaderSanitization:
         result = sanitize_header_value(name, value)
         # Extract the actual secret part (after = for cookies, whole value for auth)
         if "=" in value:
-            secret = value.split("=")[1].split(";")[0]
+            secret = value.split("=", maxsplit=1)[1].split(";", maxsplit=1)[0]
         else:
             secret = value.rsplit(" ", maxsplit=1)[-1] if " " in value else value
         assert secret not in result, f"{desc}: secret '{secret}' should be removed"
@@ -612,7 +612,11 @@ class TestResponseContentFallback:
             "response": {
                 "status": 200,
                 "headers": [],
-                "content": {"text": "MTkyLjE2OC4xLjEwMA==", "mimeType": "application/octet-stream", "encoding": "base64"},
+                "content": {
+                    "text": "MTkyLjE2OC4xLjEwMA==",
+                    "mimeType": "application/octet-stream",
+                    "encoding": "base64",
+                },
             },
         }
         result = sanitize_entry(entry, salt=None)
@@ -645,7 +649,9 @@ class TestIPValidation:
             ("IP: 192.168.1.100", None, "valid_ip_redacted"),
         ],
     )
-    def test_ip_validation_in_string_patterns(self, input_text: str, should_contain: str | None, desc: str) -> None:
+    def test_ip_validation_in_string_patterns(
+        self, input_text: str, should_contain: str | None, desc: str
+    ) -> None:
         """Test IP validation rejects invalid octets in string patterns."""
         from har_capture.sanitization.har import _sanitize_string_patterns
 
@@ -771,7 +777,9 @@ class TestFlaggableFieldDetection:
     def test_flaggable_field_detection(self, field_name: str, expected: bool, desc: str) -> None:
         """Test detection of flaggable vs non-flaggable field names."""
         result = is_flaggable_field(field_name)
-        assert result is expected, f"{desc}: '{field_name}' should be {'flaggable' if expected else 'not flaggable'}"
+        assert result is expected, (
+            f"{desc}: '{field_name}' should be {'flaggable' if expected else 'not flaggable'}"
+        )
 
 
 class TestFlaggingBehavior:
@@ -839,7 +847,9 @@ class TestFlaggingBehavior:
         url = "http://api.example.com/devices/DEV-ABC123456/status"
         result = _sanitize_url_path(url, hasher, collector)
         assert "DEV-ABC123456" in result, "Device serial should be preserved"
-        assert any(f.category == "device_serial" for f in collector.flagged), "Device serial should be flagged"
+        assert any(f.category == "device_serial" for f in collector.flagged), (
+            "Device serial should be flagged"
+        )
 
     @pytest.mark.parametrize(
         ("segment", "desc"),
@@ -921,7 +931,9 @@ class TestFlaggingBehavior:
         username_param = next(p for p in req["queryString"] if p["name"] == "username")
         password_param = next(p for p in req["queryString"] if p["name"] == "password")
         assert username_param["value"] == "admin", "Flaggable queryString param should be preserved"
-        assert password_param["value"] in ("[REDACTED]", "***FIELD***"), "Sensitive queryString param should be redacted"
+        assert password_param["value"] in ("[REDACTED]", "***FIELD***"), (
+            "Sensitive queryString param should be redacted"
+        )
         assert any(f.original_value == "admin" for f in collector.flagged)
 
 
