@@ -249,6 +249,7 @@ def capture_device_har(
         headless: If True, run browser in headless mode (for automated capture)
         timeout: Seconds to wait before closing browser (None = wait for user to close)
         interactive: If True, flag suspicious values for interactive review
+        probes: Pre-capture diagnostic probe results to include in output
 
     Returns:
         CaptureResult with paths to generated files

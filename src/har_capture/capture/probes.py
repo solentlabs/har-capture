@@ -41,12 +41,12 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(
         self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
+        req: urllib.request.Request,  # noqa: ARG002
+        fp: Any,  # noqa: ARG002
+        code: int,  # noqa: ARG002
+        msg: str,  # noqa: ARG002
+        headers: Any,  # noqa: ARG002
+        newurl: str,  # noqa: ARG002
     ) -> None:
         return None
 
@@ -107,7 +107,7 @@ def probe_auth_challenge(url: str, timeout: int = 10) -> dict[str, Any]:
     }
 
     opener = _build_opener()
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET")  # noqa: S310
 
     try:
         kwargs: dict[str, Any] = {"timeout": timeout}
@@ -153,13 +153,13 @@ def probe_head_support(url: str, timeout: int = 10) -> dict[str, Any]:
         "error": None,
     }
 
-    req = urllib.request.Request(url, method="HEAD")
+    req = urllib.request.Request(url, method="HEAD")  # noqa: S310
 
     try:
         kwargs: dict[str, Any] = {"timeout": timeout}
         if url.startswith("https://"):
             kwargs["context"] = _make_ssl_context()
-        resp = urllib.request.urlopen(req, **kwargs)
+        resp = urllib.request.urlopen(req, **kwargs)  # noqa: S310
         result["supported"] = True
         result["status_code"] = resp.status
         result["headers"] = _headers_dict(resp.headers)
@@ -202,7 +202,7 @@ def probe_icmp(host: str, timeout: int = 5) -> dict[str, Any]:
         cmd = ["ping", "-c", "1", "-W", str(timeout), host]
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603, PLW1510
             cmd,
             capture_output=True,
             text=True,

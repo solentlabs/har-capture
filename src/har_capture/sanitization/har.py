@@ -615,7 +615,7 @@ def _sanitize_headers(
 
 def _sanitize_url_path(
     url: str,
-    hasher: Hasher | None = None,
+    hasher: Hasher | None = None,  # noqa: ARG001
     collector: RedactionCollector | None = None,
 ) -> str:
     """Flag suspicious path segments in a URL for interactive review.
@@ -1179,7 +1179,7 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
 
 # Legacy exports for backwards compatibility
 SENSITIVE_HEADERS: set[str] = _FULL_REDACT_HEADERS | _COOKIE_REDACT_HEADERS
-SENSITIVE_FIELD_PATTERNS: list[str] = (
-    lambda f=load_sensitive_patterns().get("fields", {}):
-        f.get("auto_redact_patterns", []) + f.get("flag_patterns", [])
-)()
+_fields = load_sensitive_patterns().get("fields", {})
+SENSITIVE_FIELD_PATTERNS: list[str] = _fields.get("auto_redact_patterns", []) + _fields.get(
+    "flag_patterns", []
+)

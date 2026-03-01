@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Spaceballs — "That's the kind of thing an idiot would have on his luggage!"
 USERNAME = "admin"
-PASSWORD = "12345"
+PASSWORD = "12345"  # noqa: S105
 
 
 def _wrap_page(title: str, body_html: str) -> str:
@@ -78,7 +78,7 @@ class PIITestHandler(BaseHTTPRequestHandler):
 
     server_version = "PII-TestServer/1.0"
 
-    def log_message(self, format: str, *args: object) -> None:
+    def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
         """Log requests to stdout."""
         print(f"  [{self.command}] {self.path}")
 
@@ -305,12 +305,12 @@ class PIITestHandler(BaseHTTPRequestHandler):
     # Routing
     # -----------------------------------------------------------------
 
-    def do_GET(self) -> None:
+    def do_GET(self) -> None:  # noqa: D102
         if not self._check_auth():
             self._send_auth_challenge()
             return
 
-        if self.path == "/" or self.path == "":
+        if self.path in {"/", ""}:
             self._send_html(_wrap_page("Dashboard", self._page_index()))
         elif self.path == "/status":
             self._send_html(_wrap_page("Status", self._page_status()))
@@ -325,7 +325,7 @@ class PIITestHandler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_HEAD(self) -> None:
+    def do_HEAD(self) -> None:  # noqa: D102
         if not self._check_auth():
             self._send_auth_challenge()
             return
@@ -333,7 +333,7 @@ class PIITestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html")
         self.end_headers()
 
-    def do_POST(self) -> None:
+    def do_POST(self) -> None:  # noqa: D102
         if not self._check_auth():
             self._send_auth_challenge()
             return
@@ -349,7 +349,7 @@ class PIITestHandler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
-def main() -> None:
+def main() -> None:  # noqa: D103
     parser = argparse.ArgumentParser(description="PII test server for har-capture dogfooding")
     parser.add_argument("--port", type=int, default=8080, help="Port to listen on (default: 8080)")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")

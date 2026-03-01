@@ -1204,7 +1204,7 @@ class TestCookieObjectSanitization:
                 "content": {"mimeType": "text/html", "text": "<html></html>"},
             },
         }
-        sanitize_entry(entry, salt=None)  # Should not raise  # noqa: B018
+        sanitize_entry(entry, salt=None)  # Should not raise
 
     def test_cookie_hash_consistency(self) -> None:
         """Test same cookie value produces same hash across request and response."""
