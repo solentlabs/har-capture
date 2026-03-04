@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## \[0.4.1\] - 2026-03-04
+## [0.4.1] - 2026-03-04
 
 ### Fixed
 
@@ -353,4 +353,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.3.2]: https://github.com/solentlabs/har-capture/compare/v0.3.1...v0.3.2
 [0.3.3]: https://github.com/solentlabs/har-capture/compare/v0.3.2...v0.3.3
 [0.4.0]: https://github.com/solentlabs/har-capture/compare/v0.3.3...v0.4.0
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.0...HEAD
+[0.4.1]: https://github.com/solentlabs/har-capture/compare/v0.4.0...v0.4.1
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.1...HEAD
