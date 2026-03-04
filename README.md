@@ -69,6 +69,22 @@ Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **
 
 ______________________________________________________________________
 
+## See It In Action
+
+**1. Sanitization report** — 84 values auto-redacted across 9 PII categories:
+
+![Sanitization Report](docs/images/sanitization-report.png)
+
+**2. Flagged values for review** — passwords, fields, WiFi SSIDs, and phone numbers detected automatically:
+
+![Flagged Values for Review](docs/images/flagged-values-table.png)
+
+**3. Interactive redaction picker** — high-confidence items pre-selected, you choose the rest:
+
+![Redact Picker](docs/images/redact-picker.png)
+
+______________________________________________________________________
+
 ## Installation
 
 ```bash

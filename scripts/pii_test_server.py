@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # Spaceballs — "That's the kind of thing an idiot would have on his luggage!"
 USERNAME = "admin"
-PASSWORD = "12345"  # noqa: S105
+PASSWORD = "pw"  # noqa: S105  # pragma: allowlist secret
 
 
 def _wrap_page(title: str, body_html: str) -> str:
@@ -233,7 +233,7 @@ class PIITestHandler(BaseHTTPRequestHandler):
                 "wan_ip": "73.158.42.197",
                 "gateway_ip": "10.0.1.1",
                 "mac": "00:1A:2B:3C:4D:5E",
-                "dns_primary": "10.0.0.83",   # WarGames '83
+                "dns_primary": "10.0.0.83",  # WarGames '83
                 "dns_secondary": "10.0.0.79",  # Alien '79
                 "dhcp_start": "10.0.1.100",
                 "dhcp_end": "10.0.1.254",
@@ -243,10 +243,10 @@ class PIITestHandler(BaseHTTPRequestHandler):
                 "username": "admin",
                 "password": "12345",
                 # TRON (1982)
-                "api_key": "sk_live_moreLightFather82",
+                "api_key": "sk_live_moreLightFather82",  # pragma: allowlist secret
                 "token": "tok_nexus6_2019",
                 # The Matrix (1999)
-                "wifi_password": "Th3r3IsN0Sp00n!",
+                "wifi_password": "Th3r3IsN0Sp00n!",  # pragma: allowlist secret
                 # Alien (1979)
                 "ssid_24g": "Nostromo",
                 "ssid_5g": "Nostromo-5G",
@@ -271,25 +271,25 @@ class PIITestHandler(BaseHTTPRequestHandler):
                 # Blade Runner
                 "deckard": {
                     "email": "deckard@lapd-rep-detect.gov",
-                    "password": "TK421_1977!",  # Star Wars
+                    "password": "TK421_1977!",  # Star Wars  # pragma: allowlist secret
                     "last_login_ip": "10.0.1.82",
                 },
                 # WarGames
                 "lightman": {
                     "email": "david.lightman@wopr.norad.mil",
-                    "password": "Jos4ua!",  # Joshua
+                    "password": "Jos4ua!",  # Joshua  # pragma: allowlist secret
                     "last_login_ip": "10.0.1.83",
                 },
                 # The Matrix
                 "neo": {
                     "email": "neo@metacortex.com",
-                    "password": "Wh1t3R4bb1t!",
+                    "password": "Wh1t3R4bb1t!",  # pragma: allowlist secret
                     "last_login_ip": "10.0.1.99",
                 },
                 # Alien
                 "ripley": {
                     "email": "ripley@nostromo.weyland.corp",
-                    "password": "Nuk31tFr0mOrb1t!",
+                    "password": "Nuk31tFr0mOrb1t!",  # pragma: allowlist secret
                     "last_login_ip": "10.0.1.79",
                 },
             },
