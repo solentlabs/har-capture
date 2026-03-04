@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## \[0.4.1\] - 2026-03-04
+
+### Fixed
+
+- **HTTPS Auth Probe** - `probe_auth_challenge()` passed `context=` kwarg to `OpenerDirector.open()`, which only `urlopen()` accepts. Every HTTPS target silently failed. Fixed by installing the SSL context via `HTTPSHandler` in `build_opener()`.
+- **PII Test Server Password** - Changed default password from `12345` to `pw` to match documented usage.
+
+### Added
+
+- **HTTPS Probe Integration Tests** - Real local TLS server tests using `trustme` library, covering auth challenge, cookie capture, body preview, redirect suppression, and HEAD support over HTTPS.
+- **README Screenshots** - Added "See It In Action" section with sanitization report, flagged values table, and interactive redact picker screenshots.
+
 ## [0.4.0] - 2026-02-28
 
 ### Added
