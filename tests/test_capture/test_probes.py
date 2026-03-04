@@ -5,18 +5,24 @@ Test Coverage:
     - HEAD support probe (200, 401, 405, connection error, timeout)
     - ICMP probe (success, no latency, failure, timeout, command not found, platform flags)
     - run_probes orchestrator (all succeed, partial failure, hostname extraction)
+    - Integration: real HTTPS server with self-signed cert (trustme)
 
 Test Strategy:
     - Table-driven with @pytest.mark.parametrize
     - Mocked urllib and subprocess to avoid real network/system calls
+    - Integration tests against a local TLS server for HTTPS probe validation
 """
 
 from __future__ import annotations
 
+import logging
+import ssl
 import subprocess
+import threading
 import urllib.error
 import urllib.request
 from http.client import HTTPMessage
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -220,18 +226,44 @@ class TestProbeAuthChallenge:
         assert len(result["body_preview"]) <= _BODY_PREVIEW_CAP
 
     def test_https_ssl_context(self) -> None:
-        """Test HTTPS URL uses SSL context for self-signed certs."""
+        """Test HTTPS URL installs SSL context via HTTPSHandler in build_opener."""
+        resp = _make_response(200)
+
+        with (
+            patch("urllib.request.build_opener") as mock_build_opener,
+            patch.object(urllib.request.OpenerDirector, "open", return_value=resp),
+        ):
+            mock_build_opener.return_value = urllib.request.OpenerDirector()
+            probe_auth_challenge("https://192.168.1.1/")
+
+        # Verify build_opener received an HTTPSHandler with a permissive SSL context
+        args = mock_build_opener.call_args[0]
+        https_handlers = [a for a in args if isinstance(a, urllib.request.HTTPSHandler)]
+        assert https_handlers, f"Expected HTTPSHandler in build_opener args, got {args}"
+        assert https_handlers[0]._context.check_hostname is False
+
+    def test_https_no_context_kwarg_to_open(self) -> None:
+        """Test HTTPS does NOT pass context kwarg to opener.open() (the original bug)."""
         resp = _make_response(200)
 
         with patch.object(urllib.request.OpenerDirector, "open", return_value=resp) as mock_open:
             probe_auth_challenge("https://192.168.1.1/")
 
-        # Verify context kwarg was passed
-        call_kwargs = mock_open.call_args
-        # The open call may have positional or keyword args; check for context
-        assert any(hasattr(arg, "check_hostname") for arg in (call_kwargs.args or [])) or "context" in (
-            call_kwargs.kwargs or {}
+        # The bug was passing context= to open(); verify it's not there
+        assert "context" not in (mock_open.call_args.kwargs or {}), (
+            "context kwarg should NOT be passed to OpenerDirector.open()"
         )
+
+    def test_redirect_not_followed(self) -> None:
+        """Test 3xx redirect is NOT followed by _NoRedirectHandler."""
+        # _NoRedirectHandler suppresses redirects, so a 302 should raise HTTPError
+        error_302 = _make_http_error(302, {"Location": "http://192.168.1.1/login"})
+
+        with patch.object(urllib.request.OpenerDirector, "open", side_effect=error_302):
+            result = probe_auth_challenge("http://192.168.1.1/")
+
+        assert result["status_code"] == 302
+        assert result["error"] is None
 
 
 class TestProbeHeadSupport:
@@ -427,3 +459,182 @@ class TestRunProbes:
         mock_icmp.assert_called_once()
         actual_host = mock_icmp.call_args[0][0]
         assert actual_host == expected_host, f"Expected {expected_host}, got {actual_host}"
+
+
+# =============================================================================
+# Integration Tests — real HTTPS server with self-signed cert
+# =============================================================================
+
+trustme = pytest.importorskip("trustme", reason="trustme not installed")
+
+_log = logging.getLogger(__name__)
+
+
+class _ProbeTestHandler(BaseHTTPRequestHandler):
+    """Minimal handler for probe integration tests."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Suppress logging."""
+
+    def do_GET(self) -> None:
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Basic "):
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="Test Realm"')
+            self.send_header("Set-Cookie", "sid=abc123; Path=/")
+            self.end_headers()
+            self.wfile.write(b"<html>Unauthorized</html>")
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<html>OK</html>")
+
+    def do_HEAD(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    """Handler that always returns 302."""
+
+    def log_message(self, format: str, *args: object) -> None:
+        """Suppress logging."""
+
+    def do_GET(self) -> None:
+        self.send_response(302)
+        self.send_header("Location", "http://127.0.0.1/redirected")
+        self.end_headers()
+
+
+def _start_server(
+    handler_class: type,
+    ssl_ctx: ssl.SSLContext | None = None,
+) -> tuple[HTTPServer, int]:
+    """Start a threaded HTTP(S) server on a random port, return (server, port)."""
+    server = HTTPServer(("127.0.0.1", 0), handler_class)
+    if ssl_ctx:
+        server.socket = ssl_ctx.wrap_socket(server.socket, server_side=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port
+
+
+@pytest.fixture(scope="module")
+def _tls_context() -> tuple:
+    """Create a trustme CA and server SSL context."""
+    ca = trustme.CA()
+    server_cert = ca.issue_cert("127.0.0.1")
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_cert.configure_cert(server_ctx)
+    ca.configure_trust(server_ctx)
+    return ca, server_ctx
+
+
+def _shutdown_quietly(server: HTTPServer) -> None:
+    """Shut down a server, suppressing SSL errors from daemon threads."""
+    try:
+        server.shutdown()
+        server.server_close()
+    except Exception:
+        _log.debug("server shutdown error (expected for TLS)", exc_info=True)
+
+
+@pytest.fixture(scope="module")
+def https_auth_server(_tls_context: tuple) -> str:
+    """HTTPS server that returns 401 with WWW-Authenticate: Basic."""
+    _ca, server_ctx = _tls_context
+    server, port = _start_server(_ProbeTestHandler, ssl_ctx=server_ctx)
+    yield f"https://127.0.0.1:{port}/"
+    _shutdown_quietly(server)
+
+
+@pytest.fixture(scope="module")
+def http_auth_server() -> str:
+    """Plain HTTP server that returns 401 with WWW-Authenticate: Basic."""
+    server, port = _start_server(_ProbeTestHandler)
+    yield f"http://127.0.0.1:{port}/"
+    _shutdown_quietly(server)
+
+
+@pytest.fixture(scope="module")
+def http_redirect_server() -> str:
+    """Plain HTTP server that always returns 302."""
+    server, port = _start_server(_RedirectHandler)
+    yield f"http://127.0.0.1:{port}/"
+    _shutdown_quietly(server)
+
+
+# fmt: off
+INTEGRATION_AUTH_CASES = [
+    # (description, fixture_name, expected_status, expected_www_auth_contains, expected_error)
+    ("http_401_basic",  "http_auth_server",  401, "Basic", None),
+    ("https_401_basic", "https_auth_server", 401, "Basic", None),
+]
+# fmt: on
+
+
+@pytest.mark.integration
+class TestProbeIntegrationHTTPS:
+    """Integration tests hitting real local HTTP/HTTPS servers."""
+
+    @pytest.mark.parametrize(
+        ("desc", "fixture_name", "expected_status", "expected_www_auth", "expected_error"),
+        INTEGRATION_AUTH_CASES,
+        ids=[c[0] for c in INTEGRATION_AUTH_CASES],
+    )
+    def test_auth_challenge_real_server(
+        self,
+        desc: str,
+        fixture_name: str,
+        expected_status: int,
+        expected_www_auth: str,
+        expected_error: str | None,
+        request: pytest.FixtureRequest,
+    ) -> None:
+        """Auth probe captures 401 + WWW-Authenticate from real HTTP/HTTPS servers."""
+        url = request.getfixturevalue(fixture_name)
+        result = probe_auth_challenge(url, timeout=5)
+
+        assert result["error"] == expected_error, f"Unexpected error: {result['error']}"
+        assert result["status_code"] == expected_status
+        assert expected_www_auth in (result["www_authenticate"] or "")
+
+    def test_https_captures_cookies(self, https_auth_server: str) -> None:
+        """HTTPS auth probe captures Set-Cookie headers."""
+        result = probe_auth_challenge(https_auth_server, timeout=5)
+
+        assert result["status_code"] == 401
+        assert len(result["set_cookie"]) > 0
+        assert any("sid=" in c for c in result["set_cookie"])
+
+    def test_https_captures_body_preview(self, https_auth_server: str) -> None:
+        """HTTPS auth probe captures body preview from 401 response."""
+        result = probe_auth_challenge(https_auth_server, timeout=5)
+
+        assert "Unauthorized" in result["body_preview"]
+
+    def test_redirect_not_followed(self, http_redirect_server: str) -> None:
+        """Auth probe captures 302 status instead of following the redirect."""
+        result = probe_auth_challenge(http_redirect_server, timeout=5)
+
+        assert result["status_code"] == 302
+        assert result["error"] is None
+
+    def test_head_support_http(self, http_auth_server: str) -> None:
+        """HEAD probe works against real HTTP server."""
+        result = probe_head_support(http_auth_server, timeout=5)
+
+        assert result["supported"] is True
+        assert result["status_code"] is not None
+
+    def test_head_support_https(self, https_auth_server: str) -> None:
+        """HEAD probe works against real HTTPS server with self-signed cert."""
+        result = probe_head_support(https_auth_server, timeout=5)
+
+        assert result["supported"] is True
+        assert result["status_code"] is not None
+        assert result["error"] is None

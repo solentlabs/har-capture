@@ -55,6 +55,8 @@ dev = [
     "mypy>=1.10",
     # Linting & formatting
     "ruff>=0.5.0",
+    # TLS testing
+    "trustme>=1.1",
     # Pre-commit
     "pre-commit>=3.7",
     # Security

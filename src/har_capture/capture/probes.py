@@ -106,14 +106,17 @@ def probe_auth_challenge(url: str, timeout: int = 10) -> dict[str, Any]:
         "error": None,
     }
 
-    opener = _build_opener()
+    if url.startswith("https://"):
+        ctx = _make_ssl_context()
+        https_handler = urllib.request.HTTPSHandler(context=ctx)
+        opener = urllib.request.build_opener(_NoRedirectHandler, https_handler)
+    else:
+        opener = _build_opener()
+
     req = urllib.request.Request(url, method="GET")  # noqa: S310
 
     try:
-        kwargs: dict[str, Any] = {"timeout": timeout}
-        if url.startswith("https://"):
-            kwargs["context"] = _make_ssl_context()
-        resp = opener.open(req, **kwargs)
+        resp = opener.open(req, timeout=timeout)
         result["status_code"] = resp.status
         result["headers"] = _headers_dict(resp.headers)
         result["body_preview"] = _read_body_preview(resp)
