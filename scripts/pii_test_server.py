@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -355,7 +356,13 @@ def main() -> None:  # noqa: D103
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     args = parser.parse_args()
 
-    server = HTTPServer((args.host, args.port), PIITestHandler)
+    try:
+        server = HTTPServer((args.host, args.port), PIITestHandler)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            print(f"Port {args.port} is already in use. Try: --port {args.port + 1}")
+            sys.exit(1)
+        raise
     print(f"PII Test Server running on http://{args.host}:{args.port}")
     print()
     print("  A PII-laden web server for dogfooding har-capture sanitization.")

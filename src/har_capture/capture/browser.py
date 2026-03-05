@@ -126,13 +126,17 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
         har: HAR data dict to modify in-place
         tool_name: Name of the capture tool to record
     """
-    har["log"]["_har_capture"] = {
-        "tool": tool_name,
-        "version": __version__,
-        "captured_at": datetime.now(tz=timezone.utc).isoformat(),
-        "cache_disabled": True,
-        "service_workers_blocked": True,
-    }
+    metadata = har["log"].get("_har_capture", {})
+    metadata.update(
+        {
+            "tool": tool_name,
+            "version": __version__,
+            "captured_at": datetime.now(tz=timezone.utc).isoformat(),
+            "cache_disabled": True,
+            "service_workers_blocked": True,
+        }
+    )
+    har["log"]["_har_capture"] = metadata
 
 
 def filter_and_compress_har(
