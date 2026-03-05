@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-03-05
+
+### Changed
+
+- **CI workflow_dispatch** — Added `workflow_dispatch` trigger to CI workflow for manual recovery when push events are missed
+
+### Fixed
+
+- **mypy no-any-return** — Fixed `apply_user_redactions()` returning `Any` from `json.loads()` instead of typed `dict[str, Any]`
+
+### Removed
+
+- **release.py skip flags** — Removed `--skip-tests` and `--skip-quality` flags from `release.py` to prevent bypassing quality gates
+
 ## [0.4.3] - 2026-03-05
 
 ### Added
@@ -390,4 +404,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.1]: https://github.com/solentlabs/har-capture/compare/v0.4.0...v0.4.1
 [0.4.2]: https://github.com/solentlabs/har-capture/compare/v0.4.1...v0.4.2
 [0.4.3]: https://github.com/solentlabs/har-capture/compare/v0.4.2...v0.4.3
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.3...HEAD
+[0.4.4]: https://github.com/solentlabs/har-capture/compare/v0.4.3...v0.4.4
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.4...HEAD

@@ -5,8 +5,9 @@ Validates that a merged PR is ready to tag by checking:
 1. On the main branch with clean working directory
 2. Version format is valid semver (X.Y.Z)
 3. Tag doesn't already exist
-4. Version is consistent across pyproject.toml, __init__.py, CHANGELOG.md
-5. Tests pass and code quality checks pass
+4. CI passed on HEAD commit
+5. Version is consistent across pyproject.toml, __init__.py, CHANGELOG.md
+6. Tests pass and code quality checks pass
 
 Then creates and pushes the annotated tag to trigger the GitHub Actions
 release workflow (which publishes to PyPI).
@@ -18,15 +19,14 @@ Workflow:
     4. GitHub Actions creates the verified release and publishes to PyPI
 
 Usage:
-    python scripts/release.py 0.4.2                  # Validate and tag
-    python scripts/release.py 0.4.2 --dry-run        # Validate only, don't tag
-    python scripts/release.py 0.4.2 --skip-tests     # Skip tests (not recommended)
-    python scripts/release.py 0.4.2 --skip-quality   # Skip code quality checks
+    python scripts/release.py 0.4.4                  # Validate and tag
+    python scripts/release.py 0.4.4 --dry-run        # Validate only, don't tag
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -114,6 +114,72 @@ def check_tag_exists(version: str) -> bool:
         return bool(result.stdout.strip())
     except subprocess.CalledProcessError:
         return False
+
+
+def check_ci_passed_on_head() -> bool:
+    """Verify that CI passed on the current HEAD commit.
+
+    Uses the GitHub CLI to query check runs on HEAD. Ensures at least one
+    CI run exists and all completed successfully. This catches the failure
+    mode where code is merged to main without CI running (e.g. --admin merge).
+    """
+    print_info("Checking CI status on HEAD...")
+
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{head_sha}/check-runs"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        print_error("GitHub CLI (gh) not found. Install it: https://cli.github.com/")
+        return False
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to query GitHub CI status: {e.stderr.strip()}")
+        return False
+
+    data = json.loads(result.stdout)
+    check_runs = data.get("check_runs", [])
+
+    if not check_runs:
+        print_error("No CI check runs found on HEAD commit.")
+        print_error(f"  HEAD: {head_sha[:12]}")
+        print_error("  Trigger CI manually: gh workflow run ci.yml --ref main")
+        print_error("  Then wait for it to complete before re-running this script.")
+        return False
+
+    failed = []
+    in_progress = []
+    for run in check_runs:
+        name = run.get("name", "unknown")
+        status = run.get("status", "unknown")
+        conclusion = run.get("conclusion")
+
+        if status != "completed":
+            in_progress.append(name)
+        elif conclusion != "success":
+            failed.append(f"{name} ({conclusion})")
+
+    if in_progress:
+        print_error(f"CI still running: {', '.join(in_progress)}")
+        print_error("  Wait for CI to complete before tagging.")
+        return False
+
+    if failed:
+        print_error(f"CI failed: {', '.join(failed)}")
+        print_error("  Fix CI failures before tagging.")
+        return False
+
+    print_success(f"CI passed on HEAD ({head_sha[:12]}, {len(check_runs)} check(s))")
+    return True
 
 
 def run_tests(repo_root: Path) -> bool:
@@ -266,21 +332,11 @@ Workflow:
     5. GitHub Actions creates the release and publishes to PyPI
 """,
     )
-    parser.add_argument("version", help="Version to release (e.g., 0.4.2)")
+    parser.add_argument("version", help="Version to release (e.g., 0.4.4)")
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate only, don't create or push the tag",
-    )
-    parser.add_argument(
-        "--skip-tests",
-        action="store_true",
-        help="Skip running tests (not recommended)",
-    )
-    parser.add_argument(
-        "--skip-quality",
-        action="store_true",
-        help="Skip code quality checks (not recommended)",
     )
 
     args = parser.parse_args()
@@ -316,6 +372,13 @@ Workflow:
     print_success("Working directory clean")
     print()
 
+    # === CI VERIFICATION PHASE ===
+    print_info("=== CI Verification ===")
+
+    if not check_ci_passed_on_head():
+        sys.exit(1)
+    print()
+
     # === CONSISTENCY PHASE ===
     print_info("=== Version Consistency ===")
 
@@ -326,17 +389,11 @@ Workflow:
     # === QUALITY PHASE ===
     print_info("=== Quality Checks ===")
 
-    if not args.skip_tests:
-        if not run_tests(repo_root):
-            sys.exit(1)
-    else:
-        print_warning("Skipping tests (--skip-tests)")
+    if not run_tests(repo_root):
+        sys.exit(1)
 
-    if not args.skip_quality:
-        if not run_code_quality_checks(repo_root):
-            sys.exit(1)
-    else:
-        print_warning("Skipping quality checks (--skip-quality)")
+    if not run_code_quality_checks(repo_root):
+        sys.exit(1)
     print()
 
     # === TAG PHASE ===
