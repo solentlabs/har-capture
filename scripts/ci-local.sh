@@ -74,7 +74,7 @@ fi
 # Step 3: Integration tests (optional, requires Playwright)
 if [ "$INTEGRATION" = true ]; then
     echo -e "\n${YELLOW}[3/3] Running integration tests...${NC}"
-    if pytest --tb=short -q -m "integration"; then
+    if "$PYTHON" -m pytest --tb=short -q -m "integration"; then
         echo -e "${GREEN}✓ Integration tests passed${NC}"
     else
         echo -e "${RED}✗ Integration tests failed${NC}"

@@ -56,6 +56,9 @@ REDACTED_VALUES = [
     "FIELD_dddd4444",
     "AUTH_eeee5555",
     "COOKIE_ffff6666",
+    "STORAGE_a1b2c3d4",
+    "CRED_deadbeef01",
+    "SENSITIVE_12345678",
     # Format-preserving patterns
     "02:aa:bb:cc:dd:ee",
     "02:AA:BB:CC:DD:EE",

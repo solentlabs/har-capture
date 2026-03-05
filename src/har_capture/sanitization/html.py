@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from har_capture.sanitization.collector import RedactionCollector
     from har_capture.sanitization.report import HeuristicMode
 else:
+    from har_capture.sanitization.collector import RedactionCollector
     from har_capture.sanitization.report import HeuristicMode
 
 
@@ -155,9 +156,6 @@ def sanitize_html(
         hasher = collector.hasher
     else:
         hasher = Hasher.create(salt)
-        # Import here to avoid circular import
-        from har_capture.sanitization.collector import RedactionCollector
-
         collector = RedactionCollector(hasher=hasher)
 
     pii = load_pii_patterns(custom_patterns)

@@ -83,6 +83,18 @@ def _load_sensitive_fields(custom_patterns: str | None = None) -> list[str]:
     return patterns
 
 
+def _compile_sensitive_fields(custom_patterns: str | None = None) -> list[re.Pattern[str]]:
+    """Compile sensitive field patterns for efficient matching.
+
+    Args:
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        List of compiled regex patterns (case-insensitive)
+    """
+    return [re.compile(p, re.IGNORECASE) for p in _load_sensitive_fields(custom_patterns)]
+
+
 @dataclass
 class Finding:
     """A potential secret/PII finding.
@@ -240,7 +252,7 @@ def check_post_data(
     if not post_data:
         return
 
-    sensitive_fields = _load_sensitive_fields(custom_patterns)
+    sensitive_fields = _compile_sensitive_fields(custom_patterns)
 
     # Check params (form data)
     params = post_data.get("params", [])
@@ -252,14 +264,14 @@ def check_post_data(
             continue
 
         for pattern in sensitive_fields:
-            if re.search(pattern, name, re.IGNORECASE):
+            if pattern.search(name):
                 findings.append(
                     Finding(
                         severity="error",
                         location=location,
                         field=name,
                         value=truncate(value),
-                        reason=f"Sensitive form field matching '{pattern}'",
+                        reason=f"Sensitive form field matching '{pattern.pattern}'",
                     )
                 )
                 break
@@ -280,7 +292,7 @@ def check_json_fields(
     findings: list[Finding],
     path: str = "",
     custom_patterns: str | None = None,
-    _sensitive_fields: list[str] | None = None,
+    _sensitive_fields: list[re.Pattern[str]] | None = None,
     _depth: int = 0,
 ) -> None:
     """Recursively check JSON for sensitive fields.
@@ -291,14 +303,14 @@ def check_json_fields(
         findings: List to append findings to
         path: Current path in the JSON structure
         custom_patterns: Optional path to custom patterns file
-        _sensitive_fields: Pre-loaded sensitive field patterns. Internal use only.
+        _sensitive_fields: Pre-compiled sensitive field patterns. Internal use only.
         _depth: Current recursion depth. Internal use only.
     """
     if _depth > 50:
         return
 
     if _sensitive_fields is None:
-        _sensitive_fields = _load_sensitive_fields(custom_patterns)
+        _sensitive_fields = _compile_sensitive_fields(custom_patterns)
 
     if isinstance(data, dict):
         for key, value in data.items():
@@ -307,14 +319,14 @@ def check_json_fields(
             # Skip empty or redacted values
             if isinstance(value, str) and value and not is_redacted(value, custom_patterns):
                 for pattern in _sensitive_fields:
-                    if re.search(pattern, key, re.IGNORECASE):
+                    if pattern.search(key):
                         findings.append(
                             Finding(
                                 severity="error",
                                 location=location,
                                 field=current_path,
                                 value=truncate(value),
-                                reason=f"Sensitive JSON field matching '{pattern}'",
+                                reason=f"Sensitive JSON field matching '{pattern.pattern}'",
                             )
                         )
                         break
@@ -322,7 +334,11 @@ def check_json_fields(
             # Recurse
             if isinstance(value, dict | list):
                 check_json_fields(
-                    value, location, findings, current_path, custom_patterns,
+                    value,
+                    location,
+                    findings,
+                    current_path,
+                    custom_patterns,
                     _sensitive_fields=_sensitive_fields,
                     _depth=_depth + 1,
                 )
@@ -331,7 +347,11 @@ def check_json_fields(
         for i, item in enumerate(data):
             if isinstance(item, dict | list):
                 check_json_fields(
-                    item, location, findings, f"{path}[{i}]", custom_patterns,
+                    item,
+                    location,
+                    findings,
+                    f"{path}[{i}]",
+                    custom_patterns,
                     _sensitive_fields=_sensitive_fields,
                     _depth=_depth + 1,
                 )

@@ -7,10 +7,11 @@ requirements before launching the browser capture.
 from __future__ import annotations
 
 import logging
-import ssl
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
+
+from har_capture.capture.probes import make_ssl_context
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,6 +25,8 @@ def _parse_target(target: str) -> tuple[str, str | None]:
     - Hostname only: "example.com" -> ("example.com", None)
     - IP address: "192.168.1.1" -> ("192.168.1.1", None)
     - IP with port: "192.168.1.1:8080" -> ("192.168.1.1:8080", None)
+    - IPv6 address: "[::1]" -> ("[::1]", None)
+    - IPv6 URL: "https://[::1]:8443/page" -> ("[::1]:8443", "https")
 
     Args:
         target: URL, hostname, or IP address
@@ -71,10 +74,7 @@ def check_device_connectivity(target: str, timeout: int = 5) -> tuple[bool, str,
         try:
             req = urllib.request.Request(url, method="GET")
             if scheme == "https":
-                # Allow self-signed certs
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
+                ctx = make_ssl_context()
                 urllib.request.urlopen(req, timeout=timeout, context=ctx)
             else:
                 urllib.request.urlopen(req, timeout=timeout)
@@ -105,9 +105,7 @@ def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:
         req = urllib.request.Request(url, method="GET")
         # Handle HTTPS with self-signed certs
         if url.startswith("https://"):
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
+            ctx = make_ssl_context()
             urllib.request.urlopen(req, timeout=timeout, context=ctx)
         else:
             urllib.request.urlopen(req, timeout=timeout)

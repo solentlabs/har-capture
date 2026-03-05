@@ -126,13 +126,17 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
         har: HAR data dict to modify in-place
         tool_name: Name of the capture tool to record
     """
-    har["log"]["_har_capture"] = {
-        "tool": tool_name,
-        "version": __version__,
-        "captured_at": datetime.now(tz=timezone.utc).isoformat(),
-        "cache_disabled": True,
-        "service_workers_blocked": True,
-    }
+    metadata = har["log"].get("_har_capture", {})
+    metadata.update(
+        {
+            "tool": tool_name,
+            "version": __version__,
+            "captured_at": datetime.now(tz=timezone.utc).isoformat(),
+            "cache_disabled": True,
+            "service_workers_blocked": True,
+        }
+    )
+    har["log"]["_har_capture"] = metadata
 
 
 def filter_and_compress_har(
@@ -326,10 +330,12 @@ def capture_device_har(
     os.close(temp_fd)
 
     browser_cookies: list[Any] = []
+    web_storage_local: list[dict[str, Any]] = []
+    web_storage_session: dict[str, str] = {}
 
     def launch_browser_and_capture() -> bool:
         """Launch browser and capture HAR. Returns True on success."""
-        nonlocal browser_cookies
+        nonlocal browser_cookies, web_storage_local, web_storage_session
         with sync_playwright() as p:
             # Select browser
             if browser == "firefox":
@@ -369,6 +375,25 @@ def capture_device_har(
                 browser_cookies = context.cookies()
             except Exception:
                 browser_cookies = []
+
+            # Web Storage snapshot — localStorage via storage_state(),
+            # sessionStorage via JS evaluation in the page context
+            try:
+                storage_state = context.storage_state()
+                web_storage_local = [
+                    {"origin": o["origin"], "items": o["localStorage"]}
+                    for o in storage_state.get("origins", [])
+                    if o.get("localStorage")
+                ]
+            except Exception:
+                web_storage_local = []
+
+            try:
+                web_storage_session = page.evaluate(
+                    "() => Object.fromEntries(Object.entries(sessionStorage))"
+                )
+            except Exception:
+                web_storage_session = {}
 
             if timeout is not None:
                 # Automated mode: wait for timeout then close
@@ -462,7 +487,7 @@ def capture_device_har(
     # Inject probe data and browser cookies into the raw HAR before any
     # downstream processing.  This ensures they appear in all output paths
     # (sanitized, compressed, raw).
-    if probes or browser_cookies:
+    if probes or browser_cookies or web_storage_local or web_storage_session:
         try:
             with open(temp_path, encoding="utf-8") as f:
                 raw_har = json.load(f)
@@ -471,6 +496,17 @@ def capture_device_har(
             if browser_cookies:
                 raw_har["log"].setdefault("_har_capture", {})
                 raw_har["log"]["_har_capture"]["browser_cookies"] = browser_cookies
+            if web_storage_local:
+                raw_har["log"].setdefault("_har_capture", {})
+                raw_har["log"]["_har_capture"]["local_storage"] = web_storage_local
+            if web_storage_session:
+                raw_har["log"].setdefault("_har_capture", {})
+                raw_har["log"]["_har_capture"]["session_storage"] = [
+                    {
+                        "origin": target_url,
+                        "items": [{"name": k, "value": v} for k, v in web_storage_session.items()],
+                    }
+                ]
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(raw_har, f)
         except Exception as e:

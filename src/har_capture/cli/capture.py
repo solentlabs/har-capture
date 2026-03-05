@@ -277,8 +277,6 @@ def _display_results(result: CaptureWorkflowResult) -> None:
 
 def _run_interactive_review(result: CaptureWorkflowResult) -> None:
     """Run interactive review of flagged values after capture."""
-    import json
-
     # Type narrowing: ensure we have capture data
     if not result.capture:
         typer.echo("Error: No capture data available for interactive review", err=True)
@@ -298,7 +296,6 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
         return
 
     from har_capture.cli.interactive import display_summary, run_interactive_review
-    from har_capture.sanitization import apply_user_redactions
 
     # Determine salt mode for display
     salt_mode = "random (correlation within file)" if report.salt else "static placeholders"
@@ -315,47 +312,9 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
     )
 
     if review_completed and report.total_user_redacted > 0:
-        # Apply user redactions and rewrite the file
-        typer.echo()
-        typer.echo("Applying user redactions...")
+        from har_capture.cli.interactive import apply_reviewed_redactions
 
-        # Read the sanitized file back
-        try:
-            with open(sanitized_path, encoding="utf-8") as f:
-                sanitized_data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
-            raise typer.Exit(1) from None
-
-        # Apply user redactions
-        try:
-            final_data = apply_user_redactions(sanitized_data, report)
-        except Exception as e:
-            typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
-            raise typer.Exit(1) from None
-
-        # Write atomically using temp file + rename
-        import tempfile
-
-        try:
-            result_dir = Path(sanitized_path).parent
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
-            ) as tmp_file:
-                json.dump(final_data, tmp_file, indent=2)
-                tmp_path = tmp_file.name
-
-            Path(tmp_path).replace(sanitized_path)
-        except OSError as e:
-            typer.echo(f"Error: Failed to write output file: {e}", err=True)
-            try:
-                if "tmp_path" in locals():
-                    Path(tmp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise typer.Exit(1) from None
-
-        typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
+        apply_reviewed_redactions(report, sanitized_path)
 
     # Display summary
     display_summary(report)

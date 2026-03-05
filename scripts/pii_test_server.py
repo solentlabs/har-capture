@@ -9,6 +9,7 @@ that har-capture's sanitizer is expected to redact:
 - Serial numbers, device names, SSIDs
 - CSRF tokens, session cookies, Basic Auth credentials
 - Pipe-delimited JS variables (tagValueList / systemInfo patterns)
+- Web Storage (localStorage: HNAP PrivateKey; sessionStorage: SJCL keys, CSRF)
 - Nested JSON API responses
 - HTML tables, forms, and event logs
 
@@ -28,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -69,6 +71,17 @@ def _wrap_page(title: str, body_html: str) -> str:
   <div class="content">
     {body_html}
   </div>
+  <script>
+    // Web Storage PII — tests localStorage + sessionStorage capture
+    // HNAP PrivateKey pattern (Arris S33, Motorola MB8600)
+    localStorage.setItem("PrivateKey", "HMAC_replicant_batty_c1982");
+    localStorage.setItem("firmware_url", "http://10.0.1.1/firmware/v3.2.1.bin");
+    // SJCL encryption params (Arris TG3442DE pattern)
+    sessionStorage.setItem("sjcl_key", "aes256_tyrell_pyramid_key");
+    sessionStorage.setItem("sjcl_iv", "iv_voightkampff_0x2019");
+    sessionStorage.setItem("csrf_token", "xsrf_wopr_shall_we_play");
+    sessionStorage.setItem("user", "admin");
+  </script>
 </body>
 </html>"""
 
@@ -355,7 +368,13 @@ def main() -> None:  # noqa: D103
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     args = parser.parse_args()
 
-    server = HTTPServer((args.host, args.port), PIITestHandler)
+    try:
+        server = HTTPServer((args.host, args.port), PIITestHandler)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            print(f"Port {args.port} is already in use. Try: --port {args.port + 1}")
+            sys.exit(1)
+        raise
     print(f"PII Test Server running on http://{args.host}:{args.port}")
     print()
     print("  A PII-laden web server for dogfooding har-capture sanitization.")
@@ -368,6 +387,7 @@ def main() -> None:  # noqa: D103
     print("    /settings   Form with passwords, SSIDs, CSRF token")
     print("    /logs       Event log with MACs, IPs, emails in entries")
     print("    /api/config JSON API with nested PII structures")
+    print("    (all)       Web Storage: localStorage + sessionStorage PII on every page")
     print()
     print("Test with:")
     print(f"  har-capture get http://{args.host}:{args.port}")

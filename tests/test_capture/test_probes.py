@@ -86,6 +86,50 @@ def _make_response(
     return resp
 
 
+class _HeadersNoGetAll:
+    """Mock headers object that lacks get_all (exercises AttributeError fallback)."""
+
+    def __init__(self, headers: dict[str, str] | None = None) -> None:
+        self._headers = headers or {}
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        return self._headers.get(key, default)
+
+    def items(self) -> list[tuple[str, str]]:
+        return list(self._headers.items())
+
+
+def _make_response_no_get_all(status: int = 200, body: str = "", cookie: str | None = None) -> MagicMock:
+    """Create a mock response whose headers lack get_all."""
+    resp = MagicMock()
+    resp.status = status
+    hdrs = {} if cookie is None else {"Set-Cookie": cookie}
+    resp.headers = _HeadersNoGetAll(hdrs)
+    resp.read.return_value = body.encode("utf-8")
+    return resp
+
+
+def _make_http_error_no_get_all(
+    code: int,
+    headers: dict[str, str] | None = None,
+    cookie: str | None = None,
+) -> urllib.error.HTTPError:
+    """Create an HTTPError whose headers lack get_all."""
+    hdrs = dict(headers or {})
+    if cookie:
+        hdrs["Set-Cookie"] = cookie
+    headers_obj = _HeadersNoGetAll(hdrs)
+    err = urllib.error.HTTPError(
+        url="http://test/",
+        code=code,
+        msg="error",
+        hdrs=headers_obj,
+        fp=None,  # type: ignore[arg-type]
+    )
+    err.headers = headers_obj  # type: ignore[assignment]
+    return err
+
+
 # =============================================================================
 # Test Data Tables
 # =============================================================================
@@ -131,6 +175,16 @@ AUTH_CHALLENGE_CASES = [
         "body_preview",
         lambda: _make_http_error(401, {"WWW-Authenticate": "Basic"}, body="<html>Unauthorized</html>"),
         401, "Basic", [], True,
+    ),
+    (
+        "200_cookies_no_get_all",
+        lambda: _make_response_no_get_all(200, body="<html>OK</html>", cookie="sid=fallback"),
+        200, None, ["sid=fallback"], True,
+    ),
+    (
+        "401_cookies_no_get_all",
+        lambda: _make_http_error_no_get_all(401, {"WWW-Authenticate": "Basic"}, cookie="sid=err"),
+        401, "Basic", ["sid=err"], True,
     ),
     (
         "connection_error",

@@ -8,8 +8,11 @@ Uses Rich for beautiful tables and InquirerPy for checkbox selection.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -115,6 +118,60 @@ def capture_html_context(html: str, start: int, end: int, window: int = 50) -> s
     match_text = html[start:end]
     after = html[end:ctx_end]
     return f"...{before}>>>{match_text}<<<{after}..."
+
+
+def apply_reviewed_redactions(
+    report: SanitizationReport,
+    output_path: str | Path,
+) -> None:
+    """Apply user redactions from interactive review to sanitized file.
+
+    Reads the sanitized HAR, applies redactions, writes atomically
+    via tempfile + rename.
+
+    Args:
+        report: Sanitization report with user redaction decisions
+        output_path: Path to the sanitized HAR file to update
+    """
+    import typer
+
+    from har_capture.sanitization import apply_user_redactions
+
+    typer.echo()
+    typer.echo("Applying user redactions...")
+
+    try:
+        with open(output_path, encoding="utf-8") as f:
+            sanitized_data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    try:
+        final_data = apply_user_redactions(sanitized_data, report)
+    except Exception as e:
+        typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
+        raise typer.Exit(1) from None
+
+    try:
+        result_dir = Path(output_path).parent
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
+        ) as tmp_file:
+            json.dump(final_data, tmp_file, indent=2)
+            tmp_path = tmp_file.name
+
+        Path(tmp_path).replace(output_path)
+    except OSError as e:
+        typer.echo(f"Error: Failed to write output file: {e}", err=True)
+        try:
+            if "tmp_path" in locals():
+                Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise typer.Exit(1) from None
+
+    typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
 
 
 # =============================================================================

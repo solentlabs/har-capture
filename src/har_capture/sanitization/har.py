@@ -338,6 +338,7 @@ def _sanitize_json_text(
         sanitized = _sanitize_json_recursive(data, hasher, collector)
         return json.dumps(sanitized)
     except json.JSONDecodeError:
+        _LOGGER.debug("Non-JSON text encountered in response body, skipping JSON sanitization")
         return text
 
 
@@ -891,6 +892,45 @@ def sanitize_entry(
     return result
 
 
+def _embed_sanitization_metadata(
+    har_data: dict[str, Any],
+    report: SanitizationReport,
+    heuristics: HeuristicMode,
+    salt: str | None,
+) -> None:
+    """Embed sanitization metadata into the HAR for self-describing output.
+
+    Records tool version, timestamp, salt mode, heuristic mode, and redaction
+    counts into ``log._har_capture.sanitization``. Does **not** leak the actual
+    salt value.
+    """
+    from datetime import datetime, timezone
+
+    from har_capture import __version__
+
+    if salt in ("auto", "random"):
+        salt_mode = "random"
+    elif salt is None:
+        salt_mode = "static"
+    else:
+        salt_mode = "provided"
+
+    metadata = har_data.setdefault("log", {}).setdefault("_har_capture", {})
+    metadata["sanitization"] = {
+        "tool": "har-capture",
+        "version": __version__,
+        "sanitized_at": datetime.now(tz=timezone.utc).isoformat(),
+        "salt_mode": salt_mode,
+        "heuristics": heuristics.value,
+        "auto_redacted": report.total_auto_redacted,
+        "auto_redacted_counts": dict(report.auto_redacted_counts),
+        "user_redacted": report.total_user_redacted,
+        "user_skipped": report.total_user_skipped,
+        "flagged_total": len(report.flagged),
+        "warnings": list(report.warnings),
+    }
+
+
 def sanitize_har(
     har_data: dict[str, Any],
     *,
@@ -979,8 +1019,21 @@ def sanitize_har(
             if isinstance(cookie, dict) and "value" in cookie:
                 cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
 
+    # Sanitize web storage (localStorage + sessionStorage) in _har_capture metadata
+    for storage_key in ("local_storage", "session_storage"):
+        storage_list = har_capture_meta.get(storage_key)
+        if isinstance(storage_list, list):
+            for origin_entry in storage_list:
+                if not isinstance(origin_entry, dict):
+                    continue
+                for item in origin_entry.get("items", []):
+                    if isinstance(item, dict) and "value" in item:
+                        item["value"] = _redact_value(item["value"], hasher, "STORAGE", collector)
+
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)
+
+    _embed_sanitization_metadata(result, report, heuristics, salt)
 
     return result, report
 

@@ -49,7 +49,10 @@
       "DEVICE_",
       "FIELD_",
       "AUTH_",
-      "COOKIE_"
+      "COOKIE_",
+      "STORAGE_",
+      "CRED_",
+      "SENSITIVE_"
     ]
   },
 

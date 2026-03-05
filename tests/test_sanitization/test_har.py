@@ -28,6 +28,7 @@ import json
 import pytest
 
 from har_capture.sanitization.har import (
+    _embed_sanitization_metadata,
     is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
@@ -35,6 +36,7 @@ from har_capture.sanitization.har import (
     sanitize_header_value,
     sanitize_post_data,
 )
+from har_capture.sanitization.report import HeuristicMode, SanitizationReport
 
 # =============================================================================
 # Test Data Tables
@@ -1447,3 +1449,341 @@ class TestBrowserCookieSanitization:
 
         result, _ = sanitize_har(har, salt="test-salt")
         assert result["log"]["_har_capture"]["browser_cookies"] == []
+
+
+# ┌──────────────────────────────┬──────────────┬──────────────────────────────────────────────────────┬──────────────────────────────────────┐
+# │ desc                         │ storage_key  │ har_capture_input                                    │ assertion                            │
+# ├──────────────────────────────┼──────────────┼──────────────────────────────────────────────────────┼──────────────────────────────────────┤
+# │ Test case name               │ Which key    │ _har_capture metadata                                │ Lambda checking result               │
+# └──────────────────────────────┴──────────────┴──────────────────────────────────────────────────────┴──────────────────────────────────────┘
+#
+# fmt: off
+WEB_STORAGE_SANITIZATION_CASES = [
+    (
+        "local_storage_values_redacted",
+        "local_storage",
+        {
+            "local_storage": [
+                {
+                    "origin": "https://192.168.100.1",
+                    "items": [
+                        {"name": "PrivateKey", "value": "hmac_secret_123"},
+                        {"name": "firmware_url", "value": "http://10.0.1.1/fw"},
+                    ],
+                },
+            ],
+        },
+        lambda r: (
+            r["local_storage"][0]["items"][0]["name"] == "PrivateKey"
+            and r["local_storage"][0]["items"][0]["value"] != "hmac_secret_123"
+            and r["local_storage"][0]["items"][1]["name"] == "firmware_url"
+            and r["local_storage"][0]["items"][1]["value"] != "http://10.0.1.1/fw"
+        ),
+    ),
+    (
+        "session_storage_values_redacted",
+        "session_storage",
+        {
+            "session_storage": [
+                {
+                    "origin": "https://192.168.100.1",
+                    "items": [
+                        {"name": "sjcl_key", "value": "aes256_key_abc"},
+                        {"name": "csrf_token", "value": "xsrf_token_xyz"},
+                    ],
+                },
+            ],
+        },
+        lambda r: (
+            r["session_storage"][0]["items"][0]["name"] == "sjcl_key"
+            and r["session_storage"][0]["items"][0]["value"] != "aes256_key_abc"
+            and r["session_storage"][0]["items"][1]["name"] == "csrf_token"
+            and r["session_storage"][0]["items"][1]["value"] != "xsrf_token_xyz"
+        ),
+    ),
+    (
+        "origin_preserved",
+        "local_storage",
+        {
+            "local_storage": [
+                {"origin": "https://192.168.100.1", "items": [{"name": "k", "value": "v"}]},
+            ],
+            "session_storage": [
+                {"origin": "http://10.0.0.1:8080", "items": [{"name": "t", "value": "a"}]},
+            ],
+        },
+        lambda r: (
+            r["local_storage"][0]["origin"] == "https://192.168.100.1"
+            and r["session_storage"][0]["origin"] == "http://10.0.0.1:8080"
+        ),
+    ),
+    (
+        "absent_no_error",
+        "local_storage",
+        {"tool": "har-capture", "version": "0.4.2"},
+        lambda r: "local_storage" not in r and "session_storage" not in r,
+    ),
+    (
+        "empty_lists_preserved",
+        "local_storage",
+        {"local_storage": [], "session_storage": []},
+        lambda r: r["local_storage"] == [] and r["session_storage"] == [],
+    ),
+    (
+        "storage_prefix_not_cookie",
+        "local_storage",
+        {
+            "local_storage": [
+                {"origin": "https://example.com", "items": [{"name": "key", "value": "secret_value"}]},
+            ],
+        },
+        lambda r: r["local_storage"][0]["items"][0]["value"].startswith("STORAGE_"),
+    ),
+]
+# fmt: on
+
+
+class TestWebStorageSanitization:
+    """Tests for web storage sanitization in _har_capture metadata."""
+
+    @pytest.mark.parametrize(
+        ("desc", "storage_key", "har_capture_input", "check"),
+        WEB_STORAGE_SANITIZATION_CASES,
+        ids=[c[0] for c in WEB_STORAGE_SANITIZATION_CASES],
+    )
+    def test_web_storage_sanitization(
+        self,
+        desc: str,
+        storage_key: str,
+        har_capture_input: dict,
+        check: object,
+    ) -> None:
+        """Table-driven web storage sanitization tests."""
+        har = {"log": {"entries": [], "_har_capture": har_capture_input}}
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        meta = result["log"]["_har_capture"]
+        assert check(meta), f"Assertion failed for case: {desc}"
+
+
+class TestSanitizeJsonTextLogging:
+    """Tests for _sanitize_json_text debug logging."""
+
+    def test_sanitize_json_text_invalid_json_logs_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Non-JSON text logs debug message."""
+        import logging
+
+        from har_capture.sanitization.har import _sanitize_json_text
+
+        with caplog.at_level(logging.DEBUG):
+            result = _sanitize_json_text("<html>not json</html>")
+        assert result == "<html>not json</html>"
+        assert "Non-JSON" in caplog.text
+
+
+# =============================================================================
+# Sanitization Metadata Embedding
+# =============================================================================
+
+# ┌──────────────────────┬────────────┬──────────────────────────────────────┐
+# │ salt_arg             │ expected   │ description                          │
+# ├──────────────────────┼────────────┼──────────────────────────────────────┤
+SALT_MODE_CASES = [
+    ("auto", "random", "auto keyword → random mode"),
+    ("random", "random", "random keyword → random mode"),
+    (None, "static", "None → static mode"),
+    ("my-salt", "provided", "user string → provided mode"),
+    ("s3cret!", "provided", "special chars → provided mode"),
+]
+# └──────────────────────┴────────────┴──────────────────────────────────────┘
+
+# ┌──────────────────────┬──────────────────────────────────────────────────┐
+# │ heuristic_mode       │ expected_value                                  │
+# ├──────────────────────┼──────────────────────────────────────────────────┤
+HEURISTICS_MODE_CASES = [
+    (HeuristicMode.DISABLED, "disabled"),
+    (HeuristicMode.FLAG, "flag"),
+    (HeuristicMode.REDACT, "redact"),
+]
+# └──────────────────────┴──────────────────────────────────────────────────┘
+
+# Required keys in the sanitization metadata block
+_REQUIRED_METADATA_KEYS = frozenset(
+    {
+        "tool",
+        "version",
+        "sanitized_at",
+        "salt_mode",
+        "heuristics",
+        "auto_redacted",
+        "auto_redacted_counts",
+        "user_redacted",
+        "user_skipped",
+        "flagged_total",
+        "warnings",
+    }
+)
+
+
+def _make_report(**overrides: object) -> SanitizationReport:
+    """Build a minimal SanitizationReport with optional overrides."""
+    defaults: dict[str, object] = {
+        "input_file": "",
+        "output_file": "",
+        "salt": "test-salt",
+        "auto_redacted_counts": {"password": 3, "mac_address": 2},
+    }
+    defaults.update(overrides)
+    return SanitizationReport(**defaults)  # type: ignore[arg-type]
+
+
+class TestEmbedSanitizationMetadataUnit:
+    """Unit tests for _embed_sanitization_metadata() called directly."""
+
+    def test_all_required_keys_present(self) -> None:
+        """Metadata block contains every required key."""
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, "auto")
+        meta = har["log"]["_har_capture"]["sanitization"]  # type: ignore[index]
+        assert set(meta.keys()) == _REQUIRED_METADATA_KEYS
+
+    @pytest.mark.parametrize(
+        ("salt_arg", "expected_mode", "desc"),
+        SALT_MODE_CASES,
+        ids=[c[2] for c in SALT_MODE_CASES],
+    )
+    def test_salt_mode_mapping(
+        self,
+        salt_arg: str | None,
+        expected_mode: str,
+        desc: str,
+    ) -> None:
+        """Salt argument maps to correct salt_mode string."""
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, salt_arg)
+        assert har["log"]["_har_capture"]["sanitization"]["salt_mode"] == expected_mode  # type: ignore[index]
+
+    @pytest.mark.parametrize(
+        ("mode", "expected_value"),
+        HEURISTICS_MODE_CASES,
+        ids=[m.value for m, _ in HEURISTICS_MODE_CASES],
+    )
+    def test_heuristics_mode_recorded(
+        self,
+        mode: HeuristicMode,
+        expected_value: str,
+    ) -> None:
+        """Each HeuristicMode enum is serialised to its .value string."""
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, _make_report(), mode, "auto")
+        assert har["log"]["_har_capture"]["sanitization"]["heuristics"] == expected_value  # type: ignore[index]
+
+    def test_report_counts_propagated(self) -> None:
+        """Auto-redacted counts from the report appear in metadata."""
+        report = _make_report(auto_redacted_counts={"password": 5, "mac_address": 12})
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, report, HeuristicMode.DISABLED, "auto")
+        meta = har["log"]["_har_capture"]["sanitization"]  # type: ignore[index]
+        assert meta["auto_redacted"] == 17
+        assert meta["auto_redacted_counts"] == {"password": 5, "mac_address": 12}
+
+    def test_does_not_leak_salt_value(self) -> None:
+        """Actual salt string must never appear anywhere in the metadata."""
+        report = _make_report(salt="super-secret-salt")
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, report, HeuristicMode.DISABLED, "super-secret-salt")
+        meta_json = json.dumps(har["log"]["_har_capture"]["sanitization"])  # type: ignore[index]
+        assert "super-secret-salt" not in meta_json
+        # Only salt-related key should be salt_mode
+        assert set(k for k in har["log"]["_har_capture"]["sanitization"] if "salt" in k) == {"salt_mode"}  # type: ignore[index]
+
+    def test_preserves_existing_har_capture_keys(self) -> None:
+        """Existing _har_capture fields are not clobbered."""
+        har: dict[str, object] = {
+            "log": {"_har_capture": {"version": "0.4.3", "browser_cookies": []}},
+        }
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, "auto")
+        cap = har["log"]["_har_capture"]  # type: ignore[index]
+        assert cap["version"] == "0.4.3"
+        assert cap["browser_cookies"] == []
+        assert "sanitization" in cap
+
+    def test_creates_log_and_har_capture_if_missing(self) -> None:
+        """Works even when log and _har_capture don't exist yet."""
+        har: dict[str, object] = {}
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, "auto")
+        assert "sanitization" in har["log"]["_har_capture"]  # type: ignore[index]
+
+    def test_user_redacted_and_skipped_defaults(self) -> None:
+        """Non-interactive report yields zero user counts."""
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, "auto")
+        meta = har["log"]["_har_capture"]["sanitization"]  # type: ignore[index]
+        assert meta["user_redacted"] == 0
+        assert meta["user_skipped"] == 0
+        assert meta["flagged_total"] == 0
+        assert meta["warnings"] == []
+
+    def test_sanitized_at_is_utc_iso(self) -> None:
+        """Timestamp is a valid UTC ISO-8601 string."""
+        from datetime import datetime, timezone
+
+        har: dict[str, object] = {"log": {}}
+        _embed_sanitization_metadata(har, _make_report(), HeuristicMode.DISABLED, "auto")
+        ts = har["log"]["_har_capture"]["sanitization"]["sanitized_at"]  # type: ignore[index]
+        parsed = datetime.fromisoformat(ts)
+        assert parsed.tzinfo is not None
+        assert parsed.utcoffset() == timezone.utc.utcoffset(None)
+
+
+class TestSanitizationMetadataIntegration:
+    """Integration tests: sanitize_har() embeds metadata end-to-end."""
+
+    def test_sanitize_har_embeds_metadata(self) -> None:
+        """sanitize_har() output contains sanitization metadata with all keys."""
+        result, _ = sanitize_har({"log": {"entries": []}})
+        meta = result["log"]["_har_capture"]["sanitization"]
+        assert set(meta.keys()) == _REQUIRED_METADATA_KEYS
+        assert meta["tool"] == "har-capture"
+
+    def test_records_redaction_counts(self) -> None:
+        """HAR with sensitive data produces non-zero auto_redacted counts."""
+        har = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "http://example.com",
+                            "headers": [{"name": "Authorization", "value": "Bearer tok123"}],
+                        },
+                        "response": {
+                            "headers": [],
+                            "content": {"text": "", "mimeType": "text/html"},
+                        },
+                    }
+                ]
+            }
+        }
+        result, _ = sanitize_har(har, salt="test")
+        meta = result["log"]["_har_capture"]["sanitization"]
+        assert meta["auto_redacted"] > 0
+        assert isinstance(meta["auto_redacted_counts"], dict)
+        assert len(meta["auto_redacted_counts"]) > 0
+
+    def test_preserves_existing_metadata(self) -> None:
+        """Existing _har_capture fields are not clobbered by sanitize_har()."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "version": "0.4.3",
+                    "browser_cookies": [{"name": "sid", "value": "abc"}],
+                },
+            }
+        }
+        result, _ = sanitize_har(har, salt="test")
+        cap = result["log"]["_har_capture"]
+        assert "sanitization" in cap
+        assert "browser_cookies" in cap
+        assert cap["version"] == "0.4.3"
