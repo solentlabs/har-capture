@@ -306,8 +306,11 @@ def _sanitize_form_urlencoded(
                 value = _redact_value(value, hasher, "FIELD", collector)
             elif is_flaggable_field(key) and collector and value:
                 collector.flag_value(
-                    value, "field", ConfidenceLevel.MEDIUM,
-                    f"form field '{key}'", f"Flaggable field name '{key}' in form data",
+                    value,
+                    "field",
+                    ConfidenceLevel.MEDIUM,
+                    f"form field '{key}'",
+                    f"Flaggable field name '{key}' in form data",
                 )
             pairs.append(f"{key}={value}")
         else:
@@ -366,7 +369,9 @@ def sanitize_post_data(
                     param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
                 elif is_flaggable_field(param["name"]) and collector and param.get("value"):
                     collector.flag_value(
-                        param["value"], "field", ConfidenceLevel.MEDIUM,
+                        param["value"],
+                        "field",
+                        ConfidenceLevel.MEDIUM,
                         f"POST param '{param['name']}'",
                         f"Flaggable field name '{param['name']}' in POST params",
                     )
@@ -413,8 +418,11 @@ def _sanitize_json_recursive(
                 result[key] = _redact_value(value, hasher, "FIELD", collector)
             elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
                 collector.flag_value(
-                    value, "field", ConfidenceLevel.MEDIUM,
-                    f"JSON key '{key}'", f"Flaggable field name '{key}' in JSON",
+                    value,
+                    "field",
+                    ConfidenceLevel.MEDIUM,
+                    f"JSON key '{key}'",
+                    f"Flaggable field name '{key}' in JSON",
                 )
                 result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
             elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
@@ -566,8 +574,10 @@ def _sanitize_string_patterns(
     if collector:
         for match in _SSN_PATTERN.finditer(value):
             collector.flag_value(
-                match.group(0), "ssn", ConfidenceLevel.MEDIUM,
-                value[max(0, match.start() - 20):match.end() + 20],
+                match.group(0),
+                "ssn",
+                ConfidenceLevel.MEDIUM,
+                value[max(0, match.start() - 20) : match.end() + 20],
                 "Possible SSN pattern (###-##-####)",
             )
 
@@ -575,8 +585,10 @@ def _sanitize_string_patterns(
     if collector:
         for match in _PHONE_PATTERN.finditer(value):
             collector.flag_value(
-                match.group(0), "phone", ConfidenceLevel.LOW,
-                value[max(0, match.start() - 20):match.end() + 20],
+                match.group(0),
+                "phone",
+                ConfidenceLevel.LOW,
+                value[max(0, match.start() - 20) : match.end() + 20],
                 "Possible phone number pattern",
             )
 
@@ -643,23 +655,35 @@ def _sanitize_url_path(
                 continue
             if _UUID_PATTERN.match(segment):
                 collector.flag_value(
-                    segment, "uuid", ConfidenceLevel.LOW,
-                    url, "UUID in URL path segment",
+                    segment,
+                    "uuid",
+                    ConfidenceLevel.LOW,
+                    url,
+                    "UUID in URL path segment",
                 )
             elif _API_KEY_PREFIX_PATTERN.match(segment):
                 collector.flag_value(
-                    segment, "api_key", ConfidenceLevel.HIGH,
-                    url, "API key prefix pattern in URL path segment",
+                    segment,
+                    "api_key",
+                    ConfidenceLevel.HIGH,
+                    url,
+                    "API key prefix pattern in URL path segment",
                 )
             elif _DEVICE_SERIAL_PATTERN.match(segment):
                 collector.flag_value(
-                    segment, "device_serial", ConfidenceLevel.MEDIUM,
-                    url, "Device/serial number pattern in URL path segment",
+                    segment,
+                    "device_serial",
+                    ConfidenceLevel.MEDIUM,
+                    url,
+                    "Device/serial number pattern in URL path segment",
                 )
             elif _LONG_TOKEN_PATTERN.match(segment):
                 collector.flag_value(
-                    segment, "token", ConfidenceLevel.MEDIUM,
-                    url, "Long mixed-case token in URL path segment",
+                    segment,
+                    "token",
+                    ConfidenceLevel.MEDIUM,
+                    url,
+                    "Long mixed-case token in URL path segment",
                 )
 
     return url
@@ -693,8 +717,11 @@ def _sanitize_url_query_params(
             changed = True
         elif is_flaggable_field(name) and collector and value:
             collector.flag_value(
-                value, "field", ConfidenceLevel.MEDIUM,
-                f"query param '{name}'", f"Flaggable field name '{name}' in URL query",
+                value,
+                "field",
+                ConfidenceLevel.MEDIUM,
+                f"query param '{name}'",
+                f"Flaggable field name '{name}' in URL query",
             )
             sanitized_params.append((name, value))
         else:
@@ -741,7 +768,9 @@ def _sanitize_request(
                     param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
                 elif is_flaggable_field(param["name"]) and collector and param.get("value"):
                     collector.flag_value(
-                        param["value"], "field", ConfidenceLevel.MEDIUM,
+                        param["value"],
+                        "field",
+                        ConfidenceLevel.MEDIUM,
                         f"queryString param '{param['name']}'",
                         f"Flaggable field name '{param['name']}' in queryString",
                     )
@@ -785,10 +814,7 @@ def _sanitize_response_content(
             content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
         except json.JSONDecodeError:
             _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
-    elif (
-        mime_type.startswith("text/")
-        or not mime_type
-    ) and content.get("encoding") != "base64":
+    elif (mime_type.startswith("text/") or not mime_type) and content.get("encoding") != "base64":
         # Fallback: apply pattern-based sanitization to text content
         content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
 
@@ -945,6 +971,13 @@ def sanitize_har(
                     custom_patterns=custom_patterns,
                     heuristics=heuristics,
                 )
+
+    # Sanitize browser_cookies in _har_capture metadata
+    har_capture_meta = log.get("_har_capture", {})
+    if isinstance(har_capture_meta.get("browser_cookies"), list):
+        for cookie in har_capture_meta["browser_cookies"]:
+            if isinstance(cookie, dict) and "value" in cookie:
+                cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)

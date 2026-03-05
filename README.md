@@ -73,15 +73,15 @@ ______________________________________________________________________
 
 **1. Sanitization report** — 84 values auto-redacted across 9 PII categories:
 
-![Sanitization Report](docs/images/sanitization-report.png)
+![Sanitization Report](https://raw.githubusercontent.com/solentlabs/har-capture/main/docs/images/sanitization-report.png)
 
 **2. Flagged values for review** — passwords, fields, WiFi SSIDs, and phone numbers detected automatically:
 
-![Flagged Values for Review](docs/images/flagged-values-table.png)
+![Flagged Values for Review](https://raw.githubusercontent.com/solentlabs/har-capture/main/docs/images/flagged-values-table.png)
 
 **3. Interactive redaction picker** — high-confidence items pre-selected, you choose the rest:
 
-![Redact Picker](docs/images/redact-picker.png)
+![Redact Picker](https://raw.githubusercontent.com/solentlabs/har-capture/main/docs/images/redact-picker.png)
 
 ______________________________________________________________________
 

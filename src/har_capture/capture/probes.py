@@ -120,6 +120,12 @@ def probe_auth_challenge(url: str, timeout: int = 10) -> dict[str, Any]:
         result["status_code"] = resp.status
         result["headers"] = _headers_dict(resp.headers)
         result["body_preview"] = _read_body_preview(resp)
+        result["www_authenticate"] = resp.headers.get("WWW-Authenticate")
+        try:
+            result["set_cookie"] = resp.headers.get_all("Set-Cookie") or []
+        except AttributeError:
+            val = resp.headers.get("Set-Cookie")
+            result["set_cookie"] = [val] if val else []
     except urllib.error.HTTPError as e:
         result["status_code"] = e.code
         result["headers"] = _headers_dict(e.headers)

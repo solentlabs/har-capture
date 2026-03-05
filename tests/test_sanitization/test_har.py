@@ -1352,3 +1352,98 @@ class TestSerialNumberJsonSanitization:
         content = json.loads(result["response"]["content"]["text"])
         assert content["model"] == "C7000", "Model should be preserved"
         assert content["firmware"] == "V1.03.08", "Firmware should be preserved"
+
+
+class TestBrowserCookieSanitization:
+    """Tests for browser_cookies sanitization in _har_capture metadata."""
+
+    def test_browser_cookie_values_redacted(self) -> None:
+        """Test that browser_cookies values in _har_capture metadata are redacted."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "browser_cookies": [
+                        {
+                            "name": "XSRF_TOKEN",
+                            "value": "secret123",
+                            "domain": ".example.com",
+                            "path": "/",
+                            "httpOnly": False,
+                            "secure": True,
+                            "sameSite": "Lax",
+                        },
+                        {
+                            "name": "session_id",
+                            "value": "s3cr3t-s3ss10n",
+                            "domain": ".example.com",
+                            "path": "/",
+                            "httpOnly": True,
+                            "secure": True,
+                            "sameSite": "Strict",
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        cookies = result["log"]["_har_capture"]["browser_cookies"]
+        assert cookies[0]["value"] != "secret123", "Cookie value should be redacted"
+        assert cookies[1]["value"] != "s3cr3t-s3ss10n", "Cookie value should be redacted"
+
+    def test_browser_cookie_structural_properties_preserved(self) -> None:
+        """Test that cookie structural properties (domain, path, httpOnly, secure) are preserved."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "browser_cookies": [
+                        {
+                            "name": "token",
+                            "value": "abc",
+                            "domain": ".example.com",
+                            "path": "/api",
+                            "httpOnly": True,
+                            "secure": True,
+                            "sameSite": "Strict",
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        cookie = result["log"]["_har_capture"]["browser_cookies"][0]
+        assert cookie["name"] == "token"
+        assert cookie["domain"] == ".example.com"
+        assert cookie["path"] == "/api"
+        assert cookie["httpOnly"] is True
+        assert cookie["secure"] is True
+        assert cookie["sameSite"] == "Strict"
+
+    def test_browser_cookies_absent_no_error(self) -> None:
+        """Test sanitize_har works when _har_capture has no browser_cookies."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {"tool": "har-capture", "version": "0.4.1"},
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+        assert "browser_cookies" not in result["log"]["_har_capture"]
+
+    def test_browser_cookies_empty_list(self) -> None:
+        """Test sanitize_har handles empty browser_cookies list."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {"browser_cookies": []},
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+        assert result["log"]["_har_capture"]["browser_cookies"] == []
