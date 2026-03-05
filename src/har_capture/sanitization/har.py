@@ -1214,14 +1214,14 @@ def apply_user_redactions(
             continue
 
     try:
-        # Parse back to dict
-        result = json.loads(content)
+        # Parse back to dict — cast needed because json.loads returns Any
+        parsed: dict[str, Any] = json.loads(content)
     except json.JSONDecodeError as e:
         raise HarValidationError(
             f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
         ) from e
 
-    return result
+    return parsed
 
 
 def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bool, int]:
