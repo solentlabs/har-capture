@@ -66,13 +66,21 @@ def _make_http_error(
     return err
 
 
-def _make_response(status: int = 200, body: str = "", headers: dict[str, str] | None = None) -> MagicMock:
+def _make_response(
+    status: int = 200,
+    body: str = "",
+    headers: dict[str, str] | None = None,
+    multi_cookies: list[str] | None = None,
+) -> MagicMock:
     """Create a mock HTTP response."""
     resp = MagicMock()
     resp.status = status
     msg = HTTPMessage()
     for k, v in (headers or {}).items():
         msg[k] = v
+    if multi_cookies:
+        for cookie in multi_cookies:
+            msg["Set-Cookie"] = cookie
     resp.headers = msg
     resp.read.return_value = body.encode("utf-8")
     return resp
@@ -99,6 +107,16 @@ AUTH_CHALLENGE_CASES = [
         "200_no_auth",
         lambda: _make_response(200, body="<html>OK</html>"),
         200, None, [], True,
+    ),
+    (
+        "200_with_cookies",
+        lambda: _make_response(200, body="<html>OK</html>", multi_cookies=["PHPSESSID=xyz789", "theme=dark"]),
+        200, None, ["PHPSESSID=xyz789", "theme=dark"], True,
+    ),
+    (
+        "200_with_www_authenticate",
+        lambda: _make_response(200, body="<html>OK</html>", headers={"WWW-Authenticate": "Negotiate"}),
+        200, "Negotiate", [], True,
     ),
     (
         "set_cookie_capture",
@@ -488,6 +506,7 @@ class _ProbeTestHandler(BaseHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
+        self.send_header("Set-Cookie", "session=authed; Path=/; HttpOnly")
         self.end_headers()
         self.wfile.write(b"<html>OK</html>")
 
@@ -630,6 +649,14 @@ class TestProbeIntegrationHTTPS:
 
         assert result["supported"] is True
         assert result["status_code"] is not None
+
+    def test_200_captures_cookies(self, http_auth_server: str) -> None:
+        """Auth probe captures Set-Cookie headers from error responses."""
+        # probe_auth_challenge sends unauthenticated GET, so _ProbeTestHandler
+        # returns 401 with Set-Cookie. Verifies cookie extraction on error path.
+        result = probe_auth_challenge(http_auth_server, timeout=5)
+        assert result["status_code"] == 401
+        assert any("sid=" in c for c in result["set_cookie"])
 
     def test_head_support_https(self, https_auth_server: str) -> None:
         """HEAD probe works against real HTTPS server with self-signed cert."""

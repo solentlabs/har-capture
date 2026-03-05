@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Probe 200-Path Cookies** - `probe_auth_challenge()` now captures `Set-Cookie` and `WWW-Authenticate` headers on 200 responses (previously only extracted on 401/error paths)
+
+### Added
+
+- **Browser Cookie Snapshot** - After Playwright navigates and page settles, `context.cookies()` captures all browser cookies (including JS-set ones like XSRF_TOKEN) with full properties (domain, path, expires, httpOnly, secure, sameSite). Stored in HAR as `log._har_capture.browser_cookies` with values sanitized.
+
 ## [0.4.1] - 2026-03-04
 
 ### Fixed

@@ -325,8 +325,11 @@ def capture_device_har(
     # Close the file descriptor - Playwright will write to it by path
     os.close(temp_fd)
 
+    browser_cookies: list[Any] = []
+
     def launch_browser_and_capture() -> bool:
         """Launch browser and capture HAR. Returns True on success."""
+        nonlocal browser_cookies
         with sync_playwright() as p:
             # Select browser
             if browser == "firefox":
@@ -359,6 +362,13 @@ def capture_device_har(
             # Create page and navigate to device
             page = context.new_page()
             page.goto(target_url, wait_until="networkidle")
+
+            # Capture browser cookie state after page load
+            # Includes JS-set cookies (e.g. XSRF_TOKEN) with full properties
+            try:
+                browser_cookies = context.cookies()
+            except Exception:
+                browser_cookies = []
 
             if timeout is not None:
                 # Automated mode: wait for timeout then close
@@ -449,18 +459,22 @@ def capture_device_har(
                 error=error_str,
             )
 
-    # Inject probe data into the raw HAR before any downstream processing.
-    # This ensures probes appear in all output paths (sanitized, compressed, raw).
-    # Safe: sanitizer only walks log.entries and log.pages, not log._probes.
-    if probes:
+    # Inject probe data and browser cookies into the raw HAR before any
+    # downstream processing.  This ensures they appear in all output paths
+    # (sanitized, compressed, raw).
+    if probes or browser_cookies:
         try:
             with open(temp_path, encoding="utf-8") as f:
                 raw_har = json.load(f)
-            raw_har["log"]["_probes"] = probes
+            if probes:
+                raw_har["log"]["_probes"] = probes
+            if browser_cookies:
+                raw_har["log"].setdefault("_har_capture", {})
+                raw_har["log"]["_har_capture"]["browser_cookies"] = browser_cookies
             with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(raw_har, f)
         except Exception as e:
-            _LOGGER.warning("Failed to inject probe data into HAR: %s", e)
+            _LOGGER.warning("Failed to inject metadata into HAR: %s", e)
 
     # Determine sanitized output path based on user's output_path
     if str(output_path).endswith(".har"):

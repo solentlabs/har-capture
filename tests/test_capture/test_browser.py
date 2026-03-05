@@ -533,6 +533,147 @@ class TestCaptureDeviceHar:
         mock_playwright.chromium.launch.assert_not_called()
 
 
+class TestBrowserCookieSnapshot:
+    """Tests for browser cookie snapshot after page load."""
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_context_cookies_called_after_goto(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test context.cookies() is called after page.goto()."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_context.cookies.return_value = [
+            {
+                "name": "XSRF_TOKEN",
+                "value": "abc123",
+                "domain": ".example.com",
+                "path": "/",
+                "httpOnly": False,
+                "secure": True,
+                "sameSite": "Lax",
+            },
+        ]
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_context.cookies.assert_called_once()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_browser_cookies_injected_into_har(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test browser cookies appear in HAR _har_capture.browser_cookies."""
+        import json
+        import os
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        test_cookies = [
+            {
+                "name": "XSRF_TOKEN",
+                "value": "abc123",
+                "domain": ".example.com",
+                "path": "/",
+                "httpOnly": False,
+                "secure": True,
+                "sameSite": "Lax",
+            },
+        ]
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_context.cookies.return_value = test_cookies
+
+        # Create a real temp HAR file so the injection JSON read/write works
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+        temp_har = tmp_path / "temp_capture.har"
+        temp_har.write_text(json.dumps(har_data))
+
+        output = tmp_path / "test.har"
+
+        # The capture writes the temp HAR via Playwright (mocked), then reads it
+        # back for injection.  We must make tempfile.mkstemp point at our real file.
+        fd = os.open(str(temp_har), os.O_RDWR)
+        with patch("tempfile.mkstemp", return_value=(fd, str(temp_har))):
+            capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                headless=True,
+                timeout=1,
+                sanitize=False,
+                compress=False,
+                keep_raw=True,
+            )
+
+        # The output file should contain injected browser_cookies
+        raw_har = json.loads(output.read_text())
+        assert "browser_cookies" in raw_har["log"].get("_har_capture", {}), (
+            "browser_cookies should be injected into _har_capture metadata"
+        )
+        assert raw_har["log"]["_har_capture"]["browser_cookies"] == test_cookies
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_context_cookies_exception_handled(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test context.cookies() exception is caught gracefully."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_context.cookies.side_effect = RuntimeError("cookies() failed")
+
+        output = tmp_path / "test.har"
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        # Should not crash
+        assert result.success is True
+
+
 class TestSanitizationBeforeCompression:
     """Tests to ensure compression happens AFTER sanitization.
 
