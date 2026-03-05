@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-03-05
+
 ### Added
 
 - **Sanitization metadata in HAR** — Every sanitized HAR now embeds a `log._har_capture.sanitization` section recording tool version, timestamp, salt mode, heuristic mode, and redaction counts. Does not leak the salt value.
+- **Web Storage Snapshot** — After page settles, captures localStorage (via `context.storage_state()`) and sessionStorage (via `page.evaluate()`) per origin. Stored in HAR as `log._har_capture.local_storage` and `log._har_capture.session_storage` with values sanitized using `STORAGE_` prefix. Catches auth-critical data that lives only in web storage (e.g., HNAP PrivateKey in localStorage, SJCL encryption keys in sessionStorage).
 
 ### Fixed
 
+- **`_add_capture_metadata` clobbering** — `_add_capture_metadata()` now merges with existing `_har_capture` metadata instead of overwriting it. Previously, `browser_cookies` injected before compression were silently lost.
 - **Allowlist missing hash prefixes** — Added `STORAGE_`, `CRED_`, `SENSITIVE_` to `allowlist.json` hash prefixes, preventing double-redaction on re-sanitization
 - **ci-local.sh bare pytest** — Integration test step now uses `"$PYTHON" -m pytest` consistently
 
@@ -26,16 +30,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Module-level import** — Moved `RedactionCollector` from per-call lazy import in `sanitize_html()` to module-level `else` branch of `TYPE_CHECKING` block
 - **Thread-safety docstring** — `RedactionCollector` now documents that it is not thread-safe
 - **IPv6 docstring** — `_parse_target()` now documents IPv6 address support
-
-## [0.4.3] - 2026-03-05
-
-### Added
-
-- **Web Storage Snapshot** — After page settles, captures localStorage (via `context.storage_state()`) and sessionStorage (via `page.evaluate()`) per origin. Stored in HAR as `log._har_capture.local_storage` and `log._har_capture.session_storage` with values sanitized using `STORAGE_` prefix. Catches auth-critical data that lives only in web storage (e.g., HNAP PrivateKey in localStorage, SJCL encryption keys in sessionStorage).
-
-### Fixed
-
-- **`_add_capture_metadata` clobbering** — `_add_capture_metadata()` now merges with existing `_har_capture` metadata instead of overwriting it. Previously, `browser_cookies` injected before compression were silently lost.
 
 ## [0.4.2] - 2026-03-05
 
