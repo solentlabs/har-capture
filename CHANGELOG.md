@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-03-05
+
+### Added
+
+- **Web Storage Snapshot** — After page settles, captures localStorage (via `context.storage_state()`) and sessionStorage (via `page.evaluate()`) per origin. Stored in HAR as `log._har_capture.local_storage` and `log._har_capture.session_storage` with values sanitized using `STORAGE_` prefix. Catches auth-critical data that lives only in web storage (e.g., HNAP PrivateKey in localStorage, SJCL encryption keys in sessionStorage).
+
+### Fixed
+
+- **`_add_capture_metadata` clobbering** — `_add_capture_metadata()` now merges with existing `_har_capture` metadata instead of overwriting it. Previously, `browser_cookies` injected before compression were silently lost.
+
 ## [0.4.2] - 2026-03-05
 
 ### Fixed
@@ -365,4 +375,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.0]: https://github.com/solentlabs/har-capture/compare/v0.3.3...v0.4.0
 [0.4.1]: https://github.com/solentlabs/har-capture/compare/v0.4.0...v0.4.1
 [0.4.2]: https://github.com/solentlabs/har-capture/compare/v0.4.1...v0.4.2
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.2...HEAD
+[0.4.3]: https://github.com/solentlabs/har-capture/compare/v0.4.2...v0.4.3
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.3...HEAD

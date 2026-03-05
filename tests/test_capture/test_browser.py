@@ -674,6 +674,149 @@ class TestBrowserCookieSnapshot:
         assert result.success is True
 
 
+class TestWebStorageCapture:
+    """Tests for Web Storage (localStorage + sessionStorage) capture."""
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_storage_state_and_evaluate_called(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test context.storage_state() and page.evaluate() are called after goto."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_context.storage_state.return_value = {"origins": [], "cookies": []}
+        mock_page.evaluate.return_value = {}
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        mock_context.storage_state.assert_called_once()
+        mock_page.evaluate.assert_called_once()
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_web_storage_injected_into_har(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test web storage data appears in HAR _har_capture metadata."""
+        import json
+        import os
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_context.cookies.return_value = []
+        mock_context.storage_state.return_value = {
+            "origins": [
+                {
+                    "origin": "http://127.0.0.1",
+                    "localStorage": [
+                        {"name": "PrivateKey", "value": "hmac_secret_123"},
+                    ],
+                },
+            ],
+            "cookies": [],
+        }
+        mock_page.evaluate.return_value = {"sjcl_key": "aes_key_456", "user": "admin"}
+
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+        temp_har = tmp_path / "temp_capture.har"
+        temp_har.write_text(json.dumps(har_data))
+
+        output = tmp_path / "test.har"
+        fd = os.open(str(temp_har), os.O_RDWR)
+        with patch("tempfile.mkstemp", return_value=(fd, str(temp_har))):
+            capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                headless=True,
+                timeout=1,
+                sanitize=False,
+                compress=False,
+                keep_raw=True,
+            )
+
+        raw_har = json.loads(output.read_text())
+        meta = raw_har["log"].get("_har_capture", {})
+
+        # localStorage
+        assert "local_storage" in meta
+        assert len(meta["local_storage"]) == 1
+        assert meta["local_storage"][0]["origin"] == "http://127.0.0.1"
+        assert meta["local_storage"][0]["items"][0]["name"] == "PrivateKey"
+        assert meta["local_storage"][0]["items"][0]["value"] == "hmac_secret_123"
+
+        # sessionStorage
+        assert "session_storage" in meta
+        assert len(meta["session_storage"]) == 1
+        items = {i["name"]: i["value"] for i in meta["session_storage"][0]["items"]}
+        assert items["sjcl_key"] == "aes_key_456"
+        assert items["user"] == "admin"
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_storage_state_exception_handled(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test storage_state() exception is caught gracefully."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_context.storage_state.side_effect = RuntimeError("storage_state() failed")
+        mock_page.evaluate.side_effect = RuntimeError("evaluate() failed")
+
+        output = tmp_path / "test.har"
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+        )
+
+        assert result.success is True
+
+
 # fmt: off
 ADD_CAPTURE_METADATA_CASES = [
     # (description, input_har_capture, expected_keys_present, expected_values)
@@ -833,6 +976,67 @@ class TestBrowserCookiesSurvivePipeline:
         assert cookies[0]["value"] != "s3cr3t_t0k3n", "Cookie value should be redacted"
         assert cookies[0]["domain"] == "example.com", "Structural properties preserved"
         assert cookies[0]["httpOnly"] is True, "Structural properties preserved"
+
+    def test_full_capture_sanitize_compress_preserves_storage(self, tmp_path: Path) -> None:
+        """End-to-end: web storage is sanitized and present after compress."""
+        import json
+
+        from har_capture.capture.browser import filter_and_compress_har
+        from har_capture.sanitization import sanitize_har_file
+
+        har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [
+                        {
+                            "origin": "https://192.168.100.1",
+                            "items": [
+                                {"name": "PrivateKey", "value": "hmac_secret_key"},
+                            ],
+                        },
+                    ],
+                    "session_storage": [
+                        {
+                            "origin": "https://192.168.100.1",
+                            "items": [
+                                {"name": "sjcl_key", "value": "aes256_enc_key"},
+                                {"name": "csrf_token", "value": "xsrf_abc123"},
+                            ],
+                        },
+                    ],
+                },
+            }
+        }
+
+        raw_path = tmp_path / "capture.har"
+        raw_path.write_text(json.dumps(har))
+
+        sanitized_path_str, _ = sanitize_har_file(str(raw_path))
+        sanitized_path = Path(sanitized_path_str)
+
+        filter_and_compress_har(sanitized_path)
+
+        result = json.loads(sanitized_path.read_text())
+        meta = result["log"]["_har_capture"]
+
+        # localStorage survives and is redacted
+        assert "local_storage" in meta
+        ls = meta["local_storage"][0]
+        assert ls["origin"] == "https://192.168.100.1"
+        assert ls["items"][0]["name"] == "PrivateKey"
+        assert ls["items"][0]["value"] != "hmac_secret_key", "Should be redacted"
+
+        # sessionStorage survives and is redacted
+        assert "session_storage" in meta
+        ss = meta["session_storage"][0]
+        assert ss["origin"] == "https://192.168.100.1"
+        assert ss["items"][0]["name"] == "sjcl_key"
+        assert ss["items"][0]["value"] != "aes256_enc_key", "Should be redacted"
+        assert ss["items"][1]["name"] == "csrf_token"
+        assert ss["items"][1]["value"] != "xsrf_abc123", "Should be redacted"
 
 
 class TestSanitizationBeforeCompression:

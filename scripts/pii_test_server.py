@@ -9,6 +9,7 @@ that har-capture's sanitizer is expected to redact:
 - Serial numbers, device names, SSIDs
 - CSRF tokens, session cookies, Basic Auth credentials
 - Pipe-delimited JS variables (tagValueList / systemInfo patterns)
+- Web Storage (localStorage: HNAP PrivateKey; sessionStorage: SJCL keys, CSRF)
 - Nested JSON API responses
 - HTML tables, forms, and event logs
 
@@ -70,6 +71,17 @@ def _wrap_page(title: str, body_html: str) -> str:
   <div class="content">
     {body_html}
   </div>
+  <script>
+    // Web Storage PII — tests localStorage + sessionStorage capture
+    // HNAP PrivateKey pattern (Arris S33, Motorola MB8600)
+    localStorage.setItem("PrivateKey", "HMAC_replicant_batty_c1982");
+    localStorage.setItem("firmware_url", "http://10.0.1.1/firmware/v3.2.1.bin");
+    // SJCL encryption params (Arris TG3442DE pattern)
+    sessionStorage.setItem("sjcl_key", "aes256_tyrell_pyramid_key");
+    sessionStorage.setItem("sjcl_iv", "iv_voightkampff_0x2019");
+    sessionStorage.setItem("csrf_token", "xsrf_wopr_shall_we_play");
+    sessionStorage.setItem("user", "admin");
+  </script>
 </body>
 </html>"""
 
@@ -375,6 +387,7 @@ def main() -> None:  # noqa: D103
     print("    /settings   Form with passwords, SSIDs, CSRF token")
     print("    /logs       Event log with MACs, IPs, emails in entries")
     print("    /api/config JSON API with nested PII structures")
+    print("    (all)       Web Storage: localStorage + sessionStorage PII on every page")
     print()
     print("Test with:")
     print(f"  har-capture get http://{args.host}:{args.port}")

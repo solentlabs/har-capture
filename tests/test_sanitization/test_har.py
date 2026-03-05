@@ -1447,3 +1447,140 @@ class TestBrowserCookieSanitization:
 
         result, _ = sanitize_har(har, salt="test-salt")
         assert result["log"]["_har_capture"]["browser_cookies"] == []
+
+
+class TestWebStorageSanitization:
+    """Tests for web storage sanitization in _har_capture metadata."""
+
+    def test_local_storage_values_redacted(self) -> None:
+        """Test that localStorage item values are redacted, names preserved."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [
+                        {
+                            "origin": "https://192.168.100.1",
+                            "items": [
+                                {"name": "PrivateKey", "value": "hmac_secret_123"},
+                                {"name": "firmware_url", "value": "http://10.0.1.1/fw"},
+                            ],
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        items = result["log"]["_har_capture"]["local_storage"][0]["items"]
+        assert items[0]["name"] == "PrivateKey"
+        assert items[0]["value"] != "hmac_secret_123", "Value should be redacted"
+        assert items[1]["name"] == "firmware_url"
+        assert items[1]["value"] != "http://10.0.1.1/fw", "Value should be redacted"
+
+    def test_session_storage_values_redacted(self) -> None:
+        """Test that sessionStorage item values are redacted, names preserved."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "session_storage": [
+                        {
+                            "origin": "https://192.168.100.1",
+                            "items": [
+                                {"name": "sjcl_key", "value": "aes256_key_abc"},
+                                {"name": "csrf_token", "value": "xsrf_token_xyz"},
+                            ],
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        items = result["log"]["_har_capture"]["session_storage"][0]["items"]
+        assert items[0]["name"] == "sjcl_key"
+        assert items[0]["value"] != "aes256_key_abc", "Value should be redacted"
+        assert items[1]["name"] == "csrf_token"
+        assert items[1]["value"] != "xsrf_token_xyz", "Value should be redacted"
+
+    def test_storage_structural_properties_preserved(self) -> None:
+        """Test that origin is preserved after sanitization."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [
+                        {
+                            "origin": "https://192.168.100.1",
+                            "items": [{"name": "key", "value": "val"}],
+                        },
+                    ],
+                    "session_storage": [
+                        {
+                            "origin": "http://10.0.0.1:8080",
+                            "items": [{"name": "tok", "value": "abc"}],
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        ls = result["log"]["_har_capture"]["local_storage"][0]
+        assert ls["origin"] == "https://192.168.100.1"
+        ss = result["log"]["_har_capture"]["session_storage"][0]
+        assert ss["origin"] == "http://10.0.0.1:8080"
+
+    def test_storage_absent_no_error(self) -> None:
+        """Test sanitize_har works when _har_capture has no web storage."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {"tool": "har-capture", "version": "0.4.2"},
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+        assert "local_storage" not in result["log"]["_har_capture"]
+        assert "session_storage" not in result["log"]["_har_capture"]
+
+    def test_storage_empty_list(self) -> None:
+        """Test sanitize_har handles empty web storage lists."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [],
+                    "session_storage": [],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+        assert result["log"]["_har_capture"]["local_storage"] == []
+        assert result["log"]["_har_capture"]["session_storage"] == []
+
+    def test_storage_uses_storage_category_prefix(self) -> None:
+        """Test that redacted storage values use STORAGE prefix, not COOKIE."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [
+                        {
+                            "origin": "https://example.com",
+                            "items": [{"name": "key", "value": "secret_value"}],
+                        },
+                    ],
+                },
+            }
+        }
+
+        result, _ = sanitize_har(har, salt="test-salt")
+
+        value = result["log"]["_har_capture"]["local_storage"][0]["items"][0]["value"]
+        assert value.startswith("STORAGE_"), f"Expected STORAGE_ prefix, got: {value}"

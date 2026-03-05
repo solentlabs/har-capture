@@ -979,6 +979,17 @@ def sanitize_har(
             if isinstance(cookie, dict) and "value" in cookie:
                 cookie["value"] = _redact_value(cookie["value"], hasher, "COOKIE", collector)
 
+    # Sanitize web storage (localStorage + sessionStorage) in _har_capture metadata
+    for storage_key in ("local_storage", "session_storage"):
+        storage_list = har_capture_meta.get(storage_key)
+        if isinstance(storage_list, list):
+            for origin_entry in storage_list:
+                if not isinstance(origin_entry, dict):
+                    continue
+                for item in origin_entry.get("items", []):
+                    if isinstance(item, dict) and "value" in item:
+                        item["value"] = _redact_value(item["value"], hasher, "STORAGE", collector)
+
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)
 
