@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gzip
 import json
-import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -181,7 +180,6 @@ def sanitize(
         # Interactive review mode (requires TTY)
         if interactive_terminal and sanitization_report.flagged:
             from har_capture.cli.interactive import run_interactive_review
-            from har_capture.sanitization import apply_user_redactions
 
             review_completed = run_interactive_review(
                 sanitization_report,
@@ -191,50 +189,9 @@ def sanitize(
             )
 
             if review_completed and sanitization_report.total_user_redacted > 0:
-                # Apply user redactions and rewrite the file
-                typer.echo()
-                typer.echo("Applying user redactions...")
+                from har_capture.cli.interactive import apply_reviewed_redactions
 
-                # Read the sanitized file back
-                try:
-                    with open(result_path, encoding="utf-8") as f:
-                        sanitized_data = json.load(f)
-                except (OSError, json.JSONDecodeError) as e:
-                    typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
-                    raise typer.Exit(1) from None
-
-                # Apply user redactions
-                try:
-                    final_data = apply_user_redactions(sanitized_data, sanitization_report)
-                except Exception as e:
-                    typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
-                    raise typer.Exit(1) from None
-
-                # Write atomically using temp file + rename
-                try:
-                    # Write to temporary file first
-                    result_dir = Path(result_path).parent
-                    with tempfile.NamedTemporaryFile(
-                        mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
-                    ) as tmp_file:
-                        json.dump(final_data, tmp_file, indent=2)
-                        tmp_path = tmp_file.name
-
-                    # Atomic rename (overwrites destination)
-                    Path(tmp_path).replace(result_path)
-
-                except OSError as e:
-                    typer.echo(f"Error: Failed to write output file: {e}", err=True)
-                    # Clean up temp file if it exists
-                    try:
-                        if "tmp_path" in locals():
-                            Path(tmp_path).unlink(missing_ok=True)
-                    except OSError:
-                        # Cleanup failure in error path - not critical, already exiting
-                        pass
-                    raise typer.Exit(1) from None
-
-                typer.echo(f"  Applied {sanitization_report.total_user_redacted} user redaction(s)")
+                apply_reviewed_redactions(sanitization_report, result_path)
 
             # Display summary
             from har_capture.cli.interactive import display_summary

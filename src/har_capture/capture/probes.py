@@ -28,7 +28,7 @@ _BODY_PREVIEW_CAP = 1024
 # =============================================================================
 
 
-def _make_ssl_context() -> ssl.SSLContext:
+def make_ssl_context() -> ssl.SSLContext:
     """Create an SSL context that accepts self-signed certificates."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -107,7 +107,7 @@ def probe_auth_challenge(url: str, timeout: int = 10) -> dict[str, Any]:
     }
 
     if url.startswith("https://"):
-        ctx = _make_ssl_context()
+        ctx = make_ssl_context()
         https_handler = urllib.request.HTTPSHandler(context=ctx)
         opener = urllib.request.build_opener(_NoRedirectHandler, https_handler)
     else:
@@ -167,7 +167,7 @@ def probe_head_support(url: str, timeout: int = 10) -> dict[str, Any]:
     try:
         kwargs: dict[str, Any] = {"timeout": timeout}
         if url.startswith("https://"):
-            kwargs["context"] = _make_ssl_context()
+            kwargs["context"] = make_ssl_context()
         resp = urllib.request.urlopen(req, **kwargs)  # noqa: S310
         result["supported"] = True
         result["status_code"] = resp.status

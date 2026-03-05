@@ -543,3 +543,17 @@ def test_validate_har_gzipped(tmp_path) -> None:
 
     findings = validate_har(har_file)
     assert len(findings) > 0
+
+
+class TestCompileSensitiveFields:
+    """Tests for _compile_sensitive_fields function."""
+
+    def test_compile_sensitive_fields_returns_compiled_patterns(self) -> None:
+        """Verify _compile_sensitive_fields returns compiled regex objects."""
+        import re
+
+        from har_capture.validation.secrets import _compile_sensitive_fields
+
+        patterns = _compile_sensitive_fields()
+        assert len(patterns) > 0
+        assert all(isinstance(p, re.Pattern) for p in patterns)

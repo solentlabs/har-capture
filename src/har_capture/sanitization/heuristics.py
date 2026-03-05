@@ -70,8 +70,6 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
 # Security: Maximum SSID name length for regex check (prevents ReDoS)
 # WiFi standard allows up to 32 chars, but this generous limit prevents
 # catastrophic backtracking on malicious input while catching real SSIDs
-_SSID_NAME_MAX_LENGTH = 100
-
 # Entropy thresholds for password/token detection
 _ENTROPY_THRESHOLD_DEFAULT = 2.8  # Higher threshold reduces false positives
 _ENTROPY_THRESHOLD_MIXED = 2.0  # Lower threshold for 3+ character types
@@ -211,7 +209,10 @@ def is_device_name_like(value: str) -> tuple[bool, str]:
         (r"(?i)(iphone|ipad|macbook|android|galaxy|pixel|surface|kindle)", "device brand/type"),
         (r"(?i)(laptop|desktop|phone|tablet|tv|speaker|printer|camera)", "device category"),
         (r"(?i)(living|bed|bath|kitchen|office|garage|basement)[-_\s]?room", "room name"),
-        (r"(?i)(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)", "router/modem brand"),
+        (
+            r"(?i)(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)",
+            "router/modem brand",
+        ),
     ]
 
     for pattern, reason in device_patterns:
@@ -298,9 +299,20 @@ def is_adjacent_to_redacted(
     values: list[str],
     index: int,
     redacted_prefixes: tuple[str, ...] = (
-        "***", "MAC_", "PASS_", "PRIV_IP_", "TOKEN_", "SERIAL_",
-        "FIELD_", "CREDENTIAL_", "AUTH_", "COOKIE_", "WIFI_SSID_",
-        "WIFI_", "DEVICE_", "CC_",
+        "***",
+        "MAC_",
+        "PASS_",
+        "PRIV_IP_",
+        "TOKEN_",
+        "SERIAL_",
+        "FIELD_",
+        "CREDENTIAL_",
+        "AUTH_",
+        "COOKIE_",
+        "WIFI_SSID_",
+        "WIFI_",
+        "DEVICE_",
+        "CC_",
     ),
 ) -> tuple[bool, str]:
     """Check if a value is adjacent to an already-redacted value.

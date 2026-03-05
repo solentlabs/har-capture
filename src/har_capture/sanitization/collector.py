@@ -28,6 +28,9 @@ class RedactionCollector:
     2. Track counts of auto-redacted values by category
     3. Collect suspicious values for user review (with deduplication)
 
+    Note:
+        Not thread-safe. Create a separate instance per sanitization pass.
+
     Attributes:
         hasher: The Hasher instance for generating redaction placeholders
         auto_redacted_counts: Counts by category for auto-redacted values

@@ -130,7 +130,9 @@ class TestMalformedInput:
         har_data = {"log": {}}
 
         result, _ = sanitize_har(har_data)
-        assert result == {"log": {}}
+        assert "log" in result
+        # Sanitization metadata is embedded even for empty logs
+        assert "sanitization" in result["log"].get("_har_capture", {})
 
     def test_har_missing_log_key(self) -> None:
         """Test HAR without log key."""

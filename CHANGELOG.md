@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Sanitization metadata in HAR** — Every sanitized HAR now embeds a `log._har_capture.sanitization` section recording tool version, timestamp, salt mode, heuristic mode, and redaction counts. Does not leak the salt value.
+
+### Fixed
+
+- **Allowlist missing hash prefixes** — Added `STORAGE_`, `CRED_`, `SENSITIVE_` to `allowlist.json` hash prefixes, preventing double-redaction on re-sanitization
+- **ci-local.sh bare pytest** — Integration test step now uses `"$PYTHON" -m pytest` consistently
+
+### Changed
+
+- **Shared SSL context** — Extracted duplicate SSL context creation from `connectivity.py` to use shared `make_ssl_context()` from `probes.py`
+- **CLI code deduplication** — Extracted `apply_reviewed_redactions()` into `cli/interactive.py`, eliminating ~55 lines of identical logic between `capture.py` and `sanitize.py`
+- **Debug logging on JSON parse failure** — `_sanitize_json_text()` now logs a debug message when encountering non-JSON text instead of silently returning
+- **Pre-compiled regex in secrets validation** — `check_post_data()` and `check_json_fields()` now use pre-compiled patterns via `_compile_sensitive_fields()` for better performance
+- **Removed unused constant** — Deleted `_SSID_NAME_MAX_LENGTH` from `heuristics.py` (never referenced)
+- **Module-level import** — Moved `RedactionCollector` from per-call lazy import in `sanitize_html()` to module-level `else` branch of `TYPE_CHECKING` block
+- **Thread-safety docstring** — `RedactionCollector` now documents that it is not thread-safe
+- **IPv6 docstring** — `_parse_target()` now documents IPv6 address support
+
 ## [0.4.3] - 2026-03-05
 
 ### Added
