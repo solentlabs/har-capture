@@ -16,7 +16,12 @@ import re
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
-from har_capture.patterns import Hasher, load_sensitive_patterns
+from har_capture.patterns import (
+    Hasher,
+    is_base64_credential,
+    is_cookie_attribute_metadata,
+    load_sensitive_patterns,
+)
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import is_valid_ip_address, sanitize_html
 from har_capture.sanitization.report import ConfidenceLevel
@@ -271,6 +276,11 @@ def sanitize_header_value(
         return _redact_value(value, hasher, "AUTH", collector)
 
     if name_lower in _COOKIE_REDACT_HEADERS:
+        # Detect cookie attribute metadata (e.g., "HttpOnly: true, Secure: true")
+        # that was incorrectly serialized as the header value
+        if is_cookie_attribute_metadata(value):
+            return _redact_value(value, hasher, "COOKIE", collector)
+
         # Preserve cookie names, redact values
         def redact_cookie(match: re.Match[str]) -> str:
             cookie_name = match.group(1)
@@ -278,7 +288,13 @@ def sanitize_header_value(
             hashed = _redact_value(cookie_value, hasher, "COOKIE", collector)
             return f"{cookie_name}={hashed}"
 
-        return re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
+        result = re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
+
+        # If regex matched nothing (no name=value pairs), redact the whole value
+        if result == value and value.strip():
+            return _redact_value(value, hasher, "COOKIE", collector)
+
+        return result
 
     return value
 
@@ -709,29 +725,46 @@ def _sanitize_url_query_params(
     if not parsed.query:
         return url
 
-    params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    sanitized_params = []
+    # Process raw query segments instead of parse_qsl to preserve base64
+    # padding ('=') which parse_qsl treats as key/value separator.
+    # Untouched segments pass through verbatim, preserving original encoding.
+    raw_segments = parsed.query.split("&")
+    rebuilt_segments = []
     changed = False
-    for name, value in params:
-        if is_sensitive_field(name) and value:
-            sanitized_params.append((name, _redact_value(value, hasher, "FIELD", collector)))
+    for segment in raw_segments:
+        if is_base64_credential(segment):
+            # Bare base64(user:pass) token (e.g., ?YWRtaW46cGFzcw==)
+            rebuilt_segments.append(_redact_value(segment, hasher, "AUTH", collector))
             changed = True
-        elif is_flaggable_field(name) and collector and value:
-            collector.flag_value(
-                value,
-                "field",
-                ConfidenceLevel.MEDIUM,
-                f"query param '{name}'",
-                f"Flaggable field name '{name}' in URL query",
-            )
-            sanitized_params.append((name, value))
+        elif "=" in segment:
+            key, _, val = segment.partition("=")
+            decoded_key = urllib.parse.unquote_plus(key)
+            decoded_val = urllib.parse.unquote_plus(val)
+            if is_sensitive_field(decoded_key) and val:
+                rebuilt_segments.append(f"{key}={_redact_value(decoded_val, hasher, 'FIELD', collector)}")
+                changed = True
+            elif is_flaggable_field(decoded_key) and collector and val:
+                collector.flag_value(
+                    decoded_val,
+                    "field",
+                    ConfidenceLevel.MEDIUM,
+                    f"query param '{decoded_key}'",
+                    f"Flaggable field name '{decoded_key}' in URL query",
+                )
+                rebuilt_segments.append(segment)
+            elif is_base64_credential(decoded_val):
+                # Base64 user:pass in parameter value (e.g., ?token=YWRtaW46cGFzcw==)
+                rebuilt_segments.append(f"{key}={_redact_value(decoded_val, hasher, 'AUTH', collector)}")
+                changed = True
+            else:
+                rebuilt_segments.append(segment)
         else:
-            sanitized_params.append((name, value))
+            rebuilt_segments.append(segment)
 
     if not changed:
         return url
 
-    new_query = urllib.parse.urlencode(sanitized_params)
+    new_query = "&".join(rebuilt_segments)
     return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
@@ -775,6 +808,15 @@ def _sanitize_request(
                         f"queryString param '{param['name']}'",
                         f"Flaggable field name '{param['name']}' in queryString",
                     )
+                elif is_base64_credential(param.get("value", "")):
+                    # Base64 user:pass in parameter value
+                    param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
+                elif is_base64_credential(param["name"]) or (
+                    not param.get("value") and is_base64_credential(param["name"] + "=")
+                ):
+                    # Bare base64 token as query parameter name
+                    # Also try with '=' appended since parse_qsl strips base64 padding
+                    param["name"] = _redact_value(param["name"], hasher, "AUTH", collector)
 
     # Sanitize the URL string itself (query params and path segments)
     if "url" in req and isinstance(req["url"], str):

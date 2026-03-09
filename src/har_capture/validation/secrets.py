@@ -17,12 +17,19 @@ import contextlib
 import gzip
 import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from har_capture.patterns import load_sensitive_patterns
-from har_capture.patterns.redaction import is_redacted as check_if_redacted
+from har_capture.patterns.redaction import (
+    is_base64_credential,
+    is_cookie_attribute_metadata,
+)
+from har_capture.patterns.redaction import (
+    is_redacted as check_if_redacted,
+)
 
 # Cookie attribute-only values (not actual session data)
 COOKIE_ATTRIBUTES_ONLY: list[str] = [
@@ -39,6 +46,11 @@ MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
 SERIAL_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"serial[^:]*:\s*[A-Z0-9]{8,}", re.IGNORECASE),
     re.compile(r"SN[:\s]+[A-Z0-9]{8,}", re.IGNORECASE),
+    # Serial numbers in HTML table cells (label in one td, value in next td)
+    re.compile(
+        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*([A-Za-z0-9\-]{8,})",
+        re.IGNORECASE,
+    ),
 ]
 
 # Public IP pattern (not private ranges)
@@ -135,6 +147,7 @@ def is_cookie_attributes_only(value: str) -> bool:
 
     When HARs are sanitized, cookie values may be stripped leaving just
     attributes like 'Secure; HttpOnly'. These are safe to commit.
+    Also detects serialized attribute metadata like 'HttpOnly: true, Secure: true'.
 
     Args:
         value: Cookie value to check
@@ -142,7 +155,10 @@ def is_cookie_attributes_only(value: str) -> bool:
     Returns:
         True if cookie contains only attributes
     """
-    return any(re.match(pattern, value.strip(), re.IGNORECASE) for pattern in COOKIE_ATTRIBUTES_ONLY)
+    stripped = value.strip()
+    if any(re.match(pattern, stripped, re.IGNORECASE) for pattern in COOKIE_ATTRIBUTES_ONLY):
+        return True
+    return is_cookie_attribute_metadata(stripped)
 
 
 def is_private_ip(ip: str) -> bool:
@@ -192,6 +208,56 @@ def truncate(value: str, max_len: int = 40) -> str:
     if len(value) <= max_len:
         return value
     return value[: max_len - 3] + "..."
+
+
+def check_url(
+    url: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | None = None,
+) -> None:
+    """Check URL query parameters for base64-encoded credentials.
+
+    Detects URL token authentication patterns where base64(user:pass)
+    is passed as a bare query parameter or parameter value.
+
+    Args:
+        url: Full URL string
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional path to custom patterns file
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.query:
+        return
+
+    # Single pass over raw segments. We avoid parse_qsl because it treats
+    # '=' as a key/value separator, stripping base64 padding.
+    for segment in parsed.query.split("&"):
+        # First check the full segment (catches base64 tokens with '=' padding)
+        if is_base64_credential(segment) and not is_redacted(segment, custom_patterns):
+            findings.append(
+                Finding(
+                    severity="error",
+                    location=location,
+                    field="query string",
+                    value=truncate(segment),
+                    reason="Base64-encoded credential (user:pass) as bare URL query parameter",
+                )
+            )
+        elif "=" in segment:
+            _, _, val = segment.partition("=")
+            if val and is_base64_credential(val) and not is_redacted(val, custom_patterns):
+                key = segment.partition("=")[0]
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field=f"query param '{key}'",
+                        value=truncate(val),
+                        reason="Base64-encoded credential (user:pass) in URL query parameter",
+                    )
+                )
 
 
 def check_headers(
@@ -465,6 +531,9 @@ def validate_har(
 
         url = request.get("url", "")
         location = f"Entry {i}: {truncate(url, 60)}"
+
+        # Check URL for base64-encoded credentials in query parameters
+        check_url(url, f"{location} (url)", findings, custom_patterns)
 
         # Check request headers
         check_headers(request.get("headers", []), f"{location} (request)", findings, custom_patterns)

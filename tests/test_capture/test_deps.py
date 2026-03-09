@@ -9,6 +9,7 @@ import pytest
 
 from har_capture.capture.deps import (
     LINUX_BROWSER_DEPS,
+    _get_browser_executable,
     check_browser_installed,
     check_playwright,
     install_browser,
@@ -53,6 +54,46 @@ class TestCheckPlaywright:
             assert isinstance(result, bool)
 
 
+class TestGetBrowserExecutable:
+    """Tests for _get_browser_executable helper."""
+
+    @patch("har_capture.capture.deps.Path.home")
+    def test_resolves_chromium_path(self, mock_home: MagicMock) -> None:
+        """Test resolves chromium executable path from browsers.json."""
+        import json
+        import sys
+        import tempfile
+        import types
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_home.return_value = Path(tmpdir)
+            pkg_dir = Path(tmpdir) / "driver" / "package"
+            pkg_dir.mkdir(parents=True)
+            browsers_json = pkg_dir / "browsers.json"
+            browsers_json.write_text(json.dumps({"browsers": [{"name": "chromium", "revision": "1200"}]}))
+
+            # Create a fake playwright module so the import inside
+            # _get_browser_executable resolves without the real package.
+            fake_pw = types.ModuleType("playwright")
+            fake_pw.__file__ = str(Path(tmpdir) / "__init__.py")
+            with patch.dict(sys.modules, {"playwright": fake_pw}):
+                result = _get_browser_executable("chromium")
+
+            assert result is not None
+            assert "chromium-1200" in str(result)
+            assert "chrome-linux64/chrome" in str(result)
+
+    def test_returns_none_without_playwright(self) -> None:
+        """Test returns None when playwright is not importable."""
+        with (
+            patch.dict("sys.modules", {"playwright": None}),
+            patch("builtins.__import__", side_effect=ImportError),
+        ):
+            result = _get_browser_executable("chromium")
+            assert result is None
+
+
 class TestCheckBrowserInstalled:
     """Tests for check_browser_installed function."""
 
@@ -62,26 +103,46 @@ class TestCheckBrowserInstalled:
         ids=[b[1] for b in BROWSER_TYPES],
     )
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("subprocess.run")
-    def test_browser_installed_check(
+    @patch("har_capture.capture.deps._get_browser_executable")
+    def test_browser_installed_when_executable_exists(
         self,
-        mock_run: MagicMock,
+        mock_get_exe: MagicMock,
         mock_check_pw: MagicMock,
         browser: str,
         desc: str,
     ) -> None:
-        """Test browser installation check for different browsers."""
-        mock_run.return_value = MagicMock(
-            stdout="browser already installed",
-            returncode=0,
-        )
+        """Test returns True when browser executable exists on disk."""
+        mock_path = MagicMock()
+        mock_path.exists.return_value = True
+        mock_get_exe.return_value = mock_path
 
         result = check_browser_installed(browser)
 
         assert result is True
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert browser in call_args
+        mock_get_exe.assert_called_once_with(browser)
+
+    @pytest.mark.parametrize(
+        ("browser", "desc"),
+        BROWSER_TYPES,
+        ids=[b[1] for b in BROWSER_TYPES],
+    )
+    @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps._get_browser_executable")
+    def test_browser_not_installed_when_executable_missing(
+        self,
+        mock_get_exe: MagicMock,
+        mock_check_pw: MagicMock,
+        browser: str,
+        desc: str,
+    ) -> None:
+        """Test returns False when browser executable does not exist on disk."""
+        mock_path = MagicMock()
+        mock_path.exists.return_value = False
+        mock_get_exe.return_value = mock_path
+
+        result = check_browser_installed(browser)
+
+        assert result is False
 
     @patch("har_capture.capture.deps.check_playwright", return_value=False)
     def test_returns_false_when_playwright_not_installed(
@@ -93,36 +154,56 @@ class TestCheckBrowserInstalled:
         assert result is False
 
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps._get_browser_executable", return_value=None)
     @patch("subprocess.run")
-    def test_returns_true_on_subprocess_exception(
+    def test_falls_back_to_dry_run_when_path_unavailable(
         self,
         mock_run: MagicMock,
+        mock_get_exe: MagicMock,
         mock_check_pw: MagicMock,
     ) -> None:
-        """Test returns True (assume installed) on subprocess exception."""
-        mock_run.side_effect = Exception("subprocess failed")
-
-        result = check_browser_installed("chromium")
-
-        # Should return True as fallback
-        assert result is True
-
-    @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("subprocess.run")
-    def test_detects_not_installed(
-        self,
-        mock_run: MagicMock,
-        mock_check_pw: MagicMock,
-    ) -> None:
-        """Test detects when browser is not installed."""
+        """Test falls back to dry-run when executable path can't be resolved."""
         mock_run.return_value = MagicMock(
-            stdout="will download chromium",
-            returncode=1,
+            stdout="browser already installed",
+            returncode=0,
         )
 
         result = check_browser_installed("chromium")
 
-        # returncode != 0 and "already installed" not in stdout
+        assert result is True
+        mock_run.assert_called_once()
+
+    @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps._get_browser_executable", return_value=None)
+    @patch("subprocess.run")
+    def test_dry_run_fallback_detects_not_installed(
+        self,
+        mock_run: MagicMock,
+        mock_get_exe: MagicMock,
+        mock_check_pw: MagicMock,
+    ) -> None:
+        """Test dry-run fallback returns False when not 'already installed'."""
+        mock_run.return_value = MagicMock(
+            stdout="will download chromium",
+            returncode=0,
+        )
+
+        result = check_browser_installed("chromium")
+
+        assert result is False
+
+    @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps._get_browser_executable", side_effect=Exception("oops"))
+    @patch("subprocess.run", side_effect=Exception("subprocess failed"))
+    def test_returns_false_on_all_failures(
+        self,
+        mock_run: MagicMock,
+        mock_get_exe: MagicMock,
+        mock_check_pw: MagicMock,
+    ) -> None:
+        """Test returns False when both primary and fallback checks fail."""
+        result = check_browser_installed("chromium")
+
         assert result is False
 
 

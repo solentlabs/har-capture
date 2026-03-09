@@ -19,7 +19,12 @@ from har_capture.patterns.loader import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.redaction import is_allowlisted, is_redacted
+from har_capture.patterns.redaction import (
+    is_allowlisted,
+    is_base64_credential,
+    is_cookie_attribute_metadata,
+    is_redacted,
+)
 
 __all__ = [
     # Pattern loading
@@ -33,6 +38,8 @@ __all__ = [
     "PatternLoadError",
     # Redaction checking
     "is_allowlisted",
+    "is_base64_credential",
+    "is_cookie_attribute_metadata",
     "is_redacted",
     # Hashing
     "Hasher",

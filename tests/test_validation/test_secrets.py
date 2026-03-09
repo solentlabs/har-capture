@@ -545,6 +545,126 @@ def test_validate_har_gzipped(tmp_path) -> None:
     assert len(findings) > 0
 
 
+# ┌────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────┐
+# │ url                                                        │ findings │ description                  │
+# ├────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────┤
+# │ Full URL with query string                                 │ count    │ test case name               │
+# └────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────┘
+#
+# fmt: off
+CHECK_URL_CASES = [
+    # Base64 credentials (should be flagged)
+    ("https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=", 1, "bare_base64_user_pass"),
+    ("https://modem.local/api?auth=YWRtaW46cGFzc3dvcmQ=",      1, "base64_as_param_value"),
+    # Normal params (should NOT be flagged)
+    ("https://example.com/page?id=123&format=json",             0, "normal_params"),
+    ("https://example.com/page",                                0, "no_query_string"),
+]
+# fmt: on
+
+
+class TestCheckURL:
+    """Tests for check_url() base64 credential detection."""
+
+    @pytest.mark.parametrize(
+        ("url", "expected_count", "desc"),
+        CHECK_URL_CASES,
+        ids=[c[2] for c in CHECK_URL_CASES],
+    )
+    def test_check_url(self, url: str, expected_count: int, desc: str) -> None:
+        """Test check_url detects base64-encoded credentials in query strings."""
+        from har_capture.validation.secrets import check_url
+
+        findings: list[Finding] = []
+        check_url(url, "Entry 0", findings)
+        assert len(findings) == expected_count, f"{desc}: expected {expected_count} findings"
+        if expected_count > 0:
+            assert "Base64-encoded credential" in findings[0].reason
+
+
+# ┌───────────────────────────────────────────────────┬──────────┬──────────────────────────┐
+# │ value                                             │ expected │ description              │
+# ├───────────────────────────────────────────────────┼──────────┼──────────────────────────┤
+# │ Cookie header value                               │ True/    │ test case name           │
+# │                                                   │ False    │                          │
+# └───────────────────────────────────────────────────┴──────────┴──────────────────────────┘
+#
+# fmt: off
+COOKIE_ATTR_EXTENDED_CASES = [
+    # Attribute metadata (should be recognized as attribute-only)
+    ("HttpOnly: true, Secure: true",                    True,  "metadata_with_colons"),
+    ("HttpOnly: true, Secure: true, SameSite: Strict",  True,  "three_attrs_metadata"),
+    # Standard attribute strings
+    ("Secure; HttpOnly",                                True,  "standard_attributes"),
+    ("Secure",                                          True,  "bare_secure"),
+    ("HttpOnly",                                        True,  "bare_httponly"),
+    # Real cookie values (should NOT match)
+    ("session=abc123",                                  False, "actual_cookie_value"),
+    ("Bearer token123",                                 False, "auth_token"),
+]
+# fmt: on
+
+
+class TestCookieAttributesOnlyExtended:
+    """Tests for is_cookie_attributes_only with metadata patterns."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        COOKIE_ATTR_EXTENDED_CASES,
+        ids=[c[2] for c in COOKIE_ATTR_EXTENDED_CASES],
+    )
+    def test_cookie_attributes_only(self, value: str, expected: bool, desc: str) -> None:
+        """Test is_cookie_attributes_only with extended patterns."""
+        result = is_cookie_attributes_only(value)
+        assert result == expected, f"{desc}: expected {expected}"
+
+
+# ┌────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────┐
+# │ har_data                                                   │ flagged  │ description                  │
+# ├────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────┤
+# │ HAR with URL containing base64 creds                       │ True/    │ test case name               │
+# │                                                            │ False    │                              │
+# └────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────┘
+#
+# fmt: off
+VALIDATE_HAR_URL_CRED_CASES = [
+    # (url, expect_base64_finding, desc)
+    ("https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=", True,  "base64_cred_in_url"),
+    ("https://example.com/page?id=123",                         False, "clean_url"),
+]
+# fmt: on
+
+
+class TestValidateHarURLCredentials:
+    """Test validate_har catches base64 credentials in URLs."""
+
+    @pytest.mark.parametrize(
+        ("url", "expect_finding", "desc"),
+        VALIDATE_HAR_URL_CRED_CASES,
+        ids=[c[2] for c in VALIDATE_HAR_URL_CRED_CASES],
+    )
+    def test_validate_har_url_credentials(self, url: str, expect_finding: bool, desc: str, tmp_path) -> None:
+        """validate_har flags base64(user:pass) in URL query string."""
+        import json
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {"url": url, "headers": []},
+                        "response": {"headers": [], "content": {"text": "", "mimeType": "text/html"}},
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+        has_base64 = any("Base64-encoded credential" in f.reason for f in findings)
+        assert has_base64 == expect_finding, f"{desc}: expected finding={expect_finding}"
+
+
 class TestCompileSensitiveFields:
     """Tests for _compile_sensitive_fields function."""
 

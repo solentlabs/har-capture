@@ -1787,3 +1787,118 @@ class TestSanitizationMetadataIntegration:
         assert "sanitization" in cap
         assert "browser_cookies" in cap
         assert cap["version"] == "0.4.3"
+
+
+# =============================================================================
+# Base64 Credential Detection in URL Query Parameters
+# =============================================================================
+
+# ┌──────────────────────────────────────────────────────────────┬──────────┬──────────────────────────┐
+# │ url                                                          │ redacted │ description              │
+# ├──────────────────────────────────────────────────────────────┼──────────┼──────────────────────────┤
+# │ Full URL with query string                                   │ True/    │ test case name           │
+# │                                                              │ False    │                          │
+# └──────────────────────────────────────────────────────────────┴──────────┴──────────────────────────┘
+#
+# fmt: off
+BASE64_CRED_URL_CASES = [
+    # Bare base64 token as query param (URL token auth pattern)
+    ("https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=", True,  "bare_base64_user_pass"),
+    ("https://192.168.100.1/status.html?YWRtaW46TjZyM2gydCFy", True,  "bare_base64_no_padding"),
+    # Base64 token as param value
+    ("https://modem.local/api?token=YWRtaW46cGFzc3dvcmQ=",     True,  "base64_as_param_value"),
+    # Normal query params (should NOT be detected)
+    ("https://example.com/page?id=123&format=json",             False, "normal_params"),
+    ("https://example.com/page?q=hello+world",                  False, "normal_search_query"),
+    # Non-credential base64 (no colon in decoded)
+    ("https://example.com/page?data=aGVsbG8gd29ybGQ=",         False, "base64_without_colon"),
+    # Short values (too short to be credentials)
+    ("https://example.com/page?x=YQ==",                        False, "too_short_base64"),
+]
+# fmt: on
+
+
+class TestBase64CredentialDetection:
+    """Tests for base64-encoded credential detection in URL query parameters."""
+
+    @pytest.mark.parametrize(
+        ("url", "should_redact", "desc"),
+        BASE64_CRED_URL_CASES,
+        ids=[c[2] for c in BASE64_CRED_URL_CASES],
+    )
+    def test_base64_credential_in_url(self, url: str, should_redact: bool, desc: str) -> None:
+        """Test base64-encoded user:pass credentials are detected in URLs."""
+        entry = {
+            "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        result_url = result["request"]["url"]
+        if should_redact:
+            assert result_url != url, f"{desc}: URL should be modified"
+        else:
+            assert result_url == url, f"{desc}: URL should be unchanged"
+
+    def test_base64_credential_in_query_string_array(self) -> None:
+        """Test base64 credentials in structured queryString array."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=",
+                "headers": [],
+                "queryString": [{"name": "YWRtaW46cGFzc3dvcmQ=", "value": ""}],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        qs = result["request"]["queryString"]
+        assert qs[0]["name"] != "YWRtaW46cGFzc3dvcmQ=", "Base64 cred should be redacted in queryString"
+
+
+# =============================================================================
+# Cookie Attribute Metadata Sanitization
+# =============================================================================
+
+# ┌─────────────┬──────────────────────────────────────┬──────────┬────────────────────────────────┐
+# │ header_name │ header_value                         │ redacted │ description                    │
+# ├─────────────┼──────────────────────────────────────┼──────────┼────────────────────────────────┤
+# │ Header name │ Header value to sanitize             │ True/    │ test case name                 │
+# │             │                                      │ False    │                                │
+# └─────────────┴──────────────────────────────────────┴──────────┴────────────────────────────────┘
+#
+# fmt: off
+COOKIE_ATTR_CASES = [
+    # Attribute metadata (should be redacted as non-cookie data)
+    ("Set-Cookie", "HttpOnly: true, Secure: true",      True,  "attribute_metadata_set_cookie"),
+    ("Cookie",     "HttpOnly: true, Secure: true",      True,  "attribute_metadata_cookie"),
+    ("Set-Cookie", "Secure",                            True,  "bare_secure_attribute"),
+    # Normal cookies (should be redacted as cookie values)
+    ("Set-Cookie", "session_id=abc123; HttpOnly; Secure", True,  "normal_set_cookie_with_attrs"),
+    ("Cookie",     "session=abc123",                    True,  "normal_cookie"),
+    # Non-cookie header (should be unchanged)
+    ("Content-Type", "text/html",                       False, "non_cookie_header"),
+]
+# fmt: on
+
+
+class TestCookieAttributeMetadata:
+    """Tests for cookie attribute metadata sanitization."""
+
+    @pytest.mark.parametrize(
+        ("header_name", "header_value", "should_redact", "desc"),
+        COOKIE_ATTR_CASES,
+        ids=[c[3] for c in COOKIE_ATTR_CASES],
+    )
+    def test_cookie_attribute_metadata(
+        self,
+        header_name: str,
+        header_value: str,
+        should_redact: bool,
+        desc: str,
+    ) -> None:
+        """Test cookie headers with attribute metadata are properly handled."""
+        result = sanitize_header_value(header_name, header_value)
+        if should_redact:
+            assert result != header_value, f"{desc}: should be redacted"
+        else:
+            assert result == header_value, f"{desc}: should be unchanged"

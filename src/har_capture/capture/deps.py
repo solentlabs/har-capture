@@ -6,12 +6,62 @@ browser system dependencies.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import platform
 import subprocess
 import sys
+from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
+
+# Mapping from Playwright browser name to executable relative path
+_BROWSER_EXECUTABLES: dict[str, str] = {
+    "chromium": "chrome-linux64/chrome",
+    "firefox": "firefox/firefox",
+    "webkit": "minibrowser-wpe/MiniBrowser",
+}
+
+
+def _get_browser_executable(browser: str = "chromium") -> Path | None:
+    """Resolve the expected browser executable path from Playwright's manifest.
+
+    Reads browsers.json from the Playwright package to determine the
+    expected revision, then checks the standard cache directory.
+
+    Args:
+        browser: Browser name ("chromium", "firefox", "webkit")
+
+    Returns:
+        Path to the expected executable, or None if resolution fails
+    """
+    try:
+        import playwright
+
+        pkg_dir = Path(playwright.__file__).parent / "driver" / "package"
+    except (ImportError, AttributeError):
+        return None
+
+    browsers_json = pkg_dir / "browsers.json"
+    if not browsers_json.exists():
+        return None
+
+    data = json.loads(browsers_json.read_text())
+    for entry in data.get("browsers", []):
+        if entry.get("name") == browser:
+            revision = entry.get("revision")
+            if not revision:
+                return None
+            cache_dir = Path(
+                os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "") or Path.home() / ".cache" / "ms-playwright"
+            )
+            rel_path = _BROWSER_EXECUTABLES.get(browser)
+            if not rel_path:
+                return None
+            return cache_dir / f"{browser}-{revision}" / rel_path
+
+    return None
 
 
 def check_playwright() -> bool:
@@ -31,6 +81,10 @@ def check_playwright() -> bool:
 def check_browser_installed(browser: str = "chromium") -> bool:
     """Check if Playwright browser is installed.
 
+    Verifies the actual browser executable exists on disk by reading
+    Playwright's browsers.json manifest and checking the expected path.
+    Falls back to a dry-run heuristic if the manifest is unavailable.
+
     Args:
         browser: Browser to check ("chromium", "firefox", "webkit")
 
@@ -40,6 +94,15 @@ def check_browser_installed(browser: str = "chromium") -> bool:
     if not check_playwright():
         return False
 
+    # Primary check: verify the executable exists on disk
+    try:
+        executable = _get_browser_executable(browser)
+        if executable is not None:
+            return executable.exists()
+    except Exception:
+        _LOGGER.debug("Failed to resolve browser executable path, falling back to dry-run")
+
+    # Fallback: dry-run check (unreliable — always returns rc=0)
     try:
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "--dry-run", browser],
@@ -47,11 +110,9 @@ def check_browser_installed(browser: str = "chromium") -> bool:
             text=True,
             check=False,
         )
-        # If dry-run says nothing to install, browser is installed
-        return "already installed" in result.stdout.lower() or result.returncode == 0
+        return "already installed" in result.stdout.lower()
     except Exception:
-        # Fall back to trying to launch - will fail fast if not installed
-        return True  # Assume installed, let launch fail with clear error
+        return False
 
 
 def install_browser(browser: str = "chromium") -> bool:
