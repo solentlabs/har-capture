@@ -61,7 +61,9 @@ class TestGetBrowserExecutable:
     def test_resolves_chromium_path(self, mock_home: MagicMock) -> None:
         """Test resolves chromium executable path from browsers.json."""
         import json
+        import sys
         import tempfile
+        import types
         from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -71,7 +73,11 @@ class TestGetBrowserExecutable:
             browsers_json = pkg_dir / "browsers.json"
             browsers_json.write_text(json.dumps({"browsers": [{"name": "chromium", "revision": "1200"}]}))
 
-            with patch("playwright.__file__", str(Path(tmpdir) / "__init__.py")):
+            # Create a fake playwright module so the import inside
+            # _get_browser_executable resolves without the real package.
+            fake_pw = types.ModuleType("playwright")
+            fake_pw.__file__ = str(Path(tmpdir) / "__init__.py")
+            with patch.dict(sys.modules, {"playwright": fake_pw}):
                 result = _get_browser_executable("chromium")
 
             assert result is not None
