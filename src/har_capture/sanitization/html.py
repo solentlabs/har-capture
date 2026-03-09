@@ -42,6 +42,12 @@ else:
     from har_capture.sanitization.report import HeuristicMode
 
 
+# Serial number pattern for pipe-delimited values (SN-XXXXX, S/N-XXXXX)
+# Requires a separator (- or _) after the prefix to avoid false positives on
+# SNMP-related values like SNMPv3Auth, SNMPCommunityString, etc.
+_PIPE_SERIAL_RE = re.compile(r"^(?:SN|S/N|S-N)[-_][A-Za-z0-9]{5,}$", re.IGNORECASE)
+
+
 def is_valid_ip_address(value: str) -> bool:
     """Check if dotted-decimal string is a valid IPv4 address (not a version string).
 
@@ -161,6 +167,14 @@ def sanitize_html(
     pii = load_pii_patterns(custom_patterns)
     sensitive = load_sensitive_patterns(custom_patterns)
 
+    # Lazy imports — must stay inside function body to avoid circular import
+    # (har.py imports html.py at module level; html.py needs har.py's field matcher)
+    from har_capture.sanitization.har import is_sensitive_field
+    from har_capture.sanitization.heuristics import (
+        analyze_value,
+        is_safe_value,
+    )
+
     # 0. Custom patterns (apply first so they take precedence over built-in patterns)
     # Skip built-in patterns that have dedicated replacement logic below
     BUILTIN_PATTERNS = {
@@ -206,6 +220,47 @@ def sanitize_html(
 
         html = re.sub(regex, make_replacer(prefix, pattern_name), html, flags=flags)
 
+    # 0b. Web Storage setItem() calls in inline <script> blocks
+    # Catches: localStorage.setItem("key", "value") and sessionStorage.setItem("key", "value")
+    # Must run BEFORE general PII passes so sensitive-key values are fully replaced
+    # (otherwise IP/MAC passes partially mangle values like "http://10.0.1.1/firmware.bin")
+    def replace_setitem(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        key = match.group(2)
+        sep = match.group(3)
+        value = match.group(4)
+        suffix = match.group(5)
+
+        # Tier A: Key matches sensitive field patterns -> auto-redact value
+        if is_sensitive_field(key):
+            collector.record_auto_redaction("web_storage")
+            redacted = hasher.hash_generic(value, "STORAGE")
+            return f"{prefix}{key}{sep}{redacted}{suffix}"
+
+        # Tier B: Value PII (IPs, MACs, emails) is handled by subsequent passes.
+        # No action needed here.
+
+        # Tier C: Heuristic analysis on opaque values
+        if heuristics != HeuristicMode.DISABLED:
+            should_flag, confidence, category, reason = analyze_value(value)
+            if should_flag:
+                if heuristics == HeuristicMode.REDACT:
+                    collector.record_auto_redaction(category)
+                    redacted = hasher.hash_sensitive_value(value, category)
+                    return f"{prefix}{key}{sep}{redacted}{suffix}"
+                if heuristics == HeuristicMode.FLAG:
+                    context = f'setItem("{key}", ">>>{value}<<<")'
+                    collector.flag_value(value, category, confidence, context, reason)
+
+        return match.group(0)
+
+    html = re.sub(
+        r"""((?:local|session)Storage\.setItem\s*\(\s*["'])([^"']+)(["']\s*,\s*["'])([^"']+)(["']\s*\))""",
+        replace_setitem,
+        html,
+        flags=re.IGNORECASE,
+    )
+
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
         collector.record_auto_redaction("mac_address")
@@ -224,6 +279,22 @@ def sanitize_html(
     html = re.sub(
         r"\b(Serial\s*Number|SerialNum|SN|S/N)\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
         replace_serial,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # 2b. Serial numbers in HTML table cells (label in one <td>, value in next <td>)
+    # Handles: <td>...<strong>Serial Number</strong>...</td>\s*<td>VALUE</td>
+    def replace_serial_table(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("serial_number")
+        prefix = match.group(1)
+        serial = match.group(2)
+        hashed = hasher.hash_generic(serial, "SERIAL")
+        return f"{prefix}{hashed}"
+
+    html = re.sub(
+        r"(<td[^>]*>(?:<[^>]*>)*\s*(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:<[^>]*>)*\s*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>)*\s*</td>)",
+        replace_serial_table,
         html,
         flags=re.IGNORECASE,
     )
@@ -457,12 +528,6 @@ def sanitize_html(
     # 14. WiFi credentials and device names in Netgear tagValueList
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
-    # Import heuristics for detection
-    from har_capture.sanitization.heuristics import (
-        analyze_value,
-        is_safe_value,
-    )
-
     def sanitize_tag_value_list(match: re.Match[str]) -> str:
         """Sanitize pipe-delimited values in tagValueList.
 
@@ -505,10 +570,17 @@ def sanitize_html(
                 sanitized_values.append(val)
                 continue
 
-            # AUTO-REDACT: Only known reliable patterns (MAC addresses within values)
+            # AUTO-REDACT: Known reliable patterns
+            # MAC addresses
             if re.match(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", val_stripped):
                 collector.record_auto_redaction("mac_address")
                 sanitized_values.append(hasher.hash_mac(val_stripped))
+                continue
+
+            # Serial numbers with SN/S/N prefix
+            if _PIPE_SERIAL_RE.match(val_stripped):
+                collector.record_auto_redaction("serial_number")
+                sanitized_values.append(hasher.hash_generic(val_stripped, "SERIAL"))
                 continue
 
             # HEURISTICS: Analyze unknown values (opt-in)

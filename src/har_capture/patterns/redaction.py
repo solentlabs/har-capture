@@ -3,10 +3,14 @@
 This module provides a single source of truth for determining if a value
 has been redacted or sanitized. It combines pattern matching from both
 configuration files and code-based patterns.
+
+Also provides shared detection helpers used by both sanitization and
+validation modules.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from typing import Any
@@ -103,3 +107,86 @@ def is_allowlisted(value: str, allowlist: dict[str, Any] | None = None) -> bool:
         return is_redacted(value)
 
     return _check_patterns(value, allowlist)
+
+
+# ── Shared detection helpers ─────────────────────────────────────────────────
+
+# Base64 charset pattern for quick pre-filtering
+_BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
+
+# Cookie attribute metadata pattern (e.g., "HttpOnly: true, Secure: true")
+_COOKIE_ATTR_METADATA_RE = re.compile(
+    r"^(HttpOnly|Secure|SameSite|Path|Domain|Max-Age|Expires)"
+    r"(\s*[:=]\s*\S+)?"
+    r"(\s*[,;]\s*(HttpOnly|Secure|SameSite|Path|Domain|Max-Age|Expires)(\s*[:=]\s*\S+)?)*\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_base64_credential(value: str) -> bool:
+    """Check if a value is a base64-encoded user:pass credential.
+
+    Detects URL token authentication patterns where base64(username:password)
+    is passed as a bare query parameter or parameter value.
+
+    Args:
+        value: String to check
+
+    Returns:
+        True if value decodes to a user:pass pattern
+
+    Examples:
+        >>> is_base64_credential("YWRtaW46cGFzc3dvcmQ=")  # admin:password
+        True
+        >>> is_base64_credential("aGVsbG8gd29ybGQ=")  # hello world (no colon)
+        False
+        >>> is_base64_credential("not-base64!")
+        False
+    """
+    if not value or len(value) < 4:
+        return False
+
+    # Quick pre-filter: must be valid base64 characters
+    if not _BASE64_CHARS_RE.match(value):
+        return False
+
+    # Must be plausible base64 length (multiple of 4 or close with padding)
+    stripped = value.rstrip("=")
+    if len(stripped) < 4:
+        return False
+
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except Exception:
+        return False
+
+    # Check for user:pass pattern — at least one char on each side of colon
+    if ":" not in decoded:
+        return False
+
+    parts = decoded.split(":", 1)
+    return len(parts) == 2 and len(parts[0]) >= 1 and len(parts[1]) >= 1
+
+
+def is_cookie_attribute_metadata(value: str) -> bool:
+    """Check if a value is cookie attribute metadata rather than cookie data.
+
+    Detects values like ``"HttpOnly: true, Secure: true"`` that are
+    serialized cookie attributes incorrectly placed where a cookie
+    name=value string should be.
+
+    Args:
+        value: String to check
+
+    Returns:
+        True if the value consists only of cookie attribute names/values
+
+    Examples:
+        >>> is_cookie_attribute_metadata("HttpOnly: true, Secure: true")
+        True
+        >>> is_cookie_attribute_metadata("session=abc123")
+        False
+    """
+    if not value or not value.strip():
+        return False
+    return bool(_COOKIE_ATTR_METADATA_RE.match(value))

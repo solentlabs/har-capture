@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-03-09
+
+### Fixed
+
+- **Base64 credential leak in URL query strings** — Sanitizer and validator now detect base64-encoded `user:pass` tokens in URL query parameters (both bare tokens like `?YWRtaW46cGFzcw==` and param values like `?token=YWRtaW46cGFzcw==`). Handles `parse_qsl` stripping base64 `=` padding by checking raw query segments.
+- **Cookie attribute metadata in headers** — Cookie/Set-Cookie headers containing serialized attribute metadata (e.g., `HttpOnly: true, Secure: true`) are now properly redacted instead of passing through unchanged. Also handles cookie headers with no `name=value` pairs.
+- **Serial number in HTML table cells** — Serial numbers in adjacent `<td>` cells (e.g., `<td>Serial Number</td><td>17V541334700308</td>`) are now detected and redacted by both the sanitizer and validator.
+- **Inline `setItem()` web storage scanning** — HTML response bodies containing `localStorage.setItem()` / `sessionStorage.setItem()` calls now have their values scanned. Keys matching sensitive field patterns (e.g., `PrivateKey`, `csrf_token`, `api_key`) trigger auto-redaction; remaining values are checked by PII patterns and heuristic analysis.
+- **Serial numbers in pipe-delimited strings** — Serial numbers with `SN-` / `S/N-` prefixes in `tagValueList` and similar pipe-delimited JavaScript variables are now auto-redacted, consistent with serial detection in other contexts.
+
 ## [0.4.4] - 2026-03-05
 
 ### Changed
@@ -405,4 +415,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.2]: https://github.com/solentlabs/har-capture/compare/v0.4.1...v0.4.2
 [0.4.3]: https://github.com/solentlabs/har-capture/compare/v0.4.2...v0.4.3
 [0.4.4]: https://github.com/solentlabs/har-capture/compare/v0.4.3...v0.4.4
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.4...HEAD
+[0.4.5]: https://github.com/solentlabs/har-capture/compare/v0.4.4...v0.4.5
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.5...HEAD
