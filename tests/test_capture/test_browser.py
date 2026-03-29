@@ -26,6 +26,8 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
+import unittest.mock
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -41,51 +43,15 @@ from har_capture.validation.secrets import is_private_ip
 # Test Data Tables
 # =============================================================================
 
-# ┌─────────────────────────┬─────────────┬─────────────────────────────┐
-# │ ip_address              │ is_private  │ description                 │
-# ├─────────────────────────┼─────────────┼─────────────────────────────┤
-# │ IP address to test      │ True/False  │ test case name              │
-# └─────────────────────────┴─────────────┴─────────────────────────────┘
-#
-# fmt: off
-PRIVATE_IP_CASES = [
-    # 10.x.x.x range (Class A private)
-    ("10.0.0.1",            True,   "10_network_start"),
-    ("10.0.0.0",            True,   "10_network_zero"),
-    ("10.255.255.255",      True,   "10_network_end"),
-    ("10.100.50.25",        True,   "10_network_middle"),
-    # 172.16-31.x.x range (Class B private)
-    ("172.16.0.1",          True,   "172_16_start"),
-    ("172.31.255.255",      True,   "172_31_end"),
-    ("172.20.100.50",       True,   "172_20_middle"),
-    ("172.15.0.1",          False,  "172_15_not_private"),
-    ("172.32.0.1",          False,  "172_32_not_private"),
-    # 192.168.x.x range (Class C private)
-    ("192.168.0.1",         True,   "192_168_0_1"),
-    ("192.168.1.1",         True,   "192_168_1_1"),
-    ("192.168.100.1",       True,   "192_168_100_1"),
-    ("192.168.255.255",     True,   "192_168_end"),
-    # Loopback
-    ("127.0.0.1",           True,   "localhost"),
-    ("127.0.0.0",           True,   "loopback_start"),
-    ("127.255.255.255",     True,   "loopback_end"),
-    # Special addresses
-    ("0.0.0.0",             True,   "all_zeros_redacted"),
-    # Public IPs (should NOT be private)
-    ("8.8.8.8",             False,  "google_dns"),
-    ("8.8.4.4",             False,  "google_dns_secondary"),
-    ("1.1.1.1",             False,  "cloudflare_dns"),
-    ("208.67.222.222",      False,  "opendns"),
-    ("9.9.9.9",             False,  "quad9"),
-    ("192.0.2.1",           False,  "test_net_1"),
-    ("203.0.113.1",         False,  "test_net_3"),
-    ("198.51.100.1",        False,  "test_net_2"),
-    # Edge cases
-    ("192.167.1.1",         False,  "192_167_not_private"),
-    ("192.169.1.1",         False,  "192_169_not_private"),
-    ("11.0.0.1",            False,  "11_not_private"),
+_FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "test_browser.json"
+with _FIXTURE_PATH.open() as _f:
+    _FIXTURE_DATA = json.load(_f)
+
+PRIVATE_IP_CASES = [(c["ip"], c["expected"], c["id"]) for c in _FIXTURE_DATA["private_ip_cases"]]
+
+PARSE_TARGET_CASES = [
+    (c["target"], c["expected_host"], c["scheme"], c["id"]) for c in _FIXTURE_DATA["parse_target_cases"]
 ]
-# fmt: on
 
 # ┌─────────────────────────┬─────────────────────────────┐
 # │ extension               │ description                 │
@@ -125,36 +91,6 @@ BLOAT_MEDIA_EXTENSIONS = [
 
 BLOAT_OTHER_EXTENSIONS = [
     (".map",    "sourcemap"),
-]
-# fmt: on
-
-# ┌───────────────────────────────┬─────────────────────┬─────────┬──────────────────────┐
-# │ target_input                  │ expected_host       │ scheme  │ description          │
-# ├───────────────────────────────┼─────────────────────┼─────────┼──────────────────────┤
-# │ URL or hostname to parse      │ extracted hostname  │ scheme  │ test case name       │
-# └───────────────────────────────┴─────────────────────┴─────────┴──────────────────────┘
-#
-# fmt: off
-PARSE_TARGET_CASES = [
-    # Full URLs with scheme
-    ("https://example.com",             "example.com",       "https",  "https_url"),
-    ("http://example.com",              "example.com",       "http",   "http_url"),
-    ("https://example.com/",            "example.com",       "https",  "https_trailing_slash"),
-    ("https://example.com/path/page",   "example.com",       "https",  "https_with_path"),
-    ("http://example.com:8080",         "example.com:8080",  "http",   "http_with_port"),
-    ("https://192.168.1.1:8443",        "192.168.1.1:8443",  "https",  "https_ip_with_port"),
-    # Hostnames without scheme
-    ("example.com",                     "example.com",       None,     "hostname_only"),
-    ("sub.example.com",                 "sub.example.com",   None,     "subdomain"),
-    ("router.local",                    "router.local",      None,     "local_hostname"),
-    # IP addresses without scheme
-    ("192.168.1.1",                     "192.168.1.1",       None,     "ipv4_address"),
-    ("192.168.1.1:8080",                "192.168.1.1:8080",  None,     "ipv4_with_port"),
-    ("10.0.0.1",                        "10.0.0.1",          None,     "private_ip"),
-    # Edge cases
-    ("HTTPS://EXAMPLE.COM",             "EXAMPLE.COM",       "https",  "uppercase_scheme"),
-    ("http://localhost",                "localhost",         "http",   "localhost"),
-    ("http://127.0.0.1",                "127.0.0.1",         "http",   "loopback_ip"),
 ]
 # fmt: on
 
@@ -372,6 +308,7 @@ class TestCaptureDeviceHar:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_playwright.chromium.launch.assert_called_once_with(headless=True)
@@ -400,6 +337,7 @@ class TestCaptureDeviceHar:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_playwright.chromium.launch.assert_called_once_with(headless=False)
@@ -433,6 +371,7 @@ class TestCaptureDeviceHar:
             timeout=5,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Should call time.sleep with the timeout value
@@ -467,6 +406,7 @@ class TestCaptureDeviceHar:
             timeout=None,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Should call wait_for_event when timeout is None
@@ -497,6 +437,7 @@ class TestCaptureDeviceHar:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_playwright.firefox.launch.assert_called_once_with(headless=True)
@@ -527,6 +468,7 @@ class TestCaptureDeviceHar:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_playwright.webkit.launch.assert_called_once_with(headless=True)
@@ -572,6 +514,7 @@ class TestBrowserCookieSnapshot:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_context.cookies.assert_called_once()
@@ -633,6 +576,7 @@ class TestBrowserCookieSnapshot:
                 sanitize=False,
                 compress=False,
                 keep_raw=True,
+                wait_for_data=False,
             )
 
         # The output file should contain injected browser_cookies
@@ -668,6 +612,7 @@ class TestBrowserCookieSnapshot:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Should not crash
@@ -705,6 +650,7 @@ class TestWebStorageCapture:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         mock_context.storage_state.assert_called_once()
@@ -765,6 +711,7 @@ class TestWebStorageCapture:
                 sanitize=False,
                 compress=False,
                 keep_raw=True,
+                wait_for_data=False,
             )
 
         raw_har = json.loads(output.read_text())
@@ -812,6 +759,7 @@ class TestWebStorageCapture:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         assert result.success is True
@@ -1224,6 +1172,7 @@ class TestBrowserAutoInstall:
                 timeout=1,
                 sanitize=False,
                 compress=False,
+                wait_for_data=False,
             )
 
             # Verify install was called (or not) as expected
@@ -1317,6 +1266,7 @@ class TestBrowserExecutableMissing:
                 timeout=1,
                 sanitize=False,
                 compress=False,
+                wait_for_data=False,
             )
 
             assert result.success is expect_ok
@@ -1363,6 +1313,7 @@ class TestBrowserCleanupErrorHandling:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Capture should still succeed
@@ -1401,6 +1352,7 @@ class TestBrowserCleanupErrorHandling:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Capture should still succeed
@@ -1439,6 +1391,7 @@ class TestBrowserCleanupErrorHandling:
             timeout=1,
             sanitize=False,
             compress=False,
+            wait_for_data=False,
         )
 
         # Capture should still succeed
@@ -1446,3 +1399,179 @@ class TestBrowserCleanupErrorHandling:
         # Both close methods were attempted
         mock_context.close.assert_called_once()
         mock_browser.close.assert_called_once()
+
+
+# =============================================================================
+# Wait-for-data behaviour
+# =============================================================================
+
+# ┌────────────────┬──────────────────┬─────────────────────┬───────────────────────┐
+# │ wait_for_data  │ expect_init_js   │ expect_nav_listener │ description           │
+# ├────────────────┼──────────────────┼─────────────────────┼───────────────────────┤
+# │ flag value     │ add_init_script  │ page.on called      │ test case name        │
+# └────────────────┴──────────────────┴─────────────────────┴───────────────────────┘
+#
+# fmt: off
+WAIT_FOR_DATA_ROUTING_CASES = [
+    (True,  True,  True,  "enabled_uses_nav_listener"),
+    (False, False, False, "disabled_no_listener"),
+]
+# fmt: on
+
+
+class TestWaitForData:
+    """Tests for --wait-for-data capture behaviour."""
+
+    @pytest.mark.parametrize(
+        ("wait_flag", "expect_init_js", "expect_nav_listener", "desc"),
+        WAIT_FOR_DATA_ROUTING_CASES,
+        ids=[c[3] for c in WAIT_FOR_DATA_ROUTING_CASES],
+    )
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_routing_strategy(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+        wait_flag: bool,
+        expect_init_js: bool,
+        expect_nav_listener: bool,
+        desc: str,
+    ) -> None:
+        """Test that wait_for_data uses framenavigated listener, not route handler.
+
+        Calling page.evaluate() from a sync route handler deadlocks Playwright.
+        The fix uses page.on('framenavigated') to wait after each navigation.
+        """
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=wait_flag,
+        )
+
+        if expect_init_js:
+            mock_page.add_init_script.assert_called_once()
+        else:
+            mock_page.add_init_script.assert_not_called()
+
+        # Both cases use context.route for cache control
+        mock_context.route.assert_called_once()
+        # page.route must never be used (sync API deadlock)
+        mock_page.route.assert_not_called()
+
+        if expect_nav_listener:
+            mock_page.on.assert_any_call("framenavigated", unittest.mock.ANY)
+        else:
+            nav_calls = [c for c in mock_page.on.call_args_list if c[0][0] == "framenavigated"]
+            assert len(nav_calls) == 0
+
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_quiescence_called_after_goto(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that network quiescence wait runs after initial page load."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=True,
+        )
+
+        # Called twice: once after goto, once after timeout
+        assert mock_quiescence.call_count == 2
+
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_timeout_uses_playwright_wait(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that wait_for_data uses page.wait_for_timeout instead of sleep."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_page = mock_pw.chromium.launch.return_value.new_context.return_value.new_page.return_value
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=5,
+            sanitize=False,
+            compress=False,
+            wait_for_data=True,
+        )
+
+        # Should use Playwright's wait (keeps event loop active), not time.sleep
+        mock_page.wait_for_timeout.assert_any_call(5000)
+
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_no_quiescence_when_disabled(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test that quiescence wait is skipped when wait_for_data=False."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        mock_quiescence.assert_not_called()

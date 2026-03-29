@@ -167,6 +167,12 @@ def sanitize_html(
     pii = load_pii_patterns(custom_patterns)
     sensitive = load_sensitive_patterns(custom_patterns)
 
+    # Compile domain-specific safe-value patterns and detectors from loaded sensitive data
+    from har_capture.patterns.loader import compile_detectors, compile_safe_value_patterns
+
+    extra_safe_patterns = compile_safe_value_patterns(sensitive)
+    compiled_detectors = compile_detectors(sensitive)
+
     # Lazy imports — must stay inside function body to avoid circular import
     # (har.py imports html.py at module level; html.py needs har.py's field matcher)
     from har_capture.sanitization.har import is_sensitive_field
@@ -242,7 +248,11 @@ def sanitize_html(
 
         # Tier C: Heuristic analysis on opaque values
         if heuristics != HeuristicMode.DISABLED:
-            should_flag, confidence, category, reason = analyze_value(value)
+            should_flag, confidence, category, reason = analyze_value(
+                value,
+                extra_safe_patterns=extra_safe_patterns,
+                compiled_detectors=compiled_detectors,
+            )
             if should_flag:
                 if heuristics == HeuristicMode.REDACT:
                     collector.record_auto_redaction(category)
@@ -552,7 +562,7 @@ def sanitize_html(
             val_lower = val_stripped.lower()
 
             # Skip empty values, safe values, and already-redacted placeholders
-            if not val_stripped or is_safe_value(val_stripped):
+            if not val_stripped or is_safe_value(val_stripped, extra_safe_patterns):
                 sanitized_values.append(val)
                 continue
 
@@ -589,6 +599,8 @@ def sanitize_html(
                     val_stripped,
                     values_context=sanitized_values,
                     value_index=len(sanitized_values),
+                    extra_safe_patterns=extra_safe_patterns,
+                    compiled_detectors=compiled_detectors,
                 )
 
                 if should_flag:

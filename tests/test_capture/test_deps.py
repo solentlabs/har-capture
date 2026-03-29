@@ -1,8 +1,34 @@
-"""Tests for browser dependency management."""
+"""Tests for browser dependency management.
+
+This module tests detection and installation of Playwright, browser
+executables, and Linux system dependencies required for headless capture.
+
+Test Coverage:
+    - Playwright availability detection
+    - Browser executable resolution from browsers.json manifest
+    - Browser installation status (primary path check + dry-run fallback)
+    - Browser and Playwright installation helpers
+    - Linux system dependency installation
+    - LINUX_BROWSER_DEPS constant validation
+
+Test Strategy:
+    - Table-driven tests with @pytest.mark.parametrize
+    - Mock-heavy: subprocess, filesystem, and module imports are all mocked
+      to avoid requiring real Playwright or browser installs in CI
+    - Edge cases for _get_browser_executable cover every early-return path
+
+Dependencies:
+    - pytest for test framework
+"""
 
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
+import tempfile
+import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +52,21 @@ BROWSER_TYPES = [
     ("chromium",    "chromium"),
     ("firefox",     "firefox"),
     ("webkit",      "webkit"),
+]
+
+# ┌──────────────────────────────┬──────────────────────────────────────────┬──────────┬──────────────────────────────┐
+# │ browsers_json_content        │ browser_arg                              │ expected │ description                  │
+# ├──────────────────────────────┼──────────────────────────────────────────┼──────────┼──────────────────────────────┤
+# │ JSON content or None (skip)  │ browser name to look up                  │ Path |   │ test case name               │
+# │                              │                                          │ None     │                              │
+# └──────────────────────────────┴──────────────────────────────────────────┴──────────┴──────────────────────────────┘
+GET_BROWSER_EXE_NONE_CASES = [
+    (None,                                                   "chromium",         "browsers_json_missing"),
+    ({"browsers": [{"name": "chromium"}]},                   "chromium",         "revision_missing"),
+    ({"browsers": [{"name": "chromium", "revision": ""}]},   "chromium",         "revision_empty"),
+    ({"browsers": [{"name": "unknown", "revision": "100"}]}, "unknown",          "unknown_browser_no_mapping"),
+    ({"browsers": [{"name": "firefox", "revision": "100"}]}, "chromium",         "no_matching_entry"),
+    ({"browsers": []},                                       "chromium",         "empty_browsers_list"),
 ]
 # fmt: on
 
@@ -60,12 +101,6 @@ class TestGetBrowserExecutable:
     @patch("har_capture.capture.deps.Path.home")
     def test_resolves_chromium_path(self, mock_home: MagicMock) -> None:
         """Test resolves chromium executable path from browsers.json."""
-        import json
-        import sys
-        import tempfile
-        import types
-        from pathlib import Path
-
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_home.return_value = Path(tmpdir)
             pkg_dir = Path(tmpdir) / "driver" / "package"
@@ -92,6 +127,32 @@ class TestGetBrowserExecutable:
         ):
             result = _get_browser_executable("chromium")
             assert result is None
+
+    @pytest.mark.parametrize(
+        ("browsers_json_content", "browser_arg", "desc"),
+        GET_BROWSER_EXE_NONE_CASES,
+        ids=[c[2] for c in GET_BROWSER_EXE_NONE_CASES],
+    )
+    def test_returns_none_on_edge_cases(
+        self,
+        browsers_json_content: dict | None,
+        browser_arg: str,
+        desc: str,
+    ) -> None:
+        """Test _get_browser_executable returns None for various edge cases."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg_dir = Path(tmpdir) / "driver" / "package"
+            pkg_dir.mkdir(parents=True)
+
+            if browsers_json_content is not None:
+                (pkg_dir / "browsers.json").write_text(json.dumps(browsers_json_content))
+
+            fake_pw = types.ModuleType("playwright")
+            fake_pw.__file__ = str(Path(tmpdir) / "__init__.py")
+            with patch.dict(sys.modules, {"playwright": fake_pw}):
+                result = _get_browser_executable(browser_arg)
+
+            assert result is None, f"{desc}: expected None"
 
 
 class TestCheckBrowserInstalled:

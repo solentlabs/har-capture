@@ -1,6 +1,12 @@
-"""Table-driven tests for the validation/secrets module."""
+"""Table-driven tests for the validation/secrets module.
+
+Test data loaded from tests/fixtures/test_secrets.json.
+"""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
@@ -17,78 +23,68 @@ from har_capture.validation.secrets import (
     validate_har,
 )
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ is_redacted() test cases                                                    │
-# ├─────────────────────────────────────┬───────────┬───────────────────────────┤
-# │ value                               │ expected  │ description               │
-# ├─────────────────────────────────────┼───────────┼───────────────────────────┤
-# │ "[REDACTED]"                        │ True      │ standard redaction        │
-# │ "REDACTED"                          │ True      │ plain REDACTED            │
-# │ "xxx REDACTED xxx"                  │ True      │ contains REDACTED         │
-# │ "XXXX"                              │ True      │ X placeholder             │
-# │ "XXXXXXXXXX"                        │ True      │ long X placeholder        │
-# │ "000000"                            │ True      │ all zeros (6+)            │
-# │ "0000000000"                        │ True      │ all zeros (10)            │
-# │ "XX:XX:XX:XX:XX:XX"                 │ True      │ redacted MAC              │
-# │ "0.0.0.0"                           │ True      │ zero IP (allowlisted)     │
-# │ "::"                                │ True      │ empty IPv6 (allowlisted)  │
-# │ "x@x.invalid"                       │ True      │ redacted email            │
-# │ "real-secret-value"                 │ False     │ actual secret             │
-# │ "Bearer token123"                   │ False     │ auth token                │
-# │ "password123"                       │ False     │ password                  │
-# │ "00000"                             │ False     │ 5 zeros (not enough)      │
-# │ "XX"                                │ False     │ 2 X's (not enough)        │
-# └─────────────────────────────────────┴───────────┴───────────────────────────┘
-#
-# fmt: off
-REDACTED_CASES = [
-    # Standard redaction patterns
-    ("[REDACTED]",           True,  "standard redaction"),
-    ("REDACTED",             True,  "plain REDACTED"),
-    ("xxx REDACTED xxx",     True,  "contains REDACTED"),
-    ("<REDACTED>",           True,  "angle bracket REDACTED"),
-    ("***REDACTED***",       True,  "asterisk REDACTED"),
-    # Case variations
-    ("redacted",             True,  "lowercase redacted"),
-    ("Redacted",             True,  "title case Redacted"),
-    ("REDACTED_VALUE",       True,  "redacted with suffix"),
-    # X placeholder patterns
-    ("XXXX",                 True,  "X placeholder (4)"),
-    ("XXXXXXXXXX",           True,  "long X placeholder (10)"),
-    ("xxxx",                 True,  "lowercase x placeholder"),
-    ("XX:XX:XX:XX:XX:XX",    True,  "redacted MAC"),
-    # Note: lowercase redacted MAC not currently detected (uppercase only)
-    ("xx:xx:xx:xx:xx:xx",    False, "lowercase redacted MAC (not detected)"),
-    # Numeric placeholder patterns (only zeros are detected)
-    ("000000",               True,  "all zeros (6)"),
-    ("0000000000",           True,  "all zeros (10)"),
-    # Note: only repeated zeros detected, not other digits
-    ("111111",               False, "all ones (not detected as redacted)"),
-    ("999999999",            False, "all nines (not detected as redacted)"),
-    # Allowlisted values
-    ("0.0.0.0",              True,  "zero IP (allowlisted)"),
-    ("::",                   True,  "empty IPv6 (allowlisted)"),
-    ("x@x.invalid",          True,  "redacted email (x@x pattern)"),
-    # Note: .invalid TLD not detected unless very short pattern
-    ("user@example.invalid", False, "invalid TLD not detected"),
-    # Actual secrets (should NOT be redacted)
-    ("real-secret-value",    False, "actual secret"),
-    ("Bearer token123",      False, "auth token"),
-    ("password123",          False, "password"),
-    ("abc123xyz",            False, "mixed alphanumeric"),
-    # Edge cases (boundary tests)
-    ("00000",                False, "5 zeros (not enough)"),
-    ("XXX",                  True,  "3 X's (minimum threshold)"),
-    ("XX",                   False, "2 X's (not enough)"),
-    ("111",                  False, "3 ones (not detected)"),
-    # Mixed content (should NOT be redacted)
-    ("user123",              False, "username-like"),
-    ("test@example.com",     False, "valid email"),
-    ("192.168.1.1",          False, "private IP (not redacted placeholder)"),
+# ---------------------------------------------------------------------------
+# Load fixture data
+# ---------------------------------------------------------------------------
+_FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "test_secrets.json"
+_DATA = json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _expand_x_placeholder(s: str) -> str:
+    """Expand sentinel placeholders like ``_X40_`` to ``'x' * 40``."""
+    import re
+
+    def _repl(m: re.Match) -> str:
+        return "x" * int(m.group(1))
+
+    return re.sub(r"_X(\d+)_", _repl, s)
+
+
+# ---------------------------------------------------------------------------
+# Build parametrize tuples from fixture
+# ---------------------------------------------------------------------------
+REDACTED_CASES = [(c["value"], c["expected"], c["id"]) for c in _DATA["redacted_cases"]]
+
+COOKIE_ATTR_CASES = [(c["value"], c["expected"], c["id"]) for c in _DATA["cookie_attr_cases"]]
+
+PRIVATE_IP_CASES = [(c["ip"], c["expected"], c["id"]) for c in _DATA["private_ip_cases"]]
+
+TRUNCATE_CASES = [
+    (
+        _expand_x_placeholder(c["value"]),
+        c["max_len"],
+        _expand_x_placeholder(c["expected"]),
+        c["id"],
+    )
+    for c in _DATA["truncate_cases"]
 ]
-# fmt: on
+
+CHECK_JSON_FIELDS_CASES = [
+    (c["data"], c["expected_count"], c["id"]) for c in _DATA["check_json_fields_cases"]
+]
+
+CHECK_CONTENT_CASES = [
+    (c["content"], c["expect_ip"], c["expect_mac"], c["id"]) for c in _DATA["check_content_cases"]
+]
+
+CHECK_URL_CASES = [(c["url"], c["expected_count"], c["id"]) for c in _DATA["check_url_cases"]]
+
+COOKIE_ATTR_EXTENDED_CASES = [
+    (c["value"], c["expected"], c["id"]) for c in _DATA["cookie_attr_extended_cases"]
+]
+
+VALIDATE_HAR_URL_CRED_CASES = [
+    (c["url"], c["expect_finding"], c["id"]) for c in _DATA["validate_har_url_cred_cases"]
+]
+
+VALIDATE_HAR_CASES = [
+    (c["har_data"], c["expect_findings"], c["match_field"], c["id"]) for c in _DATA["validate_har_cases"]
+]
 
 
+# ---------------------------------------------------------------------------
+# is_redacted()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("value", "expected", "desc"), REDACTED_CASES)
 def test_is_redacted(value: str, expected: bool, desc: str) -> None:
     """Test is_redacted() with various values."""
@@ -96,37 +92,9 @@ def test_is_redacted(value: str, expected: bool, desc: str) -> None:
     assert result == expected, f"Failed for {desc}: {value}"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ is_cookie_attributes_only() test cases                                      │
-# ├─────────────────────────────────────┬───────────┬───────────────────────────┤
-# │ value                               │ expected  │ description               │
-# ├─────────────────────────────────────┼───────────┼───────────────────────────┤
-# │ "Secure"                            │ True      │ just Secure               │
-# │ "HttpOnly"                          │ True      │ just HttpOnly             │
-# │ "Secure; HttpOnly"                  │ True      │ both attributes           │
-# │ "HttpOnly; Secure"                  │ True      │ both reversed             │
-# │ ""                                  │ True      │ empty string              │
-# │ "  "                                │ True      │ whitespace only           │
-# │ "session=abc123"                    │ False     │ actual session value      │
-# │ "Secure; session=abc"               │ False     │ attributes + value        │
-# │ "token=xyz; HttpOnly"               │ False     │ value + attributes        │
-# └─────────────────────────────────────┴───────────┴───────────────────────────┘
-#
-# fmt: off
-COOKIE_ATTR_CASES = [
-    ("Secure",               True,  "just Secure"),
-    ("HttpOnly",             True,  "just HttpOnly"),
-    ("Secure; HttpOnly",     True,  "both attributes"),
-    ("HttpOnly; Secure",     True,  "both reversed"),
-    ("",                     True,  "empty string"),
-    ("  ",                   True,  "whitespace only"),
-    ("session=abc123",       False, "actual session value"),
-    ("Secure; session=abc",  False, "attributes + value"),
-    ("token=xyz; HttpOnly",  False, "value + attributes"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# is_cookie_attributes_only()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("value", "expected", "desc"), COOKIE_ATTR_CASES)
 def test_is_cookie_attributes_only(value: str, expected: bool, desc: str) -> None:
     """Test is_cookie_attributes_only() with various values."""
@@ -134,87 +102,9 @@ def test_is_cookie_attributes_only(value: str, expected: bool, desc: str) -> Non
     assert result == expected, f"Failed for {desc}: {value}"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ is_private_ip() test cases                                                  │
-# ├─────────────────────────────────────┬───────────┬───────────────────────────┤
-# │ ip                                  │ expected  │ description               │
-# ├─────────────────────────────────────┼───────────┼───────────────────────────┤
-# │ "10.0.0.1"                          │ True      │ 10.x.x.x range            │
-# │ "10.255.255.255"                    │ True      │ 10.x end                  │
-# │ "172.16.0.1"                        │ True      │ 172.16.x start            │
-# │ "172.31.255.255"                    │ True      │ 172.31.x end              │
-# │ "192.168.0.1"                       │ True      │ 192.168.x.x               │
-# │ "192.168.100.1"                     │ True      │ 192.168.x.x               │
-# │ "127.0.0.1"                         │ True      │ localhost                 │
-# │ "0.0.0.0"                           │ True      │ all zeros (redacted)      │
-# │ "8.8.8.8"                           │ False     │ Google DNS (public)       │
-# │ "1.1.1.1"                           │ False     │ Cloudflare (public)       │
-# │ "172.15.0.1"                        │ False     │ just outside 172.16-31    │
-# │ "172.32.0.1"                        │ False     │ just outside 172.16-31    │
-# │ "192.167.0.1"                       │ False     │ not 192.168               │
-# │ "invalid"                           │ False     │ not an IP                 │
-# │ "256.0.0.1"                         │ False     │ invalid octet             │
-# │ "1.2.3"                             │ False     │ too few octets            │
-# └─────────────────────────────────────┴───────────┴───────────────────────────┘
-#
-# fmt: off
-PRIVATE_IP_CASES = [
-    # 10.x.x.x range (Class A private)
-    ("10.0.0.0",        True,  "10.x network address"),
-    ("10.0.0.1",        True,  "10.x.x.x range start"),
-    ("10.100.50.25",    True,  "10.x.x.x middle"),
-    ("10.255.255.255",  True,  "10.x broadcast"),
-    # 172.16-31.x.x range (Class B private)
-    ("172.16.0.1",      True,  "172.16.x start"),
-    ("172.20.100.50",   True,  "172.x middle"),
-    ("172.31.255.255",  True,  "172.31.x end"),
-    # 192.168.x.x range (Class C private)
-    ("192.168.0.1",     True,  "192.168.0.x gateway"),
-    ("192.168.1.1",     True,  "192.168.1.x gateway"),
-    ("192.168.100.1",   True,  "192.168.x.x modem"),
-    ("192.168.255.255", True,  "192.168.x broadcast"),
-    # Loopback range (127.x.x.x)
-    ("127.0.0.0",       True,  "loopback network"),
-    ("127.0.0.1",       True,  "localhost"),
-    ("127.255.255.255", True,  "loopback end"),
-    # Note: Link-local (169.254.x.x - APIPA) not currently detected
-    # These are technically private but implementation doesn't handle them
-    ("169.254.0.1",     False, "link-local (not detected)"),
-    ("169.254.100.50",  False, "link-local (not detected)"),
-    ("169.254.255.255", False, "link-local (not detected)"),
-    # Special addresses
-    ("0.0.0.0",         True,  "all zeros (redacted)"),
-    # Public IPs (should NOT be private)
-    ("8.8.8.8",         False, "Google DNS"),
-    ("8.8.4.4",         False, "Google DNS secondary"),
-    ("1.1.1.1",         False, "Cloudflare DNS"),
-    ("208.67.222.222",  False, "OpenDNS"),
-    ("9.9.9.9",         False, "Quad9"),
-    # Boundary tests (just outside private ranges)
-    ("9.255.255.255",   False, "just before 10.x"),
-    ("11.0.0.1",        False, "just after 10.x"),
-    ("172.15.255.255",  False, "just before 172.16"),
-    ("172.32.0.1",      False, "just after 172.31"),
-    ("192.167.255.255", False, "just before 192.168"),
-    ("192.169.0.1",     False, "just after 192.168"),
-    ("169.253.255.255", False, "just before link-local"),
-    ("169.255.0.1",     False, "just after link-local"),
-    # Documentation/test ranges (RFC 5737)
-    ("192.0.2.1",       False, "TEST-NET-1"),
-    ("198.51.100.1",    False, "TEST-NET-2"),
-    ("203.0.113.1",     False, "TEST-NET-3"),
-    # Invalid inputs
-    ("invalid",         False, "not an IP"),
-    ("256.0.0.1",       False, "invalid octet > 255"),
-    ("-1.0.0.0",        False, "negative octet"),
-    ("1.2.3",           False, "too few octets"),
-    ("1.2.3.4.5",       False, "too many octets"),
-    ("",                False, "empty string"),
-    ("abc.def.ghi.jkl", False, "non-numeric octets"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# is_private_ip()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("ip", "expected", "desc"), PRIVATE_IP_CASES)
 def test_is_private_ip(ip: str, expected: bool, desc: str) -> None:
     """Test is_private_ip() with various IPs."""
@@ -222,27 +112,9 @@ def test_is_private_ip(ip: str, expected: bool, desc: str) -> None:
     assert result == expected, f"Failed for {desc}: {ip}"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ truncate() test cases                                                       │
-# ├─────────────────────────────────────┬───────────┬───────────────────────────┤
-# │ value                               │ max_len   │ expected_suffix           │
-# ├─────────────────────────────────────┼───────────┼───────────────────────────┤
-# │ "short"                             │ 40        │ "short" (unchanged)       │
-# │ "x" * 40                            │ 40        │ exact (unchanged)         │
-# │ "x" * 50                            │ 40        │ ends with "..."           │
-# │ "abcdefghij"                        │ 5         │ "ab..."                   │
-# └─────────────────────────────────────┴───────────┴───────────────────────────┘
-#
-# fmt: off
-TRUNCATE_CASES = [
-    ("short",      40, "short",      "under limit unchanged"),
-    ("x" * 40,     40, "x" * 40,     "exact limit unchanged"),
-    ("x" * 50,     40, "x" * 37 + "...", "over limit truncated"),
-    ("abcdefghij", 5,  "ab...",      "custom limit"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# truncate()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("value", "max_len", "expected", "desc"), TRUNCATE_CASES)
 def test_truncate(value: str, max_len: int, expected: str, desc: str) -> None:
     """Test truncate() with various values."""
@@ -393,32 +265,9 @@ class TestFindingDataclass:
         assert finding.severity == "warning"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ check_json_fields() test cases                                              │
-# ├───────────────────────────────────────────────┬─────────┬───────────────────┤
-# │ data                                          │ count   │ description       │
-# ├───────────────────────────────────────────────┼─────────┼───────────────────┤
-# │ {"password": "secret123"}                     │ 1       │ password field    │
-# │ {"user": {"api_key": "abc123"}}               │ 1       │ nested api_key    │
-# │ {"password": "[REDACTED]"}                    │ 0       │ redacted value    │
-# │ {"password": ""}                              │ 0       │ empty value       │
-# │ [{"token": "s1"}, {"token": "s2"}]            │ 2       │ list of objects   │
-# │ {"items": [{"password": "secret"}]}           │ 1       │ nested in list    │
-# └───────────────────────────────────────────────┴─────────┴───────────────────┘
-#
-# fmt: off
-CHECK_JSON_FIELDS_CASES = [
-    ({"username": "admin", "password": "secret123"},              2, "username and password fields detected"),
-    ({"user": {"credentials": {"api_key": "abc123xyz"}}},         1, "nested api_key field"),
-    ({"password": "[REDACTED]"},                                  0, "redacted value ignored"),
-    ({"password": ""},                                            0, "empty value ignored"),
-    ([{"token": "secret1"}, {"token": "secret2"}],                2, "list of objects"),
-    ({"items": [{"credentials": {"password": "secret"}}]},        1, "nested in list"),
-    ({"safe_field": "not sensitive"},                             0, "non-sensitive field"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# check_json_fields()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("data", "expected_count", "desc"), CHECK_JSON_FIELDS_CASES)
 def test_check_json_fields(data: dict | list, expected_count: int, desc: str) -> None:
     """Test check_json_fields() with various JSON structures."""
@@ -427,31 +276,9 @@ def test_check_json_fields(data: dict | list, expected_count: int, desc: str) ->
     assert len(findings) == expected_count, f"Failed for {desc}"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ check_content() test cases                                                  │
-# ├───────────────────────────────────────────────┬─────────┬───────────────────┤
-# │ content                                       │ has_ip  │ has_mac │ desc    │
-# ├───────────────────────────────────────────────┼─────────┼─────────┼─────────┤
-# │ "Server at 203.0.113.45"                      │ True    │ False   │ pub IP  │
-# │ "Local at 192.168.1.1"                        │ False   │ False   │ priv IP │
-# │ "MAC: AA:BB:CC:11:22:33"                      │ False   │ True    │ MAC     │
-# │ "MAC: 00:00:00:00:00:00"                      │ False   │ False   │ anon MAC│
-# │ ""                                            │ False   │ False   │ empty   │
-# │ "[REDACTED]"                                  │ False   │ False   │ redacted│
-# └───────────────────────────────────────────────┴─────────┴─────────┴─────────┘
-#
-# fmt: off
-CHECK_CONTENT_CASES = [
-    ("Server is at 203.0.113.45 and ready",  True,  False, "public IP detected"),
-    ("Local server at 192.168.1.1",          False, False, "private IP ignored"),
-    ("Device MAC is AA:BB:CC:11:22:33",      False, True,  "MAC address detected"),
-    ("MAC: 00:00:00:00:00:00",               False, False, "anonymized MAC ignored"),
-    ("",                                     False, False, "empty content"),
-    ("[REDACTED]",                           False, False, "redacted content"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# check_content()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("content", "expect_ip", "expect_mac", "desc"), CHECK_CONTENT_CASES)
 def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: str) -> None:
     """Test check_content() with various content strings."""
@@ -465,47 +292,14 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
     assert has_mac == expect_mac, f"MAC detection failed for {desc}"
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ validate_har() test cases                                                   │
-# ├─────────────────────────────────────────────────┬───────────┬───────────────┤
-# │ har_data                                        │ has_find  │ description   │
-# ├─────────────────────────────────────────────────┼───────────┼───────────────┤
-# │ HAR with Authorization header                   │ True      │ auth header   │
-# │ HAR with clean Content-Type only                │ False     │ clean HAR     │
-# │ HAR with password in POST data                  │ True      │ post password │
-# │ HAR with Cookie header                          │ True      │ cookie header │
-# └─────────────────────────────────────────────────┴───────────┴───────────────┘
-#
-# fmt: off
-VALIDATE_HAR_CASES = [
-    # (har_data, expect_findings, match_field, description)
-    (
-        {"log": {"entries": [{"request": {"url": "http://x.com", "headers": [{"name": "Authorization", "value": "Bearer secret"}]}, "response": {"headers": []}}]}},
-        True, "Authorization", "auth header detected",
-    ),
-    (
-        {"log": {"entries": [{"request": {"url": "http://x.com", "headers": [{"name": "Content-Type", "value": "text/html"}]}, "response": {"headers": [], "content": {"text": "Hello", "mimeType": "text/html"}}}]}},
-        False, None, "clean HAR",
-    ),
-    (
-        {"log": {"entries": [{"request": {"url": "http://x.com/login", "headers": [], "postData": {"mimeType": "application/x-www-form-urlencoded", "params": [{"name": "password", "value": "mysecret"}]}}, "response": {"headers": []}}]}},
-        True, "password", "POST password detected",
-    ),
-    (
-        {"log": {"entries": [{"request": {"url": "http://x.com", "headers": [{"name": "Cookie", "value": "session=abc123"}]}, "response": {"headers": []}}]}},
-        True, "Cookie", "cookie header detected",
-    ),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# validate_har()
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(("har_data", "expect_findings", "match_field", "desc"), VALIDATE_HAR_CASES)
 def test_validate_har(
     har_data: dict, expect_findings: bool, match_field: str | None, desc: str, tmp_path
 ) -> None:
     """Test validate_har() with various HAR structures."""
-    import json
-
     har_file = tmp_path / "test.har"
     har_file.write_text(json.dumps(har_data))
 
@@ -522,7 +316,6 @@ def test_validate_har(
 def test_validate_har_gzipped(tmp_path) -> None:
     """Test validation of gzipped HAR file."""
     import gzip
-    import json
 
     har_data = {
         "log": {
@@ -545,24 +338,9 @@ def test_validate_har_gzipped(tmp_path) -> None:
     assert len(findings) > 0
 
 
-# ┌────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────┐
-# │ url                                                        │ findings │ description                  │
-# ├────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────┤
-# │ Full URL with query string                                 │ count    │ test case name               │
-# └────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────┘
-#
-# fmt: off
-CHECK_URL_CASES = [
-    # Base64 credentials (should be flagged)
-    ("https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=", 1, "bare_base64_user_pass"),
-    ("https://modem.local/api?auth=YWRtaW46cGFzc3dvcmQ=",      1, "base64_as_param_value"),
-    # Normal params (should NOT be flagged)
-    ("https://example.com/page?id=123&format=json",             0, "normal_params"),
-    ("https://example.com/page",                                0, "no_query_string"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# check_url()
+# ---------------------------------------------------------------------------
 class TestCheckURL:
     """Tests for check_url() base64 credential detection."""
 
@@ -582,29 +360,9 @@ class TestCheckURL:
             assert "Base64-encoded credential" in findings[0].reason
 
 
-# ┌───────────────────────────────────────────────────┬──────────┬──────────────────────────┐
-# │ value                                             │ expected │ description              │
-# ├───────────────────────────────────────────────────┼──────────┼──────────────────────────┤
-# │ Cookie header value                               │ True/    │ test case name           │
-# │                                                   │ False    │                          │
-# └───────────────────────────────────────────────────┴──────────┴──────────────────────────┘
-#
-# fmt: off
-COOKIE_ATTR_EXTENDED_CASES = [
-    # Attribute metadata (should be recognized as attribute-only)
-    ("HttpOnly: true, Secure: true",                    True,  "metadata_with_colons"),
-    ("HttpOnly: true, Secure: true, SameSite: Strict",  True,  "three_attrs_metadata"),
-    # Standard attribute strings
-    ("Secure; HttpOnly",                                True,  "standard_attributes"),
-    ("Secure",                                          True,  "bare_secure"),
-    ("HttpOnly",                                        True,  "bare_httponly"),
-    # Real cookie values (should NOT match)
-    ("session=abc123",                                  False, "actual_cookie_value"),
-    ("Bearer token123",                                 False, "auth_token"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# is_cookie_attributes_only() extended
+# ---------------------------------------------------------------------------
 class TestCookieAttributesOnlyExtended:
     """Tests for is_cookie_attributes_only with metadata patterns."""
 
@@ -619,22 +377,9 @@ class TestCookieAttributesOnlyExtended:
         assert result == expected, f"{desc}: expected {expected}"
 
 
-# ┌────────────────────────────────────────────────────────────┬──────────┬──────────────────────────────┐
-# │ har_data                                                   │ flagged  │ description                  │
-# ├────────────────────────────────────────────────────────────┼──────────┼──────────────────────────────┤
-# │ HAR with URL containing base64 creds                       │ True/    │ test case name               │
-# │                                                            │ False    │                              │
-# └────────────────────────────────────────────────────────────┴──────────┴──────────────────────────────┘
-#
-# fmt: off
-VALIDATE_HAR_URL_CRED_CASES = [
-    # (url, expect_base64_finding, desc)
-    ("https://192.168.100.1/status.html?YWRtaW46cGFzc3dvcmQ=", True,  "base64_cred_in_url"),
-    ("https://example.com/page?id=123",                         False, "clean_url"),
-]
-# fmt: on
-
-
+# ---------------------------------------------------------------------------
+# validate_har URL credential detection
+# ---------------------------------------------------------------------------
 class TestValidateHarURLCredentials:
     """Test validate_har catches base64 credentials in URLs."""
 
@@ -645,8 +390,6 @@ class TestValidateHarURLCredentials:
     )
     def test_validate_har_url_credentials(self, url: str, expect_finding: bool, desc: str, tmp_path) -> None:
         """validate_har flags base64(user:pass) in URL query string."""
-        import json
-
         har_data = {
             "log": {
                 "entries": [
@@ -663,6 +406,75 @@ class TestValidateHarURLCredentials:
         findings = validate_har(har_file)
         has_base64 = any("Base64-encoded credential" in f.reason for f in findings)
         assert has_base64 == expect_finding, f"{desc}: expected finding={expect_finding}"
+
+
+class TestCheckURLKeyValueCredential:
+    """Tests for check_url detecting base64 creds in key=value params."""
+
+    def test_base64_credential_in_param_value(self) -> None:
+        """Test check_url detects base64(user:pass) in a param value."""
+        from har_capture.validation.secrets import check_url
+
+        findings: list[Finding] = []
+        check_url(
+            "https://example.com/api?token=YWRtaW46cGFzc3dvcmQ=",
+            "Entry 0",
+            findings,
+        )
+        assert len(findings) == 1
+        assert "query param 'token'" in findings[0].field
+        assert "Base64-encoded credential" in findings[0].reason
+
+
+class TestCheckContentSerialInTable:
+    """Tests for check_content detecting serial numbers in HTML table cells."""
+
+    def test_serial_in_html_table_cell(self) -> None:
+        """Test check_content flags serial numbers in adjacent td cells."""
+        html = "<td><strong>Serial Number</strong></td><td>ARRIS99887766ZZ</td>"
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        serial_findings = [f for f in findings if "serial" in f.reason.lower()]
+        assert len(serial_findings) >= 1, "Should flag serial number in table cell"
+
+
+class TestValidateHarBase64Content:
+    """Tests for validate_har with base64-encoded response content."""
+
+    def test_base64_encoded_content_decoded_and_checked(self, tmp_path) -> None:
+        """Test that base64-encoded response content is decoded then validated."""
+        import base64
+
+        # Encode content containing a real MAC address
+        raw_content = "Device MAC: DE:AD:BE:EF:CA:FE"
+        b64_content = base64.b64encode(raw_content.encode()).decode()
+
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "url": "https://example.com/page",
+                            "headers": [],
+                        },
+                        "response": {
+                            "headers": [],
+                            "content": {
+                                "text": b64_content,
+                                "encoding": "base64",
+                                "mimeType": "text/html",
+                            },
+                        },
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+        mac_findings = [f for f in findings if "MAC" in f.reason]
+        assert len(mac_findings) >= 1, "Should detect MAC in base64-decoded content"
 
 
 class TestCompileSensitiveFields:

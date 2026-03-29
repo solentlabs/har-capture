@@ -320,6 +320,8 @@ def run_capture_phase(
     timeout: int | None = None,
     interactive: bool = False,
     result: CaptureWorkflowResult | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
+    wait_for_data: bool = True,
 ) -> CaptureWorkflowResult:
     """Run the actual capture.
 
@@ -338,6 +340,8 @@ def run_capture_phase(
         timeout: Timeout in seconds (None = wait for user to close)
         interactive: Flag suspicious values for interactive review
         result: Existing result to update, or None to create new
+        custom_patterns: Domain pattern name, file path, or pre-loaded dict
+        wait_for_data: Wait for async data fetches before navigating
 
     Returns:
         CaptureWorkflowResult with capture status
@@ -365,6 +369,8 @@ def run_capture_phase(
         timeout=timeout,
         interactive=interactive,
         probes=probe_data,
+        custom_patterns=custom_patterns,
+        wait_for_data=wait_for_data,
     )
 
     result.capture = CaptureResult(
@@ -397,6 +403,7 @@ def run_capture_workflow(
     headless: bool = False,
     timeout: int | None = None,
     skip_browser_check: bool = False,
+    wait_for_data: bool = True,
 ) -> CaptureWorkflowResult:
     """Run the complete capture workflow.
 
@@ -421,6 +428,7 @@ def run_capture_workflow(
         headless: Run browser in headless mode
         timeout: Timeout in seconds (None = wait for user to close)
         skip_browser_check: Skip browser installation check
+        wait_for_data: Wait for async data fetches before navigating
 
     Returns:
         CaptureWorkflowResult with workflow status
@@ -475,6 +483,7 @@ def run_capture_workflow(
         headless=headless,
         timeout=timeout,
         result=result,
+        wait_for_data=wait_for_data,
     )
 
     return result

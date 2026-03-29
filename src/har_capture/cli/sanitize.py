@@ -5,7 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -37,8 +37,8 @@ def sanitize(
         typer.Option("--no-salt", help="Use static placeholders instead of hashed values"),
     ] = False,
     patterns: Annotated[
-        Path | None,
-        typer.Option("--patterns", "-p", help="Custom patterns JSON file"),
+        list[str] | None,
+        typer.Option("--patterns", "-p", help="Pattern names or JSON file paths (repeatable)"),
     ] = None,
     max_size: Annotated[
         int | None,
@@ -120,7 +120,17 @@ def sanitize(
             report = Path(str(input_file) + ".review.json")
 
     output_path = str(output) if output else None
-    custom_patterns = str(patterns) if patterns else None
+
+    # Resolve --patterns args (names → built-in paths, file paths → validated)
+    custom_patterns: str | dict[str, Any] | None = None
+    if patterns:
+        from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
+
+        resolved = [resolve_patterns_arg(p) for p in patterns]
+        if len(resolved) == 1:
+            custom_patterns = str(resolved[0])
+        else:
+            custom_patterns = merge_pattern_files(resolved)
 
     # Convert max_size from MB to bytes (0 = unlimited)
     max_size_bytes: int | None = None

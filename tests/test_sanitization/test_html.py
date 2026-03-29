@@ -24,6 +24,9 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from har_capture.patterns import load_allowlist, load_pii_patterns
@@ -33,15 +36,12 @@ from har_capture.sanitization.html import (
 )
 
 # =============================================================================
-# Test Data Tables
+# Load Test Data From Fixture
 # =============================================================================
 
-# ┌─────────────────────────────────────────┬─────────────────────────┬───────────────────┬─────────────────────┐
-# │ input_html                              │ removed                 │ placeholder       │ description         │
-# ├─────────────────────────────────────────┼─────────────────────────┼───────────────────┼─────────────────────┤
-# │ PII that should be sanitized            │ original value          │ replacement       │ test case name      │
-# └─────────────────────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────┘
-#
+_FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "test_html.json"
+_FIXTURE = json.loads(_FIXTURE_PATH.read_text())
+
 # Note: When salt=None, format-preserving placeholders are used:
 # - MAC: XX:XX:XX:XX:XX:XX
 # - Private IP: 0.0.0.0
@@ -50,111 +50,32 @@ from har_capture.sanitization.html import (
 # - Email: x@x.invalid
 # - Generic: ***{PREFIX}***
 #
-# fmt: off
+# Note: WiFi credentials in tagValueList are now FLAGGED for user review, not auto-redacted.
+# See PRESERVE_CASES (wifi_credential_flagged / wifi_ssid_flagged) for those test cases.
+
 SANITIZE_PII_CASES = [
-    # MAC addresses
-    ("Device MAC: AA:BB:CC:DD:EE:FF",           "AA:BB:CC:DD:EE:FF",     "XX:XX:XX:XX:XX:XX",  "mac_colon_format"),
-    ("Device MAC: 11-22-33-44-55-66",           "11-22-33-44-55-66",     "XX:XX:XX:XX:XX:XX",  "mac_dash_format"),
-    ("MAC: aa:bb:cc:dd:ee:ff",                  "aa:bb:cc:dd:ee:ff",     "XX:XX:XX:XX:XX:XX",  "mac_lowercase"),
-    ("Multiple: AA:BB:CC:DD:EE:FF and 11:22:33:44:55:66", "AA:BB:CC:DD:EE:FF", "XX:XX:XX:XX:XX:XX", "mac_multiple"),
-    # Serial numbers - uses ***SERIAL*** placeholder
-    ("Serial Number: ABC12345678",              "ABC12345678",           "***SERIAL***",       "serial_number"),
-    ("SerialNum: XYZ98765432",                  "XYZ98765432",           "***SERIAL***",       "serial_num_variant"),
-    ("SN: DEV123456789",                         "DEV123456789",          "***SERIAL***",       "serial_sn_prefix"),
-    # IP addresses - private (uses 0.0.0.0 placeholder)
-    ("Client: 192.168.100.50",                  "192.168.100.50",        "0.0.0.0",            "private_ip_192"),
-    ("Device: 10.0.0.100",                      "10.0.0.100",            "0.0.0.0",            "private_ip_10"),
-    ("Host: 172.16.0.50",                       "172.16.0.50",           "0.0.0.0",            "private_ip_172"),
-    # IP addresses - public (uses 0.0.0.0 placeholder)
-    ("External DNS: 8.8.8.8",                   "8.8.8.8",               "0.0.0.0",            "public_ip_google"),
-    ("Server: 1.1.1.1",                         "1.1.1.1",               "0.0.0.0",            "public_ip_cloudflare"),
-    ("API: 203.0.113.50",                       "203.0.113.50",          "0.0.0.0",            "public_ip_test_net"),
-    # IPv6 addresses (uses :: placeholder)
-    ("IPv6: 2001:db8::1",                       "2001:db8::1",           "::",                 "ipv6_compressed"),
-    ("IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "::", "ipv6_full"),
-    ("Localhost: ::1",                          "::1",                   "::",                 "ipv6_localhost"),
-    # Passwords - uses ***PASS*** placeholder
-    ("password=secret123",                      "secret123",             "***PASS***",         "password_equals"),
-    ("passphrase: mysecretphrase",              "mysecretphrase",        "***PASS***",         "passphrase"),
-    ("psk=wireless_key_here",                   "wireless_key_here",     "***PASS***",         "psk_wireless"),
-    # Email addresses (uses x@x.invalid placeholder)
-    ("Contact: admin@example.com",              "admin@example.com",     "x@x.invalid",        "email_simple"),
-    ("Email: user.name+tag@domain.co.uk",       "user.name+tag@domain.co.uk", "x@x.invalid",   "email_complex"),
-    # Config paths - uses ***CONFIG*** placeholder
-    ("Config File Name: customer123.cfg",       "customer123.cfg",       "***CONFIG***",       "config_path"),
-    ("config file: isp_settings.cfg",           "isp_settings.cfg",      "***CONFIG***",       "config_lowercase"),
-    # Note: WiFi credentials in tagValueList are now FLAGGED for user review, not auto-redacted.
-    # See FLAGGED_CASES below for those test cases.
+    (c["input_html"], c["removed"], c["placeholder"], c["id"]) for c in _FIXTURE["sanitize_pii_cases"]
 ]
-# fmt: on
 
-# ┌─────────────────────────────────────────┬─────────────────────────┬─────────────────────┐
-# │ input_html                              │ preserved               │ description         │
-# ├─────────────────────────────────────────┼─────────────────────────┼─────────────────────┤
-# │ Content that should NOT be sanitized    │ value to preserve       │ test case name      │
-# └─────────────────────────────────────────┴─────────────────────────┴─────────────────────┘
-#
-# fmt: off
-PRESERVE_CASES = [
-    # Gateway IPs (common router addresses - should be in preserved_gateway_ips)
-    ("Gateway: 192.168.100.1",                  "192.168.100.1",         "gateway_192_168_100_1"),
-    ("Router: 192.168.1.1",                     "192.168.1.1",           "gateway_192_168_1_1"),
-    ("Gateway: 192.168.0.1",                    "192.168.0.1",           "gateway_192_168_0_1"),
-    # Time formats (should not match IPv6)
-    ("Uptime: 12:34:56",                        "12:34:56",              "time_format_hhmmss"),
-    ("Duration: 01:23:45",                      "01:23:45",              "time_format_short"),
-    ("Time: 00:00:00",                          "00:00:00",              "time_format_midnight"),
-    # Signal metrics
-    ("Power: 7.5 dBmV SNR: 38.2 dB",            "7.5 dBmV",              "signal_dbmv"),
-    ("Power: 7.5 dBmV SNR: 38.2 dB",            "38.2 dB",               "signal_db"),
-    ("Frequency: 602.0 MHz",                    "602.0 MHz",             "frequency_mhz"),
-    # Status values in tagValueList
-    ("var tagValueList = 'Locked|OK|Operational|QAM256';", "Locked",     "status_locked"),
-    ("var tagValueList = 'Locked|OK|Operational|QAM256';", "OK",         "status_ok"),
-    ("var tagValueList = 'Locked|OK|Operational|QAM256';", "QAM256",     "status_qam"),
-    # WiFi credentials in tagValueList are PRESERVED (flagged for review, not auto-redacted)
-    ("var tagValueList = '0|Good||happymango167|test';", "happymango167", "wifi_credential_flagged"),
-    ("var tagValueList = 'status|MySecretWiFi123|data';", "MySecretWiFi123", "wifi_ssid_flagged"),
-    # Numeric values
-    ("Channel: 123",                            "123",                   "numeric_channel"),
-    ("Version: 1.0.0",                          "1.0.0",                 "version_string"),
-]
-# fmt: on
+PRESERVE_CASES = [(c["input_html"], c["preserved"], c["id"]) for c in _FIXTURE["preserve_cases"]]
 
-# ┌─────────────────────────────────────────┬─────────────────┬─────────────────────┐
-# │ content                                 │ pattern_name    │ description         │
-# ├─────────────────────────────────────────┼─────────────────┼─────────────────────┤
-# │ Content with PII to detect              │ expected pattern│ test case name      │
-# └─────────────────────────────────────────┴─────────────────┴─────────────────────┘
-#
-# fmt: off
 PII_DETECTION_CASES = [
-    ("Device MAC: DE:AD:BE:EF:CA:FE",           "mac_address",   "DE:AD:BE:EF:CA:FE",  "mac_detect"),
-    ("MAC: 11-22-33-44-55-66",                  "mac_address",   "11-22-33-44-55-66",  "mac_dash_detect"),
-    ("Contact: admin@example.com",              "email",         "admin@example.com",  "email_detect"),
-    ("DNS: 8.8.8.8",                            "public_ip",     "8.8.8.8",            "public_ip_detect"),
+    (c["content"], c["pattern_name"], c["match"], c["id"]) for c in _FIXTURE["pii_detection_cases"]
 ]
-# fmt: on
 
-# ┌─────────────────────────────────────────┬─────────────────────┐
-# │ content                                 │ description         │
-# ├─────────────────────────────────────────┼─────────────────────┤
-# │ Allowlisted content (no findings)       │ test case name      │
-# └─────────────────────────────────────────┴─────────────────────┘
-#
-# fmt: off
-ALLOWLISTED_CASES = [
-    # Static placeholders from allowlist.json
-    ("MAC: XX:XX:XX:XX:XX:XX",                  "placeholder_mac"),
-    ("IP: 0.0.0.0",                             "placeholder_ip_zero"),
-    ("IPv6: ::",                                "placeholder_ipv6_empty"),
-    ("Email: x@x.invalid",                      "placeholder_email"),
-    ("Value: [REDACTED]",                       "placeholder_redacted"),
-    # Non-PII content
-    ("Power: 7.5 dBmV",                         "signal_metric"),
-    ("Status: OK",                              "status_value"),
+ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_cases"]]
+
+SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
+
+SETITEM_CASES = [
+    (c["input_html"], c["should_not_contain"], c["should_contain"], c["id"])
+    for c in _FIXTURE["setitem_cases"]
 ]
-# fmt: on
+
+PIPE_SERIAL_CASES = [
+    (c["input_html"], c["should_not_contain"], c["should_contain"], c["id"])
+    for c in _FIXTURE["pipe_serial_cases"]
+]
 
 
 # =============================================================================
@@ -266,13 +187,7 @@ class TestCheckForPii:
 class TestPatternLoading:
     """Tests for pattern loading functions."""
 
-    # fmt: off
-    EXPECTED_PATTERNS = [
-        "mac_address",
-        "email",
-        "public_ip",
-    ]
-    # fmt: on
+    EXPECTED_PATTERNS = _FIXTURE["expected_patterns"]
 
     @pytest.mark.parametrize("pattern_name", EXPECTED_PATTERNS)
     def test_pattern_defined(self, pattern_name: str) -> None:
@@ -280,16 +195,7 @@ class TestPatternLoading:
         patterns = load_pii_patterns()
         assert pattern_name in patterns["patterns"]
 
-    # fmt: off
-    # Static placeholders from allowlist.json
-    EXPECTED_ALLOWLIST = [
-        "XX:XX:XX:XX:XX:XX",
-        "0.0.0.0",
-        "::",
-        "x@x.invalid",
-        "[REDACTED]",
-    ]
-    # fmt: on
+    EXPECTED_ALLOWLIST = _FIXTURE["expected_allowlist"]
 
     @pytest.mark.parametrize("placeholder", EXPECTED_ALLOWLIST)
     def test_allowlist_contains_placeholder(self, placeholder: str) -> None:
@@ -302,24 +208,6 @@ class TestPatternLoading:
 # =============================================================================
 # Serial Number Detection in HTML Table Cells
 # =============================================================================
-
-# ┌──────────────────────────────────────────────────────────────────┬─────────────────┬──────────────────────┐
-# │ html                                                             │ serial_value    │ description          │
-# ├──────────────────────────────────────────────────────────────────┼─────────────────┼──────────────────────┤
-# │ HTML with <td> label and <td> value                             │ value to redact │ test case name       │
-# │                                                                  │ or None         │                      │
-# └──────────────────────────────────────────────────────────────────┴─────────────────┴──────────────────────┘
-#
-# fmt: off
-SERIAL_TABLE_CASES = [
-    # Label in one <td>, serial in next <td>
-    ('<td><strong>Serial Number</strong></td>\n<td>17V541334700308</td>', "17V541334700308", "serial_in_adjacent_td"),
-    ('<td>Serial Number</td><td>ABC12345678</td>',                       "ABC12345678",     "serial_in_plain_td"),
-    ('<td><strong>SN</strong></td>\n<td>ARRIS-99887766</td>',            "ARRIS-99887766",  "sn_label_in_td"),
-    # Non-serial table cell (should be unchanged)
-    ('<td>Model</td><td>SB8200</td>',                                    None,              "non_serial_table_cell"),
-]
-# fmt: on
 
 
 class TestSerialNumberTableCell:
@@ -342,29 +230,6 @@ class TestSerialNumberTableCell:
 # =============================================================================
 # Web Storage setItem() Scanning (Gap 1 fix)
 # =============================================================================
-
-# ┌──────────────────────────────────────────────────────────────────────────┬──────────────────────────┬─────────────────┬──────────────────────┐
-# │ input_html                                                             │ should_not_contain       │ should_contain  │ description          │
-# ├──────────────────────────────────────────────────────────────────────────┼──────────────────────────┼─────────────────┼──────────────────────┤
-# │ setItem() calls with various key types                                 │ value that must be gone  │ prefix expected │ test case name       │
-# └──────────────────────────────────────────────────────────────────────────┴──────────────────────────┴─────────────────┴──────────────────────┘
-#
-# fmt: off
-SETITEM_CASES = [
-    # Tier A: Sensitive key names -> auto-redact value
-    ('localStorage.setItem("PrivateKey", "HMAC_replicant_c1982")',       "HMAC_replicant_c1982",    "STORAGE_",  "setitem_privatekey"),
-    ('sessionStorage.setItem("csrf_token", "xsrf_wopr_play")',          "xsrf_wopr_play",          "STORAGE_",  "setitem_csrf_token"),
-    ('sessionStorage.setItem("secret", "aes256_pyramid_key")',           "aes256_pyramid_key",      "STORAGE_",  "setitem_secret"),
-    ('localStorage.setItem("api_key", "sk_live_moreLightFather")',      "sk_live_moreLightFather",  "STORAGE_", "setitem_api_key"),
-    ('sessionStorage.setItem("auth_token", "tok_nexus6_2019")',         "tok_nexus6_2019",         "STORAGE_",  "setitem_auth_token"),
-    ('localStorage.setItem("password", "Th3r3IsN0Sp00n!")',             "Th3r3IsN0Sp00n!",         "STORAGE_",  "setitem_password"),
-    # Single-quoted setItem
-    ("localStorage.setItem('token', 'secret_session_abc')",             "secret_session_abc",      "STORAGE_",  "setitem_single_quotes"),
-    # Non-sensitive key, safe value -> preserved
-    ('localStorage.setItem("theme", "dark")',                            None,                      None,        "setitem_safe_value"),
-    ('sessionStorage.setItem("lang", "en")',                             None,                      None,        "setitem_safe_lang"),
-]
-# fmt: on
 
 
 class TestSetItemScanning:
@@ -435,26 +300,6 @@ class TestSetItemScanning:
 # Serial Numbers in Pipe-Delimited Strings (Gap 2 fix)
 # =============================================================================
 
-# ┌─────────────────────────────────────────────────────────────────┬──────────────────┬─────────────────┬──────────────────────────┐
-# │ input_html                                                     │ should_not_contain│ should_contain │ description              │
-# ├─────────────────────────────────────────────────────────────────┼──────────────────┼─────────────────┼──────────────────────────┤
-# │ pipe-delimited JS vars with serial numbers                     │ leaked serial    │ prefix expected │ test case name           │
-# └─────────────────────────────────────────────────────────────────┴──────────────────┴─────────────────┴──────────────────────────┘
-#
-# fmt: off
-PIPE_SERIAL_CASES = [
-    ("var tagValueList = 'enabled|SN-N6MAA10816|WPA3';",  "SN-N6MAA10816",  "SERIAL_",  "pipe_serial_sn_dash"),
-    ("var tagValueList = 'active|S/N-ABC123456|locked';",  "S/N-ABC123456",  "SERIAL_",  "pipe_serial_s_n_prefix"),
-    ("var tagValueList = 'ok|SN_XYZW5678Q|enabled';",      "SN_XYZW5678Q",   "SERIAL_",  "pipe_serial_underscore"),
-    ("var tagValueList = 'ok|sn-abcdefgh|enabled';",       "sn-abcdefgh",    "SERIAL_",  "pipe_serial_lowercase"),
-    ("var tagValueList = 'ok|S-N-WXYZ98765|good';",          "S-N-WXYZ98765",  "SERIAL_",  "pipe_serial_s_dash_n"),
-    # Non-serial values should be preserved
-    ("var tagValueList = 'SNMP|enabled|good';",             None,             None,       "pipe_not_serial_snmp"),
-    # Note: SNMPv3Auth is caught by step 2's general serial regex (pre-existing behavior)
-    ("var tagValueList = 'SN-AB|ok';",                      None,             None,       "pipe_serial_too_short"),
-]
-# fmt: on
-
 
 class TestPipeSerialNumber:
     """Tests for serial number detection in pipe-delimited strings."""
@@ -485,3 +330,99 @@ class TestPipeSerialNumber:
                 assert "SNMP" in result, f"{desc}: SNMP should be preserved"
             elif "SN-AB" in html:
                 assert "SN-AB" in result, f"{desc}: short value should be preserved"
+
+
+class TestCustomPiiPatternEdgeCases:
+    """Tests for custom PII pattern loading edge cases in sanitize_html."""
+
+    def test_skips_pattern_without_regex_key(self) -> None:
+        """Test that PII patterns missing 'regex' key are skipped."""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        custom = {
+            "patterns": {
+                "bad_pattern": {"description": "no regex key"},
+                "good_pattern": {
+                    "regex": r"CUSTOM_SECRET_\w+",
+                    "replacement_prefix": "FOUND",
+                },
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(custom, f)
+            f.flush()
+            custom_path = f.name
+
+        try:
+            html = "data: CUSTOM_SECRET_ABC123 end"
+            result = sanitize_html(html, salt="test", custom_patterns=custom_path)
+            assert "CUSTOM_SECRET_ABC123" not in result, "good pattern should still match"
+        finally:
+            Path(custom_path).unlink(missing_ok=True)
+
+    def test_custom_pattern_with_ignorecase_flag(self) -> None:
+        """Test that custom PII patterns with IGNORECASE flag work."""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        custom = {
+            "patterns": {
+                "case_pattern": {
+                    "regex": r"secret_token_\w+",
+                    "replacement_prefix": "TOKEN",
+                    "flags": ["IGNORECASE"],
+                },
+            }
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(custom, f)
+            f.flush()
+            custom_path = f.name
+
+        try:
+            html = "data: SECRET_TOKEN_XYZ789 end"
+            result = sanitize_html(html, salt="test", custom_patterns=custom_path)
+            assert "SECRET_TOKEN_XYZ789" not in result, "IGNORECASE flag should enable match"
+        finally:
+            Path(custom_path).unlink(missing_ok=True)
+
+
+class TestSetItemHeuristicCoverage:
+    """Tests for setItem heuristic code paths with mocked analyze_value."""
+
+    def test_setitem_heuristic_redact_triggers_redaction(self) -> None:
+        """Test Tier C REDACT path when analyze_value flags the value."""
+        from unittest.mock import patch
+
+        from har_capture.sanitization.report import HeuristicMode
+
+        html = 'localStorage.setItem("mykey", "some_opaque_value")'
+        with patch(
+            "har_capture.sanitization.heuristics.analyze_value",
+            return_value=(True, "HIGH", "credential", "looks like a credential"),
+        ):
+            result = sanitize_html(html, salt="test", heuristics=HeuristicMode.REDACT)
+        assert "some_opaque_value" not in result, "value should be redacted in REDACT mode"
+        assert "mykey" in result, "key should be preserved"
+
+    def test_setitem_heuristic_flag_records_flag(self) -> None:
+        """Test Tier C FLAG path when analyze_value flags the value."""
+        from unittest.mock import patch
+
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.report import HeuristicMode
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        html = 'sessionStorage.setItem("config", "opaque_val_999")'
+        with patch(
+            "har_capture.sanitization.heuristics.analyze_value",
+            return_value=(True, "MEDIUM", "credential", "looks suspicious"),
+        ):
+            result = sanitize_html(html, salt="test", collector=collector, heuristics=HeuristicMode.FLAG)
+        assert "opaque_val_999" in result, "value should be preserved in FLAG mode"
+        assert len(collector.flagged) > 0, "should have flagged a value"

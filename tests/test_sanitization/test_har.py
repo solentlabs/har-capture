@@ -24,167 +24,62 @@ Dependencies:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from har_capture.sanitization.har import (
+    HarValidationError,
     _embed_sanitization_metadata,
+    _sanitize_form_urlencoded,
+    _sanitize_json_recursive,
+    _sanitize_string_patterns,
+    apply_user_redactions,
     is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
     sanitize_har,
+    sanitize_har_file,
     sanitize_header_value,
     sanitize_post_data,
+    validate_har_structure,
 )
-from har_capture.sanitization.report import HeuristicMode, SanitizationReport
+from har_capture.sanitization.report import (
+    FlaggedValue,
+    HeuristicMode,
+    RedactionStatus,
+    SanitizationReport,
+)
 
 # =============================================================================
-# Test Data Tables
+# Fixture Loading
 # =============================================================================
 
-# ┌─────────────────────────┬─────────────┬─────────────────────────────┐
-# │ field_name              │ is_sensitive│ description                 │
-# ├─────────────────────────┼─────────────┼─────────────────────────────┤
-# │ Form/JSON field name    │ True/False  │ test case name              │
-# └─────────────────────────┴─────────────┴─────────────────────────────┘
-#
-# fmt: off
+_FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures"
+
+
+def _load_fixture(name: str) -> dict:
+    """Load a JSON fixture file and return the parsed dict."""
+    with open(_FIXTURES_DIR / name) as f:
+        return json.load(f)
+
+
+_HAR_FIXTURE = _load_fixture("test_har.json")
+
+# =============================================================================
+# Test Data Tables -- large tables loaded from tests/fixtures/test_har.json
+# =============================================================================
+
+# Sensitive field detection: (field_name, expected, id)
 SENSITIVE_FIELD_CASES = [
-    # Password variations
-    ("password",            True,   "password_exact"),
-    ("Password",            True,   "password_capitalized"),
-    ("PASSWORD",            True,   "password_uppercase"),
-    ("loginPassword",       True,   "password_camel"),
-    ("user_password",       True,   "password_snake"),
-    ("passwd",              True,   "passwd"),
-    ("pwd",                 True,   "pwd"),
-    ("pass",                True,   "pass"),
-    ("oldPassword",         True,   "password_old"),
-    ("newPassword",         True,   "password_new"),
-    ("confirmPassword",     True,   "password_confirm"),
-    ("currentPassword",     True,   "password_current"),
-    ("userPass",            False,  "password_userpass_camelcase_miss"),
-    ("passphrase",          True,   "passphrase"),
-    # Auth/token variations
-    ("auth_token",          True,   "auth_token"),
-    ("authToken",           True,   "auth_token_camel"),
-    ("authentication",      True,   "authentication"),
-    ("apikey",              True,   "apikey"),
-    ("api_key",             True,   "api_key"),
-    ("apiKey",              True,   "api_key_camel"),
-    ("api-key",             True,   "api_key_hyphen"),
-    # Secret variations
-    ("secret",              True,   "secret"),
-    ("secretKey",           True,   "secret_key"),
-    ("client_secret",       True,   "client_secret"),
-    ("clientSecret",        True,   "client_secret_camel"),
-    ("app_secret",          True,   "app_secret"),
-    # Token variations
-    ("token",               True,   "token"),
-    ("accessToken",         True,   "access_token"),
-    ("access_token",        True,   "access_token_snake"),
-    ("refreshToken",        True,   "refresh_token"),
-    ("refresh_token",       True,   "refresh_token_snake"),
-    ("csrf_token",          True,   "csrf_token"),
-    ("csrfToken",           True,   "csrf_token_camel"),
-    ("bearerToken",         True,   "bearer_token"),
-    ("idToken",             True,   "id_token"),
-    ("id_token",            True,   "id_token_snake"),
-    # OAuth variations
-    ("oauth_token",         True,   "oauth_token"),
-    ("oauthToken",          True,   "oauth_token_camel"),
-    ("oauth_secret",        True,   "oauth_secret"),
-    # Identity fields (flagged, not auto-redacted)
-    ("client_id",           False,  "client_id_flagged_not_redacted"),
-    ("clientId",            False,  "client_id_camel_not_detected"),
-    # Session variations (only *token detected, not bare "session" or generic "key")
-    ("session",             False,  "session_not_detected"),
-    ("sessionId",           False,  "session_id_not_detected"),
-    ("session_id",          False,  "session_id_snake_not_detected"),
-    ("sessionToken",        True,   "session_token"),
-    ("session_key",         False,  "session_key_not_detected"),
-    # Credential variations
-    ("credential",          True,   "credential"),
-    ("credentials",         True,   "credentials"),
-    ("private_key",         True,   "private_key"),
-    ("privateKey",          True,   "private_key_camel"),
-    # Note: nonce not currently detected (could be added)
-    ("nonce",               False,  "nonce_not_detected"),
-    ("form_nonce",          False,  "form_nonce_not_detected"),
-    # User identity fields (flagged for review, not auto-redacted)
-    ("username",            False,  "username_flagged_not_redacted"),
-    ("loginName",           False,  "login_name_flagged_not_redacted"),
-    ("user",                False,  "user_flagged_not_redacted"),
-    ("login",               False,  "login_flagged_not_redacted"),
-    ("env",                 False,  "env_flagged_not_redacted"),
-    ("environment",         False,  "environment_flagged_not_redacted"),
-    # Safe fields (should NOT be flagged)
-    ("email",               False,  "email_safe"),
-    ("channel_id",          False,  "channel_id_safe"),
-    ("frequency",           False,  "frequency_safe"),
-    ("power_level",         False,  "power_level_safe"),
-    ("status",              False,  "status_safe"),
-    ("description",         False,  "description_safe"),
-    ("name",                False,  "name_safe"),
-    ("id",                  False,  "id_safe"),
-    ("data",                False,  "data_safe"),
-    ("type",                False,  "type_safe"),
-    ("value",               False,  "value_safe"),
-    ("content",             False,  "content_safe"),
-    ("title",               False,  "title_safe"),
-    ("message",             False,  "message_safe"),
+    (c["field_name"], c["expected"], c["id"]) for c in _HAR_FIXTURE["sensitive_field_cases"]
 ]
-# fmt: on
 
-# ┌─────────────────────────┬─────────────────────────────┬─────────────────────────┬─────────────────────┐
-# │ header_name             │ header_value                │ expected_contains       │ description         │
-# ├─────────────────────────┼─────────────────────────────┼─────────────────────────┼─────────────────────┤
-# │ HTTP header name        │ Original value              │ What result contains    │ test case name      │
-# └─────────────────────────┴─────────────────────────────┴─────────────────────────┴─────────────────────┘
-#
-# fmt: off
+# Header redaction: (header_name, header_value, expected_contains, id)
 HEADER_REDACTION_CASES = [
-    # Full redaction headers - Authorization
-    ("Authorization",       "Bearer abc123xyz",           "[REDACTED]",             "auth_bearer"),
-    ("Authorization",       "Basic dXNlcjpwYXNz",         "[REDACTED]",             "auth_basic"),
-    ("Authorization",       "Digest username=admin",      "[REDACTED]",             "auth_digest"),
-    ("Authorization",       "OAuth oauth_token=xyz",      "[REDACTED]",             "auth_oauth"),
-    ("authorization",       "Bearer token123",            "[REDACTED]",             "auth_lowercase"),
-    # API key headers
-    ("X-Api-Key",           "sk-1234567890abcdef",        "[REDACTED]",             "api_key"),
-    ("X-API-KEY",           "key-abcdef123456",           "[REDACTED]",             "api_key_upper"),
-    # Note: Api-Key without X- prefix not currently detected
-    ("Api-Key",             "apikey123",                  "apikey123",              "api_key_no_x_not_detected"),
-    # Auth token headers
-    ("X-Auth-Token",        "token123456",                "[REDACTED]",             "auth_token"),
-    # Note: X-Access-Token, X-Session-Token not currently detected
-    ("X-Access-Token",      "access123",                  "access123",              "access_token_not_detected"),
-    ("X-Session-Token",     "session456",                 "session456",             "session_token_not_detected"),
-    # Note: Proxy-Authorization not currently detected
-    ("Proxy-Authorization", "Basic cHJveHk6cGFzcw==",     "Basic cHJveHk6cGFzcw==", "proxy_auth_not_detected"),
-    # Note: Webhook signatures not currently detected
-    ("X-Hub-Signature",     "sha1=abc123def456",          "sha1=abc123def456",      "hub_signature_not_detected"),
-    ("X-Signature",         "hmac-sha256=xyz789",         "hmac-sha256=xyz789",     "signature_not_detected"),
-    # Cookie redaction (preserves names)
-    ("Cookie",              "session=abc123",             "session=[REDACTED]",     "cookie_session"),
-    ("Cookie",              "user=admin; token=xyz",      "user=[REDACTED]",        "cookie_multiple"),
-    ("Cookie",              "auth=secret; path=/",        "auth=[REDACTED]",        "cookie_auth"),
-    ("Set-Cookie",          "session=xyz789; Path=/",     "session=[REDACTED]",     "set_cookie"),
-    ("Set-Cookie",          "token=abc; HttpOnly",        "token=[REDACTED]",       "set_cookie_httponly"),
-    # Safe headers (preserved as-is)
-    ("Content-Type",        "text/html",                  "text/html",              "content_type"),
-    ("Content-Type",        "application/json",           "application/json",       "content_type_json"),
-    ("Content-Length",      "1234",                       "1234",                   "content_length"),
-    ("Accept",              "application/json",           "application/json",       "accept"),
-    ("Accept-Language",     "en-US,en;q=0.9",             "en-US,en;q=0.9",         "accept_language"),
-    ("Accept-Encoding",     "gzip, deflate, br",          "gzip, deflate, br",      "accept_encoding"),
-    ("User-Agent",          "Mozilla/5.0",                "Mozilla/5.0",            "user_agent"),
-    ("Cache-Control",       "no-cache",                   "no-cache",               "cache_control"),
-    ("Host",                "example.com",                "example.com",            "host"),
-    ("Origin",              "https://example.com",        "https://example.com",    "origin"),
-    ("Referer",             "https://example.com/page",   "https://example.com/page","referer"),
+    (c["header_name"], c["header_value"], c["expected_contains"], c["id"])
+    for c in _HAR_FIXTURE["header_redaction_cases"]
 ]
-# fmt: on
 
 # ┌─────────────────────────┬─────────────────────────────┬─────────────────────┐
 # │ header_name             │ header_value                │ description         │
@@ -667,30 +562,10 @@ class TestIPValidation:
 class TestSensitiveFieldPatterns:
     """Tests for tightened sensitive field patterns (over-matching fixes)."""
 
-    # fmt: off
+    # Over-matching prevention: (field_name, expected, id)
     OVER_MATCHING_CASES = [
-        ("keyboard",      False,  "keyboard_not_matched"),
-        ("bypass",         False,  "bypass_not_matched"),
-        ("author",         False,  "author_not_matched"),
-        ("user_agent",    False,  "user_agent_not_matched"),
-        ("powerUser",     False,  "power_user_not_matched"),
-        ("max_users",     False,  "max_users_not_matched"),
-        ("organic",        False,  "organic_not_matched"),
-        ("reorganize",     False,  "reorganize_not_matched"),
-        ("domain_name",   False,  "domain_name_not_matched"),
-        ("password",       True,   "password_still_matched"),
-        ("username",       False,  "username_flagged_not_sensitive"),
-        ("user",           False,  "user_flagged_not_sensitive"),
-        ("user_name",     False,  "user_name_flagged_not_sensitive"),
-        ("login",          False,  "login_flagged_not_sensitive"),
-        ("loginName",      False,  "login_name_flagged_not_sensitive"),
-        ("domain",         False,  "domain_flagged_not_sensitive"),
-        ("organization",   False,  "organization_flagged_not_sensitive"),
-        ("org",            False,  "org_flagged_not_sensitive"),
-        ("api_key",        True,   "api_key_still_matched"),
-        ("auth_token",     True,   "auth_token_still_matched"),
+        (c["field_name"], c["expected"], c["id"]) for c in _HAR_FIXTURE["over_matching_cases"]
     ]
-    # fmt: on
 
     @pytest.mark.parametrize(
         ("field_name", "expected", "desc"),
@@ -734,42 +609,10 @@ class TestSSNAndCreditCardPatterns:
 class TestFlaggableFieldDetection:
     """Tests for is_flaggable_field() — fields flagged for review, not auto-redacted."""
 
-    # fmt: off
+    # Flaggable field detection: (field_name, expected, id)
     FLAGGABLE_FIELD_CASES = [
-        # Fields that should be flaggable (review tier)
-        ("username",        True,   "username_flaggable"),
-        ("user_name",       True,   "user_name_flaggable"),
-        ("user",            True,   "user_flaggable"),
-        ("login",           True,   "login_flaggable"),
-        ("loginName",       True,   "login_name_flaggable"),
-        ("domain",          True,   "domain_flaggable"),
-        ("tenant",          True,   "tenant_flaggable"),
-        ("client_id",       True,   "client_id_flaggable"),
-        ("account_id",      True,   "account_id_flaggable"),
-        ("org",             True,   "org_flaggable"),
-        ("organization",    True,   "organization_flaggable"),
-        ("env",             True,   "env_flaggable"),
-        ("environment",     True,   "environment_flaggable"),
-        # Fields that are auto-redact (NOT flaggable)
-        ("password",        False,  "password_not_flaggable"),
-        ("secret",          False,  "secret_not_flaggable"),
-        ("token",           False,  "token_not_flaggable"),
-        ("api_key",         False,  "api_key_not_flaggable"),
-        ("auth_token",      False,  "auth_token_not_flaggable"),
-        # Safe fields (neither sensitive nor flaggable)
-        ("email",           False,  "email_not_flaggable"),
-        ("channel_id",      False,  "channel_id_not_flaggable"),
-        ("status",          False,  "status_not_flaggable"),
-        ("name",            False,  "name_not_flaggable"),
-        # Over-matching prevention
-        ("domain_name",     False,  "domain_name_not_flaggable"),
-        ("user_agent",      False,  "user_agent_not_flaggable"),
-        ("organic",         False,  "organic_not_flaggable"),
-        ("reorganize",      False,  "reorganize_not_flaggable"),
-        ("envelope",        False,  "envelope_not_flaggable"),
-        ("environmental",   False,  "environmental_not_flaggable"),
+        (c["field_name"], c["expected"], c["id"]) for c in _HAR_FIXTURE["flaggable_field_cases"]
     ]
-    # fmt: on
 
     @pytest.mark.parametrize(
         ("field_name", "expected", "desc"),
@@ -1807,6 +1650,8 @@ BASE64_CRED_URL_CASES = [
     ("https://192.168.100.1/status.html?YWRtaW46TjZyM2gydCFy", True,  "bare_base64_no_padding"),
     # Base64 token as param value
     ("https://modem.local/api?token=YWRtaW46cGFzc3dvcmQ=",     True,  "base64_as_param_value"),
+    # Base64 cred in value with non-sensitive key (exercises URL-level detection)
+    ("https://modem.local/api?ref=YWRtaW46cGFzc3dvcmQ=",      True,  "base64_val_nonsensitive_key"),
     # Normal query params (should NOT be detected)
     ("https://example.com/page?id=123&format=json",             False, "normal_params"),
     ("https://example.com/page?q=hello+world",                  False, "normal_search_query"),
@@ -1853,6 +1698,74 @@ class TestBase64CredentialDetection:
         result = sanitize_entry(entry, salt="test")
         qs = result["request"]["queryString"]
         assert qs[0]["name"] != "YWRtaW46cGFzc3dvcmQ=", "Base64 cred should be redacted in queryString"
+
+    def test_base64_credential_in_query_string_value(self) -> None:
+        """Test base64 credential in queryString param value is redacted."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/api",
+                "headers": [],
+                "queryString": [{"name": "token", "value": "YWRtaW46cGFzc3dvcmQ="}],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        qs = result["request"]["queryString"]
+        assert qs[0]["value"] != "YWRtaW46cGFzc3dvcmQ=", "Base64 cred in value should be redacted"
+
+    def test_base64_credential_bare_name_without_padding(self) -> None:
+        """Test base64 credential as bare param name with padding stripped."""
+        import base64
+
+        cred = base64.b64encode(b"user:secret").decode()  # dXNlcjpzZWNyZXQ=
+        stripped = cred.rstrip("=")
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/api",
+                "headers": [],
+                "queryString": [{"name": stripped, "value": ""}],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        qs = result["request"]["queryString"]
+        assert qs[0]["name"] != stripped, "Base64 cred name (padding stripped) should be redacted"
+
+
+class TestUrlQueryBareSegment:
+    """Tests for URL query segments without '=' that are not base64 credentials."""
+
+    def test_bare_query_segment_preserved(self) -> None:
+        """Test bare query segment (no '=', not base64 cred) passes through unchanged."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/page?debug&password=secret",
+                "headers": [],
+                "queryString": [],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        result_url = result["request"]["url"]
+        assert "debug" in result_url, "Bare non-credential segment should be preserved"
+        assert "secret" not in result_url, "Sensitive param value should be redacted"
+
+
+class TestCookieHeaderNoNameValuePairs:
+    """Tests for cookie headers with no name=value pairs."""
+
+    def test_cookie_header_bare_value_redacted(self) -> None:
+        """Test cookie header with bare value (no = sign) is fully redacted."""
+        result = sanitize_header_value("Cookie", "opaque_session_token_abc123")
+        assert result != "opaque_session_token_abc123", "Bare cookie value should be redacted"
+
+    def test_set_cookie_header_bare_value_redacted(self) -> None:
+        """Test Set-Cookie header with bare value (no = sign) is fully redacted."""
+        result = sanitize_header_value("Set-Cookie", "some_random_token")
+        assert result != "some_random_token", "Bare Set-Cookie value should be redacted"
 
 
 # =============================================================================
@@ -1902,3 +1815,456 @@ class TestCookieAttributeMetadata:
             assert result != header_value, f"{desc}: should be redacted"
         else:
             assert result == header_value, f"{desc}: should be unchanged"
+
+
+# =============================================================================
+# Pre-existing Coverage Gaps
+# =============================================================================
+
+
+class TestValidateHarStructure:
+    """Tests for validate_har_structure error and warning paths."""
+
+    # fmt: off
+    VALIDATION_ERROR_CASES = [
+        ({"log": "not_a_dict"},                                  "'log' must be an object",   "log_not_dict"),
+        ({"log": {"version": "1.2"}},                            "Missing required 'entries'", "missing_entries"),
+        ({"log": {"entries": "not_a_list"}},                     "'entries' must be an array", "entries_not_list"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("har_data", "expected_msg", "desc"),
+        VALIDATION_ERROR_CASES,
+        ids=[c[2] for c in VALIDATION_ERROR_CASES],
+    )
+    def test_structure_errors(self, har_data: dict, expected_msg: str, desc: str) -> None:
+        """Test validate_har_structure raises on invalid structures."""
+        with pytest.raises(HarValidationError, match=expected_msg):
+            validate_har_structure(har_data)
+
+    def test_missing_recommended_fields_warns(self) -> None:
+        """Test warnings for missing log.version and log.creator."""
+        har_data = {"log": {"entries": []}}
+        warnings = validate_har_structure(har_data)
+        assert any("version" in w for w in warnings)
+        assert any("creator" in w for w in warnings)
+
+    # fmt: off
+    STRICT_CASES = [
+        ({"log": {"entries": ["not_a_dict"]}},                                        "not an object",    "entry_not_dict"),
+        ({"log": {"entries": [{}]}},                                                  "missing 'request'", "entry_missing_request"),
+        ({"log": {"entries": [{"request": {"url": "/a"}}]}},                          "missing 'method'", "request_missing_method"),
+        ({"log": {"entries": [{"request": {"method": "GET"}}]}},                      "missing 'url'",    "request_missing_url"),
+        ({"log": {"entries": [{"request": {"method": "GET", "url": "/a"}}]}},         "missing 'response'", "entry_missing_response"),
+        ({"log": {"entries": [{"request": {"method": "GET", "url": "/a"}, "response": {}}]}}, "missing 'status'", "response_missing_status"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("har_data", "expected_warning", "desc"),
+        STRICT_CASES,
+        ids=[c[2] for c in STRICT_CASES],
+    )
+    def test_strict_mode_warnings(self, har_data: dict, expected_warning: str, desc: str) -> None:
+        """Test strict mode catches missing fields."""
+        warnings = validate_har_structure(har_data, strict=True)
+        assert any(expected_warning in w for w in warnings), (
+            f"{desc}: expected warning containing '{expected_warning}'"
+        )
+
+
+class TestFormUrlencodedSanitization:
+    """Tests for _sanitize_form_urlencoded edge cases."""
+
+    def test_flaggable_field_recorded(self) -> None:
+        """Test flaggable field in form data is flagged via collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_form_urlencoded("username=johndoe&page=1", hasher, collector)
+        assert "johndoe" in result, "Flaggable field value should be preserved (not auto-redacted)"
+        assert len(collector.flagged) > 0, "Should have flagged the username field"
+
+    def test_bare_segment_without_equals(self) -> None:
+        """Test bare segment (no '=') is passed through."""
+        result = _sanitize_form_urlencoded("bare_value&password=secret", None, None)
+        assert "bare_value" in result
+        assert "secret" not in result
+
+
+class TestJsonRecursiveSanitization:
+    """Tests for _sanitize_json_recursive edge cases."""
+
+    # fmt: off
+    JSON_EDGE_CASES = [
+        # MAC address field — with and without hasher
+        ({"mac": "AA:BB:CC:DD:EE:FF"},       "mac",    "AA:BB:CC:DD:EE:FF", "mac_field_redacted"),
+        ({"macaddress": "11:22:33:44:55:66"}, "macaddress", "11:22:33:44:55:66", "macaddress_field_redacted"),
+        ({"mac": ""},                         "mac",    "",                  "mac_empty_preserved"),
+        ({"mac": 42},                         "mac",    42,                  "mac_non_string_preserved"),
+        # Serial number field
+        ({"serial": "ABC12345678"},           "serial", "ABC12345678",       "serial_field_redacted"),
+        ({"sn": "XYZ987"},                    "sn",     "XYZ987",            "sn_field_redacted"),
+        ({"serial": ""},                      "serial", "",                  "serial_empty_preserved"),
+        ({"serial": 99},                      "serial", 99,                  "serial_non_string_preserved"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("data", "field", "original_value", "desc"),
+        JSON_EDGE_CASES,
+        ids=[c[3] for c in JSON_EDGE_CASES],
+    )
+    def test_json_recursive_edge_cases(
+        self, data: dict, field: str, original_value: object, desc: str
+    ) -> None:
+        """Test MAC and serial field handling in JSON recursive sanitization."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_json_recursive(data, hasher, collector)
+
+        if isinstance(original_value, str) and original_value:
+            assert result[field] != original_value, f"{desc}: should be redacted"
+        else:
+            assert result[field] == original_value, f"{desc}: should be preserved"
+
+    def test_mac_field_without_hasher(self) -> None:
+        """Test MAC field uses placeholder when no hasher provided."""
+        result = _sanitize_json_recursive({"mac": "AA:BB:CC:DD:EE:FF"}, None, None)
+        assert result["mac"] == "***MAC***"
+
+    def test_serial_field_without_hasher(self) -> None:
+        """Test serial field uses placeholder when no hasher provided."""
+        result = _sanitize_json_recursive({"serial": "ABC123"}, None, None)
+        assert result["serial"] == "***SERIAL***"
+
+    def test_bare_primitive_passthrough(self) -> None:
+        """Test non-dict/list/str values pass through unchanged."""
+        assert _sanitize_json_recursive(42, None, None) == 42
+        assert _sanitize_json_recursive(True, None, None) is True
+        assert _sanitize_json_recursive(None, None, None) is None
+
+
+class TestStringPatternSanitization:
+    """Tests for _sanitize_string_patterns edge cases."""
+
+    def test_empty_string_returns_empty(self) -> None:
+        """Test empty string is returned unchanged."""
+        assert _sanitize_string_patterns("") == ""
+
+    def test_mac_without_hasher(self) -> None:
+        """Test MAC replacement uses placeholder when no hasher."""
+        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF")
+        assert "AA:BB:CC:DD:EE:FF" not in result
+        assert "***MAC***" in result
+
+    def test_mac_without_collector(self) -> None:
+        """Test MAC replacement works without a collector."""
+        from har_capture.patterns import Hasher
+
+        hasher = Hasher.create("test")
+        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, None)
+        assert "AA:BB:CC:DD:EE:FF" not in result
+
+    def test_public_ip_without_hasher(self) -> None:
+        """Test public IP replacement uses placeholder when no hasher."""
+        result = _sanitize_string_patterns("DNS: 8.8.8.8")
+        assert "8.8.8.8" not in result
+        assert "***IP***" in result
+
+    def test_public_ip_without_collector(self) -> None:
+        """Test public IP replacement works without a collector."""
+        from har_capture.patterns import Hasher
+
+        hasher = Hasher.create("test")
+        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, None)
+        assert "8.8.8.8" not in result
+
+    def test_email_without_hasher(self) -> None:
+        """Test email replacement uses placeholder when no hasher."""
+        result = _sanitize_string_patterns("Contact: admin@example.com")
+        assert "admin@example.com" not in result
+        assert "***EMAIL***" in result
+
+    def test_email_without_collector(self) -> None:
+        """Test email replacement works without a collector."""
+        from har_capture.patterns import Hasher
+
+        hasher = Hasher.create("test")
+        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, None)
+        assert "admin@example.com" not in result
+
+    def test_credit_card_luhn_valid(self) -> None:
+        """Test valid credit card number is redacted."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        # Visa test number that passes Luhn
+        result = _sanitize_string_patterns("Card: 4111111111111111", hasher, collector)
+        assert "4111111111111111" not in result
+
+    def test_credit_card_luhn_invalid(self) -> None:
+        """Test invalid credit card number (fails Luhn) is preserved."""
+        # Visa-format but fails Luhn check
+        result = _sanitize_string_patterns("Number: 4111111111111112", None, None)
+        assert "4111111111111112" in result
+
+    def test_string_patterns_with_collector_records_mac(self) -> None:
+        """Test MAC in string patterns records redaction via collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, collector)
+        assert "AA:BB:CC:DD:EE:FF" not in result
+        assert collector.auto_redacted_counts.get("mac_address", 0) > 0
+
+    def test_string_patterns_with_collector_records_public_ip(self) -> None:
+        """Test public IP in string patterns records redaction via collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, collector)
+        assert "8.8.8.8" not in result
+        assert collector.auto_redacted_counts.get("public_ip", 0) > 0
+
+    def test_string_patterns_version_string_not_treated_as_public_ip(self) -> None:
+        """Test version-like string matching public IP regex is preserved."""
+        result = _sanitize_string_patterns("Version: 5.7.1.5", None, None)
+        assert "5.7.1.5" in result, "Version string should not be treated as a public IP"
+
+    def test_string_patterns_with_collector_records_email(self) -> None:
+        """Test email in string patterns records redaction via collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, collector)
+        assert "admin@example.com" not in result
+        assert collector.auto_redacted_counts.get("email", 0) > 0
+
+
+class TestPostDataSanitizationEdgeCases:
+    """Tests for sanitize_post_data edge cases."""
+
+    def test_form_urlencoded_text_sanitized(self) -> None:
+        """Test form-urlencoded mimeType triggers text sanitization."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "text": "password=secret123&action=login",
+        }
+        result = sanitize_post_data(post_data)
+        assert "secret123" not in result["text"]
+        assert "action=login" in result["text"]
+
+    def test_json_text_sanitized(self) -> None:
+        """Test application/json mimeType triggers JSON sanitization."""
+        post_data = {
+            "mimeType": "application/json",
+            "text": '{"password": "secret", "user": "admin"}',
+        }
+        result = sanitize_post_data(post_data)
+        parsed = json.loads(result["text"])
+        assert parsed["password"] != "secret"
+
+    def test_flaggable_param_in_params_array(self) -> None:
+        """Test flaggable field in POST params array is flagged."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        post_data = {
+            "params": [{"name": "username", "value": "johndoe"}],
+        }
+        result = sanitize_post_data(post_data, hasher, collector)
+        assert result["params"][0]["value"] == "johndoe", "Flaggable value should be preserved"
+        assert len(collector.flagged) > 0, "Should have flagged the username"
+
+
+class TestUrlPathFlagging:
+    """Tests for _sanitize_url_path flagging with collector."""
+
+    # fmt: off
+    PATH_FLAG_CASES = [
+        ("http://api.example.com/users/550e8400-e29b-41d4-a716-446655440000/profile", "uuid",          "uuid_flagged"),
+        ("http://api.example.com/keys/sk-1234567890abcdefghij/verify",                "api_key",       "api_key_flagged"),
+        ("http://api.example.com/devices/DEV-ABC123456/status",                       "device_serial", "device_serial_flagged"),
+        ("http://api.example.com/tokens/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6/refresh",   "token",         "long_token_flagged"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("url", "expected_category", "desc"),
+        PATH_FLAG_CASES,
+        ids=[c[2] for c in PATH_FLAG_CASES],
+    )
+    def test_url_path_segments_flagged(self, url: str, expected_category: str, desc: str) -> None:
+        """Test suspicious path segments are flagged via collector."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        entry = {
+            "request": {"method": "GET", "url": url, "headers": [], "queryString": []},
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        sanitize_entry(entry, salt="test", collector=collector)
+        categories = {f.category for f in collector.flagged}
+        assert expected_category in categories, f"{desc}: expected {expected_category} in {categories}"
+
+
+class TestWebStorageNonDictOrigin:
+    """Tests for web storage with non-dict origin entries."""
+
+    def test_non_dict_origin_entry_skipped(self) -> None:
+        """Test non-dict entries in web storage list are skipped."""
+        har = {
+            "log": {
+                "entries": [],
+                "_har_capture": {
+                    "local_storage": [
+                        "not_a_dict",
+                        {"origin": "https://example.com", "items": [{"name": "k", "value": "secret"}]},
+                    ],
+                },
+            }
+        }
+        result, _ = sanitize_har(har, salt="test")
+        storage = result["log"]["_har_capture"]["local_storage"]
+        assert storage[0] == "not_a_dict", "Non-dict entry should be passed through"
+        assert storage[1]["items"][0]["value"] != "secret", "Valid entry should be sanitized"
+
+
+class TestSanitizeHarFileEdgeCases:
+    """Tests for sanitize_har_file edge cases."""
+
+    def test_non_har_extension_output_path(self, tmp_path) -> None:
+        """Test input file without .har extension gets .sanitized.har appended."""
+        har_data = {"log": {"entries": []}}
+        input_file = tmp_path / "capture.json"
+        input_file.write_text(json.dumps(har_data))
+
+        output_path, _ = sanitize_har_file(input_file)
+        assert output_path.endswith(".sanitized.har")
+        assert "capture.json.sanitized.har" in output_path
+
+
+class TestApplyUserRedactions:
+    """Tests for apply_user_redactions error paths."""
+
+    def test_redaction_error_continues(self) -> None:
+        """Test that a failing redaction item doesn't stop other redactions."""
+        from unittest.mock import patch
+
+        har_data = {"log": {"entries": [{"request": {"url": "http://test/"}, "response": {}}]}}
+        report = SanitizationReport(
+            input_file="",
+            output_file="",
+            salt="test",
+            flagged=[
+                FlaggedValue(
+                    original_value="first_value",
+                    category="test",
+                    confidence="HIGH",
+                    context="ctx",
+                    reason="test",
+                    status=RedactionStatus.USER_REDACTED,
+                ),
+                FlaggedValue(
+                    original_value="http://test/",
+                    category="url",
+                    confidence="HIGH",
+                    context="ctx",
+                    reason="test url",
+                    status=RedactionStatus.USER_REDACTED,
+                ),
+            ],
+        )
+        # Mock hasher to fail on first call, succeed on second
+        with patch("har_capture.sanitization.har.Hasher") as mock_hasher_cls:
+            mock_hash = mock_hasher_cls.create.return_value.hash_generic
+            mock_hash.side_effect = [RuntimeError("hash failed"), "REDACTED_URL"]
+            result = apply_user_redactions(har_data, report)
+        assert isinstance(result, dict), "Should return valid result despite first item failing"
+        # The second redaction should still have been attempted
+        assert mock_hash.call_count == 2, "Both redaction items should have been attempted"
+
+    def test_invalid_har_data_raises(self) -> None:
+        """Test apply_user_redactions raises on invalid input."""
+        report = SanitizationReport(input_file="", output_file="", salt="test")
+        with pytest.raises(HarValidationError):
+            apply_user_redactions("not_a_dict", report)  # type: ignore[arg-type]
+
+    def test_missing_log_raises(self) -> None:
+        """Test apply_user_redactions raises when 'log' key missing."""
+        report = SanitizationReport(input_file="", output_file="", salt="test")
+        with pytest.raises(HarValidationError, match="log"):
+            apply_user_redactions({}, report)
+
+    def test_redaction_item_exception_is_caught(self) -> None:
+        """Test that an exception during a single redaction is caught and logged."""
+        from unittest.mock import patch
+
+        har_data = {"log": {"entries": []}}
+        report = SanitizationReport(
+            input_file="",
+            output_file="",
+            salt="test",
+            flagged=[
+                FlaggedValue(
+                    original_value="test_value",
+                    category="test",
+                    confidence="HIGH",
+                    context="ctx",
+                    reason="test",
+                    status=RedactionStatus.USER_REDACTED,
+                ),
+            ],
+        )
+        with patch("har_capture.sanitization.har.Hasher") as mock_hasher_cls:
+            mock_hasher_cls.create.return_value.hash_generic.side_effect = RuntimeError("hash failed")
+            result = apply_user_redactions(har_data, report)
+        assert isinstance(result, dict), "Should return valid result despite error"
+
+    def test_json_decode_error_after_replacement(self) -> None:
+        """Test HarValidationError raised if json.loads fails after replacement."""
+        from unittest.mock import patch
+
+        har_data = {"log": {"entries": [{"note": "target_value"}]}}
+        report = SanitizationReport(
+            input_file="",
+            output_file="",
+            salt="test",
+            flagged=[
+                FlaggedValue(
+                    original_value="target_value",
+                    category="test",
+                    confidence="HIGH",
+                    context="ctx",
+                    reason="test",
+                    status=RedactionStatus.USER_REDACTED,
+                ),
+            ],
+        )
+        with (
+            patch(
+                "har_capture.sanitization.har.json.loads",
+                side_effect=json.JSONDecodeError("broken", "", 0),
+            ),
+            pytest.raises(HarValidationError, match="Failed to parse HAR"),
+        ):
+            apply_user_redactions(har_data, report)

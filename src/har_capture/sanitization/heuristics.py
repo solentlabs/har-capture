@@ -11,19 +11,18 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from har_capture.patterns.loader import CompiledDetector
     from har_capture.sanitization.report import ConfidenceLevel
 
 # Safe patterns - values matching these should NOT be flagged
 SAFE_PATTERNS: list[re.Pattern[str]] = [
     # Status values
     re.compile(
-        r"^(Good|Bad|OK|Error|Locked|Unlocked|Operational|Disabled|Enabled|Active|Inactive|Online|Offline|Up|Down|Connected|Disconnected)$",
+        r"^(Good|Bad|OK|Error|Locked|Unlocked|Operational|Disabled|Enabled|Active|Inactive|"
+        r"Online|Offline|Up|Down|Connected|Disconnected|Configured|Allowed|Denied|Blocked|"
+        r"In Progress|Not Synchronized|Synchronized|Not Locked|Unknown)$",
         re.IGNORECASE,
     ),
-    # Band indicators
-    re.compile(r"^(2\.4g|5g|6g|2\.4GHz|5GHz|6GHz|2\.4\s*GHz|5\s*GHz)$", re.IGNORECASE),
-    # Security types
-    re.compile(r"^(WPA|WPA2|WPA3|WEP|NONE|Open|WPA2-PSK|WPA-PSK|WPA2-Enterprise|WPA3-SAE)$", re.IGNORECASE),
     # Channel/frequency numbers
     re.compile(r"^\d+$"),
     re.compile(r"^\d+\s*Hz$", re.IGNORECASE),
@@ -36,8 +35,36 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^(true|false|yes|no|on|off)$", re.IGNORECASE),
     # Time formats
     re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$"),
-    # Date formats
+    # Date formats — numeric (2026-03-14, 03/14/2026)
     re.compile(r"^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$"),
+    # Date formats — ctime (Sat Mar 14 21:28:45 2026)
+    re.compile(
+        r"^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+        r"\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$"
+    ),
+    # Date formats — RFC 2822 (Sat, 14 Mar 2026 21:28:45 GMT)
+    re.compile(
+        r"^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\s+\d{1,2}\s+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+        r"\d{4}\s+\d{2}:\d{2}:\d{2}(?:\s+\w+)?$"
+    ),
+    # Date formats — ISO 8601 (2026-03-14T21:28:45Z, with optional timezone/millis)
+    re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$"),
+    # Date formats — full day name (Wednesday, 01 Jan 2003 16:01:11)
+    re.compile(
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+\d{1,2}\s+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+"
+        r"\d{4}\s+\d{2}:\d{2}:\d{2}$"
+    ),
+    # Date formats — full day name, month-first (Friday, Jan 01,2003 00:33:00)
+    re.compile(
+        r"^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s*"
+        r"\d{4}\s+\d{2}:\d{2}:\d{2}$"
+    ),
+    # Uptime durations (14 days 07:57:25)
+    re.compile(r"^\d+\s+days?\s+\d{2}:\d{2}:\d{2}$", re.IGNORECASE),
     # Percentage
     re.compile(r"^\d+(\.\d+)?%$"),
     # Signal strength indicators
@@ -49,6 +76,16 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^0\.0\.0\.0$"),
     re.compile(r"^10\.255\.\d+\.\d+$"),
     re.compile(r"^192\.0\.2\.\d+$"),
+    # Already-redacted IPs with port suffix
+    re.compile(r"^(?:0\.0\.0\.0|10\.255\.\d+\.\d+|192\.0\.2\.\d+):\d+$"),
+    # Subnet masks
+    re.compile(r"^255\.\d+\.\d+\.\d+$"),
+    # CIDR notation (with redacted IPs)
+    re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$"),
+    # IPv6 addresses (including documentation prefix 2001:db8::)
+    re.compile(r"^[0-9a-f:]+(?:/\d{1,3})?$", re.IGNORECASE),
+    # URLs (http/https) — not PII themselves
+    re.compile(r"^https?://\S+$"),
     # Common protocol/interface names
     re.compile(r"^(eth\d*|wlan\d*|lo|br\d*|vlan\d*|lan|wan)$", re.IGNORECASE),
     # Common plan/tier/role words (not PII)
@@ -57,6 +94,12 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
         r"admin|guest|user|default|custom|auto|retail|primary|backup|both)$",
         re.IGNORECASE,
     ),
+    # UUID patterns (in asset URLs, tracking IDs)
+    re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE),
+    # Well-known domain names
+    re.compile(r"^(?:www\.)?[\w.-]+\.(com|org|net|io|gov|edu)$", re.IGNORECASE),
+    # Bracketed log messages: [DHCP IP: ...], [admin login ...], [Time s...]
+    re.compile(r"^\[.+\]$"),
     # Already-redacted values with label prefixes (from serial pattern in HTML sanitizer)
     re.compile(r"^(?:SN|S/N|Serial\w*):\s*[A-Z_]+_[a-f0-9]{8}$", re.IGNORECASE),
     # Redacted emails
@@ -67,31 +110,25 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
 # Heuristic Detection Thresholds
 # =============================================================================
 
-# Security: Maximum SSID name length for regex check (prevents ReDoS)
-# WiFi standard allows up to 32 chars, but this generous limit prevents
-# catastrophic backtracking on malicious input while catching real SSIDs
 # Entropy thresholds for password/token detection
 _ENTROPY_THRESHOLD_DEFAULT = 2.8  # Higher threshold reduces false positives
 _ENTROPY_THRESHOLD_MIXED = 2.0  # Lower threshold for 3+ character types
 _MIN_ENTROPY_LENGTH = 8  # Minimum length to check entropy
 _MAX_ENTROPY_LENGTH = 64  # Maximum length to check entropy
 
-# SSID detection ranges (WiFi standard: 0-32 octets, but 1-32 practical)
-_SSID_MIN_LENGTH = 3  # Too short to be real SSID
-_SSID_MAX_LENGTH = 32  # WiFi standard maximum
-_SSID_TYPICAL_MIN = 4  # Typical SSID range
-_SSID_TYPICAL_MAX = 24  # Typical SSID range
-
-# Device name detection ranges
-_DEVICE_NAME_MIN_LENGTH = 3
-_DEVICE_NAME_MAX_LENGTH = 64
+# CamelCase pattern: HomeNetwork, MyWiFi, GuestAccess
+_CAMELCASE_RE = re.compile(r"^[A-Z][a-z]+[A-Z][a-zA-Z0-9]*$")
 
 
-def is_safe_value(value: str) -> bool:
+def is_safe_value(
+    value: str,
+    extra_patterns: list[re.Pattern[str]] | None = None,
+) -> bool:
     """Check if a value matches safe patterns.
 
     Args:
         value: The value to check
+        extra_patterns: Additional compiled patterns (e.g., from domain pattern files)
 
     Returns:
         True if the value is safe (should not be flagged)
@@ -100,7 +137,10 @@ def is_safe_value(value: str) -> bool:
     if not value:
         return True
 
-    return any(pattern.match(value) for pattern in SAFE_PATTERNS)
+    if any(pattern.match(value) for pattern in SAFE_PATTERNS):
+        return True
+
+    return bool(extra_patterns and any(pattern.match(value) for pattern in extra_patterns))
 
 
 def calculate_entropy(s: str) -> float:
@@ -132,92 +172,31 @@ def calculate_entropy(s: str) -> float:
     return entropy
 
 
-def is_ssid_like(value: str) -> tuple[bool, str]:
-    """Check if a value looks like a WiFi SSID.
+def run_detector(value: str, detector: CompiledDetector) -> tuple[bool, str]:
+    """Run a single data-driven heuristic detector against a value.
 
-    SSIDs are typically:
-    - 1-32 characters
-    - Mix of letters, numbers, hyphens, underscores
-    - Often have patterns like "Name-5G", "Name_Guest", etc.
+    Checks length bounds, letter requirement, regex patterns, and optional
+    CamelCase matching as configured in the detector definition.
 
     Args:
-        value: The value to check
+        value: The value to check (already stripped)
+        detector: Compiled detector from domain JSON
 
     Returns:
-        Tuple of (is_ssid_like, reason)
+        Tuple of (matched, reason)
     """
-    value = value.strip()
-
-    # Too short or too long
-    if len(value) < _SSID_MIN_LENGTH or len(value) > _SSID_MAX_LENGTH:
+    if len(value) < detector.min_length or len(value) > detector.max_length:
         return False, ""
 
-    # Must contain at least one letter
-    if not re.search(r"[a-zA-Z]", value):
+    if detector.requires_letter and not re.search(r"[a-zA-Z]", value):
         return False, ""
 
-    # Common SSID patterns
-    ssid_patterns = [
-        (r"[-_](2\.?4g?|5g|6g|guest|ext|plus)$", "ends with band/extension suffix"),
-        (r"^(home|office|guest|wifi|network|net)[-_]", "starts with common prefix"),
-        (r"[-_](home|office|guest|wifi|network|net)$", "ends with common suffix"),
-        (r"^[A-Z][a-z]+[-_][A-Z][a-z]+", "CamelCase with separator (likely name)"),
-        (r"^[A-Za-z]+[-_]\d+$", "name followed by number"),
-    ]
+    for pattern, reason in detector.patterns:
+        if pattern.search(value):
+            return True, f"{detector.category} pattern: {reason}"
 
-    for pattern, reason in ssid_patterns:
-        if re.search(pattern, value, re.IGNORECASE):
-            return True, f"SSID-like pattern: {reason}"
-
-    # CamelCase pattern (no separator needed): HomeNetwork, MyWiFi, GuestAccess
-    # Must start with uppercase, transition to lowercase, then back to uppercase.
-    # Catches human-named network names while excluding single words like "admin"
-    # and all-caps model strings like "NETGEAR-C7000".
-    if _SSID_TYPICAL_MIN <= len(value) <= _SSID_TYPICAL_MAX:
-        if re.match(r"^[A-Z][a-z]+[A-Z][a-zA-Z0-9]*$", value):
-            return True, "CamelCase pattern suggesting network name"
-
-    return False, ""
-
-
-def is_device_name_like(value: str) -> tuple[bool, str]:
-    """Check if a value looks like a device name.
-
-    Device names often contain:
-    - Personal names ("John's iPhone")
-    - Device types ("MacBook-Pro", "Galaxy-S21")
-    - Location names ("Living-Room-TV")
-
-    Args:
-        value: The value to check
-
-    Returns:
-        Tuple of (is_device_name, reason)
-    """
-    value = value.strip()
-
-    if len(value) < _DEVICE_NAME_MIN_LENGTH or len(value) > _DEVICE_NAME_MAX_LENGTH:
-        return False, ""
-
-    # Must contain letters
-    if not re.search(r"[a-zA-Z]", value):
-        return False, ""
-
-    # Device name patterns
-    device_patterns = [
-        (r"'s[-\s]", "possessive pattern (someone's device)"),
-        (r"(?i)(iphone|ipad|macbook|android|galaxy|pixel|surface|kindle)", "device brand/type"),
-        (r"(?i)(laptop|desktop|phone|tablet|tv|speaker|printer|camera)", "device category"),
-        (r"(?i)(living|bed|bath|kitchen|office|garage|basement)[-_\s]?room", "room name"),
-        (
-            r"(?i)(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)",
-            "router/modem brand",
-        ),
-    ]
-
-    for pattern, reason in device_patterns:
-        if re.search(pattern, value):
-            return True, f"Device name pattern: {reason}"
+    if detector.camelcase and _CAMELCASE_RE.match(value):
+        return True, f"CamelCase pattern suggesting {detector.category}"
 
     return False, ""
 
@@ -349,8 +328,8 @@ def is_adjacent_to_redacted(
 
 def get_confidence_for_value(
     value: str,  # noqa: ARG001 - kept for API consistency, may be used in future heuristics
-    is_ssid: bool = False,
-    is_device: bool = False,
+    *,
+    detector_confidence: str | None = None,
     is_entropy: bool = False,
     is_adjacent: bool = False,
 ) -> ConfidenceLevel:
@@ -358,8 +337,8 @@ def get_confidence_for_value(
 
     Args:
         value: The flagged value
-        is_ssid: Whether it matches SSID patterns
-        is_device: Whether it matches device name patterns
+        detector_confidence: Confidence declared by the matched detector ("low"/"medium"/"high"),
+            or None if no detector matched
         is_entropy: Whether it has high entropy
         is_adjacent: Whether it's adjacent to redacted value
 
@@ -368,16 +347,21 @@ def get_confidence_for_value(
     """
     from har_capture.sanitization.report import ConfidenceLevel
 
+    has_detector = detector_confidence is not None
+
     # Adjacent to redacted + another indicator = HIGH
-    if is_adjacent and (is_ssid or is_device or is_entropy):
+    if is_adjacent and (has_detector or is_entropy):
         return ConfidenceLevel.HIGH
 
-    # SSID-like or high entropy alone = MEDIUM
-    if is_ssid or is_entropy:
-        return ConfidenceLevel.MEDIUM
+    # Detector matched — use its declared confidence
+    if has_detector and detector_confidence:
+        try:
+            return ConfidenceLevel[detector_confidence.upper()]
+        except KeyError:
+            return ConfidenceLevel.MEDIUM
 
-    # Device name alone = MEDIUM
-    if is_device:
+    # High entropy alone = MEDIUM
+    if is_entropy:
         return ConfidenceLevel.MEDIUM
 
     # Just adjacent = LOW
@@ -392,13 +376,21 @@ def analyze_value(
     value: str,
     values_context: list[str] | None = None,
     value_index: int | None = None,
+    extra_safe_patterns: list[re.Pattern[str]] | None = None,
+    compiled_detectors: list[CompiledDetector] | None = None,
 ) -> tuple[bool, ConfidenceLevel, str, str]:
     """Analyze a value and determine if it should be flagged.
+
+    Runs domain-driven detectors (if provided), entropy analysis,
+    credential-prefix matching, and adjacency detection.
 
     Args:
         value: The value to analyze
         values_context: Optional list of surrounding values (for adjacency check)
         value_index: Index of value in values_context
+        extra_safe_patterns: Additional compiled safe-value patterns (from domain files)
+        compiled_detectors: Data-driven detectors from domain files. Without detectors,
+            only entropy/credential/adjacency detection runs.
 
     Returns:
         Tuple of (should_flag, confidence, category, reason)
@@ -408,12 +400,22 @@ def analyze_value(
     value = value.strip()
 
     # Skip empty or safe values
-    if not value or is_safe_value(value):
+    if not value or is_safe_value(value, extra_patterns=extra_safe_patterns):
         return False, ConfidenceLevel.LOW, "", ""
 
-    # Run detection heuristics
-    is_ssid, ssid_reason = is_ssid_like(value)
-    is_device, device_reason = is_device_name_like(value)
+    # Run domain-driven detectors
+    detector_category = ""
+    detector_reason = ""
+    detector_confidence: str | None = None
+    for detector in compiled_detectors or []:
+        matched, reason = run_detector(value, detector)
+        if matched:
+            detector_category = detector.category
+            detector_reason = reason
+            detector_confidence = detector.confidence
+            break  # First matching detector wins
+
+    # Run core (domain-agnostic) heuristics
     is_entropy, entropy_reason = is_high_entropy(value)
     is_cred, cred_reason = is_credential_like(value)
 
@@ -422,22 +424,19 @@ def analyze_value(
     if values_context is not None and value_index is not None:
         is_adjacent, adjacent_reason = is_adjacent_to_redacted(values_context, value_index)
 
-    # Determine if we should flag
-    should_flag = is_ssid or is_device or is_entropy or is_cred or is_adjacent
+    has_detector = detector_confidence is not None
+    should_flag = has_detector or is_entropy or is_cred or is_adjacent
 
     if not should_flag:
         return False, ConfidenceLevel.LOW, "", ""
 
-    # Determine category and reason (credential prefix takes priority over SSID)
+    # Determine category and reason (credential prefix takes priority over detectors)
     if is_cred:
         category = "credential"
         reason = cred_reason
-    elif is_ssid:
-        category = "wifi_ssid"
-        reason = ssid_reason
-    elif is_device:
-        category = "device_name"
-        reason = device_reason
+    elif has_detector:
+        category = detector_category
+        reason = detector_reason
     elif is_entropy:
         category = "credential"
         reason = entropy_reason
@@ -451,8 +450,7 @@ def analyze_value(
 
     confidence = get_confidence_for_value(
         value,
-        is_ssid=is_ssid,
-        is_device=is_device,
+        detector_confidence=detector_confidence,
         is_entropy=is_entropy or is_cred,
         is_adjacent=is_adjacent,
     )

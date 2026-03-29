@@ -15,6 +15,7 @@ except ImportError as e:
     raise ImportError("CLI dependencies not installed. Install with: pip install har-capture[cli]") from e
 
 from har_capture.cli.capture import capture
+from har_capture.cli.patterns import patterns
 from har_capture.cli.sanitize import sanitize
 from har_capture.cli.validate import validate
 
@@ -27,6 +28,7 @@ app = typer.Typer(
 app.command(name="get", help="Capture HTTP traffic from a URL")(capture)
 app.command()(sanitize)
 app.command()(validate)
+app.command()(patterns)
 
 
 def version_callback(value: bool) -> None:

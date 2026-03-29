@@ -1,0 +1,109 @@
+{
+  "_description": "Safe values for network devices (routers, modems, access points, switches)",
+
+  "heuristics": {
+    "detectors": [
+      {
+        "category": "wifi_ssid",
+        "confidence": "medium",
+        "min_length": 3,
+        "max_length": 32,
+        "requires_letter": true,
+        "patterns": [
+          {"regex": "[-_](2\\.?4g?|5g|6g|guest|ext|plus)$", "flags": ["IGNORECASE"], "reason": "ends with band/extension suffix"},
+          {"regex": "^(home|office|guest|wifi|network|net)[-_]", "flags": ["IGNORECASE"], "reason": "starts with common prefix"},
+          {"regex": "[-_](home|office|guest|wifi|network|net)$", "flags": ["IGNORECASE"], "reason": "ends with common suffix"},
+          {"regex": "^[A-Z][a-z]+[-_][A-Z][a-z]+", "reason": "CamelCase with separator (likely name)"},
+          {"regex": "^[A-Za-z]+[-_]\\d+$", "reason": "name followed by number"}
+        ],
+        "camelcase": true
+      },
+      {
+        "category": "device_name",
+        "confidence": "medium",
+        "min_length": 3,
+        "max_length": 64,
+        "requires_letter": true,
+        "patterns": [
+          {"regex": "'s[-\\s]", "reason": "possessive pattern (someone's device)"},
+          {"regex": "(iphone|ipad|macbook|android|galaxy|pixel|surface|kindle)", "flags": ["IGNORECASE"], "reason": "device brand/type"},
+          {"regex": "(laptop|desktop|phone|tablet|tv|speaker|printer|camera)", "flags": ["IGNORECASE"], "reason": "device category"},
+          {"regex": "(living|bed|bath|kitchen|office|garage|basement)[-_\\s]?room", "flags": ["IGNORECASE"], "reason": "room name"},
+          {"regex": "(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)", "flags": ["IGNORECASE"], "reason": "router/modem brand"}
+        ]
+      }
+    ],
+
+    "safe_value_patterns": [
+      {
+        "regex": "^(2\\.4g|5g|6g|2\\.4GHz|5GHz|6GHz|2\\.4\\s*GHz|5\\s*GHz)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "WiFi band indicators"
+      },
+      {
+        "regex": "^(WPA|WPA2|WPA3|WEP|NONE|Open|WPA2?-PSK|WPA2?-Enterprise|WPA3-SAE)(\\s+(AES|TKIP|CCMP|AES-CCMP|TKIP\\+AES))*$",
+        "flags": ["IGNORECASE"],
+        "_comment": "Security types with optional cipher suite"
+      },
+      {
+        "regex": "^802\\.11[a-z/]+$",
+        "flags": ["IGNORECASE"],
+        "_comment": "WiFi standards (802.11ac, 802.11n/ac)"
+      },
+      {
+        "regex": "^(DHCP Client|DHCP Server|DNS Server|NAT|PPPoE|Bridge|Router|Gateway|Managed|Unmanaged|Bridged|Routed|ATDMA|TDMA|SC-QAM|OFDM|OFDMA|QAM\\d+|Attack!*)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "Network service/protocol labels"
+      },
+      {
+        "regex": "^(?:Auto\\s*\\(\\d+\\)|\\d+\\s*\\([A-Z]+\\)(?:\\s*\\+\\s*\\d+\\s*\\([A-Z]+\\))*)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "WiFi channel config strings: Auto (11), 149 (S)+153 (P)"
+      },
+      {
+        "regex": "^(?:Up to\\s+)?\\d+\\s*(?:Mbps|Gbps|Kbps|bps)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "Speed/bandwidth descriptions"
+      },
+      {
+        "regex": "^(?:United States|United Kingdom|New Zealand|South Korea|North Korea|South Africa|Hong Kong|Saudi Arabia|Costa Rica|Puerto Rico|Czech Republic|Dominican Republic|El Salvador|Sri Lanka|[A-Z][a-z]+)$",
+        "_comment": "Country/region names (router region settings)"
+      },
+      {
+        "regex": "^(\\d{1,3}:)+\\d{1,3}:?$",
+        "_comment": "WiFi channel number lists (colon-separated: 36:40:44:48:149:153:...)"
+      },
+      {
+        "regex": "^[a-zA-Z]\\w+\\(\\d+\\)$",
+        "_comment": "DOCSIS config enum values: honorMdd(4), ipv6Only(1)"
+      },
+      {
+        "regex": "^[\\w.-]+\\.(bin|cfg|conf|fw|img)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "Config/firmware filenames"
+      },
+      {
+        "regex": "^[A-Z]{1,4}\\d{2,5}[A-Z]?\\d{0,2}-\\d{2,3}[A-Z]{0,3}$",
+        "_comment": "Hardware model numbers: C279T00-01, C3700-100NAS"
+      }
+    ]
+  },
+
+  "tagValueList": {
+    "_comment": "Network-device-specific safe values in pipe-delimited data (case-insensitive exact match)",
+    "safe_values": [
+      "atdma",
+      "tdma",
+      "bpi+",
+      "qam256",
+      "qam64",
+      "qpsk",
+      "ipv6 only",
+      "ipv6only",
+      "honor mdd",
+      "dhcpclient",
+      "fixed ip",
+      "backup primary"
+    ]
+  }
+}
