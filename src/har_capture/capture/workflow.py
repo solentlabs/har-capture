@@ -318,7 +318,7 @@ def run_capture_phase(
     include_media: bool = False,
     headless: bool = False,
     timeout: int | None = None,
-    interactive: bool = False,
+    interactive: bool = True,
     result: CaptureWorkflowResult | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     wait_for_data: bool = True,

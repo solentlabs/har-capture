@@ -334,7 +334,7 @@ def capture_device_har(
     include_media: bool = False,
     headless: bool = False,
     timeout: int | None = None,
-    interactive: bool = False,
+    interactive: bool = True,
     probes: dict[str, Any] | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     wait_for_data: bool = True,

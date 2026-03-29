@@ -1,14 +1,14 @@
-# Interactive Sanitization Mode
+# Interactive Sanitization
 
-Interactive sanitization mode allows you to review and approve suspicious values that couldn't be automatically redacted. This is useful for edge cases like WiFi SSIDs, device names, or credentials that don't match standard patterns.
+Interactive review is always enabled. After auto-sanitization, suspicious values that couldn't be automatically classified are presented for your review. This catches edge cases like WiFi SSIDs, device names, or credentials that don't match standard patterns.
 
 ## Quick Start
 
 ```bash
-# Review suspicious values interactively
-har-capture sanitize device.har --interactive
+# Sanitize and review flagged values
+har-capture sanitize device.har
 
-# Save a detailed JSON report
+# Also save a detailed JSON report
 har-capture sanitize device.har --report sanitization-report.json
 ```
 
@@ -51,16 +51,16 @@ Common technical values are automatically considered safe:
 
 ## Interactive Review UI
 
-When you use `--interactive`, you'll see a beautiful table of flagged values:
+When flagged values are found, you'll see a table for review:
 
 ```
 ┌─ Flagged Values for Review ─────────────────────────────────────────┐
-│  #  Match  Type            Value                  Context            │
+│  #  Match  Type            Value                  Context           │
 ├─────────────────────────────────────────────────────────────────────┤
 │  1    ●    📶 WiFi SSID    HomeNetwork-5G        ...Good|>>>Home... │
 │  2    ●    📶 WiFi SSID    HomeNetwork-2G        ...5g|>>>HomeNe... │
 │  3    ●    🔑 Password     secret123             ...5G|>>>secret... │
-│  4    ●    📱 Device       Johns-iPhone (2x)     ...>>>Johns-iP... │
+│  4    ●    📱 Device       Johns-iPhone (2x)     ...>>>Johns-iP...  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,7 +92,7 @@ Passwords/credentials are pre-selected by default, but you can adjust any select
 ### Basic Interactive Review
 
 ```bash
-har-capture sanitize device.har --interactive
+har-capture sanitize device.har
 ```
 
 Output:
@@ -155,13 +155,13 @@ The report contains:
 }
 ```
 
-### Non-Interactive Mode (CI/CD)
+### Non-TTY Environment (CI/CD)
 
-When running in a non-TTY environment (like CI):
+When no terminal is available, flagged values are written to a report file instead of prompting:
 
 ```bash
-har-capture sanitize device.har --interactive 2>&1
-# Warning: --interactive requires a terminal. Writing flagged values to report instead.
+har-capture sanitize device.har 2>&1
+# Note: No terminal detected. Writing flagged values to report instead.
 # Sanitized: device.sanitized.har
 # Report: device.har.review.json
 ```
