@@ -27,248 +27,70 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
+from har_capture.patterns.loader import CompiledDetector, compile_detectors
 from har_capture.sanitization.heuristics import (
     analyze_value,
     calculate_entropy,
     get_confidence_for_value,
     is_adjacent_to_redacted,
     is_credential_like,
-    is_device_name_like,
     is_high_entropy,
     is_safe_value,
-    is_ssid_like,
+    run_detector,
 )
 from har_capture.sanitization.report import ConfidenceLevel
 
 # =============================================================================
-# Test Data Tables
+# Load test data from JSON fixture
 # =============================================================================
 
-# fmt: off
-SAFE_VALUE_CASES = [
-    # (value, is_safe, description)
-    # Status values
-    ("Good", True, "status_good"),
-    ("Bad", True, "status_bad"),
-    ("OK", True, "status_ok"),
-    ("Error", True, "status_error"),
-    ("Connected", True, "status_connected"),
-    ("Disconnected", True, "status_disconnected"),
-    ("Active", True, "status_active"),
-    ("Inactive", True, "status_inactive"),
-    ("Online", True, "status_online"),
-    ("Offline", True, "status_offline"),
-    ("Up", True, "status_up"),
-    ("Down", True, "status_down"),
-    # Band indicators
-    ("2.4g", True, "band_2.4g"),
-    ("5g", True, "band_5g"),
-    ("6g", True, "band_6g"),
-    ("2.4GHz", True, "band_2.4ghz"),
-    ("5GHz", True, "band_5ghz"),
-    # Security types
-    ("WPA", True, "security_wpa"),
-    ("WPA2", True, "security_wpa2"),
-    ("WPA3", True, "security_wpa3"),
-    ("WEP", True, "security_wep"),
-    ("NONE", True, "security_none"),
-    ("Open", True, "security_open"),
-    ("WPA2-PSK", True, "security_wpa2psk"),
-    # Numeric values
-    ("123", True, "numeric_channel"),
-    ("0", True, "numeric_zero"),
-    ("11", True, "numeric_channel_11"),
-    # dB values
-    ("-70dBm", True, "dbm_value"),
-    ("50dB", True, "db_value"),
-    # Version strings
-    ("1.0", True, "version_1.0"),
-    ("2.3.4", True, "version_semantic"),
-    ("v1.2.3", True, "version_prefixed"),
-    ("V2.0", True, "version_cap_prefixed"),
-    # Empty/placeholder
-    ("---", True, "placeholder_dashes"),
-    ("none", True, "placeholder_none"),
-    ("null", True, "placeholder_null"),
-    ("N/A", True, "placeholder_na"),
-    ("-", True, "placeholder_single_dash"),
-    # Boolean
-    ("true", True, "bool_true"),
-    ("false", True, "bool_false"),
-    ("yes", True, "bool_yes"),
-    ("no", True, "bool_no"),
-    # Time/date
-    ("12:30", True, "time_format"),
-    ("2024-01-15", True, "date_format"),
-    # Percentage
-    ("85%", True, "percentage"),
-    # Signal strength
-    ("Excellent", True, "signal_excellent"),
-    ("Good", True, "signal_good"),
-    ("Fair", True, "signal_fair"),
-    ("Poor", True, "signal_poor"),
-    # Already redacted
-    ("***MAC***", True, "already_redacted_stars"),
-    ("MAC_a1b2c3d4", True, "already_redacted_hash"),
-    ("XX:XX:XX:XX:XX:XX", True, "already_redacted_mac"),
-    ("0.0.0.0", True, "already_redacted_ip_zero"),
-    ("10.255.1.2", True, "already_redacted_ip_rfc5737"),
-    ("192.0.2.123", True, "already_redacted_documentation_ip"),
-    # Interface names
-    ("eth0", True, "interface_eth0"),
-    ("wlan0", True, "interface_wlan0"),
-    ("lo", True, "interface_lo"),
-    ("br0", True, "interface_br0"),
-    ("lan", True, "interface_lan"),
-    ("wan", True, "interface_wan"),
-    # Empty
-    ("", True, "empty_string"),
-    ("  ", True, "whitespace_only"),
-    # Common plan/tier/role words (new)
-    ("premium", True, "safe_plan_premium"),
-    ("admin", True, "safe_role_admin"),
-    ("guest", True, "safe_role_guest"),
-    ("default", True, "safe_role_default"),
-    ("retail", True, "safe_category_retail"),
-    ("primary", True, "safe_category_primary"),
-    # Already-redacted values with prefixes (new)
-    ("SN: SERIAL_0ad826ed", True, "safe_redacted_serial_with_prefix"),
-    ("user_70a438cb@redacted.invalid", True, "safe_redacted_email"),
-    # Values that should NOT be safe (will fail - flagged as suspicious)
-    ("HomeNetwork-5G", False, "ssid_like_not_safe"),
-    ("Johns-iPhone", False, "device_name_not_safe"),
-    ("secretpass123", False, "password_like_not_safe"),
-    ("MyWifi", False, "short_ssid_not_safe"),
-]
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_heuristics.json").read_text())
+
+SAFE_VALUE_CASES = [(c["value"], c["is_safe"], c["id"]) for c in _FIXTURES["safe_value_cases"]]
+
+DOMAIN_SAFE_VALUE_CASES = [(c["value"], c["id"]) for c in _FIXTURES["domain_safe_value_cases"]]
 
 SSID_LIKE_CASES = [
-    # (value, is_ssid_like, description)
-    # Should be detected as SSID-like
-    ("HomeNetwork-5G", True, "ends_with_5g"),
-    ("MyWifi-2.4g", True, "ends_with_2.4g"),
-    ("GuestNetwork-guest", True, "ends_with_guest"),
-    ("WiFi-ext", True, "ends_with_ext"),
-    ("home-network", True, "starts_with_home"),
-    ("office-wifi", True, "contains_wifi"),
-    ("guest-network", True, "starts_with_guest"),
-    ("Network-123", True, "name_number_pattern"),
-    ("MyRouter", True, "camelcase_ssid"),
-    ("FamilyWiFi", True, "camelcase_ssid_multi"),
-    ("HomeNetwork", True, "camelcase_no_separator"),
-    # Should NOT be detected as SSID-like (false positives fixed)
-    ("AB", False, "too_short"),
-    ("123456", False, "numeric_only"),
-    ("", False, "empty"),
-    ("a" * 35, False, "too_long"),
-    ("admin", False, "common_word_not_ssid"),
-    ("premium", False, "plan_tier_not_ssid"),
-    ("NETGEAR-C7000", False, "device_model_not_ssid"),
-    ("enabled", False, "status_word_not_ssid"),
-    ("active", False, "status_word_not_ssid_2"),
-    ("retail", False, "category_word_not_ssid"),
+    # The "too_long" case uses a generated string that can't live in JSON
+    ("a" * 35, c["is_match"], c["id"]) if c["id"] == "too_long" else (c["value"], c["is_match"], c["id"])
+    for c in _FIXTURES["ssid_like_cases"]
 ]
 
-CREDENTIAL_LIKE_CASES = [
-    # (value, is_credential, description)
-    # Should be detected as credential-like
-    ("pass123", True, "pass_prefix_digits"),
-    ("password42", True, "password_prefix_digits"),
-    ("token99", True, "token_prefix_digits"),
-    ("key!2024", True, "key_prefix_special"),
-    ("secret789", True, "secret_prefix_digits"),
-    ("auth42", True, "auth_prefix_digits"),
-    ("pwd!123", True, "pwd_prefix_special"),
-    # Should NOT be detected
-    ("abc1234", False, "no_credential_prefix"),
-    ("admin", False, "too_short_no_digits"),
-    ("password", False, "no_trailing_digits"),
-    ("pass", False, "prefix_only_no_digits"),
-    ("", False, "empty"),
-]
+CREDENTIAL_LIKE_CASES = [(c["value"], c["is_match"], c["id"]) for c in _FIXTURES["credential_like_cases"]]
 
-DEVICE_NAME_LIKE_CASES = [
-    # (value, is_device_like, description)
-    # Should be detected as device names
-    ("John's iPhone", True, "possessive_iphone"),
-    ("Mary's MacBook", True, "possessive_macbook"),
-    ("Living-Room-TV", True, "room_name_tv"),
-    ("Kitchen Tablet", True, "room_tablet"),
-    ("iPhone-14", True, "iphone_model"),
-    ("Galaxy-S23", True, "galaxy_model"),
-    ("Pixel-7", True, "pixel_model"),
-    ("MacBook Pro", True, "macbook_pro"),
-    ("Android Phone", True, "android_phone"),
-    # Router/modem brands (new)
-    ("NETGEAR-C7000", True, "netgear_model"),
-    ("Linksys-WRT", True, "linksys_model"),
-    ("TP-Link Archer", True, "tplink_model"),
-    ("ARRIS-SB8200", True, "arris_model"),
-    # Should NOT be detected as device names
-    ("Good", False, "status_value"),
-    ("WPA2", False, "security_type"),
-    ("5GHz", False, "band_indicator"),
-    ("", False, "empty"),
-    ("AB", False, "too_short"),
-]
+DEVICE_NAME_LIKE_CASES = [(c["value"], c["is_match"], c["id"]) for c in _FIXTURES["device_name_like_cases"]]
 
-HIGH_ENTROPY_CASES = [
-    # (value, is_high_entropy, description)
-    # Should be detected as high entropy
-    ("aB3$dEf7!gH9", True, "mixed_chars_high_entropy"),
-    ("X7y!Z2m@P9q&", True, "password_like"),
-    ("Abcd1234!@#$", True, "mixed_case_num_special"),
-    # Should NOT be detected as high entropy
-    ("aaaaaaaa", False, "repeated_chars"),
-    ("12345678", False, "sequential_numbers"),
-    ("abcdefgh", False, "sequential_letters"),
-    ("short", False, "too_short"),
-    ("Good", False, "safe_value"),
-    ("", False, "empty"),
-]
+HIGH_ENTROPY_CASES = [(c["value"], c["is_match"], c["id"]) for c in _FIXTURES["high_entropy_cases"]]
 
 ADJACENT_TO_REDACTED_CASES = [
-    # (values, index, is_adjacent, description)
-    (["normal", "MAC_a1b2c3d4", "test"], 0, True, "before_mac_hash"),
-    (["test", "MAC_a1b2c3d4", "normal"], 2, True, "after_mac_hash"),
-    (["a", "b", "PASS_12345678", "c"], 2, False, "is_the_redacted_value"),
-    (["a", "PASS_12345678", "b"], 0, True, "before_pass_hash"),
-    (["a", "XX:XX:XX:XX:XX:XX", "b"], 0, True, "before_redacted_mac"),
-    (["a", "0.0.0.0", "b"], 2, True, "after_redacted_ip"),
-    (["a", "b", "c"], 1, False, "no_redacted_neighbors"),
-    (["***TOKEN***", "value"], 1, True, "after_star_redacted"),
-    (["only"], 0, False, "single_element"),
+    (c["values"], c["index"], c["is_adjacent"], c["id"]) for c in _FIXTURES["adjacent_to_redacted_cases"]
 ]
 
-ANALYZE_VALUE_CASES = [
-    # (value, values_context, value_index, should_flag, expected_category, description)
-    ("HomeNetwork-5G", None, None, True, "wifi_ssid", "ssid_like_flagged"),
-    ("John's MacBook", None, None, True, "device_name", "device_name_flagged"),
-    ("pass123", None, None, True, "credential", "credential_prefix_flagged"),
-    ("NETGEAR-C7000", None, None, True, "device_name", "router_brand_flagged"),
-    ("Good", None, None, False, "", "safe_value_not_flagged"),
-    ("WPA2", None, None, False, "", "security_type_not_flagged"),
-    ("123", None, None, False, "", "numeric_not_flagged"),
-    ("", None, None, False, "", "empty_not_flagged"),
-    ("admin", None, None, False, "", "safe_role_not_flagged"),
-    ("premium", None, None, False, "", "safe_plan_not_flagged"),
-    # With context (adjacency) - note: value "cfg" doesn't match SSID/device patterns
-    ("cfg", ["cfg", "MAC_12345678"], 0, True, "suspicious", "adjacent_to_redacted"),
+ANALYZE_VALUE_CORE_CASES = [
+    (c["value"], c["values_context"], c["value_index"], c["should_flag"], c["expected_category"], c["id"])
+    for c in _FIXTURES["analyze_value_core_cases"]
+]
+
+ANALYZE_VALUE_DETECTOR_CASES = [
+    (c["value"], c["values_context"], c["value_index"], c["should_flag"], c["expected_category"], c["id"])
+    for c in _FIXTURES["analyze_value_detector_cases"]
+]
+
+ANALYZE_VALUE_NO_DETECTOR_CATEGORY_CASES = [
+    (c["value"], c["with_detector_category"], c["without_detector_category"], c["id"])
+    for c in _FIXTURES["analyze_value_no_detector_category_cases"]
 ]
 
 CONFIDENCE_LEVEL_CASES = [
-    # (is_ssid, is_device, is_entropy, is_adjacent, expected_confidence)
-    (True, False, False, True, ConfidenceLevel.HIGH),    # SSID + adjacent = HIGH
-    (False, True, False, True, ConfidenceLevel.HIGH),    # Device + adjacent = HIGH
-    (False, False, True, True, ConfidenceLevel.HIGH),    # Entropy + adjacent = HIGH
-    (True, False, False, False, ConfidenceLevel.MEDIUM), # SSID alone = MEDIUM
-    (False, True, False, False, ConfidenceLevel.MEDIUM), # Device alone = MEDIUM
-    (False, False, True, False, ConfidenceLevel.MEDIUM), # Entropy alone = MEDIUM
-    (False, False, False, True, ConfidenceLevel.LOW),    # Adjacent only = LOW
-    (False, False, False, False, ConfidenceLevel.LOW),   # Nothing = LOW
+    (c["detector_confidence"], c["is_entropy"], c["is_adjacent"], ConfidenceLevel(c["expected"]), c["id"])
+    for c in _FIXTURES["confidence_level_cases"]
 ]
-# fmt: on
 
 
 # =============================================================================
@@ -292,40 +114,126 @@ class TestIsSafeValue:
         )
 
 
-class TestIsSSIDLike:
-    """Tests for SSID-like pattern detection."""
+class TestDomainSafeValues:
+    """Tests for domain-specific safe value patterns (loaded from JSON)."""
+
+    @pytest.fixture
+    def network_device_patterns(self) -> list[re.Pattern[str]]:
+        """Load compiled patterns from the network-device domain file."""
+        from har_capture.patterns.loader import (
+            compile_safe_value_patterns,
+            load_sensitive_patterns,
+            resolve_patterns_arg,
+        )
+
+        path = resolve_patterns_arg("network-device")
+        sensitive = load_sensitive_patterns(str(path))
+        return compile_safe_value_patterns(sensitive)
 
     @pytest.mark.parametrize(
-        ("value", "expected_ssid", "desc"),
+        ("value", "desc"),
+        DOMAIN_SAFE_VALUE_CASES,
+        ids=[c[1] for c in DOMAIN_SAFE_VALUE_CASES],
+    )
+    def test_safe_with_domain_patterns(
+        self,
+        value: str,
+        desc: str,
+        network_device_patterns: list[re.Pattern[str]],
+    ) -> None:
+        """Domain-specific values are safe when domain patterns are loaded."""
+        assert is_safe_value(value, extra_patterns=network_device_patterns), (
+            f"{desc}: '{value}' should be safe with network-device patterns"
+        )
+
+    @pytest.mark.parametrize(
+        ("value", "desc"),
+        [
+            c
+            for c in DOMAIN_SAFE_VALUE_CASES
+            if c[0]
+            not in {
+                # These incidentally match core patterns (version string, IPv6 hex:colon)
+                "2.4g",
+                "36:40:44:48:149:153:157:161:165:",
+            }
+        ],
+        ids=[
+            c[1]
+            for c in DOMAIN_SAFE_VALUE_CASES
+            if c[0]
+            not in {
+                "2.4g",
+                "36:40:44:48:149:153:157:161:165:",
+            }
+        ],
+    )
+    def test_not_safe_without_domain_patterns(self, value: str, desc: str) -> None:
+        """Domain-specific values are NOT safe without domain patterns."""
+        assert not is_safe_value(value), f"{desc}: '{value}' should NOT be safe without domain patterns"
+
+
+class TestRunDetector:
+    """Tests for data-driven heuristic detectors loaded from domain files."""
+
+    @pytest.fixture
+    def network_detectors(self) -> list[CompiledDetector]:
+        """Load compiled detectors from the network-device domain file."""
+        from har_capture.patterns.loader import load_sensitive_patterns, resolve_patterns_arg
+
+        path = resolve_patterns_arg("network-device")
+        sensitive = load_sensitive_patterns(str(path))
+        return compile_detectors(sensitive)
+
+    @pytest.fixture
+    def ssid_detector(self, network_detectors: list[CompiledDetector]) -> CompiledDetector:
+        """Get the wifi_ssid detector."""
+        return next(d for d in network_detectors if d.category == "wifi_ssid")
+
+    @pytest.fixture
+    def device_detector(self, network_detectors: list[CompiledDetector]) -> CompiledDetector:
+        """Get the device_name detector."""
+        return next(d for d in network_detectors if d.category == "device_name")
+
+    @pytest.mark.parametrize(
+        ("value", "expected_match", "desc"),
         SSID_LIKE_CASES,
         ids=[c[2] for c in SSID_LIKE_CASES],
     )
-    def test_is_ssid_like(self, value: str, expected_ssid: bool, desc: str) -> None:
-        """Test SSID-like detection."""
-        is_ssid, reason = is_ssid_like(value)
-        assert is_ssid is expected_ssid, (
-            f"{desc}: '{value}' should {'be' if expected_ssid else 'not be'} SSID-like"
+    def test_ssid_detector(
+        self,
+        value: str,
+        expected_match: bool,
+        desc: str,
+        ssid_detector: CompiledDetector,
+    ) -> None:
+        """Test SSID detection via data-driven detector."""
+        matched, reason = run_detector(value, ssid_detector)
+        assert matched is expected_match, (
+            f"{desc}: '{value}' should {'match' if expected_match else 'not match'} SSID detector"
         )
-        if is_ssid:
-            assert reason, "SSID-like values should have a reason"
-
-
-class TestIsDeviceNameLike:
-    """Tests for device name pattern detection."""
+        if matched:
+            assert reason, "Matched values should have a reason"
 
     @pytest.mark.parametrize(
-        ("value", "expected_device", "desc"),
+        ("value", "expected_match", "desc"),
         DEVICE_NAME_LIKE_CASES,
         ids=[c[2] for c in DEVICE_NAME_LIKE_CASES],
     )
-    def test_is_device_name_like(self, value: str, expected_device: bool, desc: str) -> None:
-        """Test device name detection."""
-        is_device, reason = is_device_name_like(value)
-        assert is_device is expected_device, (
-            f"{desc}: '{value}' should {'be' if expected_device else 'not be'} device-like"
+    def test_device_name_detector(
+        self,
+        value: str,
+        expected_match: bool,
+        desc: str,
+        device_detector: CompiledDetector,
+    ) -> None:
+        """Test device name detection via data-driven detector."""
+        matched, reason = run_detector(value, device_detector)
+        assert matched is expected_match, (
+            f"{desc}: '{value}' should {'match' if expected_match else 'not match'} device detector"
         )
-        if is_device:
-            assert reason, "Device-like values should have a reason"
+        if matched:
+            assert reason, "Matched values should have a reason"
 
 
 class TestIsCredentialLike:
@@ -396,12 +304,21 @@ class TestIsAdjacentToRedacted:
 class TestAnalyzeValue:
     """Tests for the main analyze_value function."""
 
+    @pytest.fixture
+    def network_detectors(self) -> list[CompiledDetector]:
+        """Load compiled detectors from the network-device domain file."""
+        from har_capture.patterns.loader import load_sensitive_patterns, resolve_patterns_arg
+
+        path = resolve_patterns_arg("network-device")
+        sensitive = load_sensitive_patterns(str(path))
+        return compile_detectors(sensitive)
+
     @pytest.mark.parametrize(
         ("value", "values_context", "value_index", "should_flag", "expected_category", "desc"),
-        ANALYZE_VALUE_CASES,
-        ids=[c[5] for c in ANALYZE_VALUE_CASES],
+        ANALYZE_VALUE_CORE_CASES,
+        ids=[c[5] for c in ANALYZE_VALUE_CORE_CASES],
     )
-    def test_analyze_value(
+    def test_analyze_value_core(
         self,
         value: str,
         values_context: list[str] | None,
@@ -410,7 +327,7 @@ class TestAnalyzeValue:
         expected_category: str,
         desc: str,
     ) -> None:
-        """Test analyze_value function."""
+        """Test analyze_value with core heuristics only (no detectors)."""
         flagged, _confidence, category, reason = analyze_value(value, values_context, value_index)
         assert flagged is should_flag, f"{desc}: '{value}' should {'be' if should_flag else 'not be'} flagged"
         if should_flag:
@@ -419,28 +336,80 @@ class TestAnalyzeValue:
             )
             assert reason, "Flagged values should have a reason"
 
+    @pytest.mark.parametrize(
+        ("value", "values_context", "value_index", "should_flag", "expected_category", "desc"),
+        ANALYZE_VALUE_DETECTOR_CASES,
+        ids=[c[5] for c in ANALYZE_VALUE_DETECTOR_CASES],
+    )
+    def test_analyze_value_with_detectors(
+        self,
+        value: str,
+        values_context: list[str] | None,
+        value_index: int | None,
+        should_flag: bool,
+        expected_category: str,
+        desc: str,
+        network_detectors: list[CompiledDetector],
+    ) -> None:
+        """Test analyze_value with domain detectors loaded."""
+        flagged, _confidence, category, reason = analyze_value(
+            value,
+            values_context,
+            value_index,
+            compiled_detectors=network_detectors,
+        )
+        assert flagged is should_flag, f"{desc}: '{value}' should {'be' if should_flag else 'not be'} flagged"
+        if should_flag:
+            assert category == expected_category, (
+                f"{desc}: expected category '{expected_category}', got '{category}'"
+            )
+            assert reason, "Flagged values should have a reason"
+
+    @pytest.mark.parametrize(
+        ("value", "with_cat", "without_cat", "desc"),
+        ANALYZE_VALUE_NO_DETECTOR_CATEGORY_CASES,
+        ids=[c[3] for c in ANALYZE_VALUE_NO_DETECTOR_CATEGORY_CASES],
+    )
+    def test_analyze_value_category_changes_without_detectors(
+        self,
+        value: str,
+        with_cat: str,
+        without_cat: str,
+        desc: str,
+        network_detectors: list[CompiledDetector],
+    ) -> None:
+        """Without detectors, domain values are categorized differently (entropy, not SSID/device)."""
+        # With detectors: domain-specific category
+        _, _, cat_with, _ = analyze_value(value, compiled_detectors=network_detectors)
+        assert cat_with == with_cat, f"{desc}: with detectors expected '{with_cat}', got '{cat_with}'"
+
+        # Without detectors: falls back to entropy/credential
+        _, _, cat_without, _ = analyze_value(value)
+        assert cat_without == without_cat, (
+            f"{desc}: without detectors expected '{without_cat}', got '{cat_without}'"
+        )
+
 
 class TestGetConfidenceForValue:
     """Tests for confidence level determination."""
 
     @pytest.mark.parametrize(
-        ("is_ssid", "is_device", "is_entropy", "is_adjacent", "expected"),
+        ("detector_confidence", "is_entropy", "is_adjacent", "expected", "desc"),
         CONFIDENCE_LEVEL_CASES,
-        ids=[f"ssid{c[0]}_dev{c[1]}_ent{c[2]}_adj{c[3]}_{c[4].value}" for c in CONFIDENCE_LEVEL_CASES],
+        ids=[c[4] for c in CONFIDENCE_LEVEL_CASES],
     )
     def test_get_confidence_for_value(
         self,
-        is_ssid: bool,
-        is_device: bool,
+        detector_confidence: str | None,
         is_entropy: bool,
         is_adjacent: bool,
         expected: ConfidenceLevel,
+        desc: str,
     ) -> None:
         """Test confidence level determination."""
         result = get_confidence_for_value(
             "test-value",
-            is_ssid=is_ssid,
-            is_device=is_device,
+            detector_confidence=detector_confidence,
             is_entropy=is_entropy,
             is_adjacent=is_adjacent,
         )
@@ -450,7 +419,17 @@ class TestGetConfidenceForValue:
 class TestRegexDoSPrevention:
     """Tests for ReDoS prevention in heuristics."""
 
-    def test_long_string_doesnt_cause_redos(self) -> None:
+    @pytest.fixture
+    def ssid_detector(self) -> CompiledDetector:
+        """Load the wifi_ssid detector from network-device domain."""
+        from har_capture.patterns.loader import load_sensitive_patterns, resolve_patterns_arg
+
+        path = resolve_patterns_arg("network-device")
+        sensitive = load_sensitive_patterns(str(path))
+        detectors = compile_detectors(sensitive)
+        return next(d for d in detectors if d.category == "wifi_ssid")
+
+    def test_long_string_doesnt_cause_redos(self, ssid_detector: CompiledDetector) -> None:
         """Test that long strings don't cause catastrophic backtracking."""
         import time
 
@@ -458,7 +437,7 @@ class TestRegexDoSPrevention:
         malicious_input = "A" + "-" * 1000 + "!"
 
         start = time.time()
-        result, _reason = is_ssid_like(malicious_input)
+        result, _reason = run_detector(malicious_input, ssid_detector)
         elapsed = time.time() - start
 
         # Should be fast (< 0.1s) and return False (too long)
@@ -472,9 +451,14 @@ class TestRegexDoSPrevention:
             ("A" * 150, "very_long_150_chars"),
         ],
     )
-    def test_ssid_length_limit_enforced(self, value: str, description: str) -> None:
-        """Test that SSID length limit is enforced."""
-        result, _ = is_ssid_like(value)
+    def test_ssid_length_limit_enforced(
+        self,
+        value: str,
+        description: str,
+        ssid_detector: CompiledDetector,
+    ) -> None:
+        """Test that detector length limit is enforced."""
+        result, _ = run_detector(value, ssid_detector)
         assert result is False, f"{description}: should be rejected"
 
 

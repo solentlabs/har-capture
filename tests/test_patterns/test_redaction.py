@@ -36,67 +36,12 @@ import pytest
 
 from har_capture.patterns.redaction import is_allowlisted, is_redacted
 
-# Test data tables
-REDACTED_VALUES = [
-    # Static placeholders
-    "[REDACTED]",
-    "XX:XX:XX:XX:XX:XX",
-    "0.0.0.0",
-    "::",
-    "x@x.invalid",
-    # Hash prefixes
-    "DEVICE_default",
-    "SERIAL_a1b2c3d4",
-    "ACCOUNT_12345678",
-    "PASS_abcd1234",
-    "TOKEN_xyz98765",
-    "CSRF_aaaa1111",
-    "CONFIG_bbbb2222",
-    "WIFI_cccc3333",
-    "FIELD_dddd4444",
-    "AUTH_eeee5555",
-    "COOKIE_ffff6666",
-    "STORAGE_a1b2c3d4",
-    "CRED_deadbeef01",
-    "SENSITIVE_12345678",
-    # Format-preserving patterns
-    "02:aa:bb:cc:dd:ee",
-    "02:AA:BB:CC:DD:EE",
-    "10.255.1.1",
-    "10.255.255.254",
-    "192.0.2.1",
-    "192.0.2.255",
-    "2001:db8::",
-    "user@redacted.invalid",
-    "admin@redacted.invalid",
-    # Redaction patterns
-    "REDACTED",
-    "XXXXXX",
-    "000000",
-    "***PASSWORD***",
-    "***MAC***",
-    "***TOKEN***",
-    "COOKIE_a1b2c3d4",
-    "MAC_12345678",
-    "PASS_abcdef12",
-    "TOKEN_87654321",
-    "FIELD_deadbeef",
-]
+# Load test data from fixture
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_redaction.json").read_text())
 
-NON_REDACTED_VALUES = [
-    "my_password",
-    "192.168.1.1",  # Private IP, not in TEST-NET
-    "user@example.com",
-    "00:11:22:33:44:55",  # Normal MAC
-    "SomeDeviceName",
-    "admin123",
-    "http://example.com",
-]
-
-CASE_INSENSITIVE_PAIRS = [
-    ("redacted", "Redacted", "REDACTED"),
-    ("***password***", "***Password***", "***PASSWORD***"),
-]
+REDACTED_VALUES = _FIXTURES["redacted_values"]
+NON_REDACTED_VALUES = _FIXTURES["non_redacted_values"]
+CASE_INSENSITIVE_PAIRS = [tuple(group) for group in _FIXTURES["case_insensitive_pairs"]]
 
 
 class TestIsRedacted:
@@ -340,6 +285,51 @@ class TestMalformedRegexHandling:
         assert is_allowlisted("VALID_PATTERN", allowlist), f"{desc}: valid pattern should still match"
         # Should not crash on the invalid pattern
         assert not is_allowlisted("unmatched_value", allowlist), f"{desc}: should return False for non-match"
+
+
+class TestFormatPreservingInvalidRegex:
+    """Tests for invalid regex in format_preserving_patterns."""
+
+    def test_invalid_format_preserving_regex_is_skipped(self) -> None:
+        """Test that invalid regex in format_preserving_patterns is skipped gracefully."""
+        allowlist = {
+            "static_placeholders": {"values": []},
+            "hash_prefixes": {"values": []},
+            "format_preserving_patterns": {
+                "bad_regex": {
+                    "pattern": "[invalid(regex",
+                    "description": "broken regex",
+                },
+                "good_regex": {
+                    "pattern": "^GOOD_\\d+$",
+                    "description": "valid regex",
+                },
+            },
+        }
+        # Should not raise; bad pattern is skipped, good pattern still works
+        assert is_allowlisted("GOOD_123", allowlist)
+        assert not is_allowlisted("random_value", allowlist)
+
+
+class TestCookieAttributeMetadataDetection:
+    """Tests for is_cookie_attribute_metadata helper."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        [
+            ("HttpOnly: true, Secure: true", True, "standard_metadata"),
+            ("SameSite=Lax", True, "samesite_attr"),
+            ("session=abc123", False, "normal_cookie"),
+            ("", False, "empty_string"),
+            ("   ", False, "whitespace_only"),
+        ],
+        ids=lambda x: x if isinstance(x, str) and "_" in x else "",
+    )
+    def test_cookie_attribute_metadata(self, value: str, expected: bool, desc: str) -> None:
+        """Test is_cookie_attribute_metadata with various inputs."""
+        from har_capture.patterns.redaction import is_cookie_attribute_metadata
+
+        assert is_cookie_attribute_metadata(value) == expected, desc
 
 
 class TestErrorHandling:

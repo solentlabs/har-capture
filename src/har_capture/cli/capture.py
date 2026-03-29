@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -56,10 +56,17 @@ def capture(
         bool,
         typer.Option("--include-media", help="Include media files in capture (.mp3, .mp4, etc.)"),
     ] = False,
-    no_interactive: Annotated[
+    patterns: Annotated[
+        list[str] | None,
+        typer.Option("--patterns", help="Pattern names or JSON file paths (repeatable)"),
+    ] = None,
+    wait_for_data: Annotated[
         bool,
-        typer.Option("--no-interactive", help="Skip interactive review of flagged values"),
-    ] = False,
+        typer.Option(
+            "--wait-for-data/--no-wait-for-data",
+            help="Wait for async data to load on each page before navigating",
+        ),
+    ] = True,
 ) -> None:
     """Capture HTTP traffic using Playwright browser.
 
@@ -81,11 +88,12 @@ def capture(
         include_fonts: Include font files in capture
         include_images: Include image files in capture
         include_media: Include media files in capture
-        no_interactive: Skip interactive review of flagged values
+        patterns: Pattern names or JSON file paths (repeatable)
+        wait_for_data: Wait for async data to load on each page
 
     Example:
-        har-capture get https://example.com
-        har-capture get 192.168.100.1 --output capture.har
+        har-capture https://example.com
+        har-capture 192.168.100.1 --output capture.har
         har-capture get router.local --include-images
     """
     try:
@@ -157,6 +165,17 @@ def capture(
     # Display instructions
     _display_instructions()
 
+    # Resolve --patterns args
+    custom_patterns: str | dict[str, Any] | None = None
+    if patterns:
+        from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
+
+        resolved = [resolve_patterns_arg(p) for p in patterns]
+        if len(resolved) == 1:
+            custom_patterns = str(resolved[0])
+        else:
+            custom_patterns = merge_pattern_files(resolved)
+
     # Phase 4: Run capture
     result = run_capture_phase(
         target=target,
@@ -169,8 +188,10 @@ def capture(
         include_fonts=include_fonts,
         include_images=include_images,
         include_media=include_media,
-        interactive=not no_interactive,
+        interactive=True,
         result=result,
+        custom_patterns=custom_patterns,
+        wait_for_data=wait_for_data,
     )
 
     if not result.capture_success:
@@ -180,8 +201,8 @@ def capture(
     # Display results
     _display_results(result)
 
-    # Interactive review (enabled by default, skip with --no-interactive)
-    if not no_interactive and result.capture and result.capture.sanitization_report:
+    # Interactive review of flagged values (always enabled)
+    if result.capture and result.capture.sanitization_report:
         _run_interactive_review(result)
 
 

@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,24 @@ def _cache_set(key: str, value: Any) -> None:
         evicted_key = next(iter(_pattern_cache))
         _pattern_cache.pop(evicted_key)
         _LOGGER.debug("Pattern cache evicted: %s", evicted_key)
+
+
+@dataclass(frozen=True)
+class CompiledDetector:
+    """A compiled heuristic detector loaded from a domain JSON file.
+
+    Each detector checks values against length bounds, letter requirements,
+    regex patterns, and optional CamelCase matching. The category and
+    confidence are declared in the domain file.
+    """
+
+    category: str
+    confidence: str  # "low", "medium", "high"
+    min_length: int
+    max_length: int
+    requires_letter: bool
+    patterns: list[tuple[re.Pattern[str], str]] = field(default_factory=list)
+    camelcase: bool = False
 
 
 class PatternLoadError(Exception):
@@ -194,6 +213,16 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
             builtin["fields"]["patterns"].extend(custom["fields"]["patterns"])
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
+        if "heuristics" in custom:
+            builtin.setdefault("heuristics", {})
+            if "safe_value_patterns" in custom["heuristics"]:
+                builtin["heuristics"].setdefault("safe_value_patterns", [])
+                builtin["heuristics"]["safe_value_patterns"].extend(
+                    custom["heuristics"]["safe_value_patterns"]
+                )
+            if "detectors" in custom["heuristics"]:
+                builtin["heuristics"].setdefault("detectors", [])
+                builtin["heuristics"]["detectors"].extend(custom["heuristics"]["detectors"])
 
     if cache_key:
         _cache_set(cache_key, builtin)
@@ -328,6 +357,185 @@ def clear_pattern_cache() -> None:
     Useful for testing or when patterns have been modified.
     """
     _pattern_cache.clear()
+
+
+def _get_domains_dir() -> Path:
+    """Get path to the built-in domains directory."""
+    return Path(__file__).parent / "domains"
+
+
+def resolve_patterns_arg(value: str) -> Path:
+    """Resolve a --patterns argument to a file path.
+
+    If the value contains path separators or ends with .json, it is treated
+    as a file path. Otherwise, it is looked up as a built-in domain name
+    (hyphens normalized to underscores).
+
+    Args:
+        value: Pattern name or file path (e.g., "network-device" or "./custom.json")
+
+    Returns:
+        Resolved Path to the pattern file
+
+    Raises:
+        PatternLoadError: If the pattern file cannot be found
+    """
+    # File path: contains separator or has .json extension
+    if "/" in value or "\\" in value or value.endswith(".json"):
+        path = Path(value)
+        if not path.exists():
+            raise PatternLoadError(f"Pattern file not found: {value}")
+        return path
+
+    # Built-in domain name: normalize hyphens to underscores
+    name = value.replace("-", "_")
+    path = _get_domains_dir() / f"{name}.json"
+    if not path.exists():
+        available = list_domains()
+        names = [d["name"] for d in available]
+        raise PatternLoadError(
+            f"Unknown pattern domain '{value}'. Available: {', '.join(names) if names else '(none)'}"
+        )
+    return path
+
+
+def list_domains() -> list[dict[str, str]]:
+    """List available built-in domain pattern files.
+
+    Returns:
+        List of dicts with 'name', 'description', and 'path' keys
+    """
+    domains_dir = _get_domains_dir()
+    if not domains_dir.exists():
+        return []
+
+    result = []
+    for path in sorted(domains_dir.glob("*.json")):
+        data = _try_load_domain(path)
+        if data is not None:
+            result.append(
+                {
+                    "name": path.stem.replace("_", "-"),
+                    "description": data.get("_description", ""),
+                    "path": str(path),
+                }
+            )
+    return result
+
+
+def _try_load_domain(path: Path) -> dict[str, Any] | None:
+    """Load a domain JSON file, returning None on failure."""
+    try:
+        return load_json_file(path)
+    except PatternLoadError:
+        _LOGGER.warning("Skipping invalid domain file: %s", path)
+        return None
+
+
+def compile_safe_value_patterns(
+    sensitive_data: dict[str, Any],
+) -> list[re.Pattern[str]]:
+    """Compile heuristic safe-value patterns from loaded sensitive data.
+
+    Args:
+        sensitive_data: Loaded sensitive patterns (from load_sensitive_patterns)
+
+    Returns:
+        List of compiled regex patterns for safe value detection
+    """
+    patterns: list[re.Pattern[str]] = []
+    for pdef in sensitive_data.get("heuristics", {}).get("safe_value_patterns", []):
+        compiled = compile_pattern(pdef)
+        if compiled is not None:
+            patterns.append(compiled)
+    return patterns
+
+
+def compile_detectors(
+    sensitive_data: dict[str, Any],
+) -> list[CompiledDetector]:
+    """Compile heuristic detectors from loaded sensitive data.
+
+    Args:
+        sensitive_data: Loaded sensitive patterns (from load_sensitive_patterns)
+
+    Returns:
+        List of compiled detectors. Empty if no detectors are defined.
+    """
+    detectors: list[CompiledDetector] = []
+    for ddef in sensitive_data.get("heuristics", {}).get("detectors", []):
+        compiled_patterns: list[tuple[re.Pattern[str], str]] = []
+        for pdef in ddef.get("patterns", []):
+            regex_str = pdef.get("regex")
+            if not regex_str:
+                continue
+            reason = pdef.get("reason", "")
+            flags = 0
+            for flag_name in pdef.get("flags", []):
+                flag = getattr(re, flag_name, None)
+                if flag is not None and isinstance(flag, re.RegexFlag):
+                    flags |= flag
+            try:
+                compiled_patterns.append((re.compile(regex_str, flags), reason))
+            except re.error:
+                _LOGGER.warning(
+                    "Skipping invalid detector pattern in '%s': %s",
+                    ddef.get("category", "unknown"),
+                    regex_str,
+                )
+
+        detectors.append(
+            CompiledDetector(
+                category=ddef.get("category", "unknown"),
+                confidence=ddef.get("confidence", "medium"),
+                min_length=ddef.get("min_length", 1),
+                max_length=ddef.get("max_length", 256),
+                requires_letter=ddef.get("requires_letter", False),
+                patterns=compiled_patterns,
+                camelcase=ddef.get("camelcase", False),
+            )
+        )
+    return detectors
+
+
+def merge_pattern_files(paths: list[Path]) -> dict[str, Any]:
+    """Load and merge multiple pattern files into a single dict.
+
+    Merging follows the same extend-lists/update-dicts convention used
+    throughout the loader. Later files take precedence.
+
+    Args:
+        paths: Ordered list of pattern file paths to merge
+
+    Returns:
+        Merged pattern data suitable for passing as custom_patterns dict
+    """
+    if not paths:
+        return {}
+
+    merged = load_json_file(paths[0])
+    for path in paths[1:]:
+        extra = load_json_file(path)
+        # Merge each known section
+        for section in ("headers", "fields", "tagValueList", "heuristics", "patterns"):
+            if section not in extra:
+                continue
+            if section not in merged:
+                merged[section] = extra[section]
+                continue
+            # Merge sub-keys: extend lists, update dicts
+            for key, val in extra[section].items():
+                if key.startswith("_"):
+                    continue
+                if key not in merged[section]:
+                    merged[section][key] = val
+                elif isinstance(val, list) and isinstance(merged[section][key], list):
+                    merged[section][key].extend(val)
+                elif isinstance(val, dict) and isinstance(merged[section][key], dict):
+                    merged[section][key].update(val)
+                else:
+                    merged[section][key] = val
+    return merged
 
 
 def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:

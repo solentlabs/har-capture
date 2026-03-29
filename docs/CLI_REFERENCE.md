@@ -12,9 +12,12 @@ ______________________________________________________________________
 
 Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
 
+`get` is the default command — you can omit it when the first argument is a URL, hostname, or IP address.
+
 ### Basic Usage
 
 ```bash
+har-capture <TARGET>
 har-capture get <TARGET>
 ```
 
@@ -33,38 +36,39 @@ har-capture get <TARGET>
 
 #### Capture Options
 
-- `--wait SECONDS` - Wait time after page load (default: 2)
-- `--timeout SECONDS` - Navigation timeout (default: 30)
 - `--browser {chromium,firefox,webkit}` - Browser engine (default: chromium)
-- `--headless / --no-headless` - Run browser in headless mode (default: headless)
+- `--wait-for-data / --no-wait-for-data` - Wait for async data to load on each page (default: enabled)
+- `--username TEXT` - Username for HTTP Basic Auth
+- `--password TEXT` - Password for HTTP Basic Auth
 
 #### Sanitization Options
 
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
 - `--patterns PATH` - Custom patterns JSON file
-- `--interactive` - Review suspicious values before redacting
+
+Interactive review of flagged values is always enabled after capture.
 
 ### Examples
 
 ```bash
 # Basic capture (outputs: example.com.sanitized.har.gz)
+har-capture https://example.com
+
+# Explicit 'get' subcommand (equivalent)
 har-capture get https://example.com
 
 # Custom output path
-har-capture get https://example.com --output mysite.har
+har-capture 192.168.1.1 --output modem.har
 
 # Keep raw unsanitized file for debugging
-har-capture get https://example.com --keep-raw
-
-# Interactive mode - review suspicious values
-har-capture get https://example.com --interactive
+har-capture https://example.com --keep-raw
 
 # Use consistent salt for correlation across captures
-har-capture get https://example.com --salt my-debug-key
+har-capture https://example.com --salt my-debug-key
 
-# Visible browser with longer wait time
-har-capture get https://example.com --no-headless --wait 5
+# Disable async data wait for faster capture of simple sites
+har-capture https://example.com --no-wait-for-data
 ```
 
 ### Default Workflow
@@ -105,8 +109,9 @@ har-capture sanitize INPUT.har
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
 - `--patterns PATH` - Custom patterns JSON file
-- `--interactive` - Review suspicious values before redacting
 - `--report PATH` - Save sanitization report to JSON file
+
+Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report file instead.
 
 #### Size Limits
 
@@ -120,9 +125,6 @@ har-capture sanitize capture.har
 
 # Custom output with compression
 har-capture sanitize capture.har --output clean.har --compress
-
-# Interactive mode - review suspicious values
-har-capture sanitize capture.har --interactive
 
 # Generate sanitization report
 har-capture sanitize capture.har --report report.json
@@ -143,11 +145,12 @@ har-capture sanitize capture.har --max-size 500
 har-capture sanitize capture.har --compress --compression-level 6
 ```
 
-### Interactive Mode
+### Interactive Review
 
-Interactive mode allows you to review suspicious values that don't match standard patterns but might be sensitive (WiFi SSIDs, device names, custom credentials).
+Interactive review is always enabled. After sanitization, suspicious values that don't match standard patterns (WiFi SSIDs, device names, custom credentials) are presented for review.
 
-**Note:** Using `--interactive` automatically enables heuristic detection (equivalent to `HeuristicMode.FLAG`), which flags suspicious values for your review. Without heuristics enabled, there would be nothing to interactively review.
+- **TTY available**: Interactive table where you select values to redact
+- **No TTY (CI/CD)**: Flagged values written to a JSON report file
 
 See [Interactive Sanitization Guide](INTERACTIVE_SANITIZATION.md) for details.
 
@@ -222,7 +225,7 @@ User captures and sanitizes HAR file for support ticket:
 
 ```bash
 # User runs this
-har-capture get https://myapp.example.com --interactive
+har-capture https://myapp.example.com
 
 # Outputs: myapp.example.com.sanitized.har.gz
 # User attaches to support ticket

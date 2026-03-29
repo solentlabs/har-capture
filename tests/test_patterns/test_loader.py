@@ -14,8 +14,12 @@ from har_capture.patterns.loader import (
     _cache_set,
     clear_pattern_cache,
     compile_pattern,
+    compile_safe_value_patterns,
+    list_domains,
     load_json_file,
     load_pii_patterns,
+    load_sensitive_patterns,
+    resolve_patterns_arg,
 )
 
 
@@ -194,3 +198,127 @@ class TestCompilePattern:
         result = compile_pattern({"regex": "test", "flags": ["IGNORECASE"], "replacement_prefix": "T"})
         assert result is not None
         assert result.flags & __import__("re").IGNORECASE
+
+
+# ── Domain pattern loading ───────────────────────────────────────────────
+
+
+class TestListDomains:
+    """Tests for list_domains."""
+
+    def test_returns_network_device(self) -> None:
+        """Built-in network-device domain is listed."""
+        domains = list_domains()
+        names = [d["name"] for d in domains]
+        assert "network-device" in names
+
+    def test_domain_has_description(self) -> None:
+        """Each domain has a non-empty description."""
+        for d in list_domains():
+            assert d["description"], f"Domain {d['name']} missing description"
+
+    def test_domain_has_path(self) -> None:
+        """Each domain has a valid path."""
+        for d in list_domains():
+            assert Path(d["path"]).exists(), f"Domain {d['name']} path missing"
+
+
+RESOLVE_PATTERNS_CASES = [
+    # (input, should_resolve, description)
+    ("network-device", True, "builtin_name_with_hyphens"),
+    ("network_device", True, "builtin_name_with_underscores"),
+]
+
+
+class TestResolvePatternsArg:
+    """Tests for resolve_patterns_arg."""
+
+    @pytest.mark.parametrize(
+        ("value", "should_resolve", "desc"),
+        RESOLVE_PATTERNS_CASES,
+        ids=[c[2] for c in RESOLVE_PATTERNS_CASES],
+    )
+    def test_resolves_builtin(self, value: str, should_resolve: bool, desc: str) -> None:
+        """Built-in names resolve to existing files."""
+        path = resolve_patterns_arg(value)
+        assert path.exists(), f"{desc}: resolved path should exist"
+
+    def test_resolves_file_path(self, tmp_path: Path) -> None:
+        """File paths resolve directly."""
+        f = tmp_path / "custom.json"
+        f.write_text("{}")
+        path = resolve_patterns_arg(str(f))
+        assert path == f
+
+    def test_unknown_name_raises(self) -> None:
+        """Unknown domain name raises PatternLoadError."""
+        with pytest.raises(PatternLoadError, match="Unknown pattern domain"):
+            resolve_patterns_arg("nonexistent-domain")
+
+    def test_missing_file_raises(self) -> None:
+        """Missing file path raises PatternLoadError."""
+        with pytest.raises(PatternLoadError, match="not found"):
+            resolve_patterns_arg("/tmp/no_such_file.json")  # noqa: S108
+
+
+class TestCompileSafeValuePatterns:
+    """Tests for compile_safe_value_patterns."""
+
+    def test_compiles_from_sensitive_data(self) -> None:
+        """Compiles patterns from the heuristics section of sensitive data."""
+        data = {
+            "heuristics": {
+                "safe_value_patterns": [
+                    {"regex": "^test$"},
+                    {"regex": "^foo$", "flags": ["IGNORECASE"]},
+                ],
+            },
+        }
+        patterns = compile_safe_value_patterns(data)
+        assert len(patterns) == 2
+        assert patterns[0].match("test")
+        assert not patterns[0].match("TEST")
+        assert patterns[1].match("FOO")
+
+    def test_empty_when_no_heuristics(self) -> None:
+        """Returns empty list when no heuristics section."""
+        assert compile_safe_value_patterns({}) == []
+
+    def test_skips_invalid_regex(self) -> None:
+        """Invalid regex patterns are skipped."""
+        data = {
+            "heuristics": {
+                "safe_value_patterns": [
+                    {"regex": "^valid$"},
+                    {"regex": "[invalid("},
+                ],
+            },
+        }
+        patterns = compile_safe_value_patterns(data)
+        assert len(patterns) == 1
+
+
+class TestSensitivePatternsHeuristicsMerge:
+    """Tests for heuristics.safe_value_patterns merging in load_sensitive_patterns."""
+
+    def test_merges_custom_safe_value_patterns(self) -> None:
+        """Custom heuristics.safe_value_patterns are merged into loaded data."""
+        clear_pattern_cache()
+        custom = {
+            "heuristics": {
+                "safe_value_patterns": [
+                    {"regex": "^custom_safe$"},
+                ],
+            },
+        }
+        result = load_sensitive_patterns(custom)
+        heuristics = result.get("heuristics", {})
+        safe_pats = heuristics.get("safe_value_patterns", [])
+        assert any(p.get("regex") == "^custom_safe$" for p in safe_pats)
+
+    def test_no_heuristics_section_ok(self) -> None:
+        """Loading without heuristics section works fine."""
+        clear_pattern_cache()
+        result = load_sensitive_patterns(None)
+        # Should not have heuristics section (not in core sensitive.json)
+        assert isinstance(result, dict)

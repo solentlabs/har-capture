@@ -18,7 +18,7 @@ Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/
 
 ```bash
 pip install har-capture[full]
-python -m har_capture get https://example.com
+python -m har_capture https://example.com
 ```
 
 </details>
@@ -28,7 +28,7 @@ python -m har_capture get https://example.com
 
 ```bash
 pip install har-capture[full]
-har-capture get https://example.com
+har-capture https://example.com
 ```
 
 </details>
@@ -106,14 +106,11 @@ ______________________________________________________________________
 ### Command Line
 
 ```bash
-# Capture and sanitize
-har-capture get https://example.com
+# Capture and sanitize (interactive review always enabled)
+har-capture https://example.com
 
 # Sanitize existing HAR
 har-capture sanitize capture.har
-
-# Interactive mode (review suspicious values)
-har-capture sanitize capture.har --interactive
 
 # Validate for PII leaks
 har-capture validate capture.har

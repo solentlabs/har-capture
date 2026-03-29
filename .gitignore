@@ -101,6 +101,7 @@ Thumbs.db
 *.har.gz
 captures/
 .secrets.baseline
+RAW_DATA/
 
 # Ruff
 .ruff_cache/

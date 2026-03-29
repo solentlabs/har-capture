@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-29
+
+### Added
+
+- **Default command** — `har-capture <URL>` now works without typing `get` (e.g., `har-capture 192.168.1.1`). The `get` subcommand still works as an explicit alias.
+- **Domain-driven pattern extensibility** — heuristic detectors (`CompiledDetector`), safe value patterns, and pipe-delimited variable matching are now data-driven via domain pattern files loaded with `--patterns`. See [Pattern Spec](docs/specs/PATTERN_SPEC.md).
+- **Wait-for-data SPA capture** — JavaScript init script monkey-patches `XMLHttpRequest.send` and `window.fetch` to track in-flight requests. Polls for 2 seconds of network quiescence (vs Playwright's 500ms `networkidle`). `framenavigated` listener ensures async data completes before page transitions.
+- **Test fixture extraction** — large test data moved from inline to `tests/fixtures/*.json`
+
+### Changed
+
+- **BREAKING**: Interactive review is now always enabled and cannot be disabled. The `--no-interactive` flag has been removed from both `get` and `sanitize` commands. In non-TTY environments (CI/CD), flagged values are written to a `.review.json` report file instead.
+- **BREAKING**: `capture_device_har()` and `run_capture_phase()` now default to `interactive=True` (was `False`). API consumers can still pass `interactive=False` explicitly.
+- Documentation suite rewritten — architecture doc, 4 specs, use cases, CLI reference all verified against implementation (76 findings resolved)
+
+### Fixed
+
+- 12 HIGH-severity documentation accuracy issues: wrong function signatures, wrong phase ordering, fabricated CLI flags (`--timeout`, `--headless`), fabricated pre-commit hook, wrong scanner pass numbering, unimplemented features documented as real (`_extends`, `html` domain section)
+
 ## [0.4.5] - 2026-03-09
 
 ### Fixed
@@ -416,4 +435,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.3]: https://github.com/solentlabs/har-capture/compare/v0.4.2...v0.4.3
 [0.4.4]: https://github.com/solentlabs/har-capture/compare/v0.4.3...v0.4.4
 [0.4.5]: https://github.com/solentlabs/har-capture/compare/v0.4.4...v0.4.5
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.4.5...HEAD
+[0.5.0]: https://github.com/solentlabs/har-capture/compare/v0.4.5...v0.5.0
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.5.0...HEAD

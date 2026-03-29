@@ -543,6 +543,8 @@ class TestRunCapturePhase:
             timeout=30,
             interactive=True,
             probes=None,
+            custom_patterns=None,
+            wait_for_data=True,
         )
 
     @patch("har_capture.capture.browser.capture_device_har")
@@ -803,3 +805,4 @@ class TestRunCaptureWorkflow:
         assert call_kwargs["include_media"] is True
         assert call_kwargs["headless"] is True
         assert call_kwargs["timeout"] == 60
+        assert call_kwargs["wait_for_data"] is True

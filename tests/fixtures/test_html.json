@@ -1,0 +1,106 @@
+{
+  "sanitize_pii_cases": [
+    {"input_html": "Device MAC: AA:BB:CC:DD:EE:FF",           "removed": "AA:BB:CC:DD:EE:FF",     "placeholder": "XX:XX:XX:XX:XX:XX",  "id": "mac_colon_format"},
+    {"input_html": "Device MAC: 11-22-33-44-55-66",           "removed": "11-22-33-44-55-66",     "placeholder": "XX:XX:XX:XX:XX:XX",  "id": "mac_dash_format"},
+    {"input_html": "MAC: aa:bb:cc:dd:ee:ff",                  "removed": "aa:bb:cc:dd:ee:ff",     "placeholder": "XX:XX:XX:XX:XX:XX",  "id": "mac_lowercase"},
+    {"input_html": "Multiple: AA:BB:CC:DD:EE:FF and 11:22:33:44:55:66", "removed": "AA:BB:CC:DD:EE:FF", "placeholder": "XX:XX:XX:XX:XX:XX", "id": "mac_multiple"},
+    {"input_html": "Serial Number: ABC12345678",              "removed": "ABC12345678",           "placeholder": "***SERIAL***",       "id": "serial_number"},
+    {"input_html": "SerialNum: XYZ98765432",                  "removed": "XYZ98765432",           "placeholder": "***SERIAL***",       "id": "serial_num_variant"},
+    {"input_html": "SN: DEV123456789",                         "removed": "DEV123456789",          "placeholder": "***SERIAL***",       "id": "serial_sn_prefix"},
+    {"input_html": "Client: 192.168.100.50",                  "removed": "192.168.100.50",        "placeholder": "0.0.0.0",            "id": "private_ip_192"},
+    {"input_html": "Device: 10.0.0.100",                      "removed": "10.0.0.100",            "placeholder": "0.0.0.0",            "id": "private_ip_10"},
+    {"input_html": "Host: 172.16.0.50",                       "removed": "172.16.0.50",           "placeholder": "0.0.0.0",            "id": "private_ip_172"},
+    {"input_html": "External DNS: 8.8.8.8",                   "removed": "8.8.8.8",               "placeholder": "0.0.0.0",            "id": "public_ip_google"},
+    {"input_html": "Server: 1.1.1.1",                         "removed": "1.1.1.1",               "placeholder": "0.0.0.0",            "id": "public_ip_cloudflare"},
+    {"input_html": "API: 203.0.113.50",                       "removed": "203.0.113.50",          "placeholder": "0.0.0.0",            "id": "public_ip_test_net"},
+    {"input_html": "IPv6: 2001:db8::1",                       "removed": "2001:db8::1",           "placeholder": "::",                 "id": "ipv6_compressed"},
+    {"input_html": "IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "removed": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "placeholder": "::", "id": "ipv6_full"},
+    {"input_html": "Localhost: ::1",                          "removed": "::1",                   "placeholder": "::",                 "id": "ipv6_localhost"},
+    {"input_html": "password=secret123",                      "removed": "secret123",             "placeholder": "***PASS***",         "id": "password_equals"},
+    {"input_html": "passphrase: mysecretphrase",              "removed": "mysecretphrase",        "placeholder": "***PASS***",         "id": "passphrase"},
+    {"input_html": "psk=wireless_key_here",                   "removed": "wireless_key_here",     "placeholder": "***PASS***",         "id": "psk_wireless"},
+    {"input_html": "Contact: admin@example.com",              "removed": "admin@example.com",     "placeholder": "x@x.invalid",        "id": "email_simple"},
+    {"input_html": "Email: user.name+tag@domain.co.uk",       "removed": "user.name+tag@domain.co.uk", "placeholder": "x@x.invalid",   "id": "email_complex"},
+    {"input_html": "Config File Name: customer123.cfg",       "removed": "customer123.cfg",       "placeholder": "***CONFIG***",       "id": "config_path"},
+    {"input_html": "config file: isp_settings.cfg",           "removed": "isp_settings.cfg",      "placeholder": "***CONFIG***",       "id": "config_lowercase"}
+  ],
+
+  "preserve_cases": [
+    {"input_html": "Gateway: 192.168.100.1",                  "preserved": "192.168.100.1",         "id": "gateway_192_168_100_1"},
+    {"input_html": "Router: 192.168.1.1",                     "preserved": "192.168.1.1",           "id": "gateway_192_168_1_1"},
+    {"input_html": "Gateway: 192.168.0.1",                    "preserved": "192.168.0.1",           "id": "gateway_192_168_0_1"},
+    {"input_html": "Uptime: 12:34:56",                        "preserved": "12:34:56",              "id": "time_format_hhmmss"},
+    {"input_html": "Duration: 01:23:45",                      "preserved": "01:23:45",              "id": "time_format_short"},
+    {"input_html": "Time: 00:00:00",                          "preserved": "00:00:00",              "id": "time_format_midnight"},
+    {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "7.5 dBmV",              "id": "signal_dbmv"},
+    {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "38.2 dB",               "id": "signal_db"},
+    {"input_html": "Frequency: 602.0 MHz",                    "preserved": "602.0 MHz",             "id": "frequency_mhz"},
+    {"input_html": "var tagValueList = 'Locked|OK|Operational|QAM256';", "preserved": "Locked",     "id": "status_locked"},
+    {"input_html": "var tagValueList = 'Locked|OK|Operational|QAM256';", "preserved": "OK",         "id": "status_ok"},
+    {"input_html": "var tagValueList = 'Locked|OK|Operational|QAM256';", "preserved": "QAM256",     "id": "status_qam"},
+    {"input_html": "var tagValueList = '0|Good||happymango167|test';", "preserved": "happymango167", "id": "wifi_credential_flagged"},
+    {"input_html": "var tagValueList = 'status|MySecretWiFi123|data';", "preserved": "MySecretWiFi123", "id": "wifi_ssid_flagged"},
+    {"input_html": "Channel: 123",                            "preserved": "123",                   "id": "numeric_channel"},
+    {"input_html": "Version: 1.0.0",                          "preserved": "1.0.0",                 "id": "version_string"}
+  ],
+
+  "pii_detection_cases": [
+    {"content": "Device MAC: DE:AD:BE:EF:CA:FE",           "pattern_name": "mac_address",   "match": "DE:AD:BE:EF:CA:FE",  "id": "mac_detect"},
+    {"content": "MAC: 11-22-33-44-55-66",                  "pattern_name": "mac_address",   "match": "11-22-33-44-55-66",  "id": "mac_dash_detect"},
+    {"content": "Contact: admin@example.com",              "pattern_name": "email",         "match": "admin@example.com",  "id": "email_detect"},
+    {"content": "DNS: 8.8.8.8",                            "pattern_name": "public_ip",     "match": "8.8.8.8",            "id": "public_ip_detect"}
+  ],
+
+  "allowlisted_cases": [
+    {"content": "MAC: XX:XX:XX:XX:XX:XX",                  "id": "placeholder_mac"},
+    {"content": "IP: 0.0.0.0",                             "id": "placeholder_ip_zero"},
+    {"content": "IPv6: ::",                                "id": "placeholder_ipv6_empty"},
+    {"content": "Email: x@x.invalid",                      "id": "placeholder_email"},
+    {"content": "Value: [REDACTED]",                       "id": "placeholder_redacted"},
+    {"content": "Power: 7.5 dBmV",                         "id": "signal_metric"},
+    {"content": "Status: OK",                              "id": "status_value"}
+  ],
+
+  "serial_table_cases": [
+    {"html": "<td><strong>Serial Number</strong></td>\n<td>17V541334700308</td>", "serial_value": "17V541334700308", "id": "serial_in_adjacent_td"},
+    {"html": "<td>Serial Number</td><td>ABC12345678</td>",                       "serial_value": "ABC12345678",     "id": "serial_in_plain_td"},
+    {"html": "<td><strong>SN</strong></td>\n<td>ARRIS-99887766</td>",            "serial_value": "ARRIS-99887766",  "id": "sn_label_in_td"},
+    {"html": "<td>Model</td><td>SB8200</td>",                                    "serial_value": null,              "id": "non_serial_table_cell"}
+  ],
+
+  "setitem_cases": [
+    {"input_html": "localStorage.setItem(\"PrivateKey\", \"HMAC_replicant_c1982\")",       "should_not_contain": "HMAC_replicant_c1982",    "should_contain": "STORAGE_",  "id": "setitem_privatekey"},
+    {"input_html": "sessionStorage.setItem(\"csrf_token\", \"xsrf_wopr_play\")",          "should_not_contain": "xsrf_wopr_play",          "should_contain": "STORAGE_",  "id": "setitem_csrf_token"},
+    {"input_html": "sessionStorage.setItem(\"secret\", \"aes256_pyramid_key\")",           "should_not_contain": "aes256_pyramid_key",      "should_contain": "STORAGE_",  "id": "setitem_secret"},
+    {"input_html": "localStorage.setItem(\"api_key\", \"sk_live_moreLightFather\")",      "should_not_contain": "sk_live_moreLightFather",  "should_contain": "STORAGE_", "id": "setitem_api_key"},
+    {"input_html": "sessionStorage.setItem(\"auth_token\", \"tok_nexus6_2019\")",         "should_not_contain": "tok_nexus6_2019",         "should_contain": "STORAGE_",  "id": "setitem_auth_token"},
+    {"input_html": "localStorage.setItem(\"password\", \"Th3r3IsN0Sp00n!\")",             "should_not_contain": "Th3r3IsN0Sp00n!",         "should_contain": "STORAGE_",  "id": "setitem_password"},
+    {"input_html": "localStorage.setItem('token', 'secret_session_abc')",             "should_not_contain": "secret_session_abc",      "should_contain": "STORAGE_",  "id": "setitem_single_quotes"},
+    {"input_html": "localStorage.setItem(\"theme\", \"dark\")",                            "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_value"},
+    {"input_html": "sessionStorage.setItem(\"lang\", \"en\")",                             "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_lang"}
+  ],
+
+  "pipe_serial_cases": [
+    {"input_html": "var tagValueList = 'enabled|SN-N6MAA10816|WPA3';",  "should_not_contain": "SN-N6MAA10816",  "should_contain": "SERIAL_",  "id": "pipe_serial_sn_dash"},
+    {"input_html": "var tagValueList = 'active|S/N-ABC123456|locked';",  "should_not_contain": "S/N-ABC123456",  "should_contain": "SERIAL_",  "id": "pipe_serial_s_n_prefix"},
+    {"input_html": "var tagValueList = 'ok|SN_XYZW5678Q|enabled';",      "should_not_contain": "SN_XYZW5678Q",   "should_contain": "SERIAL_",  "id": "pipe_serial_underscore"},
+    {"input_html": "var tagValueList = 'ok|sn-abcdefgh|enabled';",       "should_not_contain": "sn-abcdefgh",    "should_contain": "SERIAL_",  "id": "pipe_serial_lowercase"},
+    {"input_html": "var tagValueList = 'ok|S-N-WXYZ98765|good';",          "should_not_contain": "S-N-WXYZ98765",  "should_contain": "SERIAL_",  "id": "pipe_serial_s_dash_n"},
+    {"input_html": "var tagValueList = 'SNMP|enabled|good';",             "should_not_contain": null,             "should_contain": null,       "id": "pipe_not_serial_snmp"},
+    {"input_html": "var tagValueList = 'SN-AB|ok';",                      "should_not_contain": null,             "should_contain": null,       "id": "pipe_serial_too_short"}
+  ],
+
+  "expected_patterns": [
+    "mac_address",
+    "email",
+    "public_ip"
+  ],
+
+  "expected_allowlist": [
+    "XX:XX:XX:XX:XX:XX",
+    "0.0.0.0",
+    "::",
+    "x@x.invalid",
+    "[REDACTED]"
+  ]
+}

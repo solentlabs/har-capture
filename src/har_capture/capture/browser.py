@@ -49,6 +49,109 @@ _MISSING_BROWSER_PATTERNS = (
     "executable does not exist",
 )
 
+# ---------------------------------------------------------------------------
+# Wait-for-data: ensure async JS data fetches complete before navigation
+# ---------------------------------------------------------------------------
+
+# Seconds of network silence required before considering data loaded
+_DATA_WAIT_QUIESCENCE_S = 2.0
+# Maximum seconds to wait for data per page
+_DATA_WAIT_TIMEOUT_S = 30.0
+# Maximum seconds to wait for pending requests in the navigation route handler
+_DATA_WAIT_NAV_TIMEOUT_S = 15.0
+# Poll interval in milliseconds (used with page.wait_for_timeout)
+_DATA_WAIT_POLL_MS = 200
+
+# Injected into every page when wait_for_data is enabled.
+# Monkey-patches XMLHttpRequest.send and fetch() to track in-flight requests.
+# Exposes window.__harCapturePendingRequests for Playwright to query.
+_WAIT_FOR_DATA_INIT_SCRIPT = """\
+(function () {
+  var __hcPending = 0;
+  var _xhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function () {
+    __hcPending++;
+    this.addEventListener("loadend", function () {
+      __hcPending = Math.max(0, __hcPending - 1);
+    });
+    return _xhrSend.apply(this, arguments);
+  };
+  if (window.fetch) {
+    var _fetch = window.fetch;
+    window.fetch = function () {
+      __hcPending++;
+      return _fetch.apply(this, arguments)["finally"](function () {
+        __hcPending = Math.max(0, __hcPending - 1);
+      });
+    };
+  }
+  Object.defineProperty(window, "__harCapturePendingRequests", {
+    get: function () { return __hcPending; },
+    configurable: true
+  });
+})();
+"""
+
+
+def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_S) -> None:
+    """Wait until in-flight JS requests (XHR/fetch) reach zero.
+
+    Used inside the navigation route handler to delay page transitions
+    until the current page's async data fetches have completed.
+
+    Args:
+        page: Playwright Page object (must have the init script injected).
+        timeout_s: Maximum seconds to wait.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout_s:
+        try:
+            pending = page.evaluate("window.__harCapturePendingRequests || 0")
+        except Exception:
+            return  # Page closed or JS context gone
+        if pending <= 0:
+            return
+        page.wait_for_timeout(_DATA_WAIT_POLL_MS)
+    _LOGGER.debug("Pending-data wait timed out after %.1fs", timeout_s)
+
+
+def _wait_for_network_quiescence(
+    page: Any,
+    quiescence_s: float = _DATA_WAIT_QUIESCENCE_S,
+    timeout_s: float = _DATA_WAIT_TIMEOUT_S,
+) -> None:
+    """Wait until no JS-initiated network requests for *quiescence_s* seconds.
+
+    Polls ``window.__harCapturePendingRequests`` (set by the init script).
+    More robust than Playwright's built-in ``networkidle`` which only requires
+    500 ms of silence — too short for SPAs that fire XHR after a brief JS
+    initialisation delay.
+
+    Args:
+        page: Playwright Page object (must have the init script injected).
+        quiescence_s: Seconds of zero in-flight requests before returning.
+        timeout_s: Maximum seconds to wait overall.
+    """
+    start = time.monotonic()
+    last_active = start
+
+    while time.monotonic() - start < timeout_s:
+        try:
+            pending = page.evaluate("window.__harCapturePendingRequests || 0")
+        except Exception:
+            return  # Page closed or JS context gone
+
+        now = time.monotonic()
+        if pending > 0:
+            last_active = now
+        elif now - last_active >= quiescence_s:
+            _LOGGER.debug("Network quiescent for %.1fs — proceeding", quiescence_s)
+            return
+
+        page.wait_for_timeout(_DATA_WAIT_POLL_MS)
+
+    _LOGGER.debug("Network quiescence timed out after %.1fs", timeout_s)
+
 
 def _sanitize_error_message(error: str, credentials: dict[str, str] | None) -> str:
     """Remove credentials from error messages to prevent leakage.
@@ -231,8 +334,10 @@ def capture_device_har(
     include_media: bool = False,
     headless: bool = False,
     timeout: int | None = None,
-    interactive: bool = False,
+    interactive: bool = True,
     probes: dict[str, Any] | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
+    wait_for_data: bool = True,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -255,6 +360,12 @@ def capture_device_har(
         timeout: Seconds to wait before closing browser (None = wait for user to close)
         interactive: If True, flag suspicious values for interactive review
         probes: Pre-capture diagnostic probe results to include in output
+        custom_patterns: Domain pattern name, file path, or pre-loaded dict
+            for domain-specific sanitization rules.
+        wait_for_data: If True, wait for async data fetches (XHR/fetch) to
+            complete before navigating away from each page.  Prevents losing
+            SPA data (e.g. HNAP/SOAP responses) that loads after the initial
+            HTML/JS.  Default True; pass False for legacy fast-navigation.
 
     Returns:
         CaptureResult with paths to generated files
@@ -309,6 +420,9 @@ def capture_device_har(
     if output_path.suffix != ".har":
         output_path = output_path.with_suffix(".har")
 
+    # Create parent directories if they don't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Parse target to extract hostname (handles URLs like "https://example.com")
     host, _ = _parse_target(ip)
 
@@ -362,12 +476,46 @@ def capture_device_har(
 
             context = browser_instance.new_context(**context_options)
 
-            # Enable route interception to disable HTTP cache
+            # Create page and configure routing
+            page = context.new_page()
+
+            if wait_for_data:
+                # Inject JS that monkey-patches XHR/fetch to track in-flight
+                # requests.  Runs before any page script on every navigation.
+                page.add_init_script(_WAIT_FOR_DATA_INIT_SCRIPT)
+
+                # Track first navigation so we skip the wait (the initial
+                # goto has its own explicit quiescence wait below).
+                _is_first_nav = [True]
+
+                def _on_frame_navigated(frame: Any) -> None:
+                    """Wait for async data to load after each page navigation.
+
+                    Called via page event, NOT from a route handler — calling
+                    page.evaluate() from a sync route handler deadlocks
+                    Playwright's dispatch loop.
+                    """
+                    if frame != page.main_frame:
+                        return
+                    if _is_first_nav[0]:
+                        _is_first_nav[0] = False
+                        return  # Initial goto — handled by explicit wait below
+                    try:
+                        page.wait_for_load_state("domcontentloaded")
+                        _wait_for_network_quiescence(page)
+                    except Exception:  # noqa: S110
+                        pass  # Page closed or context gone
+
+                page.on("framenavigated", _on_frame_navigated)
+
+            # Route handler for cache control (disable HTTP cache)
             context.route("**/*", lambda route: route.continue_())
 
-            # Create page and navigate to device
-            page = context.new_page()
             page.goto(target_url, wait_until="networkidle")
+
+            # Wait for async data fetches that fire after initial JS loads
+            if wait_for_data:
+                _wait_for_network_quiescence(page)
 
             # Capture browser cookie state after page load
             # Includes JS-set cookies (e.g. XSRF_TOKEN) with full properties
@@ -396,8 +544,15 @@ def capture_device_har(
                 web_storage_session = {}
 
             if timeout is not None:
-                # Automated mode: wait for timeout then close
-                time.sleep(timeout)
+                if wait_for_data:
+                    # Use Playwright's wait to keep the event loop (and
+                    # framenavigated listeners) active during the wait period.
+                    page.wait_for_timeout(timeout * 1000)
+                    # Final quiescence wait for the last page's data
+                    _wait_for_network_quiescence(page, timeout_s=10.0)
+                else:
+                    # Legacy: simple sleep
+                    time.sleep(timeout)
             else:
                 # Interactive mode: wait for user to close browser
                 _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
@@ -529,6 +684,7 @@ def capture_device_har(
                 str(temp_path),
                 str(sanitized_output),
                 heuristics=HeuristicMode.FLAG if interactive else HeuristicMode.DISABLED,
+                custom_patterns=custom_patterns,
             )
             result.sanitized_path = sanitized_output
             result.sanitization_report = sanitization_report
@@ -540,10 +696,13 @@ def capture_device_har(
     # - sanitize is False (user wants the raw file as output)
     if keep_raw or not sanitize:
         try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(temp_path, output_path)
             result.har_path = output_path
         except Exception as e:
-            _LOGGER.warning("Failed to copy raw HAR: %s", e)
+            result.success = False
+            result.error = f"Failed to save HAR file: {e}"
+            _LOGGER.error("Failed to copy raw HAR to %s: %s", output_path, e)
 
     # Always clean up temp file (raw PII should not persist)
     _cleanup_temp()
