@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-30
+
+### Fixed
+
+- **POST request deduplication** — `filter_and_compress_har()` used `(method, url)` as the dedup key, silently dropping POST requests to the same URL with different bodies. Devices that use a single POST endpoint differentiated only by body parameters (e.g., `param=1` vs `param=2`) lost all but the first request. The dedup key for POST/PUT/PATCH now includes a SHA-256 hash of the request body, preserving distinct requests while still deduplicating identical retries.
+
 ## [0.5.0] - 2026-03-29
 
 ### Added
@@ -436,4 +442,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.4]: https://github.com/solentlabs/har-capture/compare/v0.4.3...v0.4.4
 [0.4.5]: https://github.com/solentlabs/har-capture/compare/v0.4.4...v0.4.5
 [0.5.0]: https://github.com/solentlabs/har-capture/compare/v0.4.5...v0.5.0
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.5.0...HEAD
+[0.5.1]: https://github.com/solentlabs/har-capture/compare/v0.5.0...v0.5.1
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.5.1...HEAD
