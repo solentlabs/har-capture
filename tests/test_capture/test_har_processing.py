@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 from pathlib import Path
@@ -15,6 +16,21 @@ from har_capture.capture.browser import (
 )
 
 # =============================================================================
+# Fixture data
+# =============================================================================
+
+FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "test_har_processing.json"
+FIXTURES = json.loads(FIXTURES_PATH.read_text())
+
+
+def _write_har(tmp_path: Path, key: str, filename: str) -> Path:
+    """Write a fixture HAR to a temp file and return the path."""
+    har_file = tmp_path / filename
+    har_file.write_text(json.dumps(copy.deepcopy(FIXTURES[key])))
+    return har_file
+
+
+# =============================================================================
 # Test Fixtures
 # =============================================================================
 
@@ -22,116 +38,19 @@ from har_capture.capture.browser import (
 @pytest.fixture
 def basic_har(tmp_path: Path) -> Path:
     """Create a basic HAR file for testing."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "GET",
-                        "url": "http://example.com/page",
-                        "headers": [],
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": [],
-                        "content": {"text": "Hello", "mimeType": "text/html"},
-                    },
-                },
-            ],
-        }
-    }
-    har_file = tmp_path / "test.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    return _write_har(tmp_path, "basic_har", "test.har")
 
 
 @pytest.fixture
 def har_with_bloat(tmp_path: Path) -> Path:
     """Create a HAR file with bloat entries (fonts, images, etc.)."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                # Main page
-                {
-                    "request": {"method": "GET", "url": "http://example.com/", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # Font (bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/font.woff2", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # Image (bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/logo.png", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # CSS (not bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/style.css", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # JS (not bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/app.js", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # Sourcemap (bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/app.js.map", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # Media (bloat)
-                {
-                    "request": {"method": "GET", "url": "http://example.com/video.mp4", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-            ],
-        }
-    }
-    har_file = tmp_path / "bloat.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    return _write_har(tmp_path, "har_with_bloat", "bloat.har")
 
 
 @pytest.fixture
 def har_with_duplicates(tmp_path: Path) -> Path:
     """Create a HAR file with duplicate requests."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                # First request
-                {
-                    "request": {"method": "GET", "url": "http://example.com/api", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # Duplicate GET
-                {
-                    "request": {"method": "GET", "url": "http://example.com/api", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-                # POST to same URL (not a duplicate - different method)
-                {
-                    "request": {"method": "POST", "url": "http://example.com/api", "headers": []},
-                    "response": {"status": 201, "headers": [], "content": {}},
-                },
-                # Another duplicate GET
-                {
-                    "request": {"method": "GET", "url": "http://example.com/api", "headers": []},
-                    "response": {"status": 200, "headers": [], "content": {}},
-                },
-            ],
-        }
-    }
-    har_file = tmp_path / "duplicates.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    return _write_har(tmp_path, "har_with_duplicates", "duplicates.har")
 
 
 # =============================================================================
@@ -317,28 +236,33 @@ class TestFilterAndCompressHar:
         assert "GET" in methods
         assert "POST" in methods
 
+    def test_post_different_bodies_preserved(self, tmp_path: Path) -> None:
+        """Test POSTs to the same URL with different bodies are kept."""
+        har_file = _write_har(tmp_path, "post_different_bodies", "post_bodies.har")
+
+        compressed_path, stats = filter_and_compress_har(har_file)
+
+        assert stats["original_entries"] == 3
+        assert stats["filtered_entries"] == 3
+
+        with gzip.open(compressed_path, "rt") as f:
+            har = json.load(f)
+
+        bodies = [e["request"]["postData"]["text"] for e in har["log"]["entries"]]
+        assert bodies == ["action=1", "action=2", "action=3"]
+
+    def test_post_identical_bodies_deduped(self, tmp_path: Path) -> None:
+        """Test POSTs to the same URL with identical bodies are deduped."""
+        har_file = _write_har(tmp_path, "post_identical_bodies", "post_retry.har")
+
+        _compressed_path, stats = filter_and_compress_har(har_file)
+
+        assert stats["original_entries"] == 2
+        assert stats["filtered_entries"] == 1
+
     def test_compressed_size_smaller_for_large_file(self, tmp_path: Path) -> None:
         """Test compressed size is smaller than original for sufficiently large files."""
-        # Create a larger HAR file where compression is effective
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {"method": "GET", "url": f"http://example.com/page{i}", "headers": []},
-                        "response": {
-                            "status": 200,
-                            "headers": [],
-                            "content": {"text": "x" * 1000, "mimeType": "text/html"},
-                        },
-                    }
-                    for i in range(20)
-                ],
-            }
-        }
-        har_file = tmp_path / "large.har"
-        har_file.write_text(json.dumps(har_data))
+        har_file = _write_har(tmp_path, "large_har", "large.har")
 
         _compressed_path, stats = filter_and_compress_har(har_file)
 
@@ -346,24 +270,7 @@ class TestFilterAndCompressHar:
 
     def test_url_query_params_ignored_for_bloat_check(self, tmp_path: Path) -> None:
         """Test query params don't affect bloat extension detection."""
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {
-                            "method": "GET",
-                            "url": "http://example.com/image.png?v=123",
-                            "headers": [],
-                        },
-                        "response": {"status": 200, "headers": [], "content": {}},
-                    },
-                ],
-            }
-        }
-        har_file = tmp_path / "query.har"
-        har_file.write_text(json.dumps(har_data))
+        har_file = _write_har(tmp_path, "query_params_bloat", "query.har")
 
         _compressed_path, stats = filter_and_compress_har(har_file)
 
@@ -372,24 +279,7 @@ class TestFilterAndCompressHar:
 
     def test_case_insensitive_extension_check(self, tmp_path: Path) -> None:
         """Test bloat extension check is case-insensitive."""
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {"method": "GET", "url": "http://example.com/IMAGE.PNG", "headers": []},
-                        "response": {"status": 200, "headers": [], "content": {}},
-                    },
-                    {
-                        "request": {"method": "GET", "url": "http://example.com/Font.WOFF2", "headers": []},
-                        "response": {"status": 200, "headers": [], "content": {}},
-                    },
-                ],
-            }
-        }
-        har_file = tmp_path / "uppercase.har"
-        har_file.write_text(json.dumps(har_data))
+        har_file = _write_har(tmp_path, "uppercase_extensions", "uppercase.har")
 
         _compressed_path, stats = filter_and_compress_har(har_file)
 
@@ -405,25 +295,7 @@ class TestFilterAndCompressHar:
 
     def test_probes_preserved_through_filter_compress(self, tmp_path: Path) -> None:
         """Test _probes key in HAR survives filter+compress round-trip."""
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "_probes": {
-                    "ran_at": "2026-02-28T00:00:00+00:00",
-                    "target_url": "http://192.168.1.1/",
-                    "auth_challenge": {"status_code": 401},
-                },
-                "entries": [
-                    {
-                        "request": {"method": "GET", "url": "http://example.com/page", "headers": []},
-                        "response": {"status": 200, "headers": [], "content": {"text": "OK"}},
-                    },
-                ],
-            }
-        }
-        har_file = tmp_path / "probes.har"
-        har_file.write_text(json.dumps(har_data))
+        har_file = _write_har(tmp_path, "har_with_probes", "probes.har")
 
         compressed_path, _stats = filter_and_compress_har(har_file)
 
