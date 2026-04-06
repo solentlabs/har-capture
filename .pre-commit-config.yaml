@@ -53,6 +53,7 @@ repos:
       - id: mypy
         additional_dependencies:
           - typer>=0.12
+          - playwright>=1.40
         args: [--strict, --ignore-missing-imports]
         pass_filenames: false
         entry: mypy src/
