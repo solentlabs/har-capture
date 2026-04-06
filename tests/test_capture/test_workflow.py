@@ -35,9 +35,11 @@ from har_capture.capture.workflow import (
     CaptureWorkflowResult,
     ConnectivityResult,
     ProbeResult,
+    SessionCheckResult,
     check_auth_phase,
     check_browser_phase,
     check_connectivity_phase,
+    check_session_phase,
     run_capture_phase,
     run_capture_workflow,
     run_probes_phase,
@@ -128,6 +130,22 @@ class TestCaptureResult:
         assert result.stats == {"entries": 10}
 
 
+class TestSessionCheckResult:
+    """Tests for SessionCheckResult dataclass."""
+
+    def test_default_values(self) -> None:
+        """Test default values."""
+        result = SessionCheckResult()
+        assert result.contaminated is False
+        assert result.message is None
+
+    def test_contaminated(self) -> None:
+        """Test contaminated result."""
+        result = SessionCheckResult(contaminated=True, message="live session detected")
+        assert result.contaminated is True
+        assert result.message == "live session detected"
+
+
 class TestProbeResult:
     """Tests for ProbeResult dataclass."""
 
@@ -172,6 +190,8 @@ class TestCaptureWorkflowResult:
         assert result.connectivity_error is None
         assert result.target_url == ""
         assert result.scheme == "http"
+        assert result.session_contaminated is False
+        assert result.session_message is None
         assert result.probe_data == {}
         assert result.requires_basic_auth is False
         assert result.auth_realm is None
@@ -323,6 +343,65 @@ class TestCheckConnectivityPhase:
 
         assert result is not None
         assert result.phase == "connectivity_check"
+
+
+# =============================================================================
+# Test check_session_phase
+# =============================================================================
+
+
+class TestCheckSessionPhase:
+    """Tests for check_session_phase function."""
+
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    def test_clean_session(self, mock_check: MagicMock) -> None:
+        """Test when no session contamination detected."""
+        mock_check.return_value = (False, None)
+
+        result = check_session_phase("http://192.168.100.1/")
+
+        assert result.phase == "session_check"
+        assert result.session is not None
+        assert result.session.contaminated is False
+        assert result.session.message is None
+
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    def test_contaminated_session(self, mock_check: MagicMock) -> None:
+        """Test when session contamination is detected."""
+        mock_check.return_value = (True, "Browser has a live session")
+
+        result = check_session_phase("http://192.168.100.1/")
+
+        assert result.phase == "session_check"
+        assert result.session is not None
+        assert result.session.contaminated is True
+        assert result.session.message == "Browser has a live session"
+
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    def test_updates_existing_result(self, mock_check: MagicMock) -> None:
+        """Test existing result is updated."""
+        mock_check.return_value = (False, None)
+
+        existing = CaptureWorkflowResult(
+            browser=BrowserCheckResult(browser="firefox", needs_install=False),
+            connectivity=ConnectivityResult(ok=True, target_url="http://test/"),
+        )
+        result = check_session_phase("http://test/", existing)
+
+        assert result.browser.browser == "firefox"
+        assert result.connectivity is not None
+        assert result.session is not None
+        assert result.session.contaminated is False
+
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    def test_creates_new_result_if_none(self, mock_check: MagicMock) -> None:
+        """Test new result is created if None passed."""
+        mock_check.return_value = (False, None)
+
+        result = check_session_phase("http://test/", None)
+
+        assert result.phase == "session_check"
+        assert result.session is not None
 
 
 # =============================================================================
@@ -545,6 +624,8 @@ class TestRunCapturePhase:
             probes=None,
             custom_patterns=None,
             wait_for_data=True,
+            target_url=None,
+            page_load_strategy="networkidle",
         )
 
     @patch("har_capture.capture.browser.capture_device_har")
@@ -588,6 +669,7 @@ class TestRunCaptureWorkflow:
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
     @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -596,6 +678,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_session: MagicMock,
         mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
@@ -606,6 +689,7 @@ class TestRunCaptureWorkflow:
         mock_browser.return_value = True
         mock_parse.return_value = ("192.168.1.1", None)
         mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
         mock_auth.return_value = (False, None)
 
         mock_result = MagicMock()
@@ -650,6 +734,7 @@ class TestRunCaptureWorkflow:
 
     @patch("har_capture.capture.connectivity.check_basic_auth")
     @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -658,6 +743,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_session: MagicMock,
         mock_probes: MagicMock,
         mock_auth: MagicMock,
     ) -> None:
@@ -665,6 +751,7 @@ class TestRunCaptureWorkflow:
         mock_browser.return_value = True
         mock_parse.return_value = ("192.168.1.1", None)
         mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
         mock_auth.return_value = (True, "Router Admin")
 
         result = run_capture_workflow("192.168.1.1")
@@ -674,9 +761,34 @@ class TestRunCaptureWorkflow:
         assert result.auth_realm == "Router Admin"
         assert result.capture_success is False
 
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_stops_if_session_contaminated(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+    ) -> None:
+        """Test workflow stops if session contamination detected."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.100.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (True, "Browser has a live session")
+
+        result = run_capture_workflow("192.168.100.1")
+
+        assert result.phase == "session_check"
+        assert result.session_contaminated is True
+        assert result.session_message == "Browser has a live session"
+        assert result.capture_success is False
+
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
     @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -685,6 +797,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_session: MagicMock,
         mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
@@ -693,6 +806,7 @@ class TestRunCaptureWorkflow:
         mock_browser.return_value = True
         mock_parse.return_value = ("192.168.1.1", None)
         mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
         mock_auth.return_value = (True, "Router Admin")
 
         mock_result = MagicMock()
@@ -715,6 +829,7 @@ class TestRunCaptureWorkflow:
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
     @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -723,6 +838,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_session: MagicMock,
         mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
@@ -730,6 +846,7 @@ class TestRunCaptureWorkflow:
         """Test skip_browser_check option."""
         mock_parse.return_value = ("192.168.1.1", None)
         mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
         mock_auth.return_value = (False, None)
 
         mock_result = MagicMock()
@@ -749,6 +866,7 @@ class TestRunCaptureWorkflow:
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")
     @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
@@ -757,6 +875,7 @@ class TestRunCaptureWorkflow:
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
+        mock_session: MagicMock,
         mock_probes: MagicMock,
         mock_auth: MagicMock,
         mock_capture: MagicMock,
@@ -766,6 +885,7 @@ class TestRunCaptureWorkflow:
         mock_browser.return_value = True
         mock_parse.return_value = ("192.168.1.1", None)
         mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
         mock_auth.return_value = (False, None)
 
         mock_result = MagicMock()
@@ -806,3 +926,184 @@ class TestRunCaptureWorkflow:
         assert call_kwargs["headless"] is True
         assert call_kwargs["timeout"] == 60
         assert call_kwargs["wait_for_data"] is True
+
+
+class TestRunCaptureWorkflowMinimal:
+    """Tests for skip_probes, skip_auth_check, and page_load_strategy in run_capture_workflow."""
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_skip_probes_does_not_call_probes(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+        mock_probes: MagicMock,
+        mock_capture: MagicMock,
+    ) -> None:
+        """When skip_probes=True, run_probes is not called."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.1.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
+
+        run_capture_workflow("192.168.1.1", skip_probes=True)
+
+        mock_probes.assert_not_called()
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_skip_auth_check_does_not_call_auth(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+        mock_probes: MagicMock,
+        mock_auth: MagicMock,
+        mock_capture: MagicMock,
+    ) -> None:
+        """When skip_auth_check=True, check_basic_auth is not called."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.1.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
+
+        run_capture_workflow("192.168.1.1", skip_auth_check=True)
+
+        mock_auth.assert_not_called()
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_passes_target_url_to_capture(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+        mock_probes: MagicMock,
+        mock_auth: MagicMock,
+        mock_capture: MagicMock,
+    ) -> None:
+        """Pre-computed target_url from connectivity phase is passed to capture."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.1.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
+        mock_auth.return_value = (False, None)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
+
+        run_capture_workflow("192.168.1.1")
+
+        call_kwargs = mock_capture.call_args[1]
+        assert call_kwargs["target_url"] == "http://192.168.1.1/"
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.connectivity.check_basic_auth")
+    @patch("har_capture.capture.probes.run_probes", return_value={})
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_passes_page_load_strategy(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+        mock_probes: MagicMock,
+        mock_auth: MagicMock,
+        mock_capture: MagicMock,
+    ) -> None:
+        """page_load_strategy is threaded through to capture_device_har."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.1.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_session.return_value = (False, None)
+        mock_auth.return_value = (False, None)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
+
+        run_capture_workflow("192.168.1.1", page_load_strategy="domcontentloaded")
+
+        call_kwargs = mock_capture.call_args[1]
+        assert call_kwargs["page_load_strategy"] == "domcontentloaded"
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.connectivity.check_session_contamination")
+    @patch("har_capture.capture.connectivity._parse_target")
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_skip_session_check_does_not_call_session(
+        self,
+        mock_browser: MagicMock,
+        mock_conn: MagicMock,
+        mock_parse: MagicMock,
+        mock_session: MagicMock,
+        mock_capture: MagicMock,
+    ) -> None:
+        """When skip_session_check=True, check_session_contamination is not called."""
+        mock_browser.return_value = True
+        mock_parse.return_value = ("192.168.1.1", None)
+        mock_conn.return_value = (True, "http", None)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
+
+        run_capture_workflow(
+            "192.168.1.1",
+            skip_session_check=True,
+            skip_probes=True,
+            skip_auth_check=True,
+        )
+
+        mock_session.assert_not_called()

@@ -156,5 +156,80 @@
     {"field_name": "reorganize",    "expected": false, "id": "reorganize_not_flaggable"},
     {"field_name": "envelope",      "expected": false, "id": "envelope_not_flaggable"},
     {"field_name": "environmental", "expected": false, "id": "environmental_not_flaggable"}
+  ],
+
+  "xml_post_data_cases": [
+    {
+      "id": "text_xml_password_redacted",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<request><password>secret123</password><action>login</action></request>"
+      },
+      "must_not_contain": ["secret123"],
+      "must_contain": ["action"]
+    },
+    {
+      "id": "application_xml_token_redacted",
+      "post_data": {
+        "mimeType": "application/xml",
+        "text": "<auth><token>abc123xyz789longtoken</token><fun>1</fun></auth>"
+      },
+      "must_not_contain": ["abc123xyz789longtoken"],
+      "must_contain": ["fun"]
+    },
+    {
+      "id": "xml_mac_address_redacted",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<device><mac>AA:BB:CC:DD:EE:FF</mac><status>online</status></device>"
+      },
+      "must_not_contain": ["AA:BB:CC:DD:EE:FF"],
+      "must_contain": ["status"]
+    },
+    {
+      "id": "xml_private_ip_redacted",
+      "post_data": {
+        "mimeType": "application/xml",
+        "text": "<config><gateway>192.168.1.100</gateway><enabled>true</enabled></config>"
+      },
+      "must_not_contain": ["192.168.1.100"],
+      "must_contain": ["enabled"]
+    },
+    {
+      "id": "xml_empty_body_no_crash",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": ""
+      },
+      "must_not_contain": [],
+      "must_contain": []
+    },
+    {
+      "id": "xml_malformed_no_crash",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<broken><unclosed>"
+      },
+      "must_not_contain": [],
+      "must_contain": []
+    },
+    {
+      "id": "xml_nonsensitive_preserved",
+      "post_data": {
+        "mimeType": "application/xml",
+        "text": "<downstream><freq>834000000</freq><mod>256qam</mod><chid>30</chid></downstream>"
+      },
+      "must_not_contain": [],
+      "must_contain": ["834000000", "256qam", "30"]
+    },
+    {
+      "id": "xml_charset_suffix_handled",
+      "post_data": {
+        "mimeType": "application/xml; charset=utf-8",
+        "text": "<request><password>topsecret</password></request>"
+      },
+      "must_not_contain": ["topsecret"],
+      "must_contain": []
+    }
   ]
 }

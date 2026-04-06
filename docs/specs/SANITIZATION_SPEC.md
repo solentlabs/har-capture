@@ -131,12 +131,16 @@ def sanitize_post_data(
     post_data: dict[str, Any] | None,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
+    *,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> dict[str, Any] | None:
 ```
 
 1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and `is_flaggable_field()` (flag).
 1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted.
 1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against field patterns; values redacted if key is sensitive.
+1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML content engine, which runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are sanitized identically to XML response content.
 1. **Raw text**: Falls through to string pattern matching.
 
 ### URL Sanitization
@@ -171,7 +175,7 @@ def _sanitize_response_content(content, collector, custom_patterns, heuristics):
 
 MIME-type based routing:
 
-- `text/html`, `application/xhtml+xml` → `sanitize_html()` from html.py
+- `text/html`, `text/xml`, `application/xml` → `sanitize_html()` from html.py
 - `application/json`, `text/json` → `_sanitize_json_recursive()`
 - Other `text/*` → `_sanitize_string_patterns()`
 - Binary content → skipped

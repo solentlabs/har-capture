@@ -42,34 +42,83 @@ Domain-specific knowledge — what values are safe, what patterns indicate sensi
 
 ## Capture Pipeline
 
-### Phase 1: Browser Check
+Capture is user-driven: the user launches a browser, interacts with the target site naturally (login, navigate pages), and closes the browser when done. har-capture records everything and sanitizes the result.
 
-Verifies that Playwright is installed and the requested browser engine (chromium, firefox, or webkit) is available. If the browser executable is missing, the CLI prompts the user to download it (~150 MB one-time install). If system dependencies are missing (libasound, libnss3, libnspr4), the error is detected by pattern matching and the user is guided to install them.
+### Default Workflow
 
-### Phase 2: Connectivity Check
+The default path minimizes pre-flight HTTP requests so the tool works with session-constrained devices (see [ADR-2](ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)).
 
-Determines whether the target is reachable and which HTTP scheme to use. Tries `http` then `https` (or user-specified scheme only). A 401/403 counts as "reachable." Self-signed certificates are accepted.
+```mermaid
+graph TD
+    start([har-capture URL]) --> browser_check{Browser installed?}
+    browser_check -->|No| install[Prompt install ~150MB]
+    install --> conn
+    browser_check -->|Yes| conn
 
-### Phase 3: Pre-Capture Probes
+    conn[Connectivity Check<br>1 GET → validate reachability]
+    conn --> session{Session Check<br>1 GET → detect live session}
+    session -->|Contaminated| abort([ABORT: clear cookies])
+    session -->|Clean| has_creds{Credentials provided?}
 
-Three diagnostic probes (auth challenge, HEAD support, ICMP ping) gather metadata embedded in the final HAR as `_probes`.
+    has_creds -->|No| launch[Launch Browser<br>Clean context: empty storage_state]
+    has_creds -->|Yes| probe[Auth Probe<br>1 GET → capture 401 headers]
+    probe --> launch
 
-### Phase 4: Auth Detection
+    launch --> goto{page.goto networkidle<br>15s timeout}
+    goto -->|Resolves| user[User interacts<br>Login, navigate, close browser]
+    goto -->|Timeout| fallback[Auto-fallback to domcontentloaded<br>Disable wait-for-data]
+    fallback --> user
+    user --> process
 
-Detects HTTP Basic Auth (401 + `WWW-Authenticate: Basic`) vs in-browser auth (form/HNAP). Basic Auth credentials are passed to Playwright's `http_credentials` context option; in-browser auth requires interactive mode.
+    subgraph process[Post-Capture Processing]
+        direction TB
+        meta[Inject metadata + pre_capture_cookies] --> sanitize[Pass 1: Auto-sanitize PII]
+        sanitize --> review[Pass 2: Interactive review]
+        review --> filter[Filter bloat + deduplicate]
+        filter --> compress[Gzip compress]
+        compress --> cleanup[Delete temp files]
+    end
 
-See [Capture Spec](specs/CAPTURE_SPEC.md) for phase internals (connectivity detection, auth detection, probe details).
+    process --> done([.sanitized.har.gz])
+```
 
-### Phase 5: Browser Capture
+**Pre-flight HTTP requests:** 2 (no credentials) or 3 (with `--username`/`--password`).
+
+### Workflow with `--minimal`
+
+For devices that allow only one concurrent session (e.g., Compal CH7465MT), `--minimal` skips probes and auth detection, defers the connectivity check into `capture_device_har()`, and uses a lenient page load strategy.
+
+```mermaid
+graph TD
+    start(["har-capture URL --minimal"]) --> browser_check{Browser installed?}
+    browser_check -->|No| install[Prompt install]
+    install --> conn
+    browser_check -->|Yes| conn
+
+    conn["Connectivity Check<br>1 GET inside capture_device_har()"]
+    conn --> launch["Launch Browser<br>domcontentloaded strategy<br>wait-for-data disabled"]
+    launch --> user[User interacts<br>Login, navigate, close browser]
+    user --> process[Post-Capture Processing]
+    process --> done([.sanitized.har.gz])
+```
+
+**Pre-flight HTTP requests:** 1 (connectivity check runs inside `capture_device_har()` rather than as a separate CLI phase).
+
+### Why Probes Are Not Default
+
+Pre-capture probes (auth challenge, HEAD support, ICMP) capture metadata that Playwright would otherwise suppress when `http_credentials` is set. In interactive mode without credentials, the browser handles auth dialogs natively and the full HTTP exchange (including 401 responses) is recorded in the HAR. Probes auto-run only when the user provides `--username`/`--password`, which triggers Playwright's `http_credentials` and suppresses the 401. See [ADR-3](ARCHITECTURE_DECISIONS.md#adr-3-probes-are-opt-in-diagnostics).
+
+### Browser Capture Detail
 
 The core Playwright session. Key design decisions:
 
+- **Clean context**: `storage_state={"cookies": [], "origins": []}` forces an empty cookie jar — no inherited session cookies or credentials
 - **Temp file**: Raw HAR (containing PII) is written to `/tmp` via `mkstemp()`, never to the user's working directory
 - **Embedded content**: Response bodies are base64-encoded within the HAR
 - **Service worker blocking**: Prevents cached responses from interfering
 - **HTTPS tolerance**: Self-signed/expired device certificates accepted
 
-**Wait-for-data**: An init script monkey-patches `XMLHttpRequest.send` and `window.fetch` to track in-flight requests via `window.__harCapturePendingRequests`. After each navigation, the system polls this counter until 2 seconds of network silence (vs Playwright's 500ms `networkidle`). A `framenavigated` event listener ensures async data completes before page transitions.
+**Wait-for-data**: An init script monkey-patches `XMLHttpRequest.send` and `window.fetch` to track in-flight requests via `window.__harCapturePendingRequests`. After each navigation, the system polls this counter until 2 seconds of network silence (vs Playwright's 500ms `networkidle`). A `framenavigated` event listener ensures async data completes before page transitions. Disabled in `--minimal` mode for devices with persistent connections.
 
 **State capture**: After navigation, cookies (`context.cookies()`), localStorage (`context.storage_state()`), and sessionStorage (JS evaluation) are captured and injected into the HAR as `_har_capture` metadata.
 
@@ -77,9 +126,9 @@ The core Playwright session. Key design decisions:
 
 See [Capture Spec](specs/CAPTURE_SPEC.md) for full details (context config, wait-for-data mechanism, timing constants, timeout vs interactive mode).
 
-### Phase 6: Post-Capture Processing
+### Post-Capture Processing
 
-After the browser closes: metadata injection (probes, cookies, storage, tool version) → sanitization (Pass 1) → bloat filtering + deduplication → gzip compression → temp file cleanup.
+After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies` audit) → sanitization (Pass 1) → interactive review (Pass 2) → bloat filtering + deduplication → gzip compression → temp file cleanup.
 
 The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
 

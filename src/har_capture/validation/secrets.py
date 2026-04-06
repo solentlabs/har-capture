@@ -342,14 +342,80 @@ def check_post_data(
                 )
                 break
 
-    # Check text (raw body, might be JSON)
+    # Check text (raw body — JSON or XML)
     text = post_data.get("text", "")
     if text and not is_redacted(text, custom_patterns):
+        mime_type = post_data.get("mimeType", "")
         try:
             json_data = json.loads(text)
             check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
         except json.JSONDecodeError:
-            pass
+            if "xml" in mime_type:
+                _check_xml_fields(text, location + " (body)", findings, custom_patterns)
+
+
+def _check_xml_fields(
+    text: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | None = None,
+) -> None:
+    """Check XML body for sensitive element names.
+
+    Parses XML with stdlib ElementTree. Malformed XML is caught and skipped.
+
+    Args:
+        text: Raw XML text
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional path to custom patterns file
+    """
+    import xml.etree.ElementTree as ET
+
+    sensitive_fields = _compile_sensitive_fields(custom_patterns)
+
+    try:
+        root = ET.fromstring(text)  # noqa: S314
+    except ET.ParseError:
+        return
+
+    for elem in root.iter():
+        tag = elem.tag
+        # Strip namespace prefix if present: {http://ns}tagname -> tagname
+        if "}" in tag:
+            tag = tag.split("}", 1)[1]
+
+        value = (elem.text or "").strip()
+        if value and not is_redacted(value, custom_patterns):
+            for pattern in sensitive_fields:
+                if pattern.search(tag):
+                    findings.append(
+                        Finding(
+                            severity="error",
+                            location=location,
+                            field=tag,
+                            value=truncate(value),
+                            reason=f"Sensitive XML element matching '{pattern.pattern}'",
+                        )
+                    )
+                    break
+
+        # Check attributes (e.g., <password value="secret"/>)
+        for attr_name, attr_value in elem.attrib.items():
+            if not attr_value or is_redacted(attr_value, custom_patterns):
+                continue
+            for pattern in sensitive_fields:
+                if pattern.search(attr_name):
+                    findings.append(
+                        Finding(
+                            severity="error",
+                            location=location,
+                            field=attr_name,
+                            value=truncate(attr_value),
+                            reason=f"Sensitive XML attribute matching '{pattern.pattern}'",
+                        )
+                    )
+                    break
 
 
 def check_json_fields(

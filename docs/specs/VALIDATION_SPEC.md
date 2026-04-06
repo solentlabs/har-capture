@@ -126,6 +126,15 @@ Checks form field names and JSON body content:
 1. Parse JSON
 1. Call `check_json_fields()` for recursive scanning
 
+**XML body** (`postData.text` with `text/xml` or `application/xml` content type):
+
+1. Parse XML with `xml.etree.ElementTree`
+1. Walk element tree, checking element tag names and attribute names against sensitive field patterns
+1. Strip namespace prefixes if present (`{http://ns}tagname` → `tagname`)
+1. Report findings for elements whose text content is not redacted
+1. Report findings for attributes whose values are not redacted (e.g., `<field password="secret"/>`)  <!-- pragma: allowlist secret -->
+1. Malformed XML is caught and skipped (no findings, no crash)
+
 Severity: **error**
 
 ### `check_content(content, location, findings)`

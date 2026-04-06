@@ -11,13 +11,13 @@ This spec describes the full Playwright-based capture lifecycle — from browser
 | `src/har_capture/capture/browser.py`      | Core capture orchestration: Playwright session, wait-for-data, HAR recording, state capture, filtering/compression |
 | `src/har_capture/capture/workflow.py`     | Multi-phase workflow: browser check → connectivity → probes → auth → capture                                       |
 | `src/har_capture/capture/probes.py`       | Pre-capture diagnostics: auth challenge, HEAD support, ICMP ping                                                   |
-| `src/har_capture/capture/connectivity.py` | Scheme detection, reachability, Basic Auth detection                                                               |
+| `src/har_capture/capture/connectivity.py` | Reachability check (requires explicit scheme), Basic Auth detection                                                |
 | `src/har_capture/capture/deps.py`         | Browser installation and system dependency checking                                                                |
 | `src/har_capture/cli/capture.py`          | CLI `har-capture get` command, interactive prompts                                                                 |
 
 ## Workflow Phases
 
-The capture workflow (`workflow.py`) orchestrates five sequential phases. Each phase returns a result object; the workflow stops at the first failure.
+The capture workflow (`workflow.py`) orchestrates six sequential phases. Each phase returns a result object; the workflow stops at the first failure.
 
 ### Phase 1: Browser Check (`check_browser_phase`)
 
@@ -37,22 +37,45 @@ result = check_connectivity_phase(target, result)
 # result.connectivity.target_url: str
 ```
 
-`check_device_connectivity()` in `connectivity.py` sends unauthenticated GET requests via stdlib urllib:
+`check_device_connectivity()` in `connectivity.py` sends an unauthenticated GET request via stdlib urllib:
 
-1. Parse target via `_parse_target()` — handles URLs, hostnames, IPs (including IPv6 with brackets, ports)
-1. If user specified a scheme, try only that scheme
-1. Otherwise try `["http", "https"]` in order
+1. Parse target via `_parse_target()` — handles URLs with schemes (including IPv6 with brackets, ports)
+1. Require an explicit scheme (`http://` or `https://`); bare hostnames/IPs are rejected with a helpful error
+1. Send a single GET to `{scheme}://{host}/`
 1. Any response (including 401/403) = reachable
 1. Self-signed certificates accepted via `make_ssl_context()` (`check_hostname=False, verify_mode=CERT_NONE`)
 
 Returns `(reachable, scheme, error)`.
 
-### Phase 3: Probes (`run_probes_phase`)
+### Phase 3: Session Contamination Check (`check_session_phase`)
+
+```python
+result = check_session_phase(target_url, result)
+# result.session.contaminated: bool
+# result.session.message: str | None
+```
+
+`check_session_contamination()` in `connectivity.py` makes an unauthenticated GET to the target URL and inspects the response to detect whether the device has a live session that would cause the capture to miss the login flow.
+
+1. If the response is non-200 (401, 403, redirect) → clean state, auth is required
+1. If the response is 200 with a body under 100 bytes → clean (redirect stub)
+1. If the response body contains login-page indicators (`password`, `login`, `sign in`, `signin`, `log in`, `authenticate`) → clean, login page is being served
+1. If the response is 200 with substantial content and no login indicators → **contaminated** — the device is serving authenticated content without requiring login
+
+When contamination is detected, the workflow aborts with: *"Browser has a live session — clear cookies or use a clean profile."*
+
+Skipped in `--minimal` mode and when `skip_session_check=True`.
+
+### Phase 4: Probes (`run_probes_phase`)
 
 ```python
 result = run_probes_phase(target_url, timeout=10, result=result)
 # result.probes.data: dict with auth_challenge, head_support, icmp keys
 ```
+
+> **CLI behavior:** The CLI only runs the auth probe, and only when `--username`/`--password` is provided (see [ADR-3](../ARCHITECTURE_DECISIONS.md#adr-3-probes-are-opt-in-diagnostics)). When Playwright's `http_credentials` is set, it suppresses the 401 response in the HAR — the auth probe captures that data before suppression. Without credentials, the browser shows the native auth dialog and the full 401 exchange is recorded in the HAR naturally.
+>
+> **Library API:** `run_capture_workflow()` runs all three probes by default. Pass `skip_probes=True` to skip.
 
 `run_probes()` in `probes.py` runs three independent probes:
 
@@ -79,13 +102,17 @@ result = run_probes_phase(target_url, timeout=10, result=result)
 
 Probe results are embedded in the HAR output as `_probes` for downstream consumption.
 
-### Phase 4: Auth Detection (`check_auth_phase`)
+### Phase 5: Auth Detection (`check_auth_phase`)
 
 ```python
 result = check_auth_phase(target_url, result)
 # result.auth.requires_basic_auth: bool
 # result.auth.realm: str | None
 ```
+
+> **CLI behavior:** The CLI no longer calls `check_auth_phase`. In interactive mode, Playwright shows a native Basic Auth dialog when the device responds with 401 — the user enters credentials in the browser and the full auth exchange is captured in the HAR (see [ADR-2](../ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)). When `--username`/`--password` is provided, credentials are passed directly to Playwright's `http_credentials` without auth detection.
+>
+> **Library API:** `run_capture_workflow()` runs auth detection by default and returns early if Basic Auth is detected without credentials (so the caller can prompt). Pass `skip_auth_check=True` to skip.
 
 `check_basic_auth()` in `connectivity.py`:
 
@@ -95,13 +122,79 @@ result = check_auth_phase(target_url, result)
 1. Non-Basic auth (Bearer, Digest): return `(False, None)`
 1. Non-401 response or error: return `(False, None)`
 
-If Basic Auth is required and no `--username`/`--password` were provided, the workflow stops and the CLI prompts interactively.
-
-### Phase 5: Capture (`run_capture_phase`)
+### Phase 6: Capture (`run_capture_phase`)
 
 Calls `capture_device_har()` from `browser.py` with all accumulated state (credentials, probe data, patterns).
 
+## Minimal Mode (`--minimal`)
+
+Some devices allow only one concurrent HTTP connection (e.g., Compal CH7465MT). The original capture workflow made 5 pre-Playwright HTTP requests (connectivity, auth challenge probe, HEAD probe, auth detection, plus a duplicate connectivity check inside `capture_device_har()`), which exhausted the session slot before the browser opened. The refactored default makes 1–2 requests. The `--minimal` flag goes further by deferring the connectivity check into `capture_device_har()` and skipping everything else.
+
+### What `--minimal` Does
+
+| Behavior                           | Default                       | Default + `--username/--password` | `--minimal`        |
+| ---------------------------------- | ----------------------------- | --------------------------------- | ------------------ |
+| Connectivity check                 | Yes (1 GET)                   | Yes (1 GET)                       | Yes (1 GET)\*      |
+| Session contamination check        | Yes (1 GET)                   | Yes (1 GET)                       | **Skipped**        |
+| Auth probe                         | Skipped                       | Yes (1 GET)                       | **Skipped**        |
+| `page.goto` wait strategy          | `networkidle` (auto-fallback) | `networkidle` (auto-fallback)     | `domcontentloaded` |
+| Wait-for-data (XHR/fetch tracking) | Enabled                       | Enabled                           | **Disabled**       |
+| Pre-Playwright HTTP requests       | 2                             | 3                                 | 1\*                |
+
+\* In `--minimal` mode, the CLI skips the connectivity check. `capture_device_har()` runs it internally when no `target_url` is provided — still 1 GET, but inside the capture function rather than as a separate CLI phase.
+
+The connectivity check is preserved in all modes because it determines `http` vs `https` and validates the device is reachable before launching Playwright.
+
+> **Library API note:** `run_capture_workflow()` still runs session check (Phase 3), probes (Phase 4), and auth detection (Phase 5) by default for backward compatibility. Use `skip_session_check=True`, `skip_probes=True`, and `skip_auth_check=True` to match the CLI's minimal-pre-flight behavior.
+
+### `target_url` Parameter
+
+When the CLI workflow completes Phase 2, `target_url` (e.g., `http://192.168.100.1/`) is already known. Passing it to `capture_device_har()` eliminates the duplicate internal connectivity check that previously ran at the start of the function. This optimization applies to **all** capture modes, not just `--minimal`.
+
+### `page_load_strategy` Parameter
+
+Controls the `wait_until` argument to Playwright's `page.goto()`. Accepts any Playwright-supported value: `"networkidle"` (default), `"domcontentloaded"`, `"load"`, `"commit"`. In `--minimal` mode, `"domcontentloaded"` is used because devices with persistent polling/heartbeat connections prevent `networkidle` from ever being satisfied.
+
 ## Browser Capture Detail
+
+### Internal Decomposition
+
+`capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to four extracted functions that can each be tested independently:
+
+```
+capture_device_har()
+├── Pre-flight checks (check_playwright, check_browser_installed)
+├── _resolve_capture_paths()   → CapturePathInfo
+├── _run_browser_session()     → BrowserSessionResult
+├── _inject_har_metadata()     → modifies temp HAR in-place
+└── _run_post_capture_pipeline() → CaptureResult
+```
+
+Error recovery (missing browser/deps detection and retry) stays inline in `capture_device_har()` as local helpers.
+
+#### `_resolve_capture_paths(ip, output, target_url) -> CapturePathInfo`
+
+Pure filesystem + parsing logic. Resolves the output path (auto-generates if None), ensures `.har` suffix, creates parent directories, parses the target hostname, determines the sanitized output path, and creates the temp file via `mkstemp()`. Returns a `CapturePathInfo` dataclass.
+
+Testable with: zero mocks.
+
+#### `_run_browser_session(...) -> BrowserSessionResult`
+
+Everything that touches Playwright: launch browser, configure context (storage state, credentials, HAR recording), navigate with networkidle/domcontentloaded fallback, wait-for-data, capture cookies/storage, handle timeout vs interactive mode, close browser. Returns `BrowserSessionResult` with all captured browser state — eliminates the `nonlocal` pattern used previously to shuttle data out of a nested closure.
+
+Testable with: one mock (`sync_playwright`).
+
+#### `_inject_har_metadata(temp_path, target_url, probes, session)`
+
+Reads the raw HAR from the temp file, injects `_probes`, `_har_capture` (cookies, storage), and `_solentlabs` (pre-capture cookies), writes back. Handles corrupt/unreadable HAR gracefully.
+
+Testable with: zero mocks (real temp file).
+
+#### `_run_post_capture_pipeline(...) -> CaptureResult`
+
+Runs sanitization, copies raw HAR if needed, cleans up temp file, compresses. The temp file is always deleted.
+
+Testable with: zero Playwright mocks (one mock for `sanitize_har_file` if isolating, or zero mocks with a real fixture).
 
 ### `capture_device_har()` Signature
 
@@ -123,6 +216,8 @@ def capture_device_har(
     probes: dict[str, Any] | None = None,             # Probe results to inject
     custom_patterns: str | dict[str, Any] | None = None,  # Sanitization patterns
     wait_for_data: bool = True,                       # Enable async data tracking
+    target_url: str | None = None,                    # Pre-computed URL (skips internal connectivity check)
+    page_load_strategy: str = "networkidle",          # Playwright wait_until for page.goto
 ) -> CaptureResult
 ```
 
@@ -140,6 +235,31 @@ class CaptureResult:
     sanitization_report: SanitizationReport | None
 ```
 
+### `CapturePathInfo` Dataclass
+
+```python
+@dataclass
+class CapturePathInfo:
+    output_path: Path       # User-facing HAR output path
+    sanitized_output: Path  # Path for sanitized HAR (stem + .sanitized.har)
+    temp_path: Path         # Temp file path for raw HAR (PII, always deleted)
+    host: str               # Extracted hostname from target
+    target_url: str         # Full URL for navigation
+```
+
+### `BrowserSessionResult` Dataclass
+
+```python
+@dataclass
+class BrowserSessionResult:
+    pre_capture_cookies: list[Any]           # Cookie jar state before navigation
+    browser_cookies: list[Any]               # Cookies after page load
+    web_storage_local: list[dict[str, Any]]  # localStorage entries per origin
+    web_storage_session: dict[str, str]      # sessionStorage key/value pairs
+    success: bool
+    error: str | None
+```
+
 ### Context Configuration
 
 ```python
@@ -148,16 +268,37 @@ context = browser_type.new_context(
     record_har_content="embed",       # Base64-encode response bodies in HAR
     ignore_https_errors=True,         # Accept self-signed device certs
     service_workers="block",          # Prevent caching interference
+    storage_state={                   # Force clean context — no inherited state
+        "cookies": [],
+        "origins": [],
+    },
     http_credentials=http_credentials # Basic Auth credentials (if any)
 )
 ```
 
 Design decisions:
 
+- **Clean storage state**: `storage_state={"cookies": [], "origins": []}` forces an empty cookie jar and localStorage. Without this, some Playwright configurations inherit cookies or `httpCredentials` from launch options, causing the first request to carry session artifacts (e.g., `Secure`, `XSRF_TOKEN`, `PHPSESSID`, `Authorization`). This prevents all 6 failure signatures identified in the MCP intake pipeline.
 - **Temp file for raw HAR**: Created via `tempfile.mkstemp()` — raw PII is never written to the user's directory. The FD is closed but the path is kept for Playwright.
 - **Embedded content**: `record_har_content="embed"` base64-encodes response bodies within the HAR JSON, avoiding external file management.
 - **Service worker blocking**: `service_workers="block"` prevents cached responses from interfering with fresh device captures.
 - **HTTPS tolerance**: Device hardware commonly uses self-signed or expired certificates.
+
+### Pre-Capture Cookie Audit
+
+Immediately after context creation and before any navigation, `context.cookies()` is called and the result is stored as `pre_capture_cookies`. After the browser closes, this list is injected into the HAR at `log._solentlabs.pre_capture_cookies`.
+
+With the clean `storage_state`, this list should always be empty. A non-empty list indicates the context inherited cookies despite the explicit clean state — a signal for downstream tools that the capture may be contaminated.
+
+```json
+{
+  "log": {
+    "_solentlabs": {
+      "pre_capture_cookies": []
+    }
+  }
+}
+```
 
 ### Wait-for-Data Mechanism
 
@@ -330,9 +471,12 @@ har_data["log"]["_har_capture"] = {
     "session_storage": session_storage,
     "tool": "har-capture",
     "version": __version__,
-    "captured_at": datetime.utcnow().isoformat() + "Z",
+    "captured_at": datetime.now(tz=timezone.utc).isoformat(),
     "cache_disabled": True,
     "service_workers_blocked": True,
+}
+har_data["log"]["_solentlabs"] = {
+    "pre_capture_cookies": pre_capture_cookies,  # Cookie jar state before navigation
 }
 ```
 
@@ -396,7 +540,9 @@ class CaptureOptions:
 1. **Phase ordering is strict** — Connectivity must be checked before auth, browser must be checked before capture. Reordering phases would break the workflow.
 1. **Wait-for-data is opt-out** — `wait_for_data=True` is the default. Disabling it reverts to Playwright's basic `networkidle` wait.
 1. **Init script runs before page JS** — The XHR/fetch monkey-patches are in place before any application JavaScript executes.
-1. **Probe data is informational** — Probe failures do not stop the capture workflow. Probes always succeed (they catch all exceptions internally).
+1. **Probes are optional metadata** — Probe failures do not stop the capture workflow. Probes always succeed (they catch all exceptions internally). Probes can be skipped entirely via `--minimal` for session-constrained devices.
 1. **Error messages are credential-free** — Any username/password strings are replaced before errors are returned.
 1. **Service workers are always blocked** — This is hardcoded in context config, not configurable, to ensure fresh captures.
 1. **Self-signed certs are always accepted** — Both probes and Playwright context ignore certificate errors.
+1. **Browser context is always clean** — `storage_state={"cookies": [], "origins": []}` is hardcoded. No cookies, localStorage, or credentials leak from previous sessions.
+1. **Pre-capture cookie state is always recorded** — `_solentlabs.pre_capture_cookies` is emitted in every capture, even when empty. Downstream tools can verify context cleanliness without assumptions.

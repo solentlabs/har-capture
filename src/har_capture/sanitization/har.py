@@ -362,6 +362,9 @@ def sanitize_post_data(
     post_data: dict[str, Any] | None,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
+    *,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> dict[str, Any] | None:
     """Sanitize POST data while preserving field names.
 
@@ -369,6 +372,8 @@ def sanitize_post_data(
         post_data: HAR postData object
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for content engine
 
     Returns:
         Sanitized postData object
@@ -393,7 +398,7 @@ def sanitize_post_data(
                         f"Flaggable field name '{param['name']}' in POST params",
                     )
 
-    # Sanitize raw text (form-urlencoded or JSON)
+    # Sanitize raw text (form-urlencoded, JSON, or XML)
     if result.get("text"):
         text = result["text"]
         mime_type = result.get("mimeType", "")
@@ -402,8 +407,64 @@ def sanitize_post_data(
             result["text"] = _sanitize_form_urlencoded(text, hasher, collector)
         elif "application/json" in mime_type:
             result["text"] = _sanitize_json_text(text, hasher, collector)
+        elif "text/xml" in mime_type or "application/xml" in mime_type:
+            text = _sanitize_xml_fields(text, hasher, collector)
+            result["text"] = sanitize_html(
+                text,
+                collector=collector,
+                custom_patterns=custom_patterns,
+                heuristics=heuristics,
+            )
 
     return result
+
+
+def _sanitize_xml_fields(
+    text: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> str:
+    """Redact sensitive element values in XML text by tag name.
+
+    Parses XML, checks each element's tag name against ``is_sensitive_field()``,
+    and replaces matching text content with a hashed redaction. Returns the
+    modified XML string, or the original text if parsing fails.
+
+    Args:
+        text: Raw XML text
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        XML text with sensitive element values redacted
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(text)  # noqa: S314
+    except ET.ParseError:
+        return text
+
+    modified = False
+    for elem in root.iter():
+        tag = elem.tag
+        if "}" in tag:
+            tag = tag.split("}", 1)[1]
+
+        if elem.text and elem.text.strip() and is_sensitive_field(tag):
+            elem.text = _redact_value(elem.text.strip(), hasher, "FIELD", collector)
+            modified = True
+
+        # Check attributes (e.g., <password value="secret"/>)
+        for attr_name, attr_value in list(elem.attrib.items()):
+            if attr_value and is_sensitive_field(attr_name):
+                elem.set(attr_name, _redact_value(attr_value, hasher, "FIELD", collector))
+                modified = True
+
+    if not modified:
+        return text
+
+    return ET.tostring(root, encoding="unicode")
 
 
 def _sanitize_json_recursive(
@@ -772,6 +833,8 @@ def _sanitize_request(
     req: dict[str, Any],
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
+    heuristics: HeuristicMode = HeuristicMode.DISABLED,
 ) -> None:
     """Sanitize a HAR request object in-place.
 
@@ -779,6 +842,8 @@ def _sanitize_request(
         req: HAR request object containing headers, postData, and queryString
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for content engine
     """
     # Sanitize headers
     if "headers" in req and isinstance(req["headers"], list):
@@ -792,7 +857,13 @@ def _sanitize_request(
 
     # Sanitize POST data
     if "postData" in req:
-        req["postData"] = sanitize_post_data(req["postData"], hasher, collector)
+        req["postData"] = sanitize_post_data(
+            req["postData"],
+            hasher,
+            collector,
+            custom_patterns=custom_patterns,
+            heuristics=heuristics,
+        )
 
     # Sanitize query string params (in case password is in URL)
     if "queryString" in req and isinstance(req["queryString"], list):
@@ -844,7 +915,7 @@ def _sanitize_response_content(
     mime_type = content.get("mimeType", "")
     hasher = collector.hasher if collector else None
 
-    if "text/html" in mime_type or "text/xml" in mime_type:
+    if "text/html" in mime_type or "text/xml" in mime_type or "application/xml" in mime_type:
         content["text"] = sanitize_html(
             content["text"],
             collector=collector,
@@ -926,7 +997,7 @@ def sanitize_entry(
         collector = RedactionCollector(hasher=Hasher.create(None))
 
     if "request" in result:
-        _sanitize_request(result["request"], collector.hasher, collector)
+        _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
 
     if "response" in result:
         _sanitize_response(result["response"], collector, custom_patterns, heuristics)

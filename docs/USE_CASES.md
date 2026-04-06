@@ -13,6 +13,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-5: Capture with Custom Domain Patterns](#uc-5-capture-with-custom-domain-patterns)
 - [UC-6: Automated Capture (Non-Interactive)](#uc-6-automated-capture-non-interactive)
 - [UC-7: Interactive Capture (User Navigates, Closes Browser)](#uc-7-interactive-capture-user-navigates-closes-browser)
+- [UC-8: Capture from a Single-Session Device](#uc-8-capture-from-a-single-session-device)
 
 **Sanitization**
 
@@ -22,6 +23,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-13: Automated Sanitization (CI/CD)](#uc-13-automated-sanitization-cicd)
 - [UC-14: Sanitize HAR with Pipe-Delimited Modem Data](#uc-14-sanitize-har-with-pipe-delimited-modem-data)
 - [UC-15: Preserve Correlation Across Redacted Values](#uc-15-preserve-correlation-across-redacted-values)
+- [UC-16: Sanitize HAR with XML API Device](#uc-16-sanitize-har-with-xml-api-device)
 
 **Validation**
 
@@ -58,11 +60,11 @@ ______________________________________________________________________
 
 **Flow**:
 
-1. User runs capture command targeting the device
+1. User runs capture command targeting the device (URL must include `http://` or `https://`)
 1. System checks browser availability
-1. System checks device connectivity (tries HTTP, then HTTPS)
-1. System runs pre-capture probes (auth challenge, HEAD support, ICMP)
-1. System launches Playwright browser, navigates to device URL
+1. System checks device connectivity on the provided scheme
+1. System checks for session contamination — aborts if the device has a live session (serves data without login)
+1. System launches Playwright browser with a clean context (empty cookie jar), navigates to device URL
 1. Browser records all HTTP traffic to a temp HAR file with embedded response bodies
 1. Wait-for-data mechanism captures async XHR/fetch requests
 1. User closes browser (interactive) or timeout expires
@@ -74,13 +76,14 @@ ______________________________________________________________________
 **Variations**:
 
 - Device uses self-signed cert → accepted automatically
+- Device has a live session from another browser tab → session check aborts with "clear cookies or use a clean profile"
 - Device serves SPA that loads data async → wait-for-data captures it
 - Browser not installed → user prompted to download (~150 MB)
 
 **CLI Example**:
 
 ```bash
-har-capture 192.168.1.1
+har-capture http://192.168.1.1
 har-capture http://192.168.100.1 --output modem_capture.har
 ```
 
@@ -116,8 +119,8 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get 192.168.1.1 --username admin --password password123
-har-capture get 192.168.1.1 -u admin -p password123
+har-capture get http://192.168.1.1 --username admin --password password123
+har-capture get http://192.168.1.1 -u admin -p password123
 ```
 
 ______________________________________________________________________
@@ -155,7 +158,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get 192.168.1.1
+har-capture get http://192.168.1.1
 # Browser opens, user logs in manually, navigates, then closes browser
 ```
 
@@ -194,10 +197,10 @@ ______________________________________________________________________
 
 ```bash
 # Default: wait-for-data enabled
-har-capture get 192.168.1.1
+har-capture get http://192.168.1.1
 
 # Explicitly disable (for faster capture of simple sites)
-har-capture get 192.168.1.1 --no-wait-for-data
+har-capture get http://192.168.1.1 --no-wait-for-data
 ```
 
 ______________________________________________________________________
@@ -231,8 +234,8 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get 192.168.1.1 --patterns network-device
-har-capture get 192.168.1.1 --patterns network-device --patterns ./my_extras.json
+har-capture get http://192.168.1.1 --patterns network-device
+har-capture get http://192.168.1.1 --patterns network-device --patterns ./my_extras.json
 ```
 
 ______________________________________________________________________
@@ -252,7 +255,7 @@ ______________________________________________________________________
 **Flow**:
 
 1. Script runs capture command
-1. System runs all pre-flight checks (browser, connectivity, probes, auth)
+1. System runs all pre-flight checks (browser, connectivity, session contamination, probes, auth)
 1. Browser launches, navigates to device
 1. Wait-for-data captures async requests
 1. Browser closes when page activity completes
@@ -268,7 +271,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture 192.168.1.1 \
+har-capture http://192.168.1.1 \
     --username admin --password pass123 \
     --patterns network-device --output captures/modem.har
 ```
@@ -308,7 +311,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get 192.168.1.1 --keep-raw --patterns network-device
+har-capture get http://192.168.1.1 --keep-raw --patterns network-device
 # Browser opens. User navigates. User closes browser.
 # Interactive review of flagged values follows.
 ```
@@ -522,6 +525,80 @@ har-capture sanitize capture.har --no-salt
 
 # Reproducible across runs
 har-capture sanitize capture.har --salt my-stable-salt
+```
+
+______________________________________________________________________
+
+### UC-8: Capture from a Single-Session Device
+
+**Actor**: Engineer capturing from a device that allows only one concurrent HTTP connection (e.g., Compal CH7465MT cable modem with `max_concurrent: 1`).
+
+**Goal**: Capture HAR without exhausting the device's session limit or timing out on persistent connections.
+
+**Preconditions**:
+
+- Device is reachable on the network
+- Device allows only one concurrent HTTP session
+- Device may keep JS polling/heartbeat connections open indefinitely
+
+**Flow**:
+
+1. User runs capture with `--minimal` flag
+1. System checks browser availability (Phase 1)
+1. System checks connectivity with a single GET (Phase 2) — determines http/https scheme
+1. Session check, probes, and auth check are **skipped** — no additional HTTP requests
+1. Browser opens with a clean context and `domcontentloaded` page load strategy (no `networkidle` wait)
+1. Wait-for-data XHR/fetch tracking is disabled
+1. User logs in manually, navigates pages, closes browser
+1. Capture, sanitization, and compression proceed normally
+
+**Variations**:
+
+- Device needs Basic Auth → provide `--username`/`--password` on command line (auth check phase is skipped, credentials passed directly to Playwright)
+- Device uses form-based auth → user logs in through the browser UI (captured in HAR)
+- Even `--minimal` connectivity check triggers lockout → user can provide explicit scheme: `http://192.168.100.1`
+
+**CLI Example**:
+
+```bash
+har-capture http://192.168.100.1 --minimal
+har-capture http://192.168.100.1 --minimal --patterns network-device
+har-capture http://192.168.100.1 --minimal --username admin --password pass123
+```
+
+______________________________________________________________________
+
+### UC-16: Sanitize HAR with XML API Device
+
+**Actor**: Engineer sanitizing a HAR capture from a device that uses an XML POST API (e.g., a cable modem with `getter.xml`/`setter.xml` endpoints).
+
+**Goal**: Sanitize PII within XML POST request bodies and XML response bodies.
+
+**Preconditions**:
+
+- HAR file contains entries with `text/xml` or `application/xml` POST bodies
+- HAR file contains entries with `application/xml` response content
+
+**Flow**:
+
+1. User runs sanitize command on the HAR file
+1. System detects XML MIME type on POST body entries
+1. XML POST bodies are routed through the HTML/XML content engine (same 17-pass scanner used for response content)
+1. Sensitive values within XML elements (passwords, tokens, MACs, IPs) are auto-redacted
+1. XML response bodies with `application/xml` MIME type are routed through the same engine
+1. Non-sensitive XML content (element names, action parameters, status values) is preserved
+1. Validation confirms no PII remains in the sanitized XML
+
+**Variations**:
+
+- Malformed XML → gracefully skipped (logged, sanitization continues)
+- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by existing form-urlencoded handler, not the XML handler
+- Mixed HAR with both XML and HTML responses → each entry routed by MIME type
+
+**CLI Example**:
+
+```bash
+har-capture sanitize modem_capture.har --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -857,6 +934,7 @@ ______________________________________________________________________
    - Reads probe data from `_probes` key (auth challenge, ICMP latency)
    - Reads capture metadata from `_har_capture` key (tool version, timestamp)
    - Reads browser cookies and storage from `_har_capture` metadata
+   - Reads pre-capture cookie audit from `_solentlabs.pre_capture_cookies` — verifies the browser context was clean when capture started
 1. Extracted data is stored in CMM's database
 
 **Variations**:
@@ -870,7 +948,7 @@ ______________________________________________________________________
 ```
 Field Engineer                     CMM Pipeline
      │                                  │
-     │  har-capture get 192.168.1.1     │
+     │  har-capture get http://192.168.1.1     │
      │  --patterns network-device       │
      │                                  │
      │  ─── capture.har.gz ──────────►  │
@@ -878,5 +956,6 @@ Field Engineer                     CMM Pipeline
      │                                  │  extract entries
      │                                  │  read _probes
      │                                  │  read _har_capture metadata
+     │                                  │  read _solentlabs (pre_capture_cookies)
      │                                  │  store in database
 ```

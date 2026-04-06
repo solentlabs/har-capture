@@ -9,11 +9,50 @@ from __future__ import annotations
 import logging
 import urllib.error
 import urllib.request
+from typing import Any
 from urllib.parse import urlparse
 
 from har_capture.capture.probes import make_ssl_context
 
 _LOGGER = logging.getLogger(__name__)
+
+# Response body indicators that a login/authentication page is being served.
+# If none of these appear in a 200 response, the device likely has a live
+# session and is serving authenticated content without requiring login.
+_LOGIN_PAGE_INDICATORS = (
+    b"password",
+    b"login",
+    b"sign in",
+    b"signin",
+    b"log in",
+    b"authenticate",
+)
+
+
+def _urlopen_with_ssl(
+    url: str,
+    timeout: int = 5,
+    method: str = "GET",
+) -> Any:
+    """Make an HTTP(S) request, accepting self-signed certificates.
+
+    Args:
+        url: Target URL (http:// or https://)
+        timeout: Connection timeout in seconds
+        method: HTTP method
+
+    Returns:
+        The HTTP response object.
+
+    Raises:
+        urllib.error.HTTPError: On HTTP-level errors (401, 403, etc.)
+        urllib.error.URLError: On connection-level errors
+    """
+    req = urllib.request.Request(url, method=method)
+    if url.startswith("https://"):
+        ctx = make_ssl_context()
+        return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 def _parse_target(target: str) -> tuple[str, str | None]:
@@ -44,12 +83,12 @@ def _parse_target(target: str) -> tuple[str, str | None]:
 
 
 def check_device_connectivity(target: str, timeout: int = 5) -> tuple[bool, str, str | None]:
-    """Check if target is reachable and determine the correct URL scheme.
+    """Check if target is reachable.
 
-    Tries the provided scheme first (if any), otherwise tries HTTP then HTTPS.
+    Requires a URL with an explicit scheme (http:// or https://).
 
     Args:
-        target: URL, hostname, or IP address (e.g., "example.com", "https://example.com", "192.168.1.1")
+        target: URL with scheme (e.g., "http://192.168.1.1", "https://example.com")
         timeout: Connection timeout in seconds
 
     Returns:
@@ -58,37 +97,28 @@ def check_device_connectivity(target: str, timeout: int = 5) -> tuple[bool, str,
         - scheme: "http" or "https"
         - error_message: None if reachable, otherwise describes the problem
     """
-    # Parse target to extract hostname and any provided scheme
+    # Parse target to extract hostname and scheme
     host, provided_scheme = _parse_target(target)
 
-    # Determine which schemes to try
-    if provided_scheme in ("http", "https"):
-        schemes_to_try = [provided_scheme]
-    else:
-        schemes_to_try = ["http", "https"]
+    if provided_scheme not in ("http", "https"):
+        return (
+            False,
+            "",
+            f"Missing scheme for '{target}'. Use http:// or https:// (e.g., http://{target})",
+        )
 
-    last_error: str | None = None
-
-    for scheme in schemes_to_try:
-        url = f"{scheme}://{host}/"
-        try:
-            req = urllib.request.Request(url, method="GET")
-            if scheme == "https":
-                ctx = make_ssl_context()
-                urllib.request.urlopen(req, timeout=timeout, context=ctx)
-            else:
-                urllib.request.urlopen(req, timeout=timeout)
-            return True, scheme, None
-        except urllib.error.HTTPError:
-            # HTTP error means target is reachable (might need auth, that's fine)
-            return True, scheme, None
-        except urllib.error.URLError as e:
-            # Connection refused, timeout, etc - try next scheme
-            last_error = str(e.reason)
-        except Exception as e:
-            last_error = str(e)
-
-    return False, schemes_to_try[0], f"Cannot connect to {host}: {last_error}"
+    scheme = provided_scheme
+    url = f"{scheme}://{host}/"
+    try:
+        _urlopen_with_ssl(url, timeout=timeout)
+        return True, scheme, None
+    except urllib.error.HTTPError:
+        # HTTP error means target is reachable (might need auth, that's fine)
+        return True, scheme, None
+    except urllib.error.URLError as e:
+        return False, scheme, f"Cannot connect to {host}: {e.reason}"
+    except Exception as e:
+        return False, scheme, f"Cannot connect to {host}: {e}"
 
 
 def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:
@@ -102,13 +132,7 @@ def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:
         Tuple of (requires_basic_auth, realm_name)
     """
     try:
-        req = urllib.request.Request(url, method="GET")
-        # Handle HTTPS with self-signed certs
-        if url.startswith("https://"):
-            ctx = make_ssl_context()
-            urllib.request.urlopen(req, timeout=timeout, context=ctx)
-        else:
-            urllib.request.urlopen(req, timeout=timeout)
+        _urlopen_with_ssl(url, timeout=timeout)
         return False, None  # No auth required
     except urllib.error.HTTPError as e:
         if e.code == 401:
@@ -123,4 +147,54 @@ def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:
                 return True, realm
         return False, None
     except Exception:
+        return False, None
+
+
+def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str | None]:
+    """Check if the target has a live session that would skip the login flow.
+
+    Makes an unauthenticated GET and inspects the response.  If the device
+    returns 200 with data content (no login-page indicators), it means a
+    previous session is still active — the capture would miss the auth flow.
+
+    Args:
+        url: Target URL with scheme (e.g., ``http://192.168.100.1/``)
+        timeout: Connection timeout in seconds
+
+    Returns:
+        Tuple of (contaminated, message).
+        *contaminated* is ``True`` when the device appears to have a live
+        session.  *message* contains a human-readable warning.
+    """
+    try:
+        resp = _urlopen_with_ssl(url, timeout=timeout)
+
+        # Non-200 → auth challenge or redirect → clean state
+        if resp.status != 200:
+            return False, None
+
+        body = resp.read(4096).lower()
+
+        # If the body contains login-page indicators, the device is
+        # presenting a login form → no live session.  Check keywords
+        # before the size threshold so small JS-shell login pages
+        # (e.g. <html><script src=/app.js></script>) are caught.
+        for indicator in _LOGIN_PAGE_INDICATORS:
+            if indicator in body:
+                return False, None
+
+        # Empty or tiny response → redirect stub or placeholder
+        if len(body) < 100:
+            return False, None
+
+        # 200 with substantial content and no login indicators → live session
+        return True, (
+            "Browser has a live session \u2014 clear cookies or use a clean "
+            "profile. The device returned data content without requiring login."
+        )
+    except urllib.error.HTTPError:
+        # 401/403/etc. → auth required → clean state
+        return False, None
+    except Exception:
+        # Network errors, timeouts → can't determine, don't block capture
         return False, None

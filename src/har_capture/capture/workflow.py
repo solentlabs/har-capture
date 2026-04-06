@@ -59,6 +59,19 @@ class AuthResult:
 
 
 @dataclass
+class SessionCheckResult:
+    """Result of pre-capture session contamination check.
+
+    Attributes:
+        contaminated: True if device has a live session (no login required)
+        message: Warning message if contaminated
+    """
+
+    contaminated: bool = False
+    message: str | None = None
+
+
+@dataclass
 class ProbeResult:
     """Result of pre-capture diagnostic probes.
 
@@ -115,6 +128,7 @@ class CaptureWorkflowResult:
     phase: str = "init"
     browser: BrowserCheckResult = field(default_factory=BrowserCheckResult)
     connectivity: ConnectivityResult | None = None
+    session: SessionCheckResult | None = None
     probes: ProbeResult | None = None
     auth: AuthResult | None = None
     capture: CaptureResult | None = None
@@ -144,6 +158,16 @@ class CaptureWorkflowResult:
     def scheme(self) -> str:
         """Detected scheme (http/https)."""
         return self.connectivity.scheme if self.connectivity else "http"
+
+    @property
+    def session_contaminated(self) -> bool:
+        """True if target has a live session (no login required)."""
+        return self.session.contaminated if self.session else False
+
+    @property
+    def session_message(self) -> str | None:
+        """Warning message if session is contaminated."""
+        return self.session.message if self.session else None
 
     @property
     def probe_data(self) -> dict[str, Any]:
@@ -221,7 +245,7 @@ def check_connectivity_phase(
     """Check connectivity to target.
 
     Args:
-        target: URL, hostname, or IP to check
+        target: URL with scheme (http:// or https://)
         result: Existing result to update, or None to create new
 
     Returns:
@@ -249,6 +273,34 @@ def check_connectivity_phase(
         target_url=target_url,
         error=error,
     )
+
+    return result
+
+
+def check_session_phase(
+    target_url: str,
+    result: CaptureWorkflowResult | None = None,
+) -> CaptureWorkflowResult:
+    """Check for session contamination before capture.
+
+    Detects whether the target has a live session that would cause the
+    capture to miss the login flow.
+
+    Args:
+        target_url: Full URL to check
+        result: Existing result to update, or None to create new
+
+    Returns:
+        CaptureWorkflowResult with session check status
+    """
+    from har_capture.capture.connectivity import check_session_contamination
+
+    if result is None:
+        result = CaptureWorkflowResult()
+    result.phase = "session_check"
+
+    contaminated, message = check_session_contamination(target_url)
+    result.session = SessionCheckResult(contaminated=contaminated, message=message)
 
     return result
 
@@ -322,11 +374,13 @@ def run_capture_phase(
     result: CaptureWorkflowResult | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     wait_for_data: bool = True,
+    target_url: str | None = None,
+    page_load_strategy: str = "networkidle",
 ) -> CaptureWorkflowResult:
     """Run the actual capture.
 
     Args:
-        target: URL, hostname, or IP to capture
+        target: URL with scheme (http:// or https://)
         output: Output HAR filename
         browser: Browser to use
         http_credentials: Optional Basic Auth credentials
@@ -342,6 +396,8 @@ def run_capture_phase(
         result: Existing result to update, or None to create new
         custom_patterns: Domain pattern name, file path, or pre-loaded dict
         wait_for_data: Wait for async data fetches before navigating
+        target_url: Pre-computed URL from connectivity check (skips dup check)
+        page_load_strategy: Playwright wait_until for page.goto
 
     Returns:
         CaptureWorkflowResult with capture status
@@ -371,6 +427,8 @@ def run_capture_phase(
         probes=probe_data,
         custom_patterns=custom_patterns,
         wait_for_data=wait_for_data,
+        target_url=target_url,
+        page_load_strategy=page_load_strategy,
     )
 
     result.capture = CaptureResult(
@@ -404,18 +462,23 @@ def run_capture_workflow(
     timeout: int | None = None,
     skip_browser_check: bool = False,
     wait_for_data: bool = True,
+    skip_probes: bool = False,
+    skip_session_check: bool = False,
+    skip_auth_check: bool = False,
+    page_load_strategy: str = "networkidle",
 ) -> CaptureWorkflowResult:
     """Run the complete capture workflow.
 
     This function orchestrates all phases of the capture workflow:
     1. Check if browser is installed
     2. Check connectivity to target
-    3. Run pre-capture diagnostic probes
-    4. Detect authentication requirements
-    5. Run the capture
+    3. Check for session contamination
+    4. Run pre-capture diagnostic probes
+    5. Detect authentication requirements
+    6. Run the capture
 
     Args:
-        target: URL, hostname, or IP to capture
+        target: URL with scheme (http:// or https://)
         output: Output HAR filename
         browser: Browser to use (chromium, firefox, webkit)
         http_credentials: Optional Basic Auth credentials
@@ -429,12 +492,16 @@ def run_capture_workflow(
         timeout: Timeout in seconds (None = wait for user to close)
         skip_browser_check: Skip browser installation check
         wait_for_data: Wait for async data fetches before navigating
+        skip_probes: Skip pre-capture diagnostic probes (Phase 4)
+        skip_session_check: Skip session contamination check (Phase 3)
+        skip_auth_check: Skip Basic Auth detection (Phase 5)
+        page_load_strategy: Playwright wait_until for page.goto
 
     Returns:
         CaptureWorkflowResult with workflow status
 
     Example:
-        >>> result = run_capture_workflow("192.168.1.1", headless=True, timeout=10)
+        >>> result = run_capture_workflow("http://192.168.1.1", headless=True, timeout=10)
         >>> if result.needs_browser_install:
         ...     install_browser(result.browser.browser)
         ...     result = run_capture_workflow(...)  # retry
@@ -459,16 +526,24 @@ def run_capture_workflow(
     if not result.connectivity_ok:
         return result
 
-    # Phase 3: Pre-capture diagnostic probes
-    result = run_probes_phase(result.target_url, result=result)
+    # Phase 3: Session contamination check
+    if not skip_session_check:
+        result = check_session_phase(result.target_url, result)
+        if result.session_contaminated:
+            return result
 
-    # Phase 4: Auth detection
-    result = check_auth_phase(result.target_url, result)
-    if result.requires_basic_auth and not http_credentials:
-        # Return early so CLI can prompt for credentials
-        return result
+    # Phase 4: Pre-capture diagnostic probes (skippable for single-session devices)
+    if not skip_probes:
+        result = run_probes_phase(result.target_url, result=result)
 
-    # Phase 5: Capture
+    # Phase 5: Auth detection (skippable for single-session devices)
+    if not skip_auth_check:
+        result = check_auth_phase(result.target_url, result)
+        if result.requires_basic_auth and not http_credentials:
+            # Return early so CLI can prompt for credentials
+            return result
+
+    # Phase 6: Capture — pass pre-computed target_url to avoid duplicate connectivity check
     result = run_capture_phase(
         target=target,
         output=output,
@@ -484,6 +559,8 @@ def run_capture_workflow(
         timeout=timeout,
         result=result,
         wait_for_data=wait_for_data,
+        target_url=result.target_url,
+        page_load_strategy=page_load_strategy,
     )
 
     return result

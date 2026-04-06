@@ -6,6 +6,8 @@ Requires the 'capture' optional dependency: pip install har-capture[capture]
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import gzip
 import hashlib
 import json
@@ -62,6 +64,10 @@ _DATA_WAIT_TIMEOUT_S = 30.0
 _DATA_WAIT_NAV_TIMEOUT_S = 15.0
 # Poll interval in milliseconds (used with page.wait_for_timeout)
 _DATA_WAIT_POLL_MS = 200
+# Timeout (ms) for initial networkidle attempt before falling back to domcontentloaded.
+# Normal devices resolve networkidle in <5s. 15s gives headroom for slow devices
+# while catching persistent-connection devices without excessive wait.
+_NETWORKIDLE_FALLBACK_TIMEOUT_MS = 15_000
 
 # Injected into every page when wait_for_data is enabled.
 # Monkey-patches XMLHttpRequest.send and fetch() to track in-flight requests.
@@ -221,6 +227,49 @@ class CaptureOptions:
         )
 
 
+@dataclass
+class CapturePathInfo:
+    """Resolved paths for a capture operation.
+
+    Attributes:
+        output_path: User-facing HAR output path
+        sanitized_output: Path for sanitized HAR (stem + .sanitized.har)
+        temp_path: Temp file path for raw HAR (PII, always deleted)
+        host: Extracted hostname from target
+        target_url: Full URL for navigation (e.g., http://192.168.1.1/)
+    """
+
+    output_path: Path
+    sanitized_output: Path
+    temp_path: Path
+    host: str
+    target_url: str
+
+
+@dataclass
+class BrowserSessionResult:
+    """Data captured during a Playwright browser session.
+
+    Returned by _run_browser_session() — replaces the nonlocal variables
+    that previously shuttled data out of launch_browser_and_capture().
+
+    Attributes:
+        pre_capture_cookies: Cookie jar state before any navigation
+        browser_cookies: Cookies after page load (JS-set included)
+        web_storage_local: localStorage entries per origin
+        web_storage_session: sessionStorage key/value pairs
+        success: True if the session completed without error
+        error: Error message if session failed
+    """
+
+    pre_capture_cookies: list[Any] = dataclasses.field(default_factory=list)
+    browser_cookies: list[Any] = dataclasses.field(default_factory=list)
+    web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
+    success: bool = True
+    error: str | None = None
+
+
 def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -> None:
     """Add capture metadata to HAR file.
 
@@ -330,6 +379,363 @@ def filter_and_compress_har(
     }
 
 
+def _resolve_capture_paths(
+    ip: str,
+    output: str | Path | None,
+    target_url: str | None,
+) -> CapturePathInfo:
+    """Resolve output paths, create temp file, and determine target URL.
+
+    Pure filesystem + parsing logic — no network calls, no Playwright.
+
+    Args:
+        ip: Target URL, hostname, or IP address
+        output: User-specified output path (None = auto-generate)
+        target_url: Pre-computed target URL (None = needs connectivity check)
+
+    Returns:
+        CapturePathInfo with all resolved paths and the target URL
+        (target_url may still be None if not pre-computed — caller must
+        run connectivity check).
+    """
+    # Determine output path
+    if output is None:
+        captures_dir = Path.cwd() / "captures"
+        captures_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = captures_dir / f"capture_{timestamp}.har"
+    else:
+        output_path = Path(output)
+
+    # Ensure .har extension
+    if output_path.suffix != ".har":
+        output_path = output_path.with_suffix(".har")
+
+    # Create parent directories if they don't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parse target to extract hostname
+    host, _ = _parse_target(ip)
+
+    # Determine sanitized output path
+    if str(output_path).endswith(".har"):
+        sanitized_output = output_path.parent / (output_path.stem + ".sanitized.har")
+    else:
+        sanitized_output = output_path.with_suffix(".sanitized.har")
+
+    # Create temp file for raw HAR (contains PII, never stored in user's directory)
+    temp_fd, temp_path_str = tempfile.mkstemp(suffix=".har", prefix="har_capture_")
+    temp_path = Path(temp_path_str)
+    os.close(temp_fd)
+
+    return CapturePathInfo(
+        output_path=output_path,
+        sanitized_output=sanitized_output,
+        temp_path=temp_path,
+        host=host,
+        target_url=target_url or "",
+    )
+
+
+def _run_browser_session(
+    target_url: str,
+    temp_path: Path,
+    browser: str = "chromium",
+    http_credentials: dict[str, str] | None = None,
+    headless: bool = False,
+    timeout: int | None = None,
+    wait_for_data: bool = True,
+    page_load_strategy: str = "networkidle",
+) -> BrowserSessionResult:
+    """Launch Playwright browser and capture HAR.
+
+    Handles: browser launch, context configuration, navigation with
+    networkidle/domcontentloaded fallback, wait-for-data, cookie/storage
+    capture, timeout vs interactive mode, browser cleanup.
+
+    Args:
+        target_url: Full URL to navigate to
+        temp_path: Temp file path where Playwright writes the raw HAR
+        browser: Browser engine name
+        http_credentials: Optional HTTP Basic Auth credentials
+        headless: Run browser without visible window
+        timeout: Seconds to wait (None = interactive, wait for user close)
+        wait_for_data: Enable async data fetch tracking
+        page_load_strategy: Playwright wait_until value for page.goto()
+
+    Returns:
+        BrowserSessionResult with captured browser state
+    """
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright
+
+    result = BrowserSessionResult()
+
+    with sync_playwright() as p:
+        # Select browser
+        if browser == "firefox":
+            browser_type = p.firefox
+        elif browser == "webkit":
+            browser_type = p.webkit
+        else:
+            browser_type = p.chromium
+
+        # Launch browser with HAR recording
+        browser_instance = browser_type.launch(headless=headless)
+
+        # Build context options - write raw HAR to temp file
+        context_options: dict[str, Any] = {
+            "record_har_path": str(temp_path),
+            "record_har_content": "embed",
+            "ignore_https_errors": True,
+            "service_workers": "block",
+            "storage_state": {
+                "cookies": [],
+                "origins": [],
+            },
+        }
+
+        if http_credentials:
+            context_options["http_credentials"] = http_credentials
+
+        context = browser_instance.new_context(**context_options)
+
+        # Record cookie jar state before any navigation
+        try:
+            result.pre_capture_cookies = context.cookies()
+            if result.pre_capture_cookies:
+                _LOGGER.warning(
+                    "Context inherited %d cookies despite clean storage_state; capture may be contaminated",
+                    len(result.pre_capture_cookies),
+                )
+        except Exception as e:
+            _LOGGER.warning("Could not audit pre-capture cookies: %s", e)
+            result.pre_capture_cookies = []
+
+        page = context.new_page()
+
+        _is_first_nav = [True]
+        _quiescence_disabled = [not wait_for_data]
+
+        if wait_for_data:
+            page.add_init_script(_WAIT_FOR_DATA_INIT_SCRIPT)
+
+            def _on_frame_navigated(frame: Any) -> None:
+                if frame != page.main_frame:
+                    return
+                if _is_first_nav[0]:
+                    _is_first_nav[0] = False
+                    return
+                if _quiescence_disabled[0]:
+                    return
+                try:
+                    page.wait_for_load_state("domcontentloaded")
+                    _wait_for_network_quiescence(page)
+                except Exception:  # noqa: S110
+                    pass
+
+            page.on("framenavigated", _on_frame_navigated)
+
+        context.route("**/*", lambda route: route.continue_())
+
+        # Navigate with auto-fallback
+        if page_load_strategy == "networkidle":
+            try:
+                page.goto(
+                    target_url,
+                    wait_until="networkidle",
+                    timeout=_NETWORKIDLE_FALLBACK_TIMEOUT_MS,
+                )
+            except PlaywrightTimeout:
+                _LOGGER.info(
+                    "networkidle timed out — device has persistent connections, "
+                    "falling back to domcontentloaded"
+                )
+                page.wait_for_load_state("domcontentloaded")
+                _quiescence_disabled[0] = True
+        else:
+            page.goto(target_url, wait_until=page_load_strategy)
+
+        if wait_for_data and not _quiescence_disabled[0]:
+            _wait_for_network_quiescence(page)
+
+        # Capture browser cookie state after page load
+        try:
+            result.browser_cookies = context.cookies()
+        except Exception:
+            result.browser_cookies = []
+
+        # Web Storage snapshot
+        try:
+            storage_state = context.storage_state()
+            result.web_storage_local = [
+                {"origin": o["origin"], "items": o["localStorage"]}
+                for o in storage_state.get("origins", [])
+                if o.get("localStorage")
+            ]
+        except Exception:
+            result.web_storage_local = []
+
+        try:
+            result.web_storage_session = page.evaluate(
+                "() => Object.fromEntries(Object.entries(sessionStorage))"
+            )
+        except Exception:
+            result.web_storage_session = {}
+
+        if timeout is not None:
+            if wait_for_data:
+                page.wait_for_timeout(timeout * 1000)
+                _wait_for_network_quiescence(page, timeout_s=10.0)
+            else:
+                time.sleep(timeout)
+        else:
+            _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
+            try:
+                page.wait_for_event("close", timeout=0)
+            except Exception as e:
+                _LOGGER.warning("Error waiting for page close: %s", e)
+
+        try:
+            context.close()
+        except Exception as e:
+            _LOGGER.warning("Failed to close browser context: %s", e)
+
+        try:
+            browser_instance.close()
+        except Exception as e:
+            _LOGGER.warning("Failed to close browser instance: %s", e)
+
+    return result
+
+
+def _inject_har_metadata(
+    temp_path: Path,
+    target_url: str,
+    probes: dict[str, Any] | None,
+    session: BrowserSessionResult,
+) -> None:
+    """Inject probe data and browser state into the raw HAR.
+
+    Reads the raw HAR from temp_path, injects _probes, _har_capture
+    (cookies, storage), and _solentlabs (pre_capture_cookies), then
+    writes back.
+
+    Args:
+        temp_path: Path to the raw HAR temp file
+        target_url: Target URL used during capture (for sessionStorage origin)
+        probes: Pre-capture probe results (None if no probes ran)
+        session: Browser session result with captured state
+    """
+    try:
+        with open(temp_path, encoding="utf-8") as f:
+            raw_har = json.load(f)
+        if probes:
+            raw_har["log"]["_probes"] = probes
+        if session.browser_cookies:
+            raw_har["log"].setdefault("_har_capture", {})
+            raw_har["log"]["_har_capture"]["browser_cookies"] = session.browser_cookies
+        if session.web_storage_local:
+            raw_har["log"].setdefault("_har_capture", {})
+            raw_har["log"]["_har_capture"]["local_storage"] = session.web_storage_local
+        if session.web_storage_session:
+            raw_har["log"].setdefault("_har_capture", {})
+            raw_har["log"]["_har_capture"]["session_storage"] = [
+                {
+                    "origin": target_url,
+                    "items": [{"name": k, "value": v} for k, v in session.web_storage_session.items()],
+                }
+            ]
+        raw_har["log"]["_solentlabs"] = {
+            "pre_capture_cookies": session.pre_capture_cookies,
+        }
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(raw_har, f)
+    except Exception as e:
+        _LOGGER.warning("Failed to inject metadata into HAR: %s", e)
+
+
+def _run_post_capture_pipeline(
+    temp_path: Path,
+    output_path: Path,
+    sanitized_output: Path,
+    sanitize: bool,
+    compress: bool,
+    keep_raw: bool,
+    interactive: bool,
+    capture_options: CaptureOptions,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> CaptureResult:
+    """Run sanitization, copy raw, compress, and cleanup.
+
+    Args:
+        temp_path: Path to raw HAR temp file (always deleted)
+        output_path: User-facing output path for raw HAR
+        sanitized_output: Path for sanitized HAR output
+        sanitize: Whether to sanitize the HAR
+        compress: Whether to compress after sanitization
+        keep_raw: Whether to keep the raw (unsanitized) HAR
+        interactive: Whether to flag suspicious values for review
+        capture_options: Filtering options (fonts, images, media)
+        custom_patterns: Domain pattern for sanitization
+
+    Returns:
+        CaptureResult with paths to generated files
+    """
+    result = CaptureResult(har_path=None)
+
+    # Sanitize from temp file to user's output location
+    if sanitize:
+        try:
+            from har_capture.sanitization import sanitize_har_file
+
+            _, sanitization_report = sanitize_har_file(
+                str(temp_path),
+                str(sanitized_output),
+                heuristics=HeuristicMode.FLAG if interactive else HeuristicMode.DISABLED,
+                custom_patterns=custom_patterns,
+            )
+            result.sanitized_path = sanitized_output
+            result.sanitization_report = sanitization_report
+        except Exception as e:
+            _LOGGER.warning("Sanitization failed: %s", e)
+
+    # Copy raw file if keep_raw or no sanitization
+    if keep_raw or not sanitize:
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(temp_path, output_path)
+            result.har_path = output_path
+        except Exception as e:
+            result.success = False
+            result.error = f"Failed to save HAR file: {e}"
+            _LOGGER.error("Failed to copy raw HAR to %s: %s", output_path, e)
+
+    # Always clean up temp file (raw PII should not persist)
+    try:
+        temp_path.unlink()
+    except Exception as e:
+        _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
+
+    # Compress the sanitized file (never compress unsanitized)
+    if compress and result.sanitized_path and result.sanitized_path.exists():
+        try:
+            compressed_path, stats = filter_and_compress_har(result.sanitized_path, capture_options)
+            result.compressed_path = compressed_path
+            result.stats = stats
+
+            if not keep_raw and not interactive:
+                try:
+                    result.sanitized_path.unlink()
+                    result.sanitized_path = None
+                except Exception as e:
+                    _LOGGER.warning("Failed to delete uncompressed sanitized HAR: %s", e)
+        except Exception as e:
+            _LOGGER.warning("Compression failed: %s", e)
+
+    return result
+
+
 def capture_device_har(
     ip: str,
     output: str | Path | None = None,
@@ -347,6 +753,8 @@ def capture_device_har(
     probes: dict[str, Any] | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     wait_for_data: bool = True,
+    target_url: str | None = None,
+    page_load_strategy: str = "networkidle",
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -375,6 +783,12 @@ def capture_device_har(
             complete before navigating away from each page.  Prevents losing
             SPA data (e.g. HNAP/SOAP responses) that loads after the initial
             HTML/JS.  Default True; pass False for legacy fast-navigation.
+        target_url: Pre-computed target URL from the CLI workflow (e.g.,
+            ``http://192.168.100.1/``).  When provided, the internal
+            connectivity check is skipped — avoids a duplicate HTTP request.
+        page_load_strategy: Playwright ``wait_until`` value for ``page.goto()``.
+            Default ``"networkidle"``.  Use ``"domcontentloaded"`` for devices
+            with persistent polling that prevent network idle.
 
     Returns:
         CaptureResult with paths to generated files
@@ -395,7 +809,7 @@ def capture_device_har(
         include_media=include_media,
     )
 
-    # Check Playwright
+    # Pre-flight checks
     if not check_playwright():
         return CaptureResult(
             har_path=Path(),
@@ -403,7 +817,6 @@ def capture_device_har(
             error="Playwright not installed. Run: pip install har-capture[capture]",
         )
 
-    # Check browser installed - auto-install if missing
     if not check_browser_installed(browser):
         _LOGGER.info("Browser %s not installed. Installing...", browser)
         if not install_browser(browser):
@@ -414,202 +827,61 @@ def capture_device_har(
             )
         _LOGGER.info("Browser %s installed successfully.", browser)
 
-    from playwright.sync_api import sync_playwright
+    # 1. Resolve paths and create temp file
+    paths = _resolve_capture_paths(ip, output, target_url)
 
-    # Determine output path
-    if output is None:
-        captures_dir = Path.cwd() / "captures"
-        captures_dir.mkdir(exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = captures_dir / f"capture_{timestamp}.har"
-    else:
-        output_path = Path(output)
-
-    # Ensure .har extension
-    if output_path.suffix != ".har":
-        output_path = output_path.with_suffix(".har")
-
-    # Create parent directories if they don't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Parse target to extract hostname (handles URLs like "https://example.com")
-    host, _ = _parse_target(ip)
-
-    # Check connectivity and determine scheme
-    reachable, scheme, error = check_device_connectivity(ip)
-    if not reachable:
-        return CaptureResult(
-            har_path=output_path,
-            success=False,
-            error=error or f"Cannot connect to {host}",
+    # Check connectivity if target_url was not pre-computed
+    if not paths.target_url:
+        reachable, scheme, error = check_device_connectivity(ip)
+        if not reachable:
+            with contextlib.suppress(Exception):
+                paths.temp_path.unlink()
+            return CaptureResult(
+                har_path=paths.output_path,
+                success=False,
+                error=error or f"Cannot connect to {paths.host}",
+            )
+        paths = CapturePathInfo(
+            output_path=paths.output_path,
+            sanitized_output=paths.sanitized_output,
+            temp_path=paths.temp_path,
+            host=paths.host,
+            target_url=f"{scheme}://{paths.host}/",
         )
 
-    target_url = f"{scheme}://{host}/"
+    # 2. Run browser session (with error recovery)
+    def _run_session() -> BrowserSessionResult:
+        return _run_browser_session(
+            target_url=paths.target_url,
+            temp_path=paths.temp_path,
+            browser=browser,
+            http_credentials=http_credentials,
+            headless=headless,
+            timeout=timeout,
+            wait_for_data=wait_for_data,
+            page_load_strategy=page_load_strategy,
+        )
 
-    # Create temp file for raw HAR (contains PII, never stored in user's directory)
-    temp_fd, temp_path_str = tempfile.mkstemp(suffix=".har", prefix="har_capture_")
-    temp_path = Path(temp_path_str)
-    # Close the file descriptor - Playwright will write to it by path
-    os.close(temp_fd)
-
-    browser_cookies: list[Any] = []
-    web_storage_local: list[dict[str, Any]] = []
-    web_storage_session: dict[str, str] = {}
-
-    def launch_browser_and_capture() -> bool:
-        """Launch browser and capture HAR. Returns True on success."""
-        nonlocal browser_cookies, web_storage_local, web_storage_session
-        with sync_playwright() as p:
-            # Select browser
-            if browser == "firefox":
-                browser_type = p.firefox
-            elif browser == "webkit":
-                browser_type = p.webkit
-            else:
-                browser_type = p.chromium
-
-            # Launch browser with HAR recording
-            browser_instance = browser_type.launch(headless=headless)
-
-            # Build context options - write raw HAR to temp file
-            context_options: dict[str, Any] = {
-                "record_har_path": str(temp_path),
-                "record_har_content": "embed",  # Embed response bodies in HAR
-                "ignore_https_errors": True,  # Devices often have self-signed certs
-                "service_workers": "block",  # Disable service workers to prevent caching
-            }
-
-            # Add HTTP Basic Auth credentials if needed
-            if http_credentials:
-                context_options["http_credentials"] = http_credentials
-
-            context = browser_instance.new_context(**context_options)
-
-            # Create page and configure routing
-            page = context.new_page()
-
-            if wait_for_data:
-                # Inject JS that monkey-patches XHR/fetch to track in-flight
-                # requests.  Runs before any page script on every navigation.
-                page.add_init_script(_WAIT_FOR_DATA_INIT_SCRIPT)
-
-                # Track first navigation so we skip the wait (the initial
-                # goto has its own explicit quiescence wait below).
-                _is_first_nav = [True]
-
-                def _on_frame_navigated(frame: Any) -> None:
-                    """Wait for async data to load after each page navigation.
-
-                    Called via page event, NOT from a route handler — calling
-                    page.evaluate() from a sync route handler deadlocks
-                    Playwright's dispatch loop.
-                    """
-                    if frame != page.main_frame:
-                        return
-                    if _is_first_nav[0]:
-                        _is_first_nav[0] = False
-                        return  # Initial goto — handled by explicit wait below
-                    try:
-                        page.wait_for_load_state("domcontentloaded")
-                        _wait_for_network_quiescence(page)
-                    except Exception:  # noqa: S110
-                        pass  # Page closed or context gone
-
-                page.on("framenavigated", _on_frame_navigated)
-
-            # Route handler for cache control (disable HTTP cache)
-            context.route("**/*", lambda route: route.continue_())
-
-            page.goto(target_url, wait_until="networkidle")
-
-            # Wait for async data fetches that fire after initial JS loads
-            if wait_for_data:
-                _wait_for_network_quiescence(page)
-
-            # Capture browser cookie state after page load
-            # Includes JS-set cookies (e.g. XSRF_TOKEN) with full properties
-            try:
-                browser_cookies = context.cookies()
-            except Exception:
-                browser_cookies = []
-
-            # Web Storage snapshot — localStorage via storage_state(),
-            # sessionStorage via JS evaluation in the page context
-            try:
-                storage_state = context.storage_state()
-                web_storage_local = [
-                    {"origin": o["origin"], "items": o["localStorage"]}
-                    for o in storage_state.get("origins", [])
-                    if o.get("localStorage")
-                ]
-            except Exception:
-                web_storage_local = []
-
-            try:
-                web_storage_session = page.evaluate(
-                    "() => Object.fromEntries(Object.entries(sessionStorage))"
-                )
-            except Exception:
-                web_storage_session = {}
-
-            if timeout is not None:
-                if wait_for_data:
-                    # Use Playwright's wait to keep the event loop (and
-                    # framenavigated listeners) active during the wait period.
-                    page.wait_for_timeout(timeout * 1000)
-                    # Final quiescence wait for the last page's data
-                    _wait_for_network_quiescence(page, timeout_s=10.0)
-                else:
-                    # Legacy: simple sleep
-                    time.sleep(timeout)
-            else:
-                # Interactive mode: wait for user to close browser
-                _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
-                try:
-                    page.wait_for_event("close", timeout=0)
-                except Exception as e:
-                    _LOGGER.warning("Error waiting for page close: %s", e)
-                    # Continue with cleanup anyway
-
-            # Close context to save HAR
-            try:
-                context.close()
-            except Exception as e:
-                _LOGGER.warning("Failed to close browser context: %s", e)
-                # Continue cleanup anyway
-
-            try:
-                browser_instance.close()
-            except Exception as e:
-                _LOGGER.warning("Failed to close browser instance: %s", e)
-                # Continue cleanup anyway
-        return True
+    def _cleanup_temp() -> None:
+        try:
+            paths.temp_path.unlink()
+        except Exception as e:
+            _LOGGER.debug("Failed to clean up temp file %s: %s", paths.temp_path, e)
 
     def _is_missing_browser_error(error_msg: str) -> bool:
-        """Check if error indicates the browser executable is missing."""
         error_lower = error_msg.lower()
         return any(pattern in error_lower for pattern in _MISSING_BROWSER_PATTERNS)
 
     def _is_missing_deps_error(error_msg: str) -> bool:
-        """Check if error indicates missing browser dependencies."""
         error_lower = error_msg.lower()
         return any(pattern in error_lower for pattern in _MISSING_DEPS_PATTERNS)
 
-    def _cleanup_temp() -> None:
-        """Clean up temp file."""
-        try:
-            temp_path.unlink()
-        except Exception as e:
-            _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
-            # Not critical, continue anyway
-
     def _try_fix_and_retry(fix_fn: Callable[[], bool], fix_fail_msg: str) -> CaptureResult | None:
-        """Run a fix function and retry the capture. Returns CaptureResult on failure, None on success."""
         if fix_fn():
             _LOGGER.info("Fix applied. Retrying capture...")
             try:
-                launch_browser_and_capture()
-                return None  # success
+                _run_session()
+                return None
             except Exception as e2:
                 _cleanup_temp()
                 return CaptureResult(
@@ -621,7 +893,7 @@ def capture_device_har(
         return CaptureResult(har_path=Path(), success=False, error=fix_fail_msg)
 
     try:
-        launch_browser_and_capture()
+        session = _run_session()
     except Exception as e:
         error_str = _sanitize_error_message(str(e), http_credentials)
         if _is_missing_browser_error(error_str):
@@ -632,6 +904,8 @@ def capture_device_har(
             )
             if fail:
                 return fail
+            # Retry succeeded — create a default session result
+            session = BrowserSessionResult()
         elif _is_missing_deps_error(error_str):
             _LOGGER.warning("Browser dependencies missing. Installing...")
             fail = _try_fix_and_retry(
@@ -640,6 +914,7 @@ def capture_device_har(
             )
             if fail:
                 return fail
+            session = BrowserSessionResult()
         else:
             _cleanup_temp()
             return CaptureResult(
@@ -648,90 +923,18 @@ def capture_device_har(
                 error=error_str,
             )
 
-    # Inject probe data and browser cookies into the raw HAR before any
-    # downstream processing.  This ensures they appear in all output paths
-    # (sanitized, compressed, raw).
-    if probes or browser_cookies or web_storage_local or web_storage_session:
-        try:
-            with open(temp_path, encoding="utf-8") as f:
-                raw_har = json.load(f)
-            if probes:
-                raw_har["log"]["_probes"] = probes
-            if browser_cookies:
-                raw_har["log"].setdefault("_har_capture", {})
-                raw_har["log"]["_har_capture"]["browser_cookies"] = browser_cookies
-            if web_storage_local:
-                raw_har["log"].setdefault("_har_capture", {})
-                raw_har["log"]["_har_capture"]["local_storage"] = web_storage_local
-            if web_storage_session:
-                raw_har["log"].setdefault("_har_capture", {})
-                raw_har["log"]["_har_capture"]["session_storage"] = [
-                    {
-                        "origin": target_url,
-                        "items": [{"name": k, "value": v} for k, v in web_storage_session.items()],
-                    }
-                ]
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(raw_har, f)
-        except Exception as e:
-            _LOGGER.warning("Failed to inject metadata into HAR: %s", e)
+    # 3. Inject metadata
+    _inject_har_metadata(paths.temp_path, paths.target_url, probes, session)
 
-    # Determine sanitized output path based on user's output_path
-    if str(output_path).endswith(".har"):
-        sanitized_output = output_path.parent / (output_path.stem + ".sanitized.har")
-    else:
-        sanitized_output = output_path.with_suffix(".sanitized.har")
-
-    result = CaptureResult(har_path=None)
-
-    # Sanitize from temp file to user's output location
-    if sanitize:
-        try:
-            from har_capture.sanitization import sanitize_har_file
-
-            _, sanitization_report = sanitize_har_file(
-                str(temp_path),
-                str(sanitized_output),
-                heuristics=HeuristicMode.FLAG if interactive else HeuristicMode.DISABLED,
-                custom_patterns=custom_patterns,
-            )
-            result.sanitized_path = sanitized_output
-            result.sanitization_report = sanitization_report
-        except Exception as e:
-            _LOGGER.warning("Sanitization failed: %s", e)
-
-    # Copy raw file to user's output location if:
-    # - keep_raw is True, OR
-    # - sanitize is False (user wants the raw file as output)
-    if keep_raw or not sanitize:
-        try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(temp_path, output_path)
-            result.har_path = output_path
-        except Exception as e:
-            result.success = False
-            result.error = f"Failed to save HAR file: {e}"
-            _LOGGER.error("Failed to copy raw HAR to %s: %s", output_path, e)
-
-    # Always clean up temp file (raw PII should not persist)
-    _cleanup_temp()
-
-    # Compress the sanitized file (never compress unsanitized)
-    if compress and result.sanitized_path and result.sanitized_path.exists():
-        try:
-            compressed_path, stats = filter_and_compress_har(result.sanitized_path, capture_options)
-            result.compressed_path = compressed_path
-            result.stats = stats
-
-            # Delete uncompressed sanitized file unless keep_raw or interactive
-            # Interactive mode needs the uncompressed file for user review
-            if not keep_raw and not interactive:
-                try:
-                    result.sanitized_path.unlink()
-                    result.sanitized_path = None
-                except Exception as e:
-                    _LOGGER.warning("Failed to delete uncompressed sanitized HAR: %s", e)
-        except Exception as e:
-            _LOGGER.warning("Compression failed: %s", e)
-
-    return result
+    # 4. Post-capture pipeline
+    return _run_post_capture_pipeline(
+        temp_path=paths.temp_path,
+        output_path=paths.output_path,
+        sanitized_output=paths.sanitized_output,
+        sanitize=sanitize,
+        compress=compress,
+        keep_raw=keep_raw,
+        interactive=interactive,
+        capture_options=capture_options,
+        custom_patterns=custom_patterns,
+    )

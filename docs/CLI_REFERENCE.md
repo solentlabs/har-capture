@@ -12,7 +12,7 @@ ______________________________________________________________________
 
 Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
 
-`get` is the default command — you can omit it when the first argument is a URL, hostname, or IP address.
+`get` is the default command — you can omit it when the first argument is a URL. The URL must include a scheme (`http://` or `https://`).
 
 ### Basic Usage
 
@@ -23,7 +23,7 @@ har-capture get <TARGET>
 
 ### Arguments
 
-- `TARGET` - URL or local file path to capture
+- `TARGET` - URL with scheme (`http://` or `https://`)
 
 ### Options
 
@@ -38,6 +38,7 @@ har-capture get <TARGET>
 
 - `--browser {chromium,firefox,webkit}` - Browser engine (default: chromium)
 - `--wait-for-data / --no-wait-for-data` - Wait for async data to load on each page (default: enabled)
+- `--minimal` - Minimal pre-flight for single-session devices (skips session check, probes, auth check, uses domcontentloaded, disables wait-for-data)
 - `--username TEXT` - Username for HTTP Basic Auth
 - `--password TEXT` - Password for HTTP Basic Auth
 
@@ -59,7 +60,7 @@ har-capture https://example.com
 har-capture get https://example.com
 
 # Custom output path
-har-capture 192.168.1.1 --output modem.har
+har-capture http://192.168.1.1 --output modem.har
 
 # Keep raw unsanitized file for debugging
 har-capture https://example.com --keep-raw
@@ -70,6 +71,18 @@ har-capture https://example.com --salt my-debug-key
 # Disable async data wait for faster capture of simple sites
 har-capture https://example.com --no-wait-for-data
 ```
+
+### Pre-flight Checks
+
+Before launching the browser, `get` runs two checks (skipped with `--minimal`):
+
+1. **Connectivity** — validates the target is reachable on the given scheme
+
+1. **Session contamination** — detects if the device has a live session that would skip the login flow. If the device returns data content without requiring authentication, the capture aborts with:
+
+   > ERROR: Browser has a live session — clear cookies or use a clean profile.
+
+   **Resolution:** log out from other browser tabs, reboot the device, or wait for the session to expire. Use `--minimal` to skip this check for devices that don't require login.
 
 ### Default Workflow
 

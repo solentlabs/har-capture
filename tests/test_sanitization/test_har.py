@@ -2268,3 +2268,75 @@ class TestApplyUserRedactions:
             pytest.raises(HarValidationError, match="Failed to parse HAR"),
         ):
             apply_user_redactions(har_data, report)
+
+
+# =============================================================================
+# XML POST Data Sanitization
+# =============================================================================
+
+XML_POST_DATA_CASES = [
+    (c["post_data"], c["must_not_contain"], c["must_contain"], c["id"])
+    for c in _HAR_FIXTURE["xml_post_data_cases"]
+]
+
+
+class TestXmlPostDataSanitization:
+    """Tests for sanitize_post_data with XML MIME types."""
+
+    @pytest.mark.parametrize(
+        ("post_data", "must_not_contain", "must_contain", "desc"),
+        XML_POST_DATA_CASES,
+        ids=[c[3] for c in XML_POST_DATA_CASES],
+    )
+    def test_xml_post_body_sanitization(
+        self,
+        post_data: dict,
+        must_not_contain: list[str],
+        must_contain: list[str],
+        desc: str,
+    ) -> None:
+        """XML POST bodies are sanitized: sensitive values removed, safe values preserved."""
+        result = sanitize_post_data(post_data)
+        text = result.get("text", "")
+        for forbidden in must_not_contain:
+            assert forbidden not in text, f"'{forbidden}' should be redacted in {desc}"
+        for required in must_contain:
+            assert required in text, f"'{required}' should be preserved in {desc}"
+
+
+class TestApplicationXmlResponseRouting:
+    """Tests that application/xml responses are routed through the HTML engine."""
+
+    def test_application_xml_mac_redacted(self) -> None:
+        """application/xml response content should have MACs redacted by the HTML engine."""
+        entry = {
+            "request": {"method": "GET", "url": "http://modem/xml/getter.xml", "headers": []},
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/xml",
+                    "text": "<device><mac>AA:BB:CC:DD:EE:FF</mac></device>",
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt="test")
+        content_text = result["response"]["content"]["text"]
+        assert "AA:BB:CC:DD:EE:FF" not in content_text
+
+    def test_application_xml_ip_redacted(self) -> None:
+        """application/xml response content should have private IPs redacted."""
+        entry = {
+            "request": {"method": "GET", "url": "http://modem/status.xml", "headers": []},
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {
+                    "mimeType": "application/xml",
+                    "text": "<config><gateway>192.168.1.100</gateway></config>",
+                },
+            },
+        }
+        result = sanitize_entry(entry, salt="test")
+        content_text = result["response"]["content"]["text"]
+        assert "192.168.1.100" not in content_text
