@@ -13,30 +13,18 @@ from har_capture.capture.connectivity import (
     _parse_target,
     check_basic_auth,
     check_device_connectivity,
+    check_session_contamination,
 )
 
 # =============================================================================
 # Test Data Tables
 # =============================================================================
 
-# ┌────────────────────────┬──────────┬─────────┬────────────────────────────┐
-# │ target                 │ reachable│ scheme  │ description                │
-# ├────────────────────────┼──────────┼─────────┼────────────────────────────┤
-# │ Target to check        │ T/F      │ http/s  │ test case name             │
-# └────────────────────────┴──────────┴─────────┴────────────────────────────┘
-#
-# fmt: off
-CONNECTIVITY_SUCCESS_CASES = [
-    ("192.168.1.1",     "http",     "http_success"),
-    ("10.0.0.1",        "http",     "private_ip_http"),
-    ("example.com",     "https",    "https_success"),
-]
-
 CONNECTIVITY_HTTP_ERROR_CASES = [
-    (401,   "Unauthorized",     "auth_required"),
-    (403,   "Forbidden",        "forbidden"),
-    (404,   "Not Found",        "not_found"),
-    (500,   "Server Error",     "server_error"),
+    (401, "Unauthorized", "auth_required"),
+    (403, "Forbidden", "forbidden"),
+    (404, "Not Found", "not_found"),
+    (500, "Server Error", "server_error"),
 ]
 # fmt: on
 
@@ -54,7 +42,7 @@ class TestCheckDeviceConnectivity:
         """Test successful HTTP connection."""
         mock_urlopen.return_value = MagicMock()
 
-        reachable, scheme, error = check_device_connectivity("192.168.1.1")
+        reachable, scheme, error = check_device_connectivity("http://192.168.1.1")
 
         assert reachable is True
         assert scheme == "http"
@@ -63,21 +51,6 @@ class TestCheckDeviceConnectivity:
     @patch("urllib.request.urlopen")
     def test_https_success(self, mock_urlopen: MagicMock) -> None:
         """Test successful HTTPS connection."""
-        # First call (HTTP) fails, second call (HTTPS) succeeds
-        mock_urlopen.side_effect = [
-            urllib.error.URLError("Connection refused"),
-            MagicMock(),
-        ]
-
-        reachable, scheme, error = check_device_connectivity("example.com")
-
-        assert reachable is True
-        assert scheme == "https"
-        assert error is None
-
-    @patch("urllib.request.urlopen")
-    def test_provided_https_scheme(self, mock_urlopen: MagicMock) -> None:
-        """Test with explicitly provided HTTPS scheme."""
         mock_urlopen.return_value = MagicMock()
 
         reachable, scheme, error = check_device_connectivity("https://example.com")
@@ -85,12 +58,10 @@ class TestCheckDeviceConnectivity:
         assert reachable is True
         assert scheme == "https"
         assert error is None
-        # Should only try HTTPS, not HTTP first
-        assert mock_urlopen.call_count == 1
 
     @patch("urllib.request.urlopen")
-    def test_provided_http_scheme(self, mock_urlopen: MagicMock) -> None:
-        """Test with explicitly provided HTTP scheme."""
+    def test_http_scheme(self, mock_urlopen: MagicMock) -> None:
+        """Test with HTTP scheme."""
         mock_urlopen.return_value = MagicMock()
 
         reachable, scheme, error = check_device_connectivity("http://example.com")
@@ -98,6 +69,24 @@ class TestCheckDeviceConnectivity:
         assert reachable is True
         assert scheme == "http"
         assert error is None
+        assert mock_urlopen.call_count == 1
+
+    def test_missing_scheme_returns_error(self) -> None:
+        """Test bare hostname/IP without scheme returns error."""
+        reachable, _scheme, error = check_device_connectivity("192.168.1.1")
+
+        assert reachable is False
+        assert error is not None
+        assert "http://" in error
+        assert "https://" in error
+
+    def test_missing_scheme_hostname(self) -> None:
+        """Test bare hostname without scheme returns error."""
+        reachable, _scheme, error = check_device_connectivity("example.com")
+
+        assert reachable is False
+        assert error is not None
+        assert "Missing scheme" in error
 
     @pytest.mark.parametrize(
         ("status_code", "reason", "desc"),
@@ -121,7 +110,7 @@ class TestCheckDeviceConnectivity:
             fp=None,
         )
 
-        reachable, _scheme, error = check_device_connectivity("192.168.1.1")
+        reachable, _scheme, error = check_device_connectivity("http://192.168.1.1")
 
         assert reachable is True, f"{desc}: HTTP {status_code} should mean reachable"
         assert error is None
@@ -131,7 +120,7 @@ class TestCheckDeviceConnectivity:
         """Test connection refused returns not reachable."""
         mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
 
-        reachable, _scheme, error = check_device_connectivity("192.168.1.1")
+        reachable, _scheme, error = check_device_connectivity("http://192.168.1.1")
 
         assert reachable is False
         assert error is not None
@@ -142,7 +131,7 @@ class TestCheckDeviceConnectivity:
         """Test connection timeout returns not reachable."""
         mock_urlopen.side_effect = urllib.error.URLError("timed out")
 
-        reachable, _scheme, error = check_device_connectivity("192.168.1.1", timeout=1)
+        reachable, _scheme, error = check_device_connectivity("http://192.168.1.1", timeout=1)
 
         assert reachable is False
         assert error is not None
@@ -152,7 +141,7 @@ class TestCheckDeviceConnectivity:
         """Test generic exception is handled."""
         mock_urlopen.side_effect = Exception("Something went wrong")
 
-        reachable, _scheme, error = check_device_connectivity("192.168.1.1")
+        reachable, _scheme, error = check_device_connectivity("http://192.168.1.1")
 
         assert reachable is False
         assert error is not None
@@ -338,3 +327,178 @@ class TestParseTargetEdgeCases:
         host, scheme = _parse_target("http://[::1]:8080")
         assert "[::1]:8080" in host
         assert scheme == "http"
+
+
+# =============================================================================
+# Test Data Tables — Session Contamination
+# =============================================================================
+
+# fmt: off
+SESSION_CONTAMINATION_LOGIN_PAGES = [
+    (b"<html><body><form><input type='password'></form></body></html>",       "password field"),
+    (b"<html><body><h1>Login</h1><form action='/auth'></form></body></html>", "login keyword"),
+    (b"<html><body>Please sign in to continue</body></html>",                "sign in text"),
+    (b"<html><body>Please authenticate to access this resource</body></html>", "authenticate keyword"),
+]
+
+SESSION_CONTAMINATION_DATA_PAGES = [
+    (b"<html><body><h1>Device Status</h1><table><tr><td>Downstream</td><td>Channel 1</td></tr></table>" + b"x" * 100, "admin data page"),
+    (b'{"systemInfo":{"model":"MB8611","firmware":"2.3.1"},"uptime":123456}' + b" " * 50,                              "JSON device data"),
+]
+# fmt: on
+
+
+class TestCheckSessionContamination:
+    """Tests for check_session_contamination function."""
+
+    @patch("urllib.request.urlopen")
+    def test_401_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """401 response means auth is required — no live session."""
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://test/",
+            code=401,
+            msg="Unauthorized",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @patch("urllib.request.urlopen")
+    def test_403_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """403 response means auth is required — no live session."""
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://test/",
+            code=403,
+            msg="Forbidden",
+            hdrs=MagicMock(),
+            fp=None,
+        )
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @pytest.mark.parametrize(
+        ("body", "desc"),
+        SESSION_CONTAMINATION_LOGIN_PAGES,
+        ids=[c[1] for c in SESSION_CONTAMINATION_LOGIN_PAGES],
+    )
+    @patch("urllib.request.urlopen")
+    def test_login_page_means_clean(
+        self,
+        mock_urlopen: MagicMock,
+        body: bytes,
+        desc: str,
+    ) -> None:
+        """200 with login page indicators means clean state."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = body
+        mock_urlopen.return_value = mock_resp
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False, f"{desc}: login page should not be flagged"
+        assert message is None
+
+    @pytest.mark.parametrize(
+        ("body", "desc"),
+        SESSION_CONTAMINATION_DATA_PAGES,
+        ids=[c[1] for c in SESSION_CONTAMINATION_DATA_PAGES],
+    )
+    @patch("urllib.request.urlopen")
+    def test_data_page_means_contaminated(
+        self,
+        mock_urlopen: MagicMock,
+        body: bytes,
+        desc: str,
+    ) -> None:
+        """200 with data content and no login indicators means live session."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = body
+        mock_urlopen.return_value = mock_resp
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is True, f"{desc}: data page should be flagged"
+        assert message is not None
+        assert "live session" in message
+
+    @patch("urllib.request.urlopen")
+    def test_tiny_response_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """Very small 200 response (redirect stub) is not flagged."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"<html><body>OK</body></html>"  # < 100 bytes
+        mock_urlopen.return_value = mock_resp
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @patch("urllib.request.urlopen")
+    def test_empty_response_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """Empty 200 response is not flagged."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b""
+        mock_urlopen.return_value = mock_resp
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @patch("urllib.request.urlopen")
+    def test_connection_error_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """Connection errors don't block capture."""
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @patch("urllib.request.urlopen")
+    def test_timeout_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """Timeout doesn't block capture."""
+        mock_urlopen.side_effect = TimeoutError("timed out")
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None
+
+    @patch("urllib.request.urlopen")
+    def test_https_uses_ssl_context(self, mock_urlopen: MagicMock) -> None:
+        """HTTPS URLs use SSL context for self-signed certs."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"<html><body>Login</body></html>" + b" " * 100
+        mock_urlopen.return_value = mock_resp
+
+        check_session_contamination("https://192.168.100.1/")
+
+        call_kwargs = mock_urlopen.call_args[1]
+        assert "context" in call_kwargs
+        ctx = call_kwargs["context"]
+        assert isinstance(ctx, ssl.SSLContext)
+
+    @patch("urllib.request.urlopen")
+    def test_non_200_status_means_clean(self, mock_urlopen: MagicMock) -> None:
+        """Non-200 success status (e.g., 204) means clean state."""
+        mock_resp = MagicMock()
+        mock_resp.status = 302
+        mock_urlopen.return_value = mock_resp
+
+        contaminated, message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is False
+        assert message is None

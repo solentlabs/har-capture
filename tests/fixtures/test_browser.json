@@ -45,5 +45,38 @@
     {"target": "HTTPS://EXAMPLE.COM",           "expected_host": "EXAMPLE.COM",      "scheme": "https", "id": "uppercase_scheme"},
     {"target": "http://localhost",              "expected_host": "localhost",         "scheme": "http",  "id": "localhost"},
     {"target": "http://127.0.0.1",              "expected_host": "127.0.0.1",        "scheme": "http",  "id": "loopback_ip"}
+  ],
+  "wait_for_pending_data_cases": [
+    {"id": "immediate_zero",       "pending_values": [0],           "timeout_s": 1.0, "expect_timeout": false, "description": "returns immediately when pending is 0"},
+    {"id": "drains_to_zero",       "pending_values": [3, 2, 1, 0], "timeout_s": 1.0, "expect_timeout": false, "description": "waits until pending drains to 0"},
+    {"id": "stays_pending",        "pending_values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "timeout_s": 0.05, "expect_timeout": true, "description": "times out when requests never complete"},
+    {"id": "evaluate_exception",   "pending_values": "exception",  "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
+  ],
+  "wait_for_quiescence_cases": [
+    {"id": "already_quiet",      "pending_values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns when already quiescent"},
+    {"id": "activity_then_quiet", "pending_values": [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "waits through activity then detects quiescence"},
+    {"id": "never_quiet",        "pending_values": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0], "quiescence_s": 5.0,  "timeout_s": 0.05, "expect_timeout": true, "description": "times out when activity oscillates"},
+    {"id": "evaluate_exception", "pending_values": "exception",    "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
+  ],
+  "output_path_cases": [
+    {"id": "har_suffix_preserved",   "input": "capture.har",   "expected_suffix": ".har"},
+    {"id": "non_har_gets_har",       "input": "capture.json",  "expected_suffix": ".har"},
+    {"id": "no_ext_gets_har",        "input": "capture",       "expected_suffix": ".har"}
+  ],
+  "capture_error_cases": [
+    {"id": "playwright_not_installed",   "mock_check_pw": false, "expect_error": "Playwright not installed"},
+    {"id": "connectivity_failure",       "mock_connectivity": [false, "http", "Connection refused"], "expect_error": "Connection refused"}
+  ],
+  "browser_selection_cases": [
+    {"id": "chromium", "browser": "chromium", "launch_attr": "chromium"},
+    {"id": "firefox",  "browser": "firefox",  "launch_attr": "firefox"},
+    {"id": "webkit",   "browser": "webkit",   "launch_attr": "webkit"}
+  ],
+  "inject_metadata_cases": [
+    {"id": "all_metadata",  "has_probes": true,  "has_cookies": true,  "has_storage": true},
+    {"id": "probes_only",   "has_probes": true,  "has_cookies": false, "has_storage": false},
+    {"id": "cookies_only",  "has_probes": false, "has_cookies": true,  "has_storage": false},
+    {"id": "storage_only",  "has_probes": false, "has_cookies": false, "has_storage": true},
+    {"id": "empty_session", "has_probes": false, "has_cookies": false, "has_storage": false}
   ]
 }

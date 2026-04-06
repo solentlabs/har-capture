@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 def capture(
     target: Annotated[
         str,
-        typer.Argument(help="URL, hostname, or IP address to capture"),
+        typer.Argument(help="URL to capture (must include http:// or https://)"),
     ],
     output: Annotated[
         Path | None,
@@ -67,6 +67,14 @@ def capture(
             help="Wait for async data to load on each page before navigating",
         ),
     ] = True,
+    minimal: Annotated[
+        bool,
+        typer.Option(
+            "--minimal",
+            help="Minimal pre-flight for single-session devices "
+            "(skips probes, auth check, uses domcontentloaded)",
+        ),
+    ] = False,
 ) -> None:
     """Capture HTTP traffic using Playwright browser.
 
@@ -77,7 +85,7 @@ def capture(
     Use --include-fonts, --include-images, or --include-media to keep them.
 
     Args:
-        target: URL, hostname, or IP address to capture
+        target: URL to capture (must include http:// or https://)
         output: Output HAR filename (auto-generated if not provided)
         browser: Browser engine to use (chromium, firefox, webkit)
         username: Username for HTTP Basic Auth if required
@@ -90,24 +98,29 @@ def capture(
         include_media: Include media files in capture
         patterns: Pattern names or JSON file paths (repeatable)
         wait_for_data: Wait for async data to load on each page
+        minimal: Minimal pre-flight for single-session devices
 
     Example:
         har-capture https://example.com
-        har-capture 192.168.100.1 --output capture.har
-        har-capture get router.local --include-images
+        har-capture http://192.168.100.1 --output capture.har
+        har-capture get http://router.local --include-images
     """
     try:
         from har_capture.capture.deps import install_browser
         from har_capture.capture.workflow import (
-            check_auth_phase,
             check_browser_phase,
             check_connectivity_phase,
+            check_session_phase,
             run_capture_phase,
             run_probes_phase,
         )
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
         raise typer.Exit(1) from None
+
+    # Resolve minimal mode overrides
+    if minimal:
+        wait_for_data = False
 
     # Phase 1: Check browser installation
     result = check_browser_phase(browser)
@@ -132,35 +145,40 @@ def capture(
     # Display header
     _display_header(target, browser, output)
 
-    # Phase 2: Check connectivity
-    typer.echo("Checking connectivity...")
-    result = check_connectivity_phase(target, result)
-    if not result.connectivity_ok:
-        typer.echo(f"  ERROR: {result.connectivity_error}", err=True)
-        raise typer.Exit(1)
-    typer.echo(f"  Connected:  {result.target_url}")
+    # Phase 2: Check connectivity (skipped in minimal mode)
+    if not minimal:
+        typer.echo("Checking connectivity...")
+        result = check_connectivity_phase(target, result)
+        if not result.connectivity_ok:
+            typer.echo(f"  ERROR: {result.connectivity_error}", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"  Connected:  {result.target_url}")
 
-    # Phase 3: Pre-capture diagnostic probes
-    typer.echo()
-    typer.echo("Running diagnostic probes...")
-    result = run_probes_phase(result.target_url, result=result)
-    if result.probe_data:
-        auth_probe = result.probe_data.get("auth_challenge", {})
-        head_probe = result.probe_data.get("head_support", {})
-        icmp_probe = result.probe_data.get("icmp", {})
-        auth_status = auth_probe.get("status_code", "?")
-        head_ok = "yes" if head_probe.get("supported") else "no"
-        icmp_ok = "yes" if icmp_probe.get("reachable") else "no"
-        latency = icmp_probe.get("latency_ms")
-        latency_str = f" ({latency}ms)" if latency is not None else ""
-        typer.echo(f"  Auth status: {auth_status}  HEAD: {head_ok}  ICMP: {icmp_ok}{latency_str}")
+        # Phase 3: Session contamination check
+        result = check_session_phase(result.target_url, result)
+        if result.session_contaminated:
+            typer.echo(f"  ERROR: {result.session_message}", err=True)
+            raise typer.Exit(1)
 
-    # Phase 4: Check authentication
-    typer.echo()
-    typer.echo("Checking authentication type...")
-    result = check_auth_phase(result.target_url, result)
+    # Credentials handling: if user provides --username/--password, we set
+    # http_credentials on the Playwright context (handles Basic Auth automatically).
+    # When http_credentials is set, Playwright suppresses the 401 response in the
+    # HAR, so we auto-run the auth probe to capture that data (see ADR-3).
+    has_credentials = username is not None and password is not None
+    http_credentials: dict[str, str] | None = None
 
-    http_credentials = _handle_auth(result, username, password)
+    if has_credentials:
+        # has_credentials guarantees both are str (not None)
+        http_credentials = {"username": str(username), "password": str(password)}
+        # Auto-run auth probe to capture the 401 that http_credentials will suppress
+        if not minimal:
+            typer.echo()
+            typer.echo("Running auth probe (credentials provided)...")
+            result = run_probes_phase(result.target_url, result=result)
+            if result.probe_data:
+                auth_probe = result.probe_data.get("auth_challenge", {})
+                auth_status = auth_probe.get("status_code", "?")
+                typer.echo(f"  Auth status: {auth_status}")
 
     # Display instructions
     _display_instructions()
@@ -176,7 +194,8 @@ def capture(
         else:
             custom_patterns = merge_pattern_files(resolved)
 
-    # Phase 4: Run capture
+    # Phase 3: Run capture — pass pre-computed target_url to avoid duplicate connectivity check
+    page_load_strategy = "domcontentloaded" if minimal else "networkidle"
     result = run_capture_phase(
         target=target,
         output=output,
@@ -192,6 +211,8 @@ def capture(
         result=result,
         custom_patterns=custom_patterns,
         wait_for_data=wait_for_data,
+        target_url=result.target_url if result.connectivity else None,
+        page_load_strategy=page_load_strategy,
     )
 
     if not result.capture_success:
@@ -217,30 +238,6 @@ def _display_header(target: str, browser: str, output: Path | None) -> None:
     if output:
         typer.echo(f"  Output:     {output}")
     typer.echo()
-
-
-def _handle_auth(
-    result: CaptureWorkflowResult,
-    username: str | None,
-    password: str | None,
-) -> dict[str, str] | None:
-    """Handle authentication based on workflow result."""
-    if result.requires_basic_auth:
-        realm_msg = f" ({result.auth_realm})" if result.auth_realm else ""
-        typer.echo(f"  Detected: HTTP Basic Auth{realm_msg}")
-        if username is not None and password is not None:
-            return {"username": username, "password": password}
-        typer.echo()
-        if result.auth_realm:
-            typer.echo(f"This site ({result.auth_realm}) requires HTTP Basic Authentication.")
-        else:
-            typer.echo("This site requires HTTP Basic Authentication.")
-        typer.echo()
-        prompted_user = typer.prompt("Username", default="admin")
-        prompted_pass = typer.prompt("Password", hide_input=True)
-        return {"username": prompted_user, "password": prompted_pass or ""}
-    typer.echo("  Detected: Form-based or no auth required")
-    return None
 
 
 def _display_instructions() -> None:

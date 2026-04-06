@@ -15,6 +15,7 @@ Test Strategy:
 
 from __future__ import annotations
 
+import json
 import logging
 import ssl
 import subprocess
@@ -24,12 +25,15 @@ import urllib.request
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from har_capture.capture.probes import (
     _BODY_PREVIEW_CAP,
+    _headers_dict,
+    _read_body_preview,
     probe_auth_challenge,
     probe_head_support,
     probe_icmp,
@@ -719,3 +723,75 @@ class TestProbeIntegrationHTTPS:
         assert result["supported"] is True
         assert result["status_code"] is not None
         assert result["error"] is None
+
+
+# =============================================================================
+# Table-driven tests for helper functions (fixture data)
+# =============================================================================
+
+_PROBES_FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "test_probes.json"
+with _PROBES_FIXTURE_PATH.open() as _pf:
+    _PROBES_FIXTURES = json.load(_pf)
+
+READ_BODY_PREVIEW_CASES = _PROBES_FIXTURES["read_body_preview_cases"]
+HEADERS_DICT_CASES = _PROBES_FIXTURES["headers_dict_cases"]
+
+
+class TestReadBodyPreview:
+    """Table-driven tests for _read_body_preview helper."""
+
+    @pytest.mark.parametrize(
+        "case",
+        READ_BODY_PREVIEW_CASES,
+        ids=[c["id"] for c in READ_BODY_PREVIEW_CASES],
+    )
+    def test_read_body_preview(self, case: dict) -> None:
+        """Test _read_body_preview with various file-pointer states."""
+        if case.get("fp") is None and "fp_bytes" not in case and "fp_str" not in case:
+            result = _read_body_preview(None)
+        elif case.get("fp_raises"):
+            fp = MagicMock()
+            fp.read.side_effect = OSError("read failed")
+            result = _read_body_preview(fp)
+        elif "fp_bytes" in case:
+            result = _read_body_preview(BytesIO(case["fp_bytes"].encode()))
+        elif "fp_str" in case:
+            fp = MagicMock()
+            fp.read.return_value = case["fp_str"]
+            result = _read_body_preview(fp)
+        else:
+            result = _read_body_preview(None)
+
+        assert result == case["expect"]
+
+    def test_truncation_at_cap(self) -> None:
+        """Test body is truncated at _BODY_PREVIEW_CAP."""
+        long_body = "x" * (_BODY_PREVIEW_CAP + 500)
+        fp = MagicMock()
+        fp.read.return_value = long_body
+        result = _read_body_preview(fp)
+        assert len(result) == _BODY_PREVIEW_CAP
+
+
+class TestHeadersDict:
+    """Table-driven tests for _headers_dict helper."""
+
+    @pytest.mark.parametrize(
+        "case",
+        HEADERS_DICT_CASES,
+        ids=[c["id"] for c in HEADERS_DICT_CASES],
+    )
+    def test_headers_dict(self, case: dict) -> None:
+        """Test _headers_dict with various header objects."""
+        if case.get("headers") is None and not case.get("items_raises"):
+            result = _headers_dict(None)
+        elif case.get("items_raises"):
+            mock_headers = MagicMock()
+            mock_headers.items.side_effect = AttributeError("no items")
+            result = _headers_dict(mock_headers)
+        else:
+            mock_headers = MagicMock()
+            mock_headers.items.return_value = list(case["headers"].items())
+            result = _headers_dict(mock_headers)
+
+        assert result == case["expect"]

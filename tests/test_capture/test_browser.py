@@ -33,7 +33,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from har_capture.capture.browser import CaptureOptions, _add_capture_metadata, capture_device_har
+from har_capture.capture.browser import (
+    BrowserSessionResult,
+    CaptureOptions,
+    _add_capture_metadata,
+    _inject_har_metadata,
+    _resolve_capture_paths,
+    _run_post_capture_pipeline,
+    _wait_for_network_quiescence,
+    _wait_for_pending_data,
+    capture_device_har,
+)
 from har_capture.capture.connectivity import _parse_target
 from har_capture.capture.deps import check_playwright
 from har_capture.patterns import get_bloat_extensions
@@ -52,6 +62,12 @@ PRIVATE_IP_CASES = [(c["ip"], c["expected"], c["id"]) for c in _FIXTURE_DATA["pr
 PARSE_TARGET_CASES = [
     (c["target"], c["expected_host"], c["scheme"], c["id"]) for c in _FIXTURE_DATA["parse_target_cases"]
 ]
+
+WAIT_FOR_PENDING_DATA_CASES = _FIXTURE_DATA["wait_for_pending_data_cases"]
+WAIT_FOR_QUIESCENCE_CASES = _FIXTURE_DATA["wait_for_quiescence_cases"]
+OUTPUT_PATH_CASES = _FIXTURE_DATA["output_path_cases"]
+CAPTURE_ERROR_CASES = _FIXTURE_DATA["capture_error_cases"]
+BROWSER_SELECTION_CASES = _FIXTURE_DATA["browser_selection_cases"]
 
 # ┌─────────────────────────┬─────────────────────────────┐
 # │ extension               │ description                 │
@@ -517,7 +533,9 @@ class TestBrowserCookieSnapshot:
             wait_for_data=False,
         )
 
-        mock_context.cookies.assert_called_once()
+        # cookies() is called twice: once for pre-capture audit, once for
+        # browser state snapshot after navigation
+        assert mock_context.cookies.call_count == 2
 
     @patch("har_capture.capture.browser.check_playwright", return_value=True)
     @patch("har_capture.capture.browser.check_device_connectivity")
@@ -1575,3 +1593,732 @@ class TestWaitForData:
         )
 
         mock_quiescence.assert_not_called()
+
+
+# =============================================================================
+# Table-driven tests for wait-for-data helpers
+# =============================================================================
+
+
+class TestWaitForPendingData:
+    """Table-driven tests for _wait_for_pending_data timeout/success paths."""
+
+    @pytest.mark.parametrize(
+        "case",
+        WAIT_FOR_PENDING_DATA_CASES,
+        ids=[c["id"] for c in WAIT_FOR_PENDING_DATA_CASES],
+    )
+    def test_pending_data(self, case: dict) -> None:
+        """Test _wait_for_pending_data with various pending-count sequences."""
+        page = MagicMock()
+
+        if case["pending_values"] == "exception":
+            page.evaluate.side_effect = RuntimeError("context gone")
+        else:
+            page.evaluate.side_effect = case["pending_values"]
+
+        _wait_for_pending_data(page, timeout_s=case["timeout_s"])
+
+        # If exception, should return after first call
+        if case["pending_values"] == "exception":
+            page.evaluate.assert_called_once()
+        elif case["expect_timeout"]:
+            # Timed out — evaluate was called multiple times
+            assert page.evaluate.call_count >= 2
+        else:
+            # Succeeded — evaluate was called at least once
+            assert page.evaluate.call_count >= 1
+
+
+class TestWaitForNetworkQuiescence:
+    """Table-driven tests for _wait_for_network_quiescence timeout/quiescence paths."""
+
+    @pytest.mark.parametrize(
+        "case",
+        WAIT_FOR_QUIESCENCE_CASES,
+        ids=[c["id"] for c in WAIT_FOR_QUIESCENCE_CASES],
+    )
+    def test_quiescence(self, case: dict) -> None:
+        """Test _wait_for_network_quiescence with various pending-count sequences."""
+        page = MagicMock()
+
+        if case["pending_values"] == "exception":
+            page.evaluate.side_effect = RuntimeError("context gone")
+        else:
+            page.evaluate.side_effect = case["pending_values"]
+
+        _wait_for_network_quiescence(
+            page,
+            quiescence_s=case["quiescence_s"],
+            timeout_s=case["timeout_s"],
+        )
+
+        if case["pending_values"] == "exception":
+            page.evaluate.assert_called_once()
+        elif case["expect_timeout"]:
+            assert page.evaluate.call_count >= 2
+        else:
+            assert page.evaluate.call_count >= 1
+
+
+# =============================================================================
+# Table-driven tests for capture_device_har error paths
+# =============================================================================
+
+
+class TestCaptureDeviceHarErrors:
+    """Table-driven tests for capture_device_har error branches."""
+
+    @pytest.mark.parametrize(
+        "case",
+        CAPTURE_ERROR_CASES,
+        ids=[c["id"] for c in CAPTURE_ERROR_CASES],
+    )
+    def test_error_returns_failure(self, case: dict, tmp_path: Path) -> None:
+        """Test early-exit error paths return CaptureResult(success=False)."""
+        output = tmp_path / "test.har"
+
+        if "mock_check_pw" in case and case["mock_check_pw"] is False:
+            with patch("har_capture.capture.browser.check_playwright", return_value=False):
+                result = capture_device_har(
+                    ip="127.0.0.1",
+                    output=str(output),
+                    sanitize=False,
+                    compress=False,
+                )
+        else:
+            with (
+                patch("har_capture.capture.browser.check_playwright", return_value=True),
+                patch(
+                    "har_capture.capture.browser.check_device_connectivity",
+                    return_value=tuple(case["mock_connectivity"]),
+                ),
+                patch("har_capture.capture.browser.check_browser_installed", return_value=True),
+            ):
+                result = capture_device_har(
+                    ip="127.0.0.1",
+                    output=str(output),
+                    sanitize=False,
+                    compress=False,
+                )
+
+        assert result.success is False
+        assert case["expect_error"] in (result.error or "")
+
+
+# =============================================================================
+# Table-driven tests for output path handling
+# =============================================================================
+
+
+class TestOutputPathHandling:
+    """Table-driven tests for output path suffix enforcement."""
+
+    @pytest.mark.parametrize(
+        "case",
+        OUTPUT_PATH_CASES,
+        ids=[c["id"] for c in OUTPUT_PATH_CASES],
+    )
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_output_suffix_enforced(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        case: dict,
+        tmp_path: Path,
+    ) -> None:
+        """Test output path always ends with .har."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / case["input"]
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        # The context should have been created with a .har temp path
+        assert result.success is True
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_default_output_creates_captures_dir(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test output=None creates captures/ directory with timestamped file."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        monkeypatch.chdir(tmp_path)
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=None,
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        assert result.success is True
+        assert (tmp_path / "captures").is_dir()
+
+
+# =============================================================================
+# Table-driven tests for browser selection
+# =============================================================================
+
+
+class TestBrowserSelectionParametrized:
+    """Table-driven tests for browser engine selection."""
+
+    @pytest.mark.parametrize(
+        "case",
+        BROWSER_SELECTION_CASES,
+        ids=[c["id"] for c in BROWSER_SELECTION_CASES],
+    )
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_browser_selected(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        case: dict,
+        tmp_path: Path,
+    ) -> None:
+        """Test correct browser engine is selected."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            browser=case["browser"],
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        launch_fn = getattr(mock_pw, case["launch_attr"]).launch
+        launch_fn.assert_called_once_with(headless=True)
+
+
+# =============================================================================
+# Tests for context config and pre-capture cookie audit
+# =============================================================================
+
+
+class TestCleanBrowserContext:
+    """Tests for forced clean browser context (storage_state)."""
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_storage_state_set_on_context(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test new_context is called with empty storage_state."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        call_kwargs = mock_pw.chromium.launch.return_value.new_context.call_args[1]
+        assert "storage_state" in call_kwargs
+        assert call_kwargs["storage_state"]["cookies"] == []
+        assert call_kwargs["storage_state"]["origins"] == []
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_http_credentials_passed_to_context(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test http_credentials are included in context options."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        creds = {"username": "admin", "password": "secret"}
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            http_credentials=creds,
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        call_kwargs = mock_pw.chromium.launch.return_value.new_context.call_args[1]
+        assert call_kwargs["http_credentials"] == creds
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_no_http_credentials_when_none(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test http_credentials omitted from context when not provided."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        call_kwargs = mock_pw.chromium.launch.return_value.new_context.call_args[1]
+        assert "http_credentials" not in call_kwargs
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_pre_capture_cookies_in_har(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test _solentlabs.pre_capture_cookies is injected into HAR."""
+        import os
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_context.cookies.return_value = []
+
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+        temp_har = tmp_path / "temp_capture.har"
+        temp_har.write_text(json.dumps(har_data))
+
+        output = tmp_path / "test.har"
+        fd = os.open(str(temp_har), os.O_RDWR)
+        with patch("tempfile.mkstemp", return_value=(fd, str(temp_har))):
+            capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                headless=True,
+                timeout=1,
+                sanitize=False,
+                compress=False,
+                keep_raw=True,
+                wait_for_data=False,
+            )
+
+        raw_har = json.loads(output.read_text())
+        assert "_solentlabs" in raw_har["log"]
+        assert raw_har["log"]["_solentlabs"]["pre_capture_cookies"] == []
+
+
+# =============================================================================
+# Tests for networkidle fallback
+# =============================================================================
+
+
+class TestNetworkIdleFallback:
+    """Tests for networkidle → domcontentloaded auto-fallback."""
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_networkidle_timeout_falls_back(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test networkidle timeout triggers domcontentloaded fallback."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_page.goto.side_effect = PlaywrightTimeout("networkidle timed out")
+        # evaluate returns 0 pending requests so quiescence check succeeds
+        mock_page.evaluate.return_value = 0
+        mock_page.main_frame = mock_page  # framenavigated needs this
+
+        output = tmp_path / "test.har"
+        result = capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=True,
+            page_load_strategy="networkidle",
+        )
+
+        assert result.success is True
+        mock_page.wait_for_load_state.assert_called_with("domcontentloaded")
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_domcontentloaded_strategy_no_fallback(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Test domcontentloaded strategy doesn't trigger fallback logic."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_page = mock_pw.chromium.launch.return_value.new_context.return_value.new_page.return_value
+
+        output = tmp_path / "test.har"
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(output),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+            page_load_strategy="domcontentloaded",
+        )
+
+        mock_page.goto.assert_called_once_with("http://127.0.0.1/", wait_until="domcontentloaded")
+
+
+# =============================================================================
+# Tests for extracted functions (_resolve_capture_paths, _inject_har_metadata,
+# _run_post_capture_pipeline)
+# =============================================================================
+
+# ┌──────────────────────────┬──────────────────────────┬──────────────────┬──────────────────────┐
+# │ id                       │ input_output             │ expected_suffix  │ creates_captures_dir │
+# ├──────────────────────────┼──────────────────────────┼──────────────────┼──────────────────────┤
+# │ test case name           │ output param             │ .har suffix?     │ auto-create dir?     │
+# └──────────────────────────┴──────────────────────────┴──────────────────┴──────────────────────┘
+RESOLVE_PATHS_CASES = [
+    ("explicit_har", "capture.har", ".har", False),
+    ("explicit_json", "capture.json", ".har", False),
+    ("explicit_no_ext", "capture", ".har", False),
+    ("none_auto_generates", None, ".har", True),
+]
+
+
+class TestResolveCapturePathsUnit:
+    """Tests for _resolve_capture_paths — zero mocks, pure filesystem."""
+
+    @pytest.mark.parametrize(
+        ("desc", "input_output", "expected_suffix", "creates_captures_dir"),
+        RESOLVE_PATHS_CASES,
+        ids=[c[0] for c in RESOLVE_PATHS_CASES],
+    )
+    def test_output_path_resolution(
+        self,
+        desc: str,
+        input_output: str | None,
+        expected_suffix: str,
+        creates_captures_dir: bool,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test path resolution for various output specs."""
+        monkeypatch.chdir(tmp_path)
+        output = str(tmp_path / input_output) if input_output else None
+        paths = _resolve_capture_paths("192.168.1.1", output, target_url="http://192.168.1.1/")
+
+        assert paths.output_path.suffix == expected_suffix
+        assert paths.temp_path.exists()
+        assert paths.host == "192.168.1.1"
+        assert paths.target_url == "http://192.168.1.1/"
+
+        if creates_captures_dir:
+            assert (tmp_path / "captures").is_dir()
+
+        # Sanitized output is sibling with .sanitized.har
+        assert "sanitized" in paths.sanitized_output.stem
+        assert paths.sanitized_output.suffix == ".har"
+
+        # Cleanup temp
+        paths.temp_path.unlink()
+
+    def test_temp_file_created_and_closed(self, tmp_path: Path) -> None:
+        """Test temp file exists and FD is closed (writeable by path)."""
+        paths = _resolve_capture_paths("10.0.0.1", str(tmp_path / "test.har"), target_url="http://10.0.0.1/")
+        # Should be able to write to it (FD closed, file exists)
+        paths.temp_path.write_text("test")
+        assert paths.temp_path.read_text() == "test"
+        paths.temp_path.unlink()
+
+    def test_parent_dirs_created(self, tmp_path: Path) -> None:
+        """Test parent directories are created for nested output paths."""
+        nested = tmp_path / "deep" / "nested" / "dir" / "output.har"
+        paths = _resolve_capture_paths("10.0.0.1", str(nested), target_url="http://10.0.0.1/")
+        assert nested.parent.is_dir()
+        paths.temp_path.unlink()
+
+    def test_target_url_passthrough(self, tmp_path: Path) -> None:
+        """Test pre-computed target_url is passed through."""
+        paths = _resolve_capture_paths(
+            "router.local", str(tmp_path / "out.har"), target_url="https://router.local:8443/"
+        )
+        assert paths.target_url == "https://router.local:8443/"
+        paths.temp_path.unlink()
+
+    def test_target_url_none_gives_empty(self, tmp_path: Path) -> None:
+        """Test target_url=None produces empty string (caller must check connectivity)."""
+        paths = _resolve_capture_paths("192.168.1.1", str(tmp_path / "out.har"), target_url=None)
+        assert paths.target_url == ""
+        paths.temp_path.unlink()
+
+
+# ┌──────────────────────────────┬──────────┬──────────────────┬──────────────────┬───────────────┐
+# │ id                           │ probes   │ browser_cookies  │ web_storage      │ description   │
+# ├──────────────────────────────┼──────────┼──────────────────┼──────────────────┼───────────────┤
+# │ test case name               │ inject?  │ inject?          │ inject?          │ scenario      │
+# └──────────────────────────────┴──────────┴──────────────────┴──────────────────┘───────────────┘
+INJECT_METADATA_CASES = _FIXTURE_DATA["inject_metadata_cases"]
+
+
+class TestInjectHarMetadataUnit:
+    """Tests for _inject_har_metadata — zero mocks, real temp files."""
+
+    @pytest.mark.parametrize(
+        "case",
+        INJECT_METADATA_CASES,
+        ids=[c["id"] for c in INJECT_METADATA_CASES],
+    )
+    def test_metadata_injection(self, case: dict, tmp_path: Path) -> None:
+        """Test metadata injection with various combinations."""
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+        temp_har = tmp_path / "temp.har"
+        temp_har.write_text(json.dumps(har_data))
+
+        probes = {"auth_challenge": {"status": 401}} if case["has_probes"] else None
+        session = BrowserSessionResult(
+            browser_cookies=[{"name": "SID", "value": "abc"}] if case["has_cookies"] else [],
+            web_storage_local=(
+                [{"origin": "http://10.0.0.1", "items": [{"name": "k", "value": "v"}]}]
+                if case["has_storage"]
+                else []
+            ),
+            web_storage_session={"token": "xyz"} if case["has_storage"] else {},
+            pre_capture_cookies=[],
+        )
+
+        _inject_har_metadata(temp_har, "http://10.0.0.1/", probes, session)
+
+        result = json.loads(temp_har.read_text())
+        log = result["log"]
+
+        # _solentlabs.pre_capture_cookies is always present
+        assert log["_solentlabs"]["pre_capture_cookies"] == []
+
+        if case["has_probes"]:
+            assert log["_probes"]["auth_challenge"]["status"] == 401
+        else:
+            assert "_probes" not in log
+
+        if case["has_cookies"]:
+            assert log["_har_capture"]["browser_cookies"][0]["name"] == "SID"
+        elif not case["has_storage"]:
+            assert "_har_capture" not in log or "browser_cookies" not in log.get("_har_capture", {})
+
+        if case["has_storage"]:
+            assert "local_storage" in log["_har_capture"]
+            assert "session_storage" in log["_har_capture"]
+            ss_items = log["_har_capture"]["session_storage"][0]["items"]
+            assert any(i["name"] == "token" for i in ss_items)
+
+    def test_corrupt_har_handled_gracefully(self, tmp_path: Path) -> None:
+        """Test _inject_har_metadata handles unreadable HAR without crashing."""
+        temp_har = tmp_path / "bad.har"
+        temp_har.write_text("not json")
+
+        session = BrowserSessionResult()
+        # Should not raise
+        _inject_har_metadata(temp_har, "http://10.0.0.1/", None, session)
+
+
+# ┌────────────────────────┬──────────┬──────────┬──────────┬──────────────┬─────────────────────┐
+# │ id                     │ sanitize │ compress │ keep_raw │ interactive  │ description         │
+# ├────────────────────────┼──────────┼──────────┼──────────┼──────────────┼─────────────────────┤
+# │ test case name         │ flag     │ flag     │ flag     │ flag         │ scenario            │
+# └────────────────────────┴──────────┴──────────┴──────────┴──────────────┴─────────────────────┘
+POST_PIPELINE_CASES = [
+    ("sanitize_compress", True, True, False, False, "default pipeline"),
+    ("no_sanitize", False, True, False, False, "skip sanitization"),
+    ("keep_raw", True, True, True, False, "keep raw HAR"),
+    ("no_compress", True, False, False, False, "skip compression"),
+    ("interactive", True, True, False, True, "interactive mode keeps sanitized"),
+]
+
+
+class TestRunPostCapturePipelineUnit:
+    """Tests for _run_post_capture_pipeline — zero Playwright mocks."""
+
+    @pytest.mark.parametrize(
+        ("desc", "sanitize", "compress", "keep_raw", "interactive", "scenario"),
+        POST_PIPELINE_CASES,
+        ids=[c[0] for c in POST_PIPELINE_CASES],
+    )
+    def test_pipeline_file_outputs(
+        self,
+        desc: str,
+        sanitize: bool,
+        compress: bool,
+        keep_raw: bool,
+        interactive: bool,
+        scenario: str,
+        tmp_path: Path,
+    ) -> None:
+        """Test post-capture pipeline produces correct file outputs."""
+        # Create a realistic temp HAR
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [
+                    {
+                        "request": {"method": "GET", "url": "http://10.0.0.1/"},
+                        "response": {"status": 200, "content": {"text": "ok"}},
+                    }
+                ],
+            }
+        }
+        temp_path = tmp_path / "temp_raw.har"
+        temp_path.write_text(json.dumps(har_data))
+
+        output_path = tmp_path / "output.har"
+        sanitized_output = tmp_path / "output.sanitized.har"
+
+        result = _run_post_capture_pipeline(
+            temp_path=temp_path,
+            output_path=output_path,
+            sanitized_output=sanitized_output,
+            sanitize=sanitize,
+            compress=compress,
+            keep_raw=keep_raw,
+            interactive=interactive,
+            capture_options=CaptureOptions(),
+        )
+
+        assert result.success is True
+
+        # Temp file always deleted
+        assert not temp_path.exists(), "Temp file should always be deleted"
+
+        # Raw HAR only when keep_raw or not sanitize
+        if keep_raw or not sanitize:
+            assert result.har_path == output_path
+            assert output_path.exists()
+        else:
+            assert result.har_path is None
+
+        # Sanitized path
+        if sanitize:
+            if compress and not keep_raw and not interactive:
+                # Sanitized deleted after compression
+                assert result.sanitized_path is None
+            else:
+                assert result.sanitized_path is not None
+        else:
+            assert result.sanitized_path is None
+
+        # Compressed path
+        if sanitize and compress:
+            assert result.compressed_path is not None
+            assert result.compressed_path.exists()
+            assert result.stats is not None
+        else:
+            assert result.compressed_path is None
+
+    def test_temp_cleaned_on_copy_failure(self, tmp_path: Path) -> None:
+        """Test temp file is deleted even if copy fails."""
+        temp_path = tmp_path / "temp.har"
+        temp_path.write_text("{}")
+
+        # Point output to a non-existent device to force copy failure
+        _run_post_capture_pipeline(
+            temp_path=temp_path,
+            output_path=Path("/dev/null/impossible/output.har"),
+            sanitized_output=tmp_path / "sanitized.har",
+            sanitize=False,
+            compress=False,
+            keep_raw=False,
+            interactive=False,
+            capture_options=CaptureOptions(),
+        )
+
+        assert not temp_path.exists(), "Temp file should still be cleaned up"

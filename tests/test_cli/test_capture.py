@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -128,107 +127,4 @@ def test_display_results(
 
     captured = capsys.readouterr()
     for s in expected_strs:
-        assert s in captured.out, f"{desc}: expected '{s}' in output"
-
-
-# =============================================================================
-# _handle_auth() test cases
-# =============================================================================
-#
-# ┌───────────────┬─────────┬──────────┬──────────┬──────────────────────────────┐
-# │ requires_auth │ realm   │ username │ password │ description                  │
-# ├───────────────┼─────────┼──────────┼──────────┼──────────────────────────────┤
-# │ False         │ None    │ None     │ None     │ no auth required             │
-# │ True          │ Router  │ admin    │ pass123  │ auth with provided creds     │
-# │ True          │ None    │ admin    │ pass123  │ auth without realm           │
-# └───────────────┴─────────┴──────────┴──────────┴──────────────────────────────┘
-#
-# fmt: off
-HANDLE_AUTH_CASES = [
-    # (requires_auth, realm,    username, password,   expected_creds,                          expected_output,              desc)
-    (False,           None,     None,     None,       None,                                    ["Form-based or no auth"],    "no auth required"),
-    (True,            "Router", "admin",  "pass123",  {"username": "admin", "password": "pass123"}, ["HTTP Basic Auth", "Router"], "auth with creds and realm"),
-    (True,            None,     "admin",  "pass123",  {"username": "admin", "password": "pass123"}, ["HTTP Basic Auth"],          "auth with creds no realm"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize(
-    ("requires_auth", "realm", "username", "password", "expected_creds", "expected_output", "desc"),
-    HANDLE_AUTH_CASES,
-)
-def test_handle_auth(
-    requires_auth: bool,
-    realm: str | None,
-    username: str | None,
-    password: str | None,
-    expected_creds: dict[str, str] | None,
-    expected_output: list[str],
-    desc: str,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Test _handle_auth returns correct credentials."""
-    from har_capture.capture.workflow import AuthResult, CaptureWorkflowResult
-    from har_capture.cli.capture import _handle_auth
-
-    result = CaptureWorkflowResult(auth=AuthResult(requires_basic_auth=requires_auth, realm=realm))
-
-    creds = _handle_auth(result, username, password)
-
-    assert creds == expected_creds, f"{desc}: unexpected credentials"
-    captured = capsys.readouterr()
-    for s in expected_output:
-        assert s in captured.out, f"{desc}: expected '{s}' in output"
-
-
-# =============================================================================
-# _handle_auth() prompt tests (require mocking)
-# =============================================================================
-#
-# ┌─────────────┬────────────────┬────────────────┬──────────────────────────────┐
-# │ realm       │ prompt_returns │ expected_creds │ description                  │
-# ├─────────────┼────────────────┼────────────────┼──────────────────────────────┤
-# │ Modem       │ [user, pass]   │ user/pass      │ prompts with realm           │
-# │ None        │ [user, pass]   │ user/pass      │ prompts without realm        │
-# │ Router      │ [admin, ""]    │ admin/""       │ empty password allowed       │
-# └─────────────┴────────────────┴────────────────┴──────────────────────────────┘
-#
-# fmt: off
-HANDLE_AUTH_PROMPT_CASES = [
-    # (realm,    prompt_returns,       expected_creds,                              expected_output,                         desc)
-    ("Modem",    ["testuser", "testpass"], {"username": "testuser", "password": "testpass"}, ["Modem"],                              "prompts with realm"),
-    (None,       ["user", "pass"],         {"username": "user", "password": "pass"},         ["requires HTTP Basic Authentication"], "prompts without realm"),
-    ("Router",   ["admin", ""],            {"username": "admin", "password": ""},            ["Router"],                             "empty password allowed"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize(
-    ("realm", "prompt_returns", "expected_creds", "expected_output", "desc"),
-    HANDLE_AUTH_PROMPT_CASES,
-)
-@patch("har_capture.cli.capture.typer.prompt")
-def test_handle_auth_prompts(
-    mock_prompt: MagicMock,
-    realm: str | None,
-    prompt_returns: list[str],
-    expected_creds: dict[str, str],
-    expected_output: list[str],
-    desc: str,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Test _handle_auth prompts for credentials when not provided."""
-    from har_capture.capture.workflow import AuthResult, CaptureWorkflowResult
-    from har_capture.cli.capture import _handle_auth
-
-    mock_prompt.side_effect = prompt_returns
-
-    result = CaptureWorkflowResult(auth=AuthResult(requires_basic_auth=True, realm=realm))
-
-    creds = _handle_auth(result, None, None)
-
-    assert creds == expected_creds, f"{desc}: unexpected credentials"
-    assert mock_prompt.call_count == 2, f"{desc}: expected 2 prompts"
-    captured = capsys.readouterr()
-    for s in expected_output:
         assert s in captured.out, f"{desc}: expected '{s}' in output"

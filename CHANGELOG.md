@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-06
+
+### Changed
+
+- **Decomposed `capture_device_har()`** — The 460-line god function is now a ~60-line orchestrator that delegates to four independently testable units: `_resolve_capture_paths()` (pure filesystem), `_run_browser_session()` (Playwright lifecycle), `_inject_har_metadata()` (HAR enrichment), `_run_post_capture_pipeline()` (sanitize/compress/cleanup). Eliminates `nonlocal` data shuttling via new `BrowserSessionResult` dataclass. Public API signature unchanged.
+- **Explicit scheme required** — `har-capture` now requires `http://` or `https://` in the target URL (e.g., `har-capture http://192.168.1.1`). Bare hostnames/IPs are rejected with a helpful error message. This eliminates ambiguity and prevents duplicate connectivity probes.
+- **Connectivity module hardened** — Extracted `_urlopen_with_ssl()` shared helper, eliminating 3 copies of the urllib + SSL context pattern across `check_device_connectivity`, `check_basic_auth`, and `check_session_contamination`.
+
+### Added
+
+- **Session contamination check** — New `check_session_contamination()` detects live sessions before capture by inspecting the unauthenticated response for login-page indicators. Prevents captures that skip the auth flow because the device already has a session. Added as Phase 3 in the workflow.
+- **Architecture Decisions document** — ADR-1 through ADR-5 covering minimal pre-flight, interactive mode, probe opt-in, explicit scheme, and session contamination guard.
+- **`CapturePathInfo` dataclass** — Encapsulates resolved output path, sanitized path, temp file path, hostname, and target URL.
+- **`BrowserSessionResult` dataclass** — Encapsulates all browser-captured state (cookies, localStorage, sessionStorage, pre-capture cookie audit).
+- **20+ new unit tests** — Tests for extracted functions use zero `@patch` decorators and real temp files. browser.py coverage 76% → 85%.
+
+### Fixed
+
+- **Orphaned temp file on connectivity failure** — `_resolve_capture_paths()` creates the temp file before the connectivity check. If connectivity fails, the temp file is now cleaned up before the early return.
+
 ## [0.5.1] - 2026-03-30
 
 ### Fixed
@@ -443,4 +463,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.4.5]: https://github.com/solentlabs/har-capture/compare/v0.4.4...v0.4.5
 [0.5.0]: https://github.com/solentlabs/har-capture/compare/v0.4.5...v0.5.0
 [0.5.1]: https://github.com/solentlabs/har-capture/compare/v0.5.0...v0.5.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.5.1...HEAD
+[0.6.0]: https://github.com/solentlabs/har-capture/compare/v0.5.1...v0.6.0
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.6.0...HEAD

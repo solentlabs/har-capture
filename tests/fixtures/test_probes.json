@@ -1,0 +1,15 @@
+{
+  "read_body_preview_cases": [
+    {"id": "none_fp",         "fp": null,          "expect": ""},
+    {"id": "empty_bytes",     "fp_bytes": "",      "expect": ""},
+    {"id": "short_string",    "fp_str": "hello",   "expect": "hello"},
+    {"id": "short_bytes",     "fp_bytes": "hello",  "expect": "hello"},
+    {"id": "read_exception",  "fp_raises": true,    "expect": ""}
+  ],
+  "headers_dict_cases": [
+    {"id": "none_headers",           "headers": null,                                "expect": {}},
+    {"id": "normal_headers",         "headers": {"Content-Type": "text/html"},       "expect": {"Content-Type": "text/html"}},
+    {"id": "multiple_headers",       "headers": {"X-A": "1", "X-B": "2"},           "expect": {"X-A": "1", "X-B": "2"}},
+    {"id": "items_exception",        "items_raises": true,                           "expect": {}}
+  ]
+}

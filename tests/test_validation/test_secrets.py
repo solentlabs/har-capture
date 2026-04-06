@@ -77,6 +77,10 @@ VALIDATE_HAR_URL_CRED_CASES = [
     (c["url"], c["expect_finding"], c["id"]) for c in _DATA["validate_har_url_cred_cases"]
 ]
 
+CHECK_POST_DATA_XML_CASES = [
+    (c["post_data"], c["expected_finding_count"], c["id"]) for c in _DATA["check_post_data_xml_cases"]
+]
+
 VALIDATE_HAR_CASES = [
     (c["har_data"], c["expect_findings"], c["match_field"], c["id"]) for c in _DATA["validate_har_cases"]
 ]
@@ -489,3 +493,25 @@ class TestCompileSensitiveFields:
         patterns = _compile_sensitive_fields()
         assert len(patterns) > 0
         assert all(isinstance(p, re.Pattern) for p in patterns)
+
+
+class TestCheckPostDataXml:
+    """Tests for XML POST body validation in check_post_data."""
+
+    @pytest.mark.parametrize(
+        ("post_data", "expected_count", "desc"),
+        CHECK_POST_DATA_XML_CASES,
+        ids=[c[2] for c in CHECK_POST_DATA_XML_CASES],
+    )
+    def test_xml_post_body_validation(
+        self,
+        post_data: dict,
+        expected_count: int,
+        desc: str,
+    ) -> None:
+        """XML POST bodies are validated: sensitive elements detected, safe elements ignored."""
+        findings: list[Finding] = []
+        check_post_data(post_data, "Entry 0", findings)
+        assert len(findings) == expected_count, (
+            f"{desc}: expected {expected_count} findings, got {len(findings)}: {[f.field for f in findings]}"
+        )

@@ -16,14 +16,21 @@ Exports:
 from __future__ import annotations
 
 from har_capture.capture.browser import (
+    BrowserSessionResult,
     CaptureOptions,
+    CapturePathInfo,
     CaptureResult,
+    _inject_har_metadata,
+    _resolve_capture_paths,
+    _run_browser_session,
+    _run_post_capture_pipeline,
     capture_device_har,
     filter_and_compress_har,
 )
 from har_capture.capture.connectivity import (
     check_basic_auth,
     check_device_connectivity,
+    check_session_contamination,
 )
 from har_capture.capture.deps import (
     check_browser_installed,
@@ -44,9 +51,11 @@ from har_capture.capture.workflow import (
     CaptureWorkflowResult,
     ConnectivityResult,
     ProbeResult,
+    SessionCheckResult,
     check_auth_phase,
     check_browser_phase,
     check_connectivity_phase,
+    check_session_phase,
     run_capture_phase,
     run_capture_workflow,
     run_probes_phase,
@@ -59,9 +68,17 @@ __all__ = [
     "filter_and_compress_har",
     "CaptureResult",
     "CaptureOptions",
+    "CapturePathInfo",
+    "BrowserSessionResult",
+    # Internal (testable units)
+    "_resolve_capture_paths",
+    "_run_browser_session",
+    "_inject_har_metadata",
+    "_run_post_capture_pipeline",
     # Connectivity checks
     "check_device_connectivity",
     "check_basic_auth",
+    "check_session_contamination",
     # Dependency management
     "check_playwright",
     "check_browser_installed",
@@ -79,10 +96,12 @@ __all__ = [
     "CaptureWorkflowResult",
     "BrowserCheckResult",
     "ConnectivityResult",
+    "SessionCheckResult",
     "AuthResult",
     "WorkflowCaptureResult",
     "check_browser_phase",
     "check_connectivity_phase",
+    "check_session_phase",
     "check_auth_phase",
     "run_capture_phase",
     "run_capture_workflow",

@@ -25,8 +25,8 @@ from har_capture.cli.validate import validate
 class _DefaultGetGroup(TyperGroup):
     """Typer group that falls back to 'get' when the first arg isn't a known command.
 
-    Allows ``har-capture https://192.168.1.1`` as shorthand for
-    ``har-capture get https://192.168.1.1``.
+    Allows ``har-capture http://192.168.1.1`` as shorthand for
+    ``har-capture get http://192.168.1.1``.
     """
 
     def resolve_command(
@@ -80,7 +80,7 @@ def main(
     \b
     Examples:
         har-capture https://example.com
-        har-capture 192.168.1.1 --output capture.har
+        har-capture http://192.168.1.1 --output capture.har
         har-capture sanitize myfile.har
         har-capture validate myfile.har
     """
