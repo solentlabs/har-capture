@@ -554,7 +554,7 @@ def _run_browser_session(
                 page.wait_for_load_state("domcontentloaded")
                 _quiescence_disabled[0] = True
         else:
-            page.goto(target_url, wait_until=page_load_strategy)
+            page.goto(target_url, wait_until=page_load_strategy)  # type: ignore[arg-type,unused-ignore]
 
         if wait_for_data and not _quiescence_disabled[0]:
             _wait_for_network_quiescence(page)
