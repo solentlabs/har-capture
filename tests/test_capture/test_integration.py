@@ -98,7 +98,7 @@ def mock_server() -> Generator[str, None, None]:
     """Start a mock HTTP server for testing.
 
     Yields:
-        Base URL of the mock server (e.g., "127.0.0.1:8765")
+        Base URL of the mock server (e.g., "http://127.0.0.1:8765")
     """
     server = HTTPServer(("127.0.0.1", 0), MockHandler)
     port = server.server_address[1]
@@ -109,7 +109,7 @@ def mock_server() -> Generator[str, None, None]:
     # Wait for server to be ready
     time.sleep(0.1)
 
-    yield f"127.0.0.1:{port}"
+    yield f"http://127.0.0.1:{port}"
 
     server.shutdown()
     server.server_close()
@@ -256,7 +256,7 @@ class TestBrowserCapture:
         output = tmp_path / "unreachable.har"
 
         result = capture_device_har(
-            ip="192.0.2.1",  # TEST-NET-1, guaranteed unreachable
+            ip="http://192.0.2.1",  # TEST-NET-1, guaranteed unreachable
             output=str(output),
             browser="chromium",
             headless=True,
@@ -288,7 +288,7 @@ class TestConnectivity:
         """Test connectivity check for unreachable server."""
         from har_capture.capture.connectivity import check_device_connectivity
 
-        reachable, _scheme, error = check_device_connectivity("192.0.2.1", timeout=2)
+        reachable, _scheme, error = check_device_connectivity("http://192.0.2.1", timeout=2)
 
         assert reachable is False
         assert error is not None
@@ -297,7 +297,7 @@ class TestConnectivity:
         """Test Basic Auth check for server without auth."""
         from har_capture.capture.connectivity import check_basic_auth
 
-        requires_auth, realm = check_basic_auth(f"http://{mock_server}/")
+        requires_auth, realm = check_basic_auth(f"{mock_server}/")
 
         assert requires_auth is False
         assert realm is None
