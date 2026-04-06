@@ -73,7 +73,7 @@ class TestCheckDeviceConnectivity:
 
     def test_missing_scheme_returns_error(self) -> None:
         """Test bare hostname/IP without scheme returns error."""
-        reachable, scheme, error = check_device_connectivity("192.168.1.1")
+        reachable, _scheme, error = check_device_connectivity("192.168.1.1")
 
         assert reachable is False
         assert error is not None
@@ -82,7 +82,7 @@ class TestCheckDeviceConnectivity:
 
     def test_missing_scheme_hostname(self) -> None:
         """Test bare hostname without scheme returns error."""
-        reachable, scheme, error = check_device_connectivity("example.com")
+        reachable, _scheme, error = check_device_connectivity("example.com")
 
         assert reachable is False
         assert error is not None
