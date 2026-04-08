@@ -77,6 +77,16 @@ PIPE_SERIAL_CASES = [
     for c in _FIXTURE["pipe_serial_cases"]
 ]
 
+SERIAL_KEY_FP_CASES = [
+    (c["input_html"], c.get("preserved"), c.get("removed"), c["id"])
+    for c in _FIXTURE["serial_key_false_positive_cases"]
+]
+
+JS_SERIAL_VAR_CASES = [
+    (c["input_html"], c.get("should_not_contain"), c.get("should_contain"), c["id"])
+    for c in _FIXTURE["js_serial_variable_cases"]
+]
+
 
 # =============================================================================
 # Test Classes
@@ -330,6 +340,142 @@ class TestPipeSerialNumber:
                 assert "SNMP" in result, f"{desc}: SNMP should be preserved"
             elif "SN-AB" in html:
                 assert "SN-AB" in result, f"{desc}: short value should be preserved"
+
+
+# =============================================================================
+# Serial Number Key False Positives (SNRLevel, SNMPEnable, etc.)
+# =============================================================================
+
+
+class TestSerialKeyFalsePositives:
+    """Tests that SN-prefix identifiers like SNRLevel are not mangled."""
+
+    @pytest.mark.parametrize(
+        ("html", "preserved", "removed", "desc"),
+        SERIAL_KEY_FP_CASES,
+        ids=[c[3] for c in SERIAL_KEY_FP_CASES],
+    )
+    def test_serial_key_false_positive(
+        self,
+        html: str,
+        preserved: str | None,
+        removed: str | None,
+        desc: str,
+    ) -> None:
+        """Test camelCase/PascalCase SN-prefix identifiers are not rewritten."""
+        result = sanitize_html(html, salt="test")
+        if preserved:
+            assert preserved in result, f"{desc}: '{preserved}' should be preserved"
+        if removed:
+            assert removed not in result, f"{desc}: '{removed}' should be redacted"
+
+
+# =============================================================================
+# JavaScript Serial Number Variable Assignments
+# =============================================================================
+
+
+class TestJsSerialVariable:
+    """Tests for JS variable assignments containing serial number indicators."""
+
+    @pytest.mark.parametrize(
+        ("html", "should_not_contain", "should_contain", "desc"),
+        JS_SERIAL_VAR_CASES,
+        ids=[c[3] for c in JS_SERIAL_VAR_CASES],
+    )
+    def test_js_serial_variable_redaction(
+        self,
+        html: str,
+        should_not_contain: str | None,
+        should_contain: str | None,
+        desc: str,
+    ) -> None:
+        """Test serial number values in JS variable assignments are redacted."""
+        result = sanitize_html(html, salt="test")
+        if should_not_contain:
+            assert should_not_contain not in result, f"{desc}: value should be redacted"
+        if should_contain:
+            assert should_contain in result, f"{desc}: expected prefix in output"
+        if should_not_contain is None:
+            assert result == html, f"{desc}: value should be preserved unchanged"
+
+
+# =============================================================================
+# Pipe-Delimited Per-Value Unit Tests (extracted _sanitize_pipe_value)
+# =============================================================================
+
+PIPE_VALUE_UNIT_CASES = [
+    (c["value"], c["expected_unchanged"], c.get("expected_not_contain"), c.get("expected_contains"), c["id"])
+    for c in _FIXTURE["pipe_value_unit_cases"]
+]
+
+
+class TestSanitizePipeValue:
+    """Unit tests for _sanitize_pipe_value() — the extracted per-value processor."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected_unchanged", "expected_not_contain", "expected_contains", "desc"),
+        PIPE_VALUE_UNIT_CASES,
+        ids=[c[4] for c in PIPE_VALUE_UNIT_CASES],
+    )
+    def test_pipe_value_processing(
+        self,
+        value: str,
+        expected_unchanged: bool,
+        expected_not_contain: str | None,
+        expected_contains: str | None,
+        desc: str,
+    ) -> None:
+        """Test individual pipe value sanitization decisions."""
+        from har_capture.patterns import Hasher
+        from har_capture.sanitization.collector import RedactionCollector
+        from har_capture.sanitization.html import _sanitize_pipe_value
+        from har_capture.sanitization.report import HeuristicMode
+
+        hasher = Hasher.create("test")
+        collector = RedactionCollector(hasher=hasher)
+        safe_values = {
+            "good",
+            "locked",
+            "not locked",
+            "unknown",
+            "operational",
+            "ok",
+            "none",
+            "&nbsp;",
+            "enabled",
+            "disabled",
+            "retail",
+            "success",
+            "primary",
+            "enable",
+            "off",
+            "on",
+            "both",
+            "in progress",
+            "synchronized",
+            "not synchronized",
+            "done",
+        }
+
+        result = _sanitize_pipe_value(
+            value,
+            hasher=hasher,
+            collector=collector,
+            safe_values=safe_values,
+            extra_safe_patterns=[],
+            compiled_detectors=[],
+            heuristics=HeuristicMode.DISABLED,
+            values_context=[],
+            value_index=0,
+        )
+
+        if expected_unchanged:
+            assert result == value, f"{desc}: value should be preserved"
+        if expected_not_contain:
+            assert expected_not_contain not in result, f"{desc}: original should be removed"
+        if expected_contains:
+            assert expected_contains in result, f"{desc}: expected prefix in output"
 
 
 class TestCustomPiiPatternEdgeCases:

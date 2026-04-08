@@ -1,4 +1,4 @@
-"""Tests for HAR processing functions (filter, compress, metadata)."""
+"""Tests for HAR processing functions (filter, compress, metadata, body patching)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 from har_capture.capture.browser import (
     CaptureOptions,
     _add_capture_metadata,
+    _patch_missing_bodies,
     filter_and_compress_har,
 )
 
@@ -314,3 +315,139 @@ class TestFilterAndCompressHar:
             har = json.load(f)
 
         assert "_probes" not in har["log"]
+
+
+# =============================================================================
+# Body patching
+# =============================================================================
+
+# ┌─────────────────────────┬───────────────────────┬──────────────┬──────────┐
+# │ fixture_key             │ captured_bodies       │ expect_patch │ id       │
+# ├─────────────────────────┼───────────────────────┼──────────────┼──────────┤
+PATCH_BODIES_CASES = [
+    (
+        "har_missing_body",
+        {"GET|http://192.168.100.1/|200": b"<html><input type='hidden' name='csrf'/></html>"},
+        True,
+        "missing_body_patched_from_cache",
+    ),
+    (
+        "har_body_present",
+        {"GET|http://192.168.100.1/|200": b"<html>SHOULD NOT REPLACE</html>"},
+        False,
+        "existing_body_not_overwritten",
+    ),
+    (
+        "har_missing_body",
+        {},
+        False,
+        "empty_cache_no_patch",
+    ),
+    (
+        "har_missing_body",
+        {"GET|http://192.168.100.1/WRONG|200": b"wrong url"},
+        False,
+        "cache_miss_no_patch",
+    ),
+    (
+        "har_missing_body_no_size",
+        {"GET|http://192.168.100.1/empty|204": b""},
+        False,
+        "zero_bodysize_not_patched",
+    ),
+]
+# └─────────────────────────┴───────────────────────┴──────────────┴──────────┘
+
+
+class TestPatchMissingBodies:
+    """Tests for _patch_missing_bodies function."""
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "captured_bodies", "expect_patch", "desc"),
+        PATCH_BODIES_CASES,
+        ids=[c[3] for c in PATCH_BODIES_CASES],
+    )
+    def test_patch_decision(
+        self,
+        tmp_path: Path,
+        fixture_key: str,
+        captured_bodies: dict[str, bytes],
+        expect_patch: bool,
+        desc: str,
+    ) -> None:
+        """Table-driven: verify when bodies are/aren't patched."""
+        har_file = _write_har(tmp_path, fixture_key, "test.har")
+
+        patched_count = _patch_missing_bodies(har_file, captured_bodies)
+
+        assert (patched_count > 0) == expect_patch
+
+        if expect_patch:
+            with open(har_file) as f:
+                har = json.load(f)
+            entry = har["log"]["entries"][0]
+            assert entry["response"]["content"]["text"]
+            assert entry["response"]["content"]["size"] > 0
+
+    def test_patches_correct_body_text(self, tmp_path: Path) -> None:
+        """Verify the patched body matches the eagerly captured content."""
+        har_file = _write_har(tmp_path, "har_missing_body", "test.har")
+        html = "<html><input type='hidden' name='csrf' value='abc'/></html>"
+        bodies = {"GET|http://192.168.100.1/|200": html.encode("utf-8")}
+
+        _patch_missing_bodies(har_file, bodies)
+
+        with open(har_file) as f:
+            har = json.load(f)
+        content = har["log"]["entries"][0]["response"]["content"]
+        assert content["text"] == html
+        assert content["size"] == len(html.encode("utf-8"))
+        assert "encoding" not in content  # UTF-8 text, no base64
+
+    def test_mixed_entries_only_missing_patched(self, tmp_path: Path) -> None:
+        """In a HAR with mixed entries, only missing bodies get patched."""
+        har_file = _write_har(tmp_path, "har_mixed_bodies", "test.har")
+        bodies = {
+            "GET|http://192.168.100.1/|200": b"<html>login</html>",
+            "GET|http://192.168.100.1/api/status|200": b'{"status":"ok"}',
+        }
+
+        patched_count = _patch_missing_bodies(har_file, bodies)
+
+        assert patched_count == 2
+
+        with open(har_file) as f:
+            har = json.load(f)
+
+        entries = har["log"]["entries"]
+        # Entry 0: was missing, now patched
+        assert entries[0]["response"]["content"]["text"] == "<html>login</html>"
+        # Entry 1: already had body, unchanged
+        assert entries[1]["response"]["content"]["text"] == "<html>dashboard</html>"
+        # Entry 2: was missing, now patched
+        assert entries[2]["response"]["content"]["text"] == '{"status":"ok"}'
+
+    def test_non_utf8_body_uses_base64(self, tmp_path: Path) -> None:
+        """Non-UTF-8 text body falls back to base64 encoding."""
+        har_file = _write_har(tmp_path, "har_missing_body", "test.har")
+        body = b"\xff\xfe<html>latin1</html>"
+        bodies = {"GET|http://192.168.100.1/|200": body}
+
+        _patch_missing_bodies(har_file, bodies)
+
+        with open(har_file) as f:
+            har = json.load(f)
+        content = har["log"]["entries"][0]["response"]["content"]
+        assert content["encoding"] == "base64"
+        import base64
+
+        assert base64.b64decode(content["text"]) == body
+
+    def test_corrupt_har_returns_zero(self, tmp_path: Path) -> None:
+        """Corrupt HAR file returns 0 patched without crashing."""
+        har_file = tmp_path / "bad.har"
+        har_file.write_text("not json")
+
+        result = _patch_missing_bodies(har_file, {"GET|http://x/|200": b"body"})
+
+        assert result == 0

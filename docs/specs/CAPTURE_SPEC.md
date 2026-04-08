@@ -159,13 +159,14 @@ Controls the `wait_until` argument to Playwright's `page.goto()`. Accepts any Pl
 
 ### Internal Decomposition
 
-`capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to four extracted functions that can each be tested independently:
+`capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to five extracted functions that can each be tested independently:
 
 ```
 capture_device_har()
 ├── Pre-flight checks (check_playwright, check_browser_installed)
 ├── _resolve_capture_paths()   → CapturePathInfo
 ├── _run_browser_session()     → BrowserSessionResult
+├── _patch_missing_bodies()    → patches temp HAR in-place
 ├── _inject_har_metadata()     → modifies temp HAR in-place
 └── _run_post_capture_pipeline() → CaptureResult
 ```
@@ -256,6 +257,7 @@ class BrowserSessionResult:
     browser_cookies: list[Any]               # Cookies after page load
     web_storage_local: list[dict[str, Any]]  # localStorage entries per origin
     web_storage_session: dict[str, str]      # sessionStorage key/value pairs
+    captured_bodies: dict[str, bytes]        # Eagerly captured response bodies
     success: bool
     error: str | None
 ```
@@ -397,7 +399,33 @@ This is more robust than Playwright's `networkidle` (500ms) — it waits for `_D
 
 #### `--no-wait-for-data` Behavior
 
-When disabled, no JS injection, no quiescence polling, and no `framenavigated` listener. A context-level route (`context.route("**/*", ...)`) still handles cache control. `page.goto()` with `wait_until="networkidle"` is the only wait mechanism.
+When disabled, no JS injection, no quiescence polling, and no `framenavigated` listener. `page.goto()` with `wait_until="networkidle"` is the only wait mechanism. The eager response body capture listener (`page.on("response")`) is always active regardless of this flag.
+
+### Eager Response Body Capture
+
+#### Problem
+
+Playwright's `record_har_content="embed"` captures response bodies lazily — it calls CDP `Network.getResponseBody` when `context.close()` flushes the HAR to disk. If a navigation event causes Chrome to evict the response data from its network buffer before the flush, the body is lost. Headers, sizes, and timing are correct (captured synchronously from Network domain events), but `content.text` is absent and `content.size` is `-1`.
+
+This typically affects the initial page load (e.g., a login form) when the user or JavaScript submits a form quickly, triggering a navigation that supersedes the first response.
+
+#### Solution: Eager Body Capture via Response Listener
+
+Before navigation, a `page.on("response")` listener is registered that eagerly calls `response.body()` for text-based content types (`text/*`, `application/json`, `application/xml`). Bodies are stored in `BrowserSessionResult.captured_bodies` keyed by `"<method>|<url>|<status>"`.
+
+After Playwright writes the HAR and before metadata injection, `_patch_missing_bodies()` scans HAR entries for responses that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. For each missing body, it looks up the key in the captured bodies cache and patches the body into the HAR entry.
+
+Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to base64 encoding with `content.encoding = "base64"`.
+
+#### `_patch_missing_bodies(temp_path, captured_bodies) -> int`
+
+- Reads the raw HAR from `temp_path`
+- For each entry missing `content.text` with `bodySize > 0` or `_transferSize > 0`: looks up `"<method>|<url>|<status>"` in `captured_bodies` and patches the body
+- Writes the patched HAR back to `temp_path`
+- Returns the number of entries patched
+- Handles corrupt HAR files gracefully (returns 0)
+
+Testable with: zero mocks (real temp file).
 
 ### Timeout vs Interactive Mode
 
@@ -459,9 +487,13 @@ Error messages are sanitized via `_sanitize_error_message()` to remove any embed
 
 ## Post-Capture Processing
 
+### Body Patching
+
+Immediately after the browser closes and writes the raw HAR, `_patch_missing_bodies()` scans for entries with missing response bodies and patches them from the eagerly captured body cache. This runs before metadata injection and sanitization so that downstream processing sees complete responses.
+
 ### Metadata Injection
 
-After the browser closes and writes the raw HAR:
+After body patching:
 
 ```python
 har_data["log"]["_probes"] = probes_data

@@ -175,6 +175,8 @@ The pattern system is how har-capture stays domain-agnostic while supporting dom
 
 This means a consumer like cable_modem_monitor ships its own pattern file and gets domain-tuned sanitization without har-capture carrying any modem-specific code. Consumers can layer multiple `--patterns` arguments for incremental customization.
 
+**Confidence boundary:** Domain `pii.patterns` entries run as Pass 0 auto-redaction — they must have 100% confidence (zero false positives). Domain `heuristics.detectors` entries flag values for interactive review and can tolerate lower confidence. When a domain-specific pattern cannot guarantee zero false positives, it belongs in `heuristics.detectors`, not `pii.patterns`.
+
 See [Pattern Spec](specs/PATTERN_SPEC.md) for file schemas, merge semantics, and the loader/cache architecture.
 
 ## Functional Specs

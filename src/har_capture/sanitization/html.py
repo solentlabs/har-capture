@@ -47,6 +47,105 @@ else:
 # SNMP-related values like SNMPv3Auth, SNMPCommunityString, etc.
 _PIPE_SERIAL_RE = re.compile(r"^(?:SN|S/N|S-N)[-_][A-Za-z0-9]{5,}$", re.IGNORECASE)
 
+# Already-redacted hash pattern for pipe-delimited values (MAC_a1b2c3d4, SERIAL_deadbeef)
+_ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
+
+# MAC address pattern for pipe-delimited values (exact match)
+_PIPE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
+
+
+def _sanitize_pipe_value(
+    value: str,
+    *,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    safe_values: set[str],
+    extra_safe_patterns: list[re.Pattern[str]],
+    compiled_detectors: list[Any],
+    heuristics: HeuristicMode,
+    values_context: list[str],
+    value_index: int,
+    all_values: list[str] | None = None,
+) -> str:
+    """Process a single pipe-delimited value.
+
+    Returns the sanitized value (hashed), the original value (preserved),
+    or the original value with a side-effect flag recorded in the collector.
+
+    Args:
+        value: Raw value from pipe-delimited string (stripped)
+        hasher: Hasher for correlation-preserving redaction
+        collector: Collector for recording redactions and flags
+        safe_values: Case-insensitive safe value set from tagValueList config
+        extra_safe_patterns: Domain-specific safe value regex patterns
+        compiled_detectors: Domain heuristic detectors
+        heuristics: Heuristic mode (DISABLED, FLAG, REDACT)
+        values_context: Already-processed values (for adjacency detection)
+        value_index: Position in the pipe-delimited string
+        all_values: Full original value list (for FLAG mode context capture)
+
+    Returns:
+        Sanitized or preserved value string
+    """
+    from har_capture.sanitization.heuristics import (
+        analyze_value,
+        is_safe_value,
+    )
+
+    val_lower = value.lower()
+
+    # Skip empty values, safe values, and already-redacted placeholders
+    if not value or is_safe_value(value, extra_safe_patterns):
+        return value
+
+    # Skip already-redacted values (e.g., MAC_xxxxx, MODEM_SN_xxxxx)
+    if value.startswith("***") or _ALREADY_REDACTED_HASH_RE.match(value) or value == "XX:XX:XX:XX:XX:XX":
+        return value
+
+    # Check if value is in safe list
+    if val_lower in safe_values:
+        return value
+
+    # AUTO-REDACT: Known reliable patterns
+    # MAC addresses
+    if _PIPE_MAC_RE.match(value):
+        collector.record_auto_redaction("mac_address")
+        return hasher.hash_mac(value)
+
+    # Serial numbers with SN/S/N prefix
+    if _PIPE_SERIAL_RE.match(value):
+        collector.record_auto_redaction("serial_number")
+        return hasher.hash_generic(value, "SERIAL")
+
+    # HEURISTICS: Analyze unknown values (opt-in)
+    if heuristics != HeuristicMode.DISABLED:
+        should_flag, confidence, category, reason = analyze_value(
+            value,
+            values_context=values_context,
+            value_index=value_index,
+            extra_safe_patterns=extra_safe_patterns,
+            compiled_detectors=compiled_detectors,
+        )
+
+        if should_flag:
+            if heuristics == HeuristicMode.REDACT:
+                collector.record_auto_redaction(category)
+                return hasher.hash_sensitive_value(value, category)
+            if heuristics == HeuristicMode.FLAG:
+                from har_capture.cli.interactive import capture_pipe_context
+
+                context = capture_pipe_context(all_values or [], value_index)
+                collector.flag_value(
+                    value,
+                    category,
+                    confidence,
+                    context,
+                    reason,
+                )
+
+    # Preserve value (either not flagged, or flagged for review)
+    return value
+
 
 def is_valid_ip_address(value: str) -> bool:
     """Check if dotted-decimal string is a valid IPv4 address (not a version string).
@@ -176,10 +275,7 @@ def sanitize_html(
     # Lazy imports — must stay inside function body to avoid circular import
     # (har.py imports html.py at module level; html.py needs har.py's field matcher)
     from har_capture.sanitization.har import is_sensitive_field
-    from har_capture.sanitization.heuristics import (
-        analyze_value,
-        is_safe_value,
-    )
+    from har_capture.sanitization.heuristics import analyze_value
 
     # 0. Custom patterns (apply first so they take precedence over built-in patterns)
     # Skip built-in patterns that have dedicated replacement logic below
@@ -287,7 +383,7 @@ def sanitize_html(
         return f"{label}: {hashed}"
 
     html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,
@@ -303,8 +399,27 @@ def sanitize_html(
         return f"{prefix}{hashed}"
 
     html = re.sub(
-        r"(<td[^>]*>(?:<[^>]*>)*\s*(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:<[^>]*>)*\s*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>)*\s*</td>)",
+        r"(<td[^>]*>(?:<[^>]*>)*\s*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>)*\s*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>)*\s*</td>)",
         replace_serial_table,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # 2c. JavaScript serial number variables
+    # Matches: names containing serial+number/num/no (e.g., serialNumber, serial_num, SerialNo)
+    # Matches: names ending with "serial" (e.g., deviceSerial, modem_serial)
+    # Does NOT match: serial+Port, serial+Protocol, serial+Baud, serialization, serialized
+    def replace_js_serial(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("serial_number")
+        label = match.group(1)
+        sep = match.group(2)
+        quote1 = match.group(3)
+        quote2 = match.group(5)
+        return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'SERIAL')}{quote2}"
+
+    html = re.sub(
+        r'(\w*serial[-_]?(?:num(?:ber)?|no)\w*|\w+serial)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        replace_js_serial,
         html,
         flags=re.IGNORECASE,
     )
@@ -336,9 +451,9 @@ def sanitize_html(
         ip = match.group(0)
         if ip in preserved_ips:
             return ip
-        # Validate it's actually an IP, not a version string
-        if not is_valid_ip_address(ip):
-            return ip  # Preserve version strings like "5.7.1.5"
+        # Private IP regex only matches 10.x/172.16-31.x/192.168.x — all have
+        # first octets (10, 172, 192) that pass is_valid_ip_address() unconditionally,
+        # so no version-string check is needed here (unlike public IPs in pass 5).
         collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True)
 
@@ -541,14 +656,8 @@ def sanitize_html(
     def sanitize_tag_value_list(match: re.Match[str]) -> str:
         """Sanitize pipe-delimited values in tagValueList.
 
-        Always auto-redacts values matching KNOWN patterns (MAC addresses).
-
-        When heuristics are enabled, analyzes remaining values to detect
-        potential PII (WiFi credentials, SSIDs, device names) based on
-        patterns, entropy, and context:
-        - DISABLED: Skip heuristic analysis (default)
-        - FLAG: Flag suspicious values for manual review
-        - REDACT: Auto-redact suspicious values (may over-redact)
+        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``,
+        and reassembles.
         """
         prefix = match.group(1)
         values_str = match.group(2)
@@ -557,75 +666,20 @@ def sanitize_html(
         values = values_str.split("|")
         sanitized_values: list[str] = []
 
-        for i, val in enumerate(values):
-            val_stripped = val.strip()
-            val_lower = val_stripped.lower()
-
-            # Skip empty values, safe values, and already-redacted placeholders
-            if not val_stripped or is_safe_value(val_stripped, extra_safe_patterns):
-                sanitized_values.append(val)
-                continue
-
-            # Skip already-redacted values (e.g., MAC_xxxxx, MODEM_SN_xxxxx)
-            if (
-                val_stripped.startswith("***")
-                or re.match(r"^[A-Z_]+_[a-f0-9]{8}$", val_stripped)
-                or val_stripped == "XX:XX:XX:XX:XX:XX"
-            ):
-                sanitized_values.append(val)
-                continue
-
-            # Check if value is in safe list
-            if val_lower in safe_values:
-                sanitized_values.append(val)
-                continue
-
-            # AUTO-REDACT: Known reliable patterns
-            # MAC addresses
-            if re.match(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", val_stripped):
-                collector.record_auto_redaction("mac_address")
-                sanitized_values.append(hasher.hash_mac(val_stripped))
-                continue
-
-            # Serial numbers with SN/S/N prefix
-            if _PIPE_SERIAL_RE.match(val_stripped):
-                collector.record_auto_redaction("serial_number")
-                sanitized_values.append(hasher.hash_generic(val_stripped, "SERIAL"))
-                continue
-
-            # HEURISTICS: Analyze unknown values (opt-in)
-            if heuristics != HeuristicMode.DISABLED:
-                should_flag, confidence, category, reason = analyze_value(
-                    val_stripped,
-                    values_context=sanitized_values,
-                    value_index=len(sanitized_values),
-                    extra_safe_patterns=extra_safe_patterns,
-                    compiled_detectors=compiled_detectors,
-                )
-
-                if should_flag:
-                    if heuristics == HeuristicMode.REDACT:
-                        # Auto-redact the flagged value
-                        redacted = hasher.hash_sensitive_value(val_stripped, category)
-                        sanitized_values.append(redacted)
-                        collector.record_auto_redaction(category)
-                        continue
-                    if heuristics == HeuristicMode.FLAG:
-                        # Flag for review, preserve value
-                        from har_capture.cli.interactive import capture_pipe_context
-
-                        context = capture_pipe_context(values, i)
-                        collector.flag_value(
-                            val_stripped,
-                            category,
-                            confidence,
-                            context,
-                            reason,
-                        )
-                        # Fall through to append original value
-
-            # Preserve value (either not flagged, or flagged for review)
-            sanitized_values.append(val)
+        for val in values:
+            result = _sanitize_pipe_value(
+                val.strip(),
+                hasher=hasher,
+                collector=collector,
+                safe_values=safe_values,
+                extra_safe_patterns=extra_safe_patterns,
+                compiled_detectors=compiled_detectors,
+                heuristics=heuristics,
+                values_context=sanitized_values,
+                value_index=len(sanitized_values),
+                all_values=values,
+            )
+            sanitized_values.append(result)
 
         return prefix + "|".join(sanitized_values) + suffix
 

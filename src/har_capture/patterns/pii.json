@@ -7,7 +7,7 @@
       "description": "MAC addresses in colon or dash format"
     },
     "serial_number": {
-      "regex": "(Serial\\s*Number|SerialNum|SN|S/N)\\s*[:\\s=]*(?:<[^>]*>)*\\s*([a-zA-Z0-9\\-]{5,})",
+      "regex": "(Serial\\s*Number|SerialNum|SN|S/N)\\b\\s*[:\\s=]*(?:<[^>]*>)*\\s*([a-zA-Z0-9\\-]{5,})",
       "replacement_prefix": "SERIAL",
       "flags": ["IGNORECASE"],
       "description": "Device serial numbers with various label formats"

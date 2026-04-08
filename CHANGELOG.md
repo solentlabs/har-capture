@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-04-08
+
+### Fixed
+
+- **Missing response body on initial page load** — Playwright's HAR recorder fetches bodies lazily at `context.close()` via CDP `Network.getResponseBody`. If a navigation (e.g., form POST) evicts the response from Chrome's buffer before the flush, the body is lost — headers and sizes are correct but `content.text` is absent. Added eager body capture via `page.on("response")` for text content types and a post-capture `_patch_missing_bodies()` step that fills missing bodies from the cache before sanitization.
+- **Serial number false positives** — Reduced false positive serial number detections in sanitization. Improved JS variable name detection and pipe-delimited pattern testability.
+
+### Removed
+
+- **No-op route handler** — Removed `context.route("**/*", lambda route: route.continue_())` which enabled the CDP Fetch domain unnecessarily, potentially interfering with HAR body capture.
+
 ## [0.6.0] - 2026-04-06
 
 ### Changed
@@ -464,4 +475,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.5.0]: https://github.com/solentlabs/har-capture/compare/v0.4.5...v0.5.0
 [0.5.1]: https://github.com/solentlabs/har-capture/compare/v0.5.0...v0.5.1
 [0.6.0]: https://github.com/solentlabs/har-capture/compare/v0.5.1...v0.6.0
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.6.0...HEAD
+[0.6.1]: https://github.com/solentlabs/har-capture/compare/v0.6.0...v0.6.1
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.6.1...HEAD

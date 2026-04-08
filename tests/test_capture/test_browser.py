@@ -1489,10 +1489,14 @@ class TestWaitForData:
         else:
             mock_page.add_init_script.assert_not_called()
 
-        # Both cases use context.route for cache control
-        mock_context.route.assert_called_once()
+        # No context.route — removed to avoid CDP Fetch domain
+        # interfering with HAR body capture
+        mock_context.route.assert_not_called()
         # page.route must never be used (sync API deadlock)
         mock_page.route.assert_not_called()
+
+        # Eager body capture listener is always registered
+        mock_page.on.assert_any_call("response", unittest.mock.ANY)
 
         if expect_nav_listener:
             mock_page.on.assert_any_call("framenavigated", unittest.mock.ANY)
