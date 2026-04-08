@@ -306,7 +306,15 @@ Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclie
 
 ### Section: `pii.patterns`
 
-Additional PII detection patterns. Same schema as `pii.json` `patterns` entries.
+Additional PII patterns for deterministic auto-redaction (Pass 0 of the HTML scanner). Same schema as `pii.json` `patterns` entries.
+
+**Confidence requirement:** Every pattern runs as auto-redact — the matched value is replaced without user review. Patterns MUST achieve 100% confidence. If a pattern cannot meet this bar, use `heuristics.detectors` instead.
+
+| Criterion      | `pii.patterns`              | `heuristics.detectors`      |
+| -------------- | --------------------------- | --------------------------- |
+| Confidence     | 100% — zero false positives | Lower confidence acceptable |
+| Action         | Auto-redact (irreversible)  | Flag for user review        |
+| Pipeline stage | Pass 0 (scanner)            | Heuristic engine            |
 
 ### Built-in Domain: `network_device.json`
 

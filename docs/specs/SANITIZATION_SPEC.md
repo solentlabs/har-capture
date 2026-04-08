@@ -209,30 +209,33 @@ MIME-type based routing:
 
 The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2b, 7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
-| Pass | Scanner                       | Pattern                                         | Redaction                              |
-| ---- | ----------------------------- | ----------------------------------------------- | -------------------------------------- |
-| 0    | Custom patterns               | Domain-specific PII regex                       | Per-pattern prefix                     |
-| 0b   | Web storage                   | `localStorage.setItem('KEY', 'VALUE')`          | Auto-redact if key is sensitive        |
-| 1    | MAC addresses                 | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`         | `hasher.hash_mac()`                    |
-| 2    | Serial numbers (inline)       | `SN\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`     |
-| 2b   | Serial numbers (table)        | `<td>Label</td><td>VALUE</td>`                  | `hasher.hash_value(val, "SERIAL")`     |
-| 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value | `hasher.hash_value(val, "ACCOUNT")`    |
-| 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)         | `hasher.hash_ip(ip, is_private=True)`  |
-| 5    | Public IPs                    | Non-private, non-reserved                       | `hasher.hash_ip(ip, is_private=False)` |
-| 6    | IPv6 addresses                | Full + compressed, validated via `ipaddress`    | `hasher.hash_ipv6()`                   |
-| 7    | Passwords/passphrases         | `password=value`, `passphrase=value`            | `hasher.hash_value(val, "PASS")`       |
-| 7a   | SSID text labels              | SSID labels in HTML text nodes                  | `hasher.hash_value(val, "WIFI")`       |
-| 7b   | JS password objects           | JavaScript object password fields               | `hasher.hash_value(val, "PASS")`       |
-| 8    | Password inputs               | `<input type="password" value="...">`           | `hasher.hash_value(val, "PASS")`       |
-| 8b   | SSID inputs                   | SSID-related input fields                       | `hasher.hash_value(val, "WIFI")`       |
-| 9    | Session tokens                | 20+ char alphanumeric with label prefix         | `hasher.hash_value(val, "TOKEN")`      |
-| 10   | CSRF tokens                   | CSRF tokens in meta tags                        | `hasher.hash_value(val, "CSRF")`       |
-| 11   | Email addresses               | `user+tag@sub.domain.co.uk`                     | `hasher.hash_email()`                  |
-| 12   | Config paths                  | `.cfg` file references                          | `hasher.hash_value(val, "CONFIG")`     |
-| 13   | Vendor JS vars                | Motorola `var CurrentPw_24g = '...'`            | `hasher.hash_value(val, "PASS")`       |
-| 14   | Pipe-delimited (tagValueList) | `var name = "val1\|val2\|val3"`                 | Per-value heuristic analysis           |
-| 15   | Pipe-delimited (other)        | Other pipe-delimited variables                  | Per-value heuristic analysis           |
-| 16   | SSID fields in JS             | `ssid_24g: 'value'`, `guest_ssid: 'value'`      | `hasher.hash_value(val, "WIFI")`       |
+| Pass | Scanner                       | Pattern                                             | Redaction                              |
+| ---- | ----------------------------- | --------------------------------------------------- | -------------------------------------- |
+| 0    | Custom patterns               | Domain-specific PII regex                           | Per-pattern prefix                     |
+| 0b   | Web storage                   | `localStorage.setItem('KEY', 'VALUE')`              | Auto-redact if key is sensitive        |
+| 1    | MAC addresses                 | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`             | `hasher.hash_mac()`                    |
+| 2    | Serial numbers (inline)       | `\bSN\b\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`     |
+| 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`     |
+| 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`     |
+| 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value     | `hasher.hash_value(val, "ACCOUNT")`    |
+| 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)             | `hasher.hash_ip(ip, is_private=True)`  |
+| 5    | Public IPs                    | Non-private, non-reserved                           | `hasher.hash_ip(ip, is_private=False)` |
+| 6    | IPv6 addresses                | Full + compressed, validated via `ipaddress`        | `hasher.hash_ipv6()`                   |
+| 7    | Passwords/passphrases         | `password=value`, `passphrase=value`                | `hasher.hash_value(val, "PASS")`       |
+| 7a   | SSID text labels              | SSID labels in HTML text nodes                      | `hasher.hash_value(val, "WIFI")`       |
+| 7b   | JS password objects           | JavaScript object password fields                   | `hasher.hash_value(val, "PASS")`       |
+| 8    | Password inputs               | `<input type="password" value="...">`               | `hasher.hash_value(val, "PASS")`       |
+| 8b   | SSID inputs                   | SSID-related input fields                           | `hasher.hash_value(val, "WIFI")`       |
+| 9    | Session tokens                | 20+ char alphanumeric with label prefix             | `hasher.hash_value(val, "TOKEN")`      |
+| 10   | CSRF tokens                   | CSRF tokens in meta tags                            | `hasher.hash_value(val, "CSRF")`       |
+| 11   | Email addresses               | `user+tag@sub.domain.co.uk`                         | `hasher.hash_email()`                  |
+| 12   | Config paths                  | `.cfg` file references                              | `hasher.hash_value(val, "CONFIG")`     |
+| 13   | Vendor JS vars                | Motorola `var CurrentPw_24g = '...'`                | `hasher.hash_value(val, "PASS")`       |
+| 14   | Pipe-delimited (tagValueList) | `var name = "val1\|val2\|val3"`                     | Per-value heuristic analysis           |
+| 15   | Pipe-delimited (other)        | Other pipe-delimited variables                      | Per-value heuristic analysis           |
+| 16   | SSID fields in JS             | `ssid_24g: 'value'`, `guest_ssid: 'value'`          | `hasher.hash_value(val, "WIFI")`       |
+
+**Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`, `Baud`, `ization`). Bare `serial` is excluded — too ambiguous for auto-redact.
 
 ### Web Storage Scanner (Pass 0b)
 
@@ -551,3 +554,4 @@ Detects common redaction markers to warn users before double-sanitizing.
 1. **Cookie metadata is preserved** — Cookie attributes (HttpOnly, Secure, SameSite, Path, Domain, Expires) are detected and not redacted. Only cookie values are redacted.
 1. **Credit card detection requires Luhn** — A 16-digit number is only redacted as a credit card if it passes Luhn checksum validation.
 1. **Global find-replace in Pass 2** — User-selected redactions are applied via string replacement on the serialized JSON, ensuring all occurrences (headers, body, URLs) are caught.
+1. **Scanner passes require 100% confidence** — Every regex in the HTML scanner pipeline (passes 0–16) auto-redacts without user review. A pattern that produces false positives is a bug. Patterns that cannot achieve 100% confidence belong in the heuristic engine (flagged for user review), not the scanner pipeline.

@@ -13,6 +13,7 @@
     {"input_html": "External DNS: 8.8.8.8",                   "removed": "8.8.8.8",               "placeholder": "0.0.0.0",            "id": "public_ip_google"},
     {"input_html": "Server: 1.1.1.1",                         "removed": "1.1.1.1",               "placeholder": "0.0.0.0",            "id": "public_ip_cloudflare"},
     {"input_html": "API: 203.0.113.50",                       "removed": "203.0.113.50",          "placeholder": "0.0.0.0",            "id": "public_ip_test_net"},
+    {"input_html": "Relay: 3.100.200.50",                     "removed": "3.100.200.50",          "placeholder": "0.0.0.0",            "id": "public_ip_low_first_octet"},
     {"input_html": "IPv6: 2001:db8::1",                       "removed": "2001:db8::1",           "placeholder": "::",                 "id": "ipv6_compressed"},
     {"input_html": "IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "removed": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "placeholder": "::", "id": "ipv6_full"},
     {"input_html": "Localhost: ::1",                          "removed": "::1",                   "placeholder": "::",                 "id": "ipv6_localhost"},
@@ -22,7 +23,22 @@
     {"input_html": "Contact: admin@example.com",              "removed": "admin@example.com",     "placeholder": "x@x.invalid",        "id": "email_simple"},
     {"input_html": "Email: user.name+tag@domain.co.uk",       "removed": "user.name+tag@domain.co.uk", "placeholder": "x@x.invalid",   "id": "email_complex"},
     {"input_html": "Config File Name: customer123.cfg",       "removed": "customer123.cfg",       "placeholder": "***CONFIG***",       "id": "config_path"},
-    {"input_html": "config file: isp_settings.cfg",           "removed": "isp_settings.cfg",      "placeholder": "***CONFIG***",       "id": "config_lowercase"}
+    {"input_html": "config file: isp_settings.cfg",           "removed": "isp_settings.cfg",      "placeholder": "***CONFIG***",       "id": "config_lowercase"},
+    {"input_html": "Account ID: 12345678",                    "removed": "12345678",              "placeholder": "***ACCOUNT***",      "id": "account_id"},
+    {"input_html": "Subscriber Number: SUB-9876",             "removed": "SUB-9876",              "placeholder": "***ACCOUNT***",      "id": "subscriber_number"},
+    {"input_html": "SSID: HomeNetwork",                       "removed": "HomeNetwork",           "placeholder": "***WIFI***",         "id": "ssid_text_label"},
+    {"input_html": "Network Name=MyWiFi5G",                   "removed": "MyWiFi5G",              "placeholder": "***WIFI***",         "id": "network_name_label"},
+    {"input_html": "password_24g: 'MyP@ssw0rd'",              "removed": "MyP@ssw0rd",            "placeholder": "***PASS***",         "id": "js_password_obj"},
+    {"input_html": "guest_password = \"secretGuest\"",        "removed": "secretGuest",           "placeholder": "***PASS***",         "id": "js_guest_password"},
+    {"input_html": "<input type=\"password\" value=\"s3cret\">","removed": "s3cret",              "placeholder": "***PASS***",         "id": "password_input_field"},
+    {"input_html": "<label>WiFi SSID</label><input value=\"MyHomeNet\">", "removed": "MyHomeNet", "placeholder": "***WIFI***",         "id": "ssid_input_field"},
+    {"input_html": "session=AbcDef1234567890abcdef",          "removed": "AbcDef1234567890abcdef","placeholder": "***TOKEN***",        "id": "session_token"},
+    {"input_html": "auth: xK9mP2qR7sT4wZaBcDeFgHiJ",         "removed": "xK9mP2qR7sT4wZaBcDeFgHiJ","placeholder": "***TOKEN***",     "id": "auth_token_long"},
+    {"input_html": "<meta name=\"csrf-token\" content=\"xsrf_abc123\">", "removed": "xsrf_abc123","placeholder": "***CSRF***",         "id": "csrf_token_meta"},
+    {"input_html": "var CurrentPw = 'motor0laP@ss'",           "removed": "motor0laP@ss",          "placeholder": "***PASS***",         "id": "motorola_password_var"},
+    {"input_html": "var CurrentPassword = 'adminPass1'",      "removed": "adminPass1",            "placeholder": "***PASS***",         "id": "motorola_password_full"},
+    {"input_html": "ssid_24g: 'MyNetwork5G'",                 "removed": "MyNetwork5G",           "placeholder": "***WIFI***",         "id": "ssid_js_field"},
+    {"input_html": "guest_ssid = \"Visitors\"",               "removed": "Visitors",              "placeholder": "***WIFI***",         "id": "guest_ssid_js_field"}
   ],
 
   "preserve_cases": [
@@ -41,7 +57,10 @@
     {"input_html": "var tagValueList = '0|Good||happymango167|test';", "preserved": "happymango167", "id": "wifi_credential_flagged"},
     {"input_html": "var tagValueList = 'status|MySecretWiFi123|data';", "preserved": "MySecretWiFi123", "id": "wifi_ssid_flagged"},
     {"input_html": "Channel: 123",                            "preserved": "123",                   "id": "numeric_channel"},
-    {"input_html": "Version: 1.0.0",                          "preserved": "1.0.0",                 "id": "version_string"}
+    {"input_html": "Version: 1.0.0",                          "preserved": "1.0.0",                 "id": "version_string"},
+    {"input_html": "Build: 2.4.6.100",                        "preserved": "2.4.6.100",             "id": "version_3_small_octets"},
+    {"input_html": "Firmware: 3.4.5.6",                       "preserved": "3.4.5.6",               "id": "version_4_small_octets"},
+    {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"}
   ],
 
   "pii_detection_cases": [
@@ -87,7 +106,51 @@
     {"input_html": "var tagValueList = 'ok|sn-abcdefgh|enabled';",       "should_not_contain": "sn-abcdefgh",    "should_contain": "SERIAL_",  "id": "pipe_serial_lowercase"},
     {"input_html": "var tagValueList = 'ok|S-N-WXYZ98765|good';",          "should_not_contain": "S-N-WXYZ98765",  "should_contain": "SERIAL_",  "id": "pipe_serial_s_dash_n"},
     {"input_html": "var tagValueList = 'SNMP|enabled|good';",             "should_not_contain": null,             "should_contain": null,       "id": "pipe_not_serial_snmp"},
-    {"input_html": "var tagValueList = 'SN-AB|ok';",                      "should_not_contain": null,             "should_contain": null,       "id": "pipe_serial_too_short"}
+    {"input_html": "var tagValueList = 'SN-AB|ok';",                      "should_not_contain": null,             "should_contain": null,       "id": "pipe_serial_too_short"},
+    {"input_html": "var tagValueList = 'ok|AA:BB:CC:DD:EE:FF|good';",   "should_not_contain": "AA:BB:CC:DD:EE:FF","should_contain": null,     "id": "pipe_mac_auto_redact"},
+    {"input_html": "var tagValueList = 'ok|***MAC***|good';",            "should_not_contain": null,             "should_contain": null,       "id": "pipe_already_redacted_stars"},
+    {"input_html": "var tagValueList = 'ok|MAC_a1b2c3d4|good';",        "should_not_contain": null,             "should_contain": null,       "id": "pipe_already_redacted_hash"},
+    {"input_html": "var tagValueList = 'ok|XX:XX:XX:XX:XX:XX|good';",   "should_not_contain": null,             "should_contain": null,       "id": "pipe_already_redacted_placeholder"},
+    {"input_html": "var tagValueList = 'Locked|OK|good';",              "should_not_contain": null,             "should_contain": null,       "id": "pipe_safe_list_values"}
+  ],
+
+  "serial_key_false_positive_cases": [
+    {"input_html": "{\"SNRLevel\":\"33\",\"LockStatus\":\"Locked\"}",                "preserved": "SNRLevel",    "id": "json_key_snrlevel"},
+    {"input_html": "SNMPEnable: true",                                               "preserved": "SNMPEnable",  "id": "snmp_enable"},
+    {"input_html": "SnmpLog: entry1",                                                "preserved": "SnmpLog",     "id": "snmp_log"},
+    {"input_html": "<td>SNRLevel</td><td>33 dB</td>",                               "preserved": "SNRLevel",    "id": "snrlevel_table"},
+    {"input_html": "SN: DEV123456789",                                               "removed": "DEV123456789",  "id": "sn_still_redacts"}
+  ],
+
+  "js_serial_variable_cases": [
+    {"input_html": "var js_SerialNumber = 'AABB12345678';",   "should_not_contain": "AABB12345678",   "should_contain": "SERIAL_",  "id": "js_serial_number_var"},
+    {"input_html": "var serialNum = \"XYZ9876543\";",         "should_not_contain": "XYZ9876543",     "should_contain": "SERIAL_",  "id": "serial_num_var"},
+    {"input_html": "var deviceSerial = 'ARRIS-11223344';",    "should_not_contain": "ARRIS-11223344", "should_contain": "SERIAL_",  "id": "device_serial_var"},
+    {"input_html": "serialNumber: 'TG3442DE-ABC123'",        "should_not_contain": "TG3442DE-ABC123","should_contain": "SERIAL_",  "id": "serial_number_js_obj"},
+    {"input_html": "var serial_number = 'MODEM-987654';",   "should_not_contain": "MODEM-987654",   "should_contain": "SERIAL_",  "id": "serial_underscore_number_var"},
+    {"input_html": "var modem_serial = 'ARRIS-556677';",    "should_not_contain": "ARRIS-556677",   "should_contain": "SERIAL_",  "id": "modem_serial_var"},
+    {"input_html": "serialNo: 'SB8200-AABB1234'",           "should_not_contain": "SB8200-AABB1234","should_contain": "SERIAL_",  "id": "serial_no_js_obj"},
+    {"input_html": "var serialProtocol = 'RS232';",          "should_not_contain": null,             "should_contain": null,       "id": "serial_protocol_preserved"},
+    {"input_html": "var serialPort = '9600';",               "should_not_contain": null,             "should_contain": null,       "id": "serial_port_preserved"},
+    {"input_html": "var serialBaud = '115200';",             "should_not_contain": null,             "should_contain": null,       "id": "serial_baud_preserved"},
+    {"input_html": "var serialization = 'json';",            "should_not_contain": null,             "should_contain": null,       "id": "serialization_preserved"}
+  ],
+
+  "pipe_value_unit_cases": [
+    {"value": "",                     "expected_unchanged": true,  "id": "empty_value"},
+    {"value": "***MAC***",            "expected_unchanged": true,  "id": "already_redacted_stars"},
+    {"value": "MAC_a1b2c3d4",        "expected_unchanged": true,  "id": "already_redacted_hash"},
+    {"value": "XX:XX:XX:XX:XX:XX",   "expected_unchanged": true,  "id": "already_redacted_placeholder"},
+    {"value": "SERIAL_deadbeef",     "expected_unchanged": true,  "id": "already_redacted_serial_hash"},
+    {"value": "good",                "expected_unchanged": true,  "id": "safe_list_value"},
+    {"value": "locked",              "expected_unchanged": true,  "id": "safe_list_locked"},
+    {"value": "retail",              "expected_unchanged": true,  "id": "safe_list_retail"},
+    {"value": "AA:BB:CC:DD:EE:FF",  "expected_unchanged": true,  "id": "mac_safe_hex_colon_pattern"},
+    {"value": "SN-ABC12345",        "expected_unchanged": false, "expected_contains": "SERIAL_", "id": "serial_auto_redact"},
+    {"value": "S/N-DEVICE789",      "expected_unchanged": false, "expected_contains": "SERIAL_", "id": "serial_s_n_prefix"},
+    {"value": "Locked",             "expected_unchanged": true,  "id": "status_word_safe"},
+    {"value": "OK",                 "expected_unchanged": true,  "id": "status_ok_safe"},
+    {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"}
   ],
 
   "expected_patterns": [
