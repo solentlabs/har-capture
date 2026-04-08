@@ -682,5 +682,97 @@
         }
       ]
     }
+  },
+  "har_missing_body": {
+    "log": {
+      "version": "1.2",
+      "creator": { "name": "test", "version": "1.0" },
+      "entries": [
+        {
+          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "response": {
+            "status": 200,
+            "headers": [
+              { "name": "Content-Length", "value": "611" },
+              { "name": "Content-type", "value": "text/html" }
+            ],
+            "content": { "size": -1, "mimeType": "text/html", "compression": 0 },
+            "bodySize": 611,
+            "_transferSize": 994
+          }
+        }
+      ]
+    }
+  },
+  "har_body_present": {
+    "log": {
+      "version": "1.2",
+      "creator": { "name": "test", "version": "1.0" },
+      "entries": [
+        {
+          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": { "text": "<html>original</html>", "size": 21, "mimeType": "text/html" },
+            "bodySize": 21
+          }
+        }
+      ]
+    }
+  },
+  "har_missing_body_no_size": {
+    "log": {
+      "version": "1.2",
+      "creator": { "name": "test", "version": "1.0" },
+      "entries": [
+        {
+          "request": { "method": "GET", "url": "http://192.168.100.1/empty", "headers": [] },
+          "response": {
+            "status": 204,
+            "headers": [],
+            "content": { "size": 0, "mimeType": "text/html" },
+            "bodySize": 0
+          }
+        }
+      ]
+    }
+  },
+  "har_mixed_bodies": {
+    "log": {
+      "version": "1.2",
+      "creator": { "name": "test", "version": "1.0" },
+      "entries": [
+        {
+          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": { "size": -1, "mimeType": "text/html" },
+            "bodySize": 611,
+            "_transferSize": 994
+          }
+        },
+        {
+          "request": { "method": "POST", "url": "http://192.168.100.1/login", "headers": [] },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": { "text": "<html>dashboard</html>", "size": 21, "mimeType": "text/html" },
+            "bodySize": 21
+          }
+        },
+        {
+          "request": { "method": "GET", "url": "http://192.168.100.1/api/status", "headers": [] },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": { "size": -1, "mimeType": "application/json" },
+            "bodySize": 42,
+            "_transferSize": 42
+          }
+        }
+      ]
+    }
   }
 }

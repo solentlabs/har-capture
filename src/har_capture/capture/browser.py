@@ -6,6 +6,7 @@ Requires the 'capture' optional dependency: pip install har-capture[capture]
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import dataclasses
 import gzip
@@ -258,6 +259,9 @@ class BrowserSessionResult:
         browser_cookies: Cookies after page load (JS-set included)
         web_storage_local: localStorage entries per origin
         web_storage_session: sessionStorage key/value pairs
+        captured_bodies: Eagerly captured response bodies keyed by
+            ``"<method>|<url>|<status>"`` — used to patch HAR entries
+            whose bodies were evicted before Playwright flushed the HAR.
         success: True if the session completed without error
         error: Error message if session failed
     """
@@ -266,6 +270,7 @@ class BrowserSessionResult:
     browser_cookies: list[Any] = dataclasses.field(default_factory=list)
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
+    captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
     success: bool = True
     error: str | None = None
 
@@ -536,7 +541,25 @@ def _run_browser_session(
 
             page.on("framenavigated", _on_frame_navigated)
 
-        context.route("**/*", lambda route: route.continue_())
+        # Eagerly capture response bodies for text content types.
+        # Playwright's HAR recorder fetches bodies lazily at context.close()
+        # via CDP Network.getResponseBody.  If a navigation evicts the
+        # response from Chrome's buffer before the flush, the body is lost.
+        # Capturing here while the response is still live lets us patch
+        # missing bodies into the HAR afterward.
+        def _on_response(response: Any) -> None:
+            try:
+                ct = response.headers.get("content-type", "")
+                if not any(t in ct for t in ("text/", "application/json", "application/xml")):
+                    return
+                body = response.body()
+                if body:
+                    key = f"{response.request.method}|{response.url}|{response.status}"
+                    result.captured_bodies[key] = body
+            except Exception:  # noqa: S110 — response may be aborted/streaming
+                pass
+
+        page.on("response", _on_response)
 
         # Navigate with auto-fallback
         if page_load_strategy == "networkidle":
@@ -607,6 +630,88 @@ def _run_browser_session(
             _LOGGER.warning("Failed to close browser instance: %s", e)
 
     return result
+
+
+def _patch_missing_bodies(
+    temp_path: Path,
+    captured_bodies: dict[str, bytes],
+) -> int:
+    """Patch missing response bodies into the raw HAR.
+
+    Playwright's HAR recorder fetches response bodies lazily at
+    ``context.close()`` via CDP ``Network.getResponseBody``.  If a
+    navigation evicts the response from Chrome's buffer before the
+    flush, the body is lost — headers and sizes are correct but
+    ``content.text`` is absent.
+
+    This function fills the gap using bodies eagerly captured via
+    ``page.on("response")`` during the live session.
+
+    Args:
+        temp_path: Path to the raw HAR temp file (modified in-place).
+        captured_bodies: Map of ``"<method>|<url>|<status>"`` → raw
+            response bytes captured during the browser session.
+
+    Returns:
+        Number of HAR entries whose bodies were patched.
+    """
+    if not captured_bodies:
+        return 0
+
+    try:
+        with open(temp_path, encoding="utf-8") as f:
+            har = json.load(f)
+    except Exception:
+        return 0
+
+    patched = 0
+    for entry in har.get("log", {}).get("entries", []):
+        response = entry.get("response", {})
+        content = response.get("content", {})
+
+        # Skip entries that already have body content
+        if content.get("text"):
+            continue
+
+        # Only patch if the response indicated there was content
+        if response.get("bodySize", 0) <= 0 and response.get("_transferSize", 0) <= 0:
+            continue
+
+        method = entry.get("request", {}).get("method", "GET")
+        url = entry.get("request", {}).get("url", "")
+        status = response.get("status", 0)
+        key = f"{method}|{url}|{status}"
+
+        if key not in captured_bodies:
+            continue
+
+        body = captured_bodies[key]
+        mime = content.get("mimeType", "")
+
+        # Text content types are stored as plain text in the HAR
+        if any(t in mime for t in ("text/", "application/json", "application/xml")):
+            try:
+                content["text"] = body.decode("utf-8")
+            except UnicodeDecodeError:
+                content["text"] = base64.b64encode(body).decode("ascii")
+                content["encoding"] = "base64"
+        else:
+            content["text"] = base64.b64encode(body).decode("ascii")
+            content["encoding"] = "base64"
+
+        content["size"] = len(body)
+        patched += 1
+
+    if patched:
+        _LOGGER.info("Patched %d HAR entries with eagerly captured response bodies", patched)
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(har, f)
+        except Exception as e:
+            _LOGGER.warning("Failed to write patched HAR: %s", e)
+            return 0
+
+    return patched
 
 
 def _inject_har_metadata(
@@ -923,10 +1028,13 @@ def capture_device_har(
                 error=error_str,
             )
 
-    # 3. Inject metadata
+    # 3. Patch any response bodies that Playwright missed
+    _patch_missing_bodies(paths.temp_path, session.captured_bodies)
+
+    # 4. Inject metadata
     _inject_har_metadata(paths.temp_path, paths.target_url, probes, session)
 
-    # 4. Post-capture pipeline
+    # 5. Post-capture pipeline
     return _run_post_capture_pipeline(
         temp_path=paths.temp_path,
         output_path=paths.output_path,
