@@ -1,0 +1,66 @@
+{
+  "include_patterns_loader_cases": [
+    {
+      "domain_config": {"include_patterns": ["mac_address", "email"]},
+      "expected_present": ["mac_address", "email"],
+      "expected_absent": ["credit_card_visa", "ssn", "serial_number"],
+      "exact_set": true,
+      "id": "exact_names_keep_only_listed"
+    },
+    {
+      "domain_config": {"include_patterns": ["credit_card_*"]},
+      "expected_present": ["credit_card_visa", "credit_card_mastercard", "credit_card_amex"],
+      "expected_absent": ["mac_address", "email"],
+      "exact_set": false,
+      "id": "wildcard_keeps_category"
+    },
+    {
+      "domain_config": {"include_patterns": ["mac_address", "private_ip", "public_ip", "ipv6", "*_ip"]},
+      "expected_present": ["mac_address", "private_ip", "public_ip", "ipv6"],
+      "expected_absent": ["credit_card_visa", "ssn"],
+      "exact_set": false,
+      "id": "mixed_exact_and_wildcard"
+    },
+    {
+      "domain_config": {"tagValueList": {"safe_values": ["foo"]}},
+      "expected_present": ["credit_card_visa", "mac_address", "ssn"],
+      "expected_absent": [],
+      "exact_set": false,
+      "id": "no_include_patterns_preserves_all"
+    },
+    {
+      "domain_config": {
+        "include_patterns": ["mac_address", "docsis_account"],
+        "patterns": {
+          "docsis_account": {
+            "regex": "CM-ACCT-\\d{8,}",
+            "replacement_prefix": "DOCSIS"
+          }
+        }
+      },
+      "expected_present": ["mac_address", "docsis_account"],
+      "expected_absent": ["credit_card_visa", "ssn"],
+      "exact_set": true,
+      "id": "domain_custom_pattern_included"
+    }
+  ],
+
+  "include_patterns_pii_cases": [
+    {
+      "domain_config": {"include_patterns": ["mac_address"]},
+      "content": "MAC: DE:AD:BE:EF:CA:FE and card 4111111111111111",
+      "expected_detected": ["mac_address"],
+      "expected_not_detected": ["credit_card_visa"],
+      "id": "only_included_patterns_detected"
+    },
+    {
+      "domain_config": {
+        "include_patterns": ["mac_address", "serial_number", "private_ip", "public_ip", "ipv6", "email"]
+      },
+      "content": "poll_duration: 2.343620812986046",
+      "expected_detected": [],
+      "expected_not_detected": [],
+      "id": "cable_modem_false_positive_suppressed"
+    }
+  ]
+}

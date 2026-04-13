@@ -1,6 +1,22 @@
 {
   "_description": "Safe values for network devices (routers, modems, access points, switches)",
 
+  "include_patterns": [
+    "mac_address",
+    "serial_number",
+    "account_id",
+    "private_ip",
+    "public_ip",
+    "ipv6",
+    "email",
+    "password_field",
+    "password_input",
+    "session_token",
+    "csrf_token",
+    "config_path",
+    "motorola_password"
+  ],
+
   "heuristics": {
     "detectors": [
       {

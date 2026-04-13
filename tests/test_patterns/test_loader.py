@@ -19,6 +19,7 @@ from har_capture.patterns.loader import (
     load_json_file,
     load_pii_patterns,
     load_sensitive_patterns,
+    merge_pattern_files,
     resolve_patterns_arg,
 )
 
@@ -296,6 +297,100 @@ class TestCompileSafeValuePatterns:
         }
         patterns = compile_safe_value_patterns(data)
         assert len(patterns) == 1
+
+
+_LOADER_FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "test_loader.json"
+_LOADER_FIXTURE = json.loads(_LOADER_FIXTURE_PATH.read_text())
+
+INCLUDE_LOADER_CASES = [
+    (c["domain_config"], c["expected_present"], c["expected_absent"], c["exact_set"], c["id"])
+    for c in _LOADER_FIXTURE["include_patterns_loader_cases"]
+]
+
+INCLUDE_PII_CASES = [
+    (c["domain_config"], c["content"], c["expected_detected"], c["expected_not_detected"], c["id"])
+    for c in _LOADER_FIXTURE["include_patterns_pii_cases"]
+]
+
+
+class TestIncludePatterns:
+    """Tests for include_patterns in domain/custom pattern files."""
+
+    def setup_method(self) -> None:
+        """Clear cache before each test."""
+        clear_pattern_cache()
+
+    def teardown_method(self) -> None:
+        """Clear cache after each test."""
+        clear_pattern_cache()
+
+    @pytest.mark.parametrize(
+        ("domain_config", "expected_present", "expected_absent", "exact_set", "desc"),
+        INCLUDE_LOADER_CASES,
+        ids=[c[4] for c in INCLUDE_LOADER_CASES],
+    )
+    def test_load_pii_with_inclusions(
+        self,
+        tmp_path: Path,
+        domain_config: dict,
+        expected_present: list[str],
+        expected_absent: list[str],
+        exact_set: bool,
+        desc: str,
+    ) -> None:
+        """Test that include_patterns filters the loaded pattern set."""
+        domain = tmp_path / "domain.json"
+        domain.write_text(json.dumps(domain_config))
+
+        result = load_pii_patterns(str(domain))
+        if exact_set:
+            assert set(result["patterns"]) == set(expected_present), f"{desc}: exact set mismatch"
+        for name in expected_present:
+            assert name in result["patterns"], f"{desc}: {name} should be present"
+        for name in expected_absent:
+            assert name not in result["patterns"], f"{desc}: {name} should be absent"
+
+    @pytest.mark.parametrize(
+        ("domain_config", "content", "expected_detected", "expected_not_detected", "desc"),
+        INCLUDE_PII_CASES,
+        ids=[c[4] for c in INCLUDE_PII_CASES],
+    )
+    def test_check_for_pii_with_inclusions(
+        self,
+        tmp_path: Path,
+        domain_config: dict,
+        content: str,
+        expected_detected: list[str],
+        expected_not_detected: list[str],
+        desc: str,
+    ) -> None:
+        """End-to-end: check_for_pii respects include_patterns from domain file."""
+        from har_capture.sanitization.html import check_for_pii
+
+        domain = tmp_path / "domain.json"
+        domain.write_text(json.dumps(domain_config))
+
+        findings = check_for_pii(content, custom_patterns=str(domain))
+        detected = {f["pattern"] for f in findings}
+        for name in expected_detected:
+            assert name in detected, f"{desc}: {name} should be detected"
+        for name in expected_not_detected:
+            assert name not in detected, f"{desc}: {name} should not be detected"
+
+    def test_dict_custom_with_inclusions(self) -> None:
+        """Inclusions work when custom_path is a dict (not a file)."""
+        result = load_pii_patterns({"include_patterns": ["mac_address", "serial_number"]})
+        assert set(result["patterns"]) == {"mac_address", "serial_number"}
+
+    def test_merge_accumulates_inclusions(self, tmp_path: Path) -> None:
+        """merge_pattern_files extends include_patterns across files."""
+        file_a = tmp_path / "a.json"
+        file_a.write_text(json.dumps({"include_patterns": ["mac_address"]}))
+        file_b = tmp_path / "b.json"
+        file_b.write_text(json.dumps({"include_patterns": ["email"]}))
+
+        merged = merge_pattern_files([file_a, file_b])
+        assert set(merged["include_patterns"]) == {"mac_address", "email"}
 
 
 class TestSensitivePatternsHeuristicsMerge:

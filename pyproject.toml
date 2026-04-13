@@ -311,7 +311,6 @@ filterwarnings = [
 [tool.coverage.run]
 source = ["src/har_capture"]
 branch = true
-parallel = true
 
 [tool.coverage.paths]
 source = ["src/har_capture"]
