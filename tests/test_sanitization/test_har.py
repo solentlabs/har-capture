@@ -622,6 +622,214 @@ class TestContextVarIsolatesThreads:
         assert results["t2_cross"] is False
 
 
+# -----------------------------------------------------------------------------
+# Header-set custom_patterns coverage (0.7.1 fix)
+# -----------------------------------------------------------------------------
+
+
+class TestHeaderSetsInternals:
+    """Direct coverage for the parallel header-sets infrastructure."""
+
+    def test_compile_header_sets_normalizes_case_and_freezes(self) -> None:
+        from har_capture.sanitization.har import _compile_header_sets
+
+        sets = _compile_header_sets(
+            {
+                "headers": {
+                    "full_redact": ["Authorization", "X-Modem-Auth"],
+                    "cookie_redact": ["Cookie"],
+                }
+            }
+        )
+        assert sets.full_redact == frozenset({"authorization", "x-modem-auth"})
+        assert sets.cookie_redact == frozenset({"cookie"})
+        assert isinstance(sets.full_redact, frozenset)
+
+    def test_resolve_header_sets_none_returns_default(self) -> None:
+        from har_capture.sanitization.har import (
+            _DEFAULT_HEADER_SETS,
+            _resolve_header_sets,
+        )
+
+        assert _resolve_header_sets(None) is _DEFAULT_HEADER_SETS
+
+    def test_resolve_header_sets_merges_custom_additively(self) -> None:
+        from har_capture.sanitization.har import _resolve_header_sets
+
+        sets = _resolve_header_sets({"headers": {"full_redact": ["X-Modem-Auth"]}})
+        # Built-in Authorization still present, custom header added.
+        assert "authorization" in sets.full_redact
+        assert "x-modem-auth" in sets.full_redact
+
+    def test_resolve_header_sets_cache_hit_returns_same_instance(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_HEADER_SETS_CACHE,
+            _resolve_header_sets,
+        )
+
+        _CUSTOM_HEADER_SETS_CACHE.clear()
+        custom = {"headers": {"full_redact": ["X-Modem-Auth"]}}
+        a = _resolve_header_sets(custom)
+        b = _resolve_header_sets(custom)
+        assert a is b
+
+    def test_header_sets_scope_restores_on_exception(self) -> None:
+        from har_capture.sanitization.har import (
+            _DEFAULT_HEADER_SETS,
+            _HEADER_SETS_CTX,
+            _header_sets_scope,
+        )
+
+        assert _HEADER_SETS_CTX.get() is _DEFAULT_HEADER_SETS
+        with (
+            pytest.raises(RuntimeError, match="boom"),
+            _header_sets_scope({"headers": {"full_redact": ["x-modem-auth"]}}),
+        ):
+            raise RuntimeError("boom")
+        assert _HEADER_SETS_CTX.get() is _DEFAULT_HEADER_SETS
+
+
+class TestCustomPatternsPropagationThroughEntry:
+    """Regression tests for 0.7.0 custom_patterns propagation gaps.
+
+    Three detection sites in ``_sanitize_request`` / ``_sanitize_response``
+    (header values, structured ``queryString`` params, and URL-query params)
+    run BEFORE ``sanitize_post_data`` / ``sanitize_html`` get a chance to
+    enter their own scopes. Entering both ContextVar scopes at
+    ``sanitize_entry`` closes the gap.
+    """
+
+    CUSTOM_MODEM_HEADER = {"headers": {"full_redact": ["x-modem-auth"]}}
+    CUSTOM_PWS_FIELD = {"fields": {"auto_redact_patterns": ["pws"]}}
+
+    def _entry(self, request: dict, response: dict | None = None) -> dict:
+        return {
+            "request": request,
+            "response": response
+            or {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/plain"}},
+        }
+
+    def test_custom_header_is_NOT_redacted_without_custom_patterns(self) -> None:
+        """Baseline: x-modem-auth passes through by default."""
+        entry = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/",
+                "headers": [{"name": "X-Modem-Auth", "value": "secret_token_123"}],
+            }
+        )
+        result = sanitize_entry(entry, salt=None)
+        header = next(h for h in result["request"]["headers"] if h["name"] == "X-Modem-Auth")
+        assert header["value"] == "secret_token_123"
+
+    def test_custom_header_IS_redacted_when_custom_patterns_passed(self) -> None:
+        """sanitize_entry's custom_patterns must reach sanitize_header_value."""
+        entry = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/",
+                "headers": [{"name": "X-Modem-Auth", "value": "secret_token_123"}],
+            }
+        )
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_MODEM_HEADER)
+        header = next(h for h in result["request"]["headers"] if h["name"] == "X-Modem-Auth")
+        assert header["value"] != "secret_token_123"
+        assert "secret_token_123" not in header["value"]
+
+    def test_custom_field_redacts_structured_querystring_param(self) -> None:
+        """QueryString params in _sanitize_request must honor custom_patterns too."""
+        entry = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/path?pws=alsosecret",
+                "headers": [],
+                "queryString": [{"name": "pws", "value": "alsosecret"}],
+            }
+        )
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_PWS_FIELD)
+        qs = result["request"]["queryString"]
+        pws = next(p for p in qs if p["name"] == "pws")
+        assert pws["value"] != "alsosecret"
+        assert "alsosecret" not in pws["value"]
+
+    def test_custom_field_redacts_url_query_param_in_request_url(self) -> None:
+        """The url string itself (via _sanitize_url_query_params) must honor it."""
+        entry = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/path?pws=alsosecret&safe=ok",
+                "headers": [],
+            }
+        )
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_PWS_FIELD)
+        url = result["request"]["url"]
+        assert "pws=alsosecret" not in url
+        assert "safe=ok" in url
+
+    def test_builtin_header_still_redacted_when_custom_patterns_provided(self) -> None:
+        """Authorization (built-in) must still redact when custom_patterns extends the set."""
+        entry = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/",
+                "headers": [
+                    {"name": "Authorization", "value": "Bearer builtin_secret"},
+                    {"name": "X-Modem-Auth", "value": "custom_secret"},
+                ],
+            }
+        )
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_MODEM_HEADER)
+        by_name = {h["name"]: h["value"] for h in result["request"]["headers"]}
+        assert "builtin_secret" not in by_name["Authorization"]
+        assert "custom_secret" not in by_name["X-Modem-Auth"]
+
+    def test_custom_patterns_at_sanitize_har_level_reaches_headers(self) -> None:
+        """sanitize_har wraps sanitize_entry — custom_patterns must flow end-to-end."""
+        har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "0"},
+                "entries": [
+                    self._entry(
+                        {
+                            "method": "GET",
+                            "url": "http://example.com/",
+                            "headers": [{"name": "X-Modem-Auth", "value": "deep_secret"}],
+                        }
+                    )
+                ],
+            }
+        }
+        sanitized, _ = sanitize_har(har, salt=None, custom_patterns=self.CUSTOM_MODEM_HEADER)
+        header = next(
+            h for h in sanitized["log"]["entries"][0]["request"]["headers"] if h["name"] == "X-Modem-Auth"
+        )
+        assert "deep_secret" not in header["value"]
+
+    def test_scope_does_not_leak_between_entries(self) -> None:
+        """Per-call scope means two consecutive sanitize_entry calls don't share state."""
+        entry_with_custom = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/",
+                "headers": [{"name": "X-Modem-Auth", "value": "first_secret"}],
+            }
+        )
+        entry_default = self._entry(
+            {
+                "method": "GET",
+                "url": "http://example.com/",
+                "headers": [{"name": "X-Modem-Auth", "value": "baseline"}],
+            }
+        )
+
+        sanitize_entry(entry_with_custom, salt=None, custom_patterns=self.CUSTOM_MODEM_HEADER)
+        result = sanitize_entry(entry_default, salt=None)
+        header = next(h for h in result["request"]["headers"] if h["name"] == "X-Modem-Auth")
+        # No custom_patterns on second call ⇒ X-Modem-Auth passes through.
+        assert header["value"] == "baseline"
+
+
 class TestEntrySanitization:
     """Tests for full HAR entry sanitization."""
 

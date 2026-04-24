@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`custom_patterns` now propagates through `sanitize_entry` to all detection sites** — In 0.7.0 the `ContextVar`-scoped override was entered only by `sanitize_post_data` and `sanitize_html`, so three detection sites in `_sanitize_request` / `_sanitize_response` that run before either of those — header-value matching (`sanitize_header_value`), structured `queryString` params, and URL query params (`_sanitize_url_query_params`) — silently ignored `custom_patterns` when callers used the top-level entry points (`sanitize_entry`, `sanitize_har`, `sanitize_har_file`). Fixed by entering both scopes at `sanitize_entry`, so every detection site within an entry sees the same extension set. Adds a parallel `_HeaderSets` dataclass + `_HEADER_SETS_CTX` ContextVar + `_header_sets_scope` / `_resolve_header_sets` resolver + cache so `sanitize_header_value` picks up custom `headers.full_redact` / `headers.cookie_redact` entries the same way field detection picks up custom `fields.auto_redact_patterns`. Module-global state still never mutated.
+
 ## [0.7.0] - 2026-04-24
 
 ### Added
