@@ -177,7 +177,9 @@ This means a consumer like cable_modem_monitor ships its own pattern file and ge
 
 **Confidence boundary:** Domain `pii.patterns` entries run as Pass 0 auto-redaction — they must have 100% confidence (zero false positives). Domain `heuristics.detectors` entries flag values for interactive review and can tolerate lower confidence. When a domain-specific pattern cannot guarantee zero false positives, it belongs in `heuristics.detectors`, not `pii.patterns`.
 
-See [Pattern Spec](specs/PATTERN_SPEC.md) for file schemas, merge semantics, and the loader/cache architecture.
+**Two extension points, one policy.** The file-based `--patterns` flow above is the *static* extension point: merge happens once at load time and the merged set is cached. A *dynamic* extension point also exists for library callers that only know their pattern list at runtime — `sanitize_post_data(..., custom_patterns=...)` and `sanitize_html(..., custom_patterns=...)` accept the same dict schema and apply it as a per-call override via a `ContextVar`. The ContextVar is read by `is_sensitive_field` / `is_flaggable_field` at every detection site, so field-name extensions reach form params, JSON/XML bodies, and inline-script scanners without any signature plumbing. The override is thread- and asyncio-scoped, additive to built-ins, and never mutates module state — independent callers with different extensions do not observe each other's patterns. This is the mechanism cable_modem_monitor uses to pass per-device credential field names (e.g. `pws`) without editing the universal `sensitive.json`.
+
+See [Pattern Spec](specs/PATTERN_SPEC.md) for file schemas, merge semantics, and the loader/cache architecture; [Sanitization Spec](specs/SANITIZATION_SPEC.md) for the ContextVar scope; and [Custom Patterns Guide](CUSTOM_PATTERNS.md#extending-sensitive-field-detection) for the user-facing recipe.
 
 ## Functional Specs
 

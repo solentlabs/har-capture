@@ -231,5 +231,166 @@
       "must_not_contain": ["topsecret"],
       "must_contain": []
     }
+  ],
+  "custom_patterns_cases": [
+    {
+      "id": "form_unknown_field_preserved_without_custom",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "pws=alsosecret"
+      },
+      "custom_patterns": null,
+      "must_contain": ["pws=alsosecret"],
+      "must_not_contain": []
+    },
+    {
+      "id": "form_unknown_field_redacted_with_custom",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "pws=alsosecret"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": ["pws=[REDACTED]"],
+      "must_not_contain": ["alsosecret"]
+    },
+    {
+      "id": "form_builtin_field_still_redacted_when_custom_present",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "user=admin&password=secret123&pws=alsosecret"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": ["password=[REDACTED]", "pws=[REDACTED]", "user=admin"],
+      "must_not_contain": ["secret123", "alsosecret"]
+    },
+    {
+      "id": "form_multiple_custom_patterns_all_applied",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "pws=one&twofactor=two&user=admin"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws", "twofactor"]}},
+      "must_contain": ["pws=[REDACTED]", "twofactor=[REDACTED]", "user=admin"],
+      "must_not_contain": ["=one", "=two"]
+    },
+    {
+      "id": "json_unknown_field_preserved_without_custom",
+      "post_data": {
+        "mimeType": "application/json",
+        "text": "{\"user\": \"admin\", \"pws\": \"alsosecret\"}"
+      },
+      "custom_patterns": null,
+      "must_contain": ["alsosecret"],
+      "must_not_contain": []
+    },
+    {
+      "id": "json_unknown_field_redacted_with_custom",
+      "post_data": {
+        "mimeType": "application/json",
+        "text": "{\"user\": \"admin\", \"pws\": \"alsosecret\"}"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": ["[REDACTED]"],
+      "must_not_contain": ["alsosecret"]
+    },
+    {
+      "id": "json_builtin_field_still_redacted_when_custom_present",
+      "post_data": {
+        "mimeType": "application/json",
+        "text": "{\"password\": \"secret123\", \"pws\": \"alsosecret\"}"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": [],
+      "must_not_contain": ["secret123", "alsosecret"]
+    },
+    {
+      "id": "json_nested_custom_pattern_reaches_deep_key",
+      "post_data": {
+        "mimeType": "application/json",
+        "text": "{\"outer\": {\"pws\": \"deepsecret\"}}"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": [],
+      "must_not_contain": ["deepsecret"]
+    },
+    {
+      "id": "xml_unknown_tag_preserved_without_custom",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<root><pws>alsosecret</pws></root>"
+      },
+      "custom_patterns": null,
+      "must_contain": ["alsosecret"],
+      "must_not_contain": []
+    },
+    {
+      "id": "xml_unknown_tag_redacted_with_custom",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<root><pws>alsosecret</pws></root>"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": [],
+      "must_not_contain": ["alsosecret"]
+    },
+    {
+      "id": "xml_builtin_tag_still_redacted_when_custom_present",
+      "post_data": {
+        "mimeType": "text/xml",
+        "text": "<root><password>secret123</password><pws>alsosecret</pws></root>"
+      },
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "must_contain": [],
+      "must_not_contain": ["secret123", "alsosecret"]
+    },
+    {
+      "id": "form_flag_patterns_extended_via_custom",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "deployenv=production"
+      },
+      "custom_patterns": {"fields": {"flag_patterns": ["deployenv"]}},
+      "must_contain": ["deployenv=production"],
+      "must_not_contain": []
+    }
+  ],
+  "custom_patterns_params_cases": [
+    {
+      "id": "params_unknown_field_preserved_without_custom",
+      "params": [
+        {"name": "pws", "value": "alsosecret"},
+        {"name": "user", "value": "admin"}
+      ],
+      "custom_patterns": null,
+      "expected_values": {"pws": "alsosecret", "user": "admin"}
+    },
+    {
+      "id": "params_unknown_field_redacted_with_custom",
+      "params": [
+        {"name": "pws", "value": "alsosecret"},
+        {"name": "user", "value": "admin"}
+      ],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "expected_values": {"pws": "[REDACTED]", "user": "admin"}
+    },
+    {
+      "id": "params_builtin_field_still_redacted_when_custom_present",
+      "params": [
+        {"name": "loginPassword", "value": "secret123"},
+        {"name": "pws", "value": "alsosecret"}
+      ],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "expected_values": {"loginPassword": "[REDACTED]", "pws": "[REDACTED]"}
+    },
+    {
+      "id": "params_multiple_custom_patterns_each_applied",
+      "params": [
+        {"name": "pws", "value": "one"},
+        {"name": "twofactor", "value": "two"},
+        {"name": "user", "value": "admin"}
+      ],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws", "twofactor"]}},
+      "expected_values": {"pws": "[REDACTED]", "twofactor": "[REDACTED]", "user": "admin"}
+    }
   ]
 }

@@ -231,8 +231,14 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
                 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
             if "cookie_redact" in custom["headers"]:
                 builtin["headers"]["cookie_redact"].extend(custom["headers"]["cookie_redact"])
-        if "fields" in custom and "patterns" in custom["fields"]:
-            builtin["fields"]["patterns"].extend(custom["fields"]["patterns"])
+        if "fields" in custom and isinstance(custom["fields"], dict):
+            custom_fields = custom["fields"]
+            # Extend each known list key. "patterns" is the legacy key; the current
+            # schema uses "auto_redact_patterns" and "flag_patterns".
+            for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
+                values = custom_fields.get(key)
+                if isinstance(values, list):
+                    builtin["fields"].setdefault(key, []).extend(values)
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
         if "heuristics" in custom:

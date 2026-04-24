@@ -379,12 +379,25 @@ Merge semantics (applied at each layer):
 # Lists are extended (custom appended to builtin)
 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
 
+# Field-name regex lists extend additively. Both the current-schema keys
+# (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are
+# honored and extend whatever list already exists on builtin.
+for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
+    builtin["fields"].setdefault(key, []).extend(custom["fields"].get(key, []))
+
 # Dicts are updated (custom overrides builtin keys)
 builtin["patterns"].update(custom["patterns"])
 
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})
 ```
+
+> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy
+> `fields.patterns` key and silently dropped `fields.auto_redact_patterns` /
+> `fields.flag_patterns` from custom inputs — even though both keys appear in
+> the built-in `sensitive.json` schema. The merge now honors all three. File-
+> or dict-based consumers that previously worked around this by editing
+> `sensitive.json` directly can switch to the `custom_patterns` kwarg.
 
 ## Loader Architecture
 

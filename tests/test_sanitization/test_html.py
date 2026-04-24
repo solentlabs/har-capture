@@ -306,6 +306,118 @@ class TestSetItemScanning:
         assert "config_data" in result, "key name should be preserved"
 
 
+_CUSTOM_PWS = {"fields": {"auto_redact_patterns": ["pws"]}}
+
+# (desc, html, custom_patterns, must_contain, must_not_contain)
+# Each row asserts that the setItem scanner honors (or ignores) custom_patterns
+# via the field-pattern ContextVar scope.
+SANITIZE_HTML_CUSTOM_PATTERN_CASES = [
+    (
+        "unknown_key_preserved_by_default",
+        'localStorage.setItem("pws", "alsosecret")',
+        None,
+        ["alsosecret"],
+        [],
+    ),
+    (
+        "unknown_key_redacted_with_custom",
+        'localStorage.setItem("pws", "alsosecret")',
+        _CUSTOM_PWS,
+        ["pws"],
+        ["alsosecret"],
+    ),
+    (
+        "sessionstorage_custom_key_redacted",
+        'sessionStorage.setItem("pws", "alsosecret")',
+        _CUSTOM_PWS,
+        ["pws"],
+        ["alsosecret"],
+    ),
+    (
+        "builtin_sensitive_key_still_redacts_with_custom",
+        'localStorage.setItem("PrivateKey", "secret_value_123")',
+        _CUSTOM_PWS,
+        ["PrivateKey"],
+        ["secret_value_123"],
+    ),
+    (
+        "unrelated_key_unaffected_by_custom",
+        'localStorage.setItem("safeKey", "benign_value")',
+        _CUSTOM_PWS,
+        ["safeKey", "benign_value"],
+        [],
+    ),
+]
+
+
+class TestSanitizeHtmlCustomFieldPatterns:
+    """Regression tests for sanitize_html honoring custom field patterns.
+
+    sanitize_html's internal ``is_sensitive_field`` calls must honor
+    ``custom_patterns`` via the field-pattern context scope. Guards against the
+    prior bug where ``custom_patterns`` was loaded but the setItem scanner
+    still used the module-global field regex.
+    """
+
+    @pytest.mark.parametrize(
+        ("desc", "html", "custom_patterns", "must_contain", "must_not_contain"),
+        SANITIZE_HTML_CUSTOM_PATTERN_CASES,
+        ids=[c[0] for c in SANITIZE_HTML_CUSTOM_PATTERN_CASES],
+    )
+    def test_setitem_redaction_matrix(
+        self,
+        desc: str,
+        html: str,
+        custom_patterns: dict | None,
+        must_contain: list[str],
+        must_not_contain: list[str],
+    ) -> None:
+        """Table-driven: setItem scanner x (default, custom_patterns)."""
+        result = sanitize_html(html, salt=None, custom_patterns=custom_patterns)
+        for needle in must_contain:
+            assert needle in result, f"{desc}: expected {needle!r} in {result!r}"
+        for needle in must_not_contain:
+            assert needle not in result, f"{desc}: {needle!r} should be redacted in {result!r}"
+
+    def test_context_scope_does_not_leak_out(self) -> None:
+        """After a custom_patterns call, a subsequent default call must behave as default."""
+        custom_html = 'localStorage.setItem("pws", "alsosecret")'
+        default_html = 'localStorage.setItem("pws", "baseline_value")'
+
+        sanitize_html(custom_html, salt=None, custom_patterns=_CUSTOM_PWS)
+        result_after = sanitize_html(default_html, salt=None)
+
+        assert "baseline_value" in result_after, (
+            "Default call after a custom_patterns call must NOT inherit the override"
+        )
+
+    def test_scope_restored_when_inner_call_raises(self) -> None:
+        """sanitize_html's try/finally must reset the ContextVar even on exception."""
+        from unittest.mock import patch
+
+        from har_capture.sanitization.har import (
+            _DEFAULT_FIELD_PATTERNS,
+            _FIELD_PATTERNS_CTX,
+        )
+
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
+
+        # Force the inner impl to blow up; the outer sanitize_html must still
+        # clean up the ContextVar.
+        with (
+            patch(
+                "har_capture.sanitization.html._sanitize_html_impl",
+                side_effect=RuntimeError("inner boom"),
+            ),
+            pytest.raises(RuntimeError, match="inner boom"),
+        ):
+            sanitize_html("<html></html>", salt=None, custom_patterns=_CUSTOM_PWS)
+
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS, (
+            "sanitize_html must reset the ContextVar even when the inner impl raises"
+        )
+
+
 # =============================================================================
 # Serial Numbers in Pipe-Delimited Strings (Gap 2 fix)
 # =============================================================================

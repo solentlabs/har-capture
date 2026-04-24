@@ -139,6 +139,11 @@ sanitize_har_file("capture.har")  # → capture.sanitized.har
 # Custom patterns (e.g., modem serials, customer IDs)
 custom = {"patterns": {"modem_sn": {"regex": r"SN[0-9]{10}", "replacement_prefix": "MODEM"}}}
 sanitize_har_file("capture.har", custom_patterns=custom)
+
+# Redact device-specific credential FIELD NAMES (not just value patterns).
+# See docs/CUSTOM_PATTERNS.md#extending-sensitive-field-detection.
+device_fields = {"fields": {"auto_redact_patterns": ["pws"]}}
+sanitize_har_file("capture.har", custom_patterns=device_fields)
 ```
 
 ______________________________________________________________________

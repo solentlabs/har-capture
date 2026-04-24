@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sanitize_post_data(..., custom_patterns=...)` now extends field detection** — The `custom_patterns` kwarg (file path or dict matching the `load_sensitive_patterns` schema, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`) additively extends the auto-redact and flag regex sets for the call across form params, `application/x-www-form-urlencoded` bodies, JSON bodies, and XML bodies. Previously the kwarg was accepted but field-name detection always used the module-global patterns. The override is plumbed through a `ContextVar`-scoped resolver, so it is thread- and asyncio-safe by construction and does not mutate module state. Compiled regex pairs are cached per canonical key so repeated calls with the same extension skip the compile. Enables downstream consumers (e.g., Cable Modem Monitor) to redact device-specific credential field names without modifying the universal `sensitive.json`.
+
+### Fixed
+
+- **`sanitize_html(..., custom_patterns=...)` now reaches the inline-script field matcher** — The `custom_patterns` kwarg previously loaded custom PII and sensitive patterns but the inline `localStorage.setItem` / `sessionStorage.setItem` scanner still consulted the module-global field regex, so custom field-name extensions silently failed. The HTML body now runs inside the same `ContextVar`-scoped override used by `sanitize_post_data`, so calls like `sanitize_html(html, custom_patterns={"fields": {"auto_redact_patterns": ["pws"]}})` correctly redact values associated with the extended field names.
+- **`load_sensitive_patterns` dict merge for `auto_redact_patterns` / `flag_patterns`** — Passing a custom-patterns dict of the current schema (`{"fields": {"auto_redact_patterns": [...]}}`) previously had no effect: only the legacy `fields.patterns` key was merged, and the pattern compiler ignored that key when `auto_redact_patterns` was present. The merge now extends `auto_redact_patterns`, `flag_patterns`, and the legacy `patterns` list. File-path custom-pattern consumers that relied on the silent no-op will start seeing their extensions apply.
+
 ## [0.6.1] - 2026-04-08
 
 ### Fixed

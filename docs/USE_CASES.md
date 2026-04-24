@@ -959,3 +959,62 @@ Field Engineer                     CMM Pipeline
      │                                  │  read _solentlabs (pre_capture_cookies)
      │                                  │  store in database
 ```
+
+______________________________________________________________________
+
+### UC-42: Redact Device-Specific Credential Fields at Runtime
+
+**Actor**: A downstream library (e.g. CMM) that captures auth traffic at runtime and knows, from its device catalog, which field names carry credentials for a particular model.
+
+**Goal**: Feed runtime-known credential field names (from a product catalog, YAML config, or database lookup) into sanitization without modifying the universal `sensitive.json` or maintaining a consumer-side pre-redaction helper.
+
+**Preconditions**:
+
+- Consumer has a `postData`-shaped dict from a live HTTP capture (e.g. via a Playwright session adapter).
+- Consumer has the field-name list for the current device (e.g. a `credential_fields` entry of `["pws"]` loaded from `modem.yaml`).
+- Consumer wants one canonical sanitization policy (har-capture's) rather than its own pre-pass.
+
+**Flow**:
+
+1. Consumer resolves the device's credential field names from its catalog at runtime.
+1. Consumer builds a `custom_patterns` dict of shape `{"fields": {"auto_redact_patterns": [...]}}`.
+1. Consumer passes that dict to `sanitize_post_data(..., custom_patterns=...)`.
+1. har-capture merges the extensions with built-ins for this call only (via a `ContextVar` scope) and returns sanitized `postData`.
+1. Subsequent calls for a different device with a different field list use their own dict; no state bleeds between calls.
+
+**Code Example**:
+
+```python
+from har_capture.sanitization import sanitize_post_data
+
+def redact_capture_for_device(post_data: dict, device_spec: dict) -> dict:
+    """Sanitize a captured postData using per-device credential field names."""
+    custom = {
+        "fields": {
+            "auto_redact_patterns": device_spec.get("credential_field_names", []),
+        },
+    }
+    return sanitize_post_data(post_data, custom_patterns=custom)
+
+# Example: a Hitron CODA56 catalog entry lists "pws" as its credential field
+hitron_spec = {"credential_field_names": ["pws"]}
+captured = {
+    "mimeType": "application/x-www-form-urlencoded",
+    "text": "user=admin&pws=hunter2",
+}
+redact_capture_for_device(captured, hitron_spec)
+# → {"mimeType": "...", "text": "user=admin&pws=[REDACTED]"}
+
+# Same process with a Motorola MB7621 (different field name) using the SAME
+# process — no global state change, no interference.
+motorola_spec = {"credential_field_names": ["loginPassword"]}
+# ... etc.
+```
+
+**Variations**:
+
+- Consumer wants to also flag (not auto-redact) a non-credential field for review → pass `{"fields": {"flag_patterns": ["deploy_env"]}}` alongside.
+- Consumer already has a JSON file on disk → pass the path as a string; the loader reads it and the regex cache keys off the resolved absolute path.
+- Concurrent captures for different devices (threaded or asyncio) → each call sees its own pattern set because the override lives in a `ContextVar`.
+
+**Why not edit `sensitive.json`?** That file captures universal PII rules. Device-specific credential names (`pws`, `loginPassword`, vendor-proprietary tokens) don't belong there because they'd apply to every capture across every consumer. The per-call hook keeps the universal set small and lets each consumer carry its own catalog.

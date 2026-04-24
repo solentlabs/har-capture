@@ -234,10 +234,22 @@ def sanitize_html(
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
             (ignored if collector is provided)
-        custom_patterns: Custom PII patterns to apply. Options:
+        custom_patterns: Custom patterns to apply. Extends the built-in
+            ``pii.patterns``, ``allowlist``, and sensitive-field sets
+            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``) for
+            THIS CALL ONLY. Options:
+
             - String: Path to JSON patterns file
             - Dict: Pattern definitions directly (e.g., from modem.yaml)
             - None: Use built-in patterns only
+
+            Field-name extensions reach the inline-script scanner
+            (``localStorage.setItem`` / ``sessionStorage.setItem``) via a
+            ``ContextVar``-scoped override, so e.g. ``{"fields":
+            {"auto_redact_patterns": ["pws"]}}`` causes values associated
+            with ``"pws"`` keys in inline scripts to be redacted. Module-
+            global patterns are never mutated; concurrent threads / asyncio
+            tasks observe their own patterns.
         collector: Optional collector for tracking redactions
         heuristics: How to handle unlabeled pipe-delimited values:
             - DISABLED (default): Skip heuristics, only redact known patterns
@@ -263,6 +275,36 @@ def sanitize_html(
         hasher = Hasher.create(salt)
         collector = RedactionCollector(hasher=hasher)
 
+    # Enter the field-pattern scope so is_sensitive_field() calls inside the
+    # HTML scanner honor custom_patterns. Lazy import: har imports html at
+    # module level, so we'd cycle if this were top-level.
+    from har_capture.sanitization.har import (
+        _FIELD_PATTERNS_CTX,
+        _resolve_field_patterns,
+    )
+
+    _scope_token = _FIELD_PATTERNS_CTX.set(_resolve_field_patterns(custom_patterns))
+    try:
+        return _sanitize_html_impl(
+            html,
+            hasher=hasher,
+            collector=collector,
+            custom_patterns=custom_patterns,
+            heuristics=heuristics,
+        )
+    finally:
+        _FIELD_PATTERNS_CTX.reset(_scope_token)
+
+
+def _sanitize_html_impl(
+    html: str,
+    *,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    custom_patterns: str | dict[str, Any] | None,
+    heuristics: HeuristicMode,
+) -> str:
+    """Inner body of :func:`sanitize_html` — runs inside the active field-pattern scope."""
     pii = load_pii_patterns(custom_patterns)
     sensitive = load_sensitive_patterns(custom_patterns)
 
