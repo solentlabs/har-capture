@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-24
+
 ### Added
 
 - **`sanitize_post_data(..., custom_patterns=...)` now extends field detection** — The `custom_patterns` kwarg (file path or dict matching the `load_sensitive_patterns` schema, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`) additively extends the auto-redact and flag regex sets for the call across form params, `application/x-www-form-urlencoded` bodies, JSON bodies, and XML bodies. Previously the kwarg was accepted but field-name detection always used the module-global patterns. The override is plumbed through a `ContextVar`-scoped resolver, so it is thread- and asyncio-safe by construction and does not mutate module state. Compiled regex pairs are cached per canonical key so repeated calls with the same extension skip the compile. Enables downstream consumers (e.g., Cable Modem Monitor) to redact device-specific credential field names without modifying the universal `sensitive.json`.
@@ -485,4 +487,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.5.1]: https://github.com/solentlabs/har-capture/compare/v0.5.0...v0.5.1
 [0.6.0]: https://github.com/solentlabs/har-capture/compare/v0.5.1...v0.6.0
 [0.6.1]: https://github.com/solentlabs/har-capture/compare/v0.6.0...v0.6.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.6.1...HEAD
+[0.7.0]: https://github.com/solentlabs/har-capture/compare/v0.6.1...v0.7.0
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.7.0...HEAD

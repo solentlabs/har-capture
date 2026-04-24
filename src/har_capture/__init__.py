@@ -24,7 +24,7 @@ Example usage:
 
 from __future__ import annotations
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 # Re-export public API for convenience
 from har_capture.sanitization import (
