@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`include_patterns` in domain pattern files** — Domain JSON files (e.g. `network_device.json`) can declare an `include_patterns` list to filter the merged `pii.patterns` set down to only the entries that domain needs. Supports exact pattern names (`"mac_address"`) and glob wildcards (`"credit_card_*"`). Prevents false positives such as the credit-card regex triggering on cable-modem duration floats. The built-in `network_device.json` ships with an `include_patterns` list. See `docs/specs/PATTERN_SPEC.md` for the schema and merge order.
 - **`sanitize_post_data(..., custom_patterns=...)` now extends field detection** — The `custom_patterns` kwarg (file path or dict matching the `load_sensitive_patterns` schema, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`) additively extends the auto-redact and flag regex sets for the call across form params, `application/x-www-form-urlencoded` bodies, JSON bodies, and XML bodies. Previously the kwarg was accepted but field-name detection always used the module-global patterns. The override is plumbed through a `ContextVar`-scoped resolver, so it is thread- and asyncio-safe by construction and does not mutate module state. Compiled regex pairs are cached per canonical key so repeated calls with the same extension skip the compile. Enables downstream consumers (e.g., Cable Modem Monitor) to redact device-specific credential field names without modifying the universal `sensitive.json`.
 
 ### Fixed
