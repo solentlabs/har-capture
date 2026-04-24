@@ -124,6 +124,8 @@ def is_flaggable_field(name: str) -> bool:
 
 Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.flag_patterns`. Fallback patterns (hardcoded): `["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]`.
 
+Callers can extend these per-call via `sanitize_post_data(..., custom_patterns=...)` or `sanitize_html(..., custom_patterns=...)`. The extension is additive (never replacing built-ins) and is applied via a `ContextVar`-scoped override that both public entry points enter at the top of the call. Inner helpers (`_sanitize_form_urlencoded`, `_sanitize_json_recursive`, `_sanitize_xml_fields`, the inline-script `setItem` scanner, and any other site that calls `is_sensitive_field` / `is_flaggable_field`) pick up the active set automatically, with no signature plumbing. Because `ContextVar` is thread- and asyncio-scoped, concurrent callers observe only their own patterns.
+
 ### POST Data Sanitization
 
 ```python
@@ -142,6 +144,8 @@ def sanitize_post_data(
 1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against field patterns; values redacted if key is sensitive.
 1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML content engine, which runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are sanitized identically to XML response content.
 1. **Raw text**: Falls through to string pattern matching.
+
+**Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON, XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors `sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`. Module-global patterns are never mutated; the override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls with the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to the HTML engine honors the override end-to-end.
 
 ### URL Sanitization
 

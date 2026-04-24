@@ -9,11 +9,16 @@ Reuses PII patterns from html.py for consistency.
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import logging
 import re
 import urllib.parse
+from collections import OrderedDict
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
@@ -27,7 +32,7 @@ from har_capture.sanitization.html import is_valid_ip_address, sanitize_html
 from har_capture.sanitization.report import ConfidenceLevel
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterator
 
     from har_capture.sanitization.report import HeuristicMode, SanitizationReport
 else:
@@ -145,15 +150,16 @@ def _load_sensitive_headers() -> tuple[set[str], set[str]]:
     return full_redact, cookie_redact
 
 
-def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] | None]:
-    """Load sensitive field patterns from patterns file.
+def _compile_sensitive_field_patterns(
+    sensitive_data: dict[str, Any],
+) -> tuple[re.Pattern[str], re.Pattern[str] | None]:
+    """Compile (auto_redact, flag) regexes from a loaded sensitive-patterns dict.
 
     Returns:
         Tuple of (auto_redact_pattern, flag_pattern) compiled regexes.
         flag_pattern is None if no flag patterns are defined.
     """
-    sensitive = load_sensitive_patterns()
-    fields = sensitive.get("fields", {})
+    fields = sensitive_data.get("fields", {})
     auto_patterns = fields.get("auto_redact_patterns", [])
     flag_patterns = fields.get("flag_patterns", [])
 
@@ -170,9 +176,114 @@ def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] |
     return auto_re, flag_re
 
 
+def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] | None]:
+    """Load and compile sensitive field patterns from the built-in patterns file."""
+    return _compile_sensitive_field_patterns(load_sensitive_patterns())
+
+
 # Load patterns at module level for efficiency
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
+
+
+@dataclass(frozen=True)
+class _FieldPatternSet:
+    """Resolved auto-redact and flag regexes used for one sanitization call.
+
+    ``flag_re`` is None when no flag patterns are configured — that is a
+    legitimate state, distinct from "use the default pattern set", which is
+    expressed by passing ``None`` in place of an entire ``_FieldPatternSet``.
+    """
+
+    field_re: re.Pattern[str]
+    flag_re: re.Pattern[str] | None
+
+    def matches_sensitive(self, field_name: str) -> bool:
+        return bool(self.field_re.search(field_name))
+
+    def matches_flaggable(self, field_name: str) -> bool:
+        if self.flag_re is None:
+            return False
+        return bool(self.flag_re.search(field_name))
+
+
+_DEFAULT_FIELD_PATTERNS = _FieldPatternSet(_SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE)
+
+# Per-call field-pattern override. ContextVar because (a) overrides must be
+# scoped to a single sanitize call without leaking to concurrent work, and
+# (b) ContextVar is the stdlib-native primitive for thread- and asyncio-safe
+# dynamic scope — no manual locking required.
+_FIELD_PATTERNS_CTX: contextvars.ContextVar[_FieldPatternSet] = contextvars.ContextVar(
+    "har_capture_field_patterns", default=_DEFAULT_FIELD_PATTERNS
+)
+
+
+@contextmanager
+def _field_patterns_scope(custom_patterns: str | dict[str, Any] | None) -> Iterator[None]:
+    """Apply ``custom_patterns`` as the active field-pattern set for this scope.
+
+    Restores the previous set on exit even if an exception escapes. Designed
+    to be called at public entry points (``sanitize_post_data``, ``sanitize_html``);
+    inner helpers simply call ``is_sensitive_field`` / ``is_flaggable_field`` and
+    pick up the active set automatically.
+    """
+    token = _FIELD_PATTERNS_CTX.set(_resolve_field_patterns(custom_patterns))
+    try:
+        yield
+    finally:
+        _FIELD_PATTERNS_CTX.reset(token)
+
+
+# Per-call regex cache for custom_patterns extensions. Keyed by a canonical
+# representation of the custom_patterns argument. Module globals above are
+# never mutated — each entry here is an independent compiled pair.
+_CUSTOM_FIELD_RE_CACHE_MAX = 32
+_CUSTOM_FIELD_RE_CACHE: OrderedDict[str, _FieldPatternSet] = OrderedDict()
+
+
+def _custom_patterns_cache_key(custom_patterns: str | dict[str, Any]) -> str | None:
+    """Derive a stable cache key for a custom_patterns argument.
+
+    Returns None if the argument is not hashable in a stable way (in which
+    case the caller should skip the cache and compile fresh).
+    """
+    if isinstance(custom_patterns, dict):
+        try:
+            return "dict:" + json.dumps(custom_patterns, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return None
+    return "path:" + str(Path(custom_patterns).resolve())
+
+
+def _resolve_field_patterns(
+    custom_patterns: str | dict[str, Any] | None,
+) -> _FieldPatternSet:
+    """Resolve the auto-redact + flag regex pair for this call.
+
+    ``custom_patterns=None`` returns the shared default set (today's behavior,
+    zero-cost). Otherwise the custom patterns are merged with built-ins via
+    the loader and the compiled result is cached per canonical key so repeat
+    calls don't recompile.
+    """
+    if custom_patterns is None:
+        return _DEFAULT_FIELD_PATTERNS
+
+    key = _custom_patterns_cache_key(custom_patterns)
+    if key is not None:
+        cached = _CUSTOM_FIELD_RE_CACHE.get(key)
+        if cached is not None:
+            _CUSTOM_FIELD_RE_CACHE.move_to_end(key)
+            return cached
+
+    field_re, flag_re = _compile_sensitive_field_patterns(load_sensitive_patterns(custom_patterns))
+    resolved = _FieldPatternSet(field_re, flag_re)
+
+    if key is not None:
+        _CUSTOM_FIELD_RE_CACHE[key] = resolved
+        while len(_CUSTOM_FIELD_RE_CACHE) > _CUSTOM_FIELD_RE_CACHE_MAX:
+            _CUSTOM_FIELD_RE_CACHE.popitem(last=False)
+    return resolved
+
 
 # Redaction placeholder - single source of truth
 REDACTED = "[REDACTED]"
@@ -205,6 +316,10 @@ def _redact_value(
 def is_sensitive_field(field_name: str) -> bool:
     """Check if a form field name matches auto-redact patterns (100% confidence).
 
+    Reads the active field-pattern set from the ``_field_patterns_scope``
+    context manager when one is entered; otherwise uses the module-wide
+    defaults from ``sensitive.json``.
+
     Args:
         field_name: Name of the form field
 
@@ -219,7 +334,7 @@ def is_sensitive_field(field_name: str) -> bool:
         >>> is_sensitive_field("channel_id")
         False
     """
-    return bool(_SENSITIVE_FIELD_RE.search(field_name))
+    return _FIELD_PATTERNS_CTX.get().matches_sensitive(field_name)
 
 
 def is_flaggable_field(field_name: str) -> bool:
@@ -227,6 +342,7 @@ def is_flaggable_field(field_name: str) -> bool:
 
     These are fields that may contain sensitive data but are not certain
     enough for auto-redaction. They are flagged for interactive user review.
+    Honors an active ``_field_patterns_scope`` override.
 
     Args:
         field_name: Name of the form field
@@ -242,9 +358,7 @@ def is_flaggable_field(field_name: str) -> bool:
         >>> is_flaggable_field("channel_id")
         False
     """
-    if _SENSITIVE_FLAG_FIELD_RE is None:
-        return False
-    return bool(_SENSITIVE_FLAG_FIELD_RE.search(field_name))
+    return _FIELD_PATTERNS_CTX.get().matches_flaggable(field_name)
 
 
 def sanitize_header_value(
@@ -372,7 +486,13 @@ def sanitize_post_data(
         post_data: HAR postData object
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
-        custom_patterns: Optional custom patterns (file path or dict)
+        custom_patterns: Optional additive custom patterns (file path or dict
+            matching the ``load_sensitive_patterns`` schema, e.g.
+            ``{"fields": {"auto_redact_patterns": ["pws"]}}``). Extends — not
+            replaces — the built-in auto-redact and flag patterns for THIS
+            CALL ONLY via a ``ContextVar``-scoped override. Module-global
+            state is never mutated, and independent threads / asyncio tasks
+            receive their own copy of the context.
         heuristics: Heuristic mode for content engine
 
     Returns:
@@ -383,38 +503,39 @@ def sanitize_post_data(
 
     result = copy.deepcopy(post_data)
 
-    # Sanitize params array
-    if "params" in result and isinstance(result["params"], list):
-        for param in result["params"]:
-            if isinstance(param, dict) and "name" in param:
-                if is_sensitive_field(param["name"]):
-                    param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
-                elif is_flaggable_field(param["name"]) and collector and param.get("value"):
-                    collector.flag_value(
-                        param["value"],
-                        "field",
-                        ConfidenceLevel.MEDIUM,
-                        f"POST param '{param['name']}'",
-                        f"Flaggable field name '{param['name']}' in POST params",
-                    )
+    with _field_patterns_scope(custom_patterns):
+        # Sanitize params array
+        if "params" in result and isinstance(result["params"], list):
+            for param in result["params"]:
+                if isinstance(param, dict) and "name" in param:
+                    if is_sensitive_field(param["name"]):
+                        param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+                    elif is_flaggable_field(param["name"]) and collector and param.get("value"):
+                        collector.flag_value(
+                            param["value"],
+                            "field",
+                            ConfidenceLevel.MEDIUM,
+                            f"POST param '{param['name']}'",
+                            f"Flaggable field name '{param['name']}' in POST params",
+                        )
 
-    # Sanitize raw text (form-urlencoded, JSON, or XML)
-    if result.get("text"):
-        text = result["text"]
-        mime_type = result.get("mimeType", "")
+        # Sanitize raw text (form-urlencoded, JSON, or XML)
+        if result.get("text"):
+            text = result["text"]
+            mime_type = result.get("mimeType", "")
 
-        if "application/x-www-form-urlencoded" in mime_type:
-            result["text"] = _sanitize_form_urlencoded(text, hasher, collector)
-        elif "application/json" in mime_type:
-            result["text"] = _sanitize_json_text(text, hasher, collector)
-        elif "text/xml" in mime_type or "application/xml" in mime_type:
-            text = _sanitize_xml_fields(text, hasher, collector)
-            result["text"] = sanitize_html(
-                text,
-                collector=collector,
-                custom_patterns=custom_patterns,
-                heuristics=heuristics,
-            )
+            if "application/x-www-form-urlencoded" in mime_type:
+                result["text"] = _sanitize_form_urlencoded(text, hasher, collector)
+            elif "application/json" in mime_type:
+                result["text"] = _sanitize_json_text(text, hasher, collector)
+            elif "text/xml" in mime_type or "application/xml" in mime_type:
+                text = _sanitize_xml_fields(text, hasher, collector)
+                result["text"] = sanitize_html(
+                    text,
+                    collector=collector,
+                    custom_patterns=custom_patterns,
+                    heuristics=heuristics,
+                )
 
     return result
 
@@ -978,7 +1099,15 @@ def sanitize_entry(
     Args:
         entry: HAR entry object
         salt: Salt for hashed redaction (ignored if collector provided)
-        custom_patterns: Optional custom patterns (file path or dict)
+        custom_patterns: Optional additive custom patterns (file path or dict
+            matching the ``load_sensitive_patterns`` schema). Extends the
+            built-in ``pii.patterns``, allowlist, and sensitive-field sets
+            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``) for
+            this call only. Propagates end-to-end: the scope is entered by
+            ``sanitize_post_data`` and ``sanitize_html`` downstream, so
+            field-name extensions reach form params, JSON/XML bodies, and
+            inline-script scanners. Module-global state is never mutated.
+            See ``sanitize_post_data`` for the full contract.
         collector: Optional collector for tracking redactions
         heuristics: Heuristic mode for pipe-delimited value detection
         _skip_copy: If True, skip deep copy (caller already copied). Internal use only.
@@ -1059,7 +1188,15 @@ def sanitize_har(
             - "auto" (default): Random salt, correlates within this call
             - None: Static placeholders (legacy behavior)
             - Any string: Consistent hashing across calls with same salt
-        custom_patterns: Optional custom patterns (file path or dict)
+        custom_patterns: Optional additive custom patterns (file path or dict
+            matching the ``load_sensitive_patterns`` schema). Extends the
+            built-in ``pii.patterns``, allowlist, and sensitive-field sets
+            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``) for
+            this call only. Applies across every entry: request/response
+            headers, POST params and bodies (form / JSON / XML), and any
+            inline-script field matching inside HTML content. Module-global
+            state is never mutated. See ``sanitize_post_data`` for the full
+            contract.
         heuristics: Heuristic mode for pipe-delimited value detection
 
     Returns:
@@ -1167,7 +1304,15 @@ def sanitize_har_file(
         input_path: Path to input HAR file
         output_path: Path to output file (default: input_path with .sanitized.har suffix)
         salt: Salt for hashed redaction
-        custom_patterns: Optional custom patterns (file path or dict)
+        custom_patterns: Optional additive custom patterns (file path or dict
+            matching the ``load_sensitive_patterns`` schema). Extends the
+            built-in ``pii.patterns``, allowlist, and sensitive-field sets
+            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``) for
+            this call only. Applied consistently across every entry in the
+            HAR — request/response headers, POST bodies, and inline-script
+            scanners inside HTML content. Module-global state is never
+            mutated. See ``sanitize_post_data`` for the full contract and
+            ``docs/CUSTOM_PATTERNS.md`` for worked examples.
         max_size: Maximum file size in bytes (default: 100MB). Set to None to disable.
         validate: If True, validate HAR structure before processing (default: True)
         heuristics: Heuristic mode for pipe-delimited value detection

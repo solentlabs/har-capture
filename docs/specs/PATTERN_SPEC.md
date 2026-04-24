@@ -234,6 +234,8 @@ A domain file can contain any combination of these sections:
     "safe_values": ["domain-specific-safe-value"]
   },
 
+  "include_patterns": ["mac_address", "serial_number", "private_ip", "public_ip", "ipv6", "email"],
+
   "pii": {
     "patterns": {
       "pattern_name": {
@@ -304,6 +306,34 @@ Case-insensitive exact-match strings safe in pipe-delimited data. Domain-specifi
 
 Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclient`
 
+### Section: `include_patterns`
+
+Top-level list of PII pattern names that are relevant to this domain. When present, only matching patterns survive the merge — all others are removed. Supports exact names and glob wildcards. Applied by `load_pii_patterns()` after custom patterns are merged into the core set.
+
+```json
+{
+  "include_patterns": ["mac_address", "serial_number", "private_ip", "public_ip", "ipv6", "email", "docsis_account"],
+
+  "patterns": {
+    "docsis_account": {
+      "regex": "\\bCM-ACCT-\\d{8,}\\b",
+      "replacement_prefix": "DOCSIS",
+      "description": "DOCSIS cable modem account identifier"
+    }
+  }
+}
+```
+
+| Field              | Type       | Description                                          |
+| ------------------ | ---------- | ---------------------------------------------------- |
+| `include_patterns` | string\[\] | Pattern names or globs to keep in the merged PII set |
+
+The domain knows its data. A cable modem page contains MAC addresses, IPs, and serial numbers — not credit cards or SSNs. The domain declares which PII categories are relevant, including both core patterns and domain-added patterns from `pii.patterns`. The inclusion filter runs after the merge, so domain-specific patterns are first-class citizens alongside core patterns.
+
+When `include_patterns` is absent, all core patterns are applied (backward compatible). When multiple `--patterns` files are specified, `include_patterns` lists are accumulated across all files before being applied.
+
+As domain-specific patterns prove valuable across multiple consumers, they can be graduated to core (`pii.json`) — at which point existing domain files that already name them in `include_patterns` continue to work unchanged.
+
 ### Section: `pii.patterns`
 
 Additional PII patterns for deterministic auto-redaction (Pass 0 of the HTML scanner). Same schema as `pii.json` `patterns` entries.
@@ -349,12 +379,25 @@ Merge semantics (applied at each layer):
 # Lists are extended (custom appended to builtin)
 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
 
+# Field-name regex lists extend additively. Both the current-schema keys
+# (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are
+# honored and extend whatever list already exists on builtin.
+for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
+    builtin["fields"].setdefault(key, []).extend(custom["fields"].get(key, []))
+
 # Dicts are updated (custom overrides builtin keys)
 builtin["patterns"].update(custom["patterns"])
 
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})
 ```
+
+> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy
+> `fields.patterns` key and silently dropped `fields.auto_redact_patterns` /
+> `fields.flag_patterns` from custom inputs — even though both keys appear in
+> the built-in `sensitive.json` schema. The merge now honors all three. File-
+> or dict-based consumers that previously worked around this by editing
+> `sensitive.json` directly can switch to the `custom_patterns` kwarg.
 
 ## Loader Architecture
 

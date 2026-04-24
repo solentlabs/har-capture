@@ -235,6 +235,393 @@ class TestPostDataSanitization:
         assert result == expected, f"{desc}"
 
 
+# -----------------------------------------------------------------------------
+# Fixture-driven tables for sanitize_post_data(..., custom_patterns=...)
+# -----------------------------------------------------------------------------
+
+CUSTOM_PATTERNS_TEXT_CASES = [
+    (
+        c["id"],
+        c["post_data"],
+        c["custom_patterns"],
+        c["must_contain"],
+        c["must_not_contain"],
+    )
+    for c in _HAR_FIXTURE["custom_patterns_cases"]
+]
+
+CUSTOM_PATTERNS_PARAMS_CASES = [
+    (
+        c["id"],
+        c["params"],
+        c["custom_patterns"],
+        c["expected_values"],
+    )
+    for c in _HAR_FIXTURE["custom_patterns_params_cases"]
+]
+
+
+class TestPostDataCustomPatterns:
+    """Per-call ``custom_patterns`` extension on ``sanitize_post_data``.
+
+    Table-driven: each case in ``tests/fixtures/test_har.json`` under
+    ``custom_patterns_cases`` / ``custom_patterns_params_cases`` exercises one
+    slice of the (MIME type x custom_patterns x field shape) matrix. The
+    fixture is the source of truth for the positive matrix; the standalone
+    methods below cover identities (None vs omission) and invariants that
+    don't fit the table shape.
+    """
+
+    @pytest.mark.parametrize(
+        ("desc", "post_data", "custom_patterns", "must_contain", "must_not_contain"),
+        CUSTOM_PATTERNS_TEXT_CASES,
+        ids=[c[0] for c in CUSTOM_PATTERNS_TEXT_CASES],
+    )
+    def test_text_body_redaction_matrix(
+        self,
+        desc: str,
+        post_data: dict,
+        custom_patterns: dict | None,
+        must_contain: list[str],
+        must_not_contain: list[str],
+    ) -> None:
+        """Exercise form / JSON / XML bodies x (default, custom_patterns)."""
+        result = sanitize_post_data(post_data, custom_patterns=custom_patterns)
+        assert result is not None, desc
+        text = result.get("text", "")
+        for needle in must_contain:
+            assert needle in text, f"{desc}: expected {needle!r} in {text!r}"
+        for needle in must_not_contain:
+            assert needle not in text, f"{desc}: {needle!r} should have been redacted in {text!r}"
+
+    @pytest.mark.parametrize(
+        ("desc", "params", "custom_patterns", "expected_values"),
+        CUSTOM_PATTERNS_PARAMS_CASES,
+        ids=[c[0] for c in CUSTOM_PATTERNS_PARAMS_CASES],
+    )
+    def test_params_redaction_matrix(
+        self,
+        desc: str,
+        params: list[dict],
+        custom_patterns: dict | None,
+        expected_values: dict[str, str],
+    ) -> None:
+        """Exercise postData.params x (default, custom_patterns)."""
+        post_data = {"mimeType": "application/x-www-form-urlencoded", "params": params}
+        result = sanitize_post_data(post_data, custom_patterns=custom_patterns)
+        assert result is not None, desc
+        by_name = {p["name"]: p["value"] for p in result["params"]}
+        for name, expected in expected_values.items():
+            assert by_name[name] == expected, f"{desc}: {name} expected {expected!r}, got {by_name[name]!r}"
+
+    def test_none_matches_omission(self) -> None:
+        """``custom_patterns=None`` produces identical output to omitting the kwarg."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "text": "user=admin&password=secret123&pws=alsosecret",
+        }
+        default = sanitize_post_data(post_data)
+        explicit_none = sanitize_post_data(post_data, custom_patterns=None)
+        assert default == explicit_none
+
+    def test_sequential_calls_with_different_patterns_do_not_leak_state(self) -> None:
+        """Sequential calls with differing custom_patterns must not share state.
+
+        Module globals and the ContextVar must not be mutated in a way that
+        changes the output of a subsequent default call.
+        """
+        body = "user=admin&pws=one&loginPassword=two&extra=three"
+
+        def form(text: str) -> dict:
+            return {"mimeType": "application/x-www-form-urlencoded", "text": text}
+
+        # Baseline captured BEFORE any custom_patterns calls.
+        baseline = sanitize_post_data(form(body))
+
+        result_a = sanitize_post_data(
+            form(body),
+            custom_patterns={"fields": {"auto_redact_patterns": ["pws"]}},
+        )
+        result_b = sanitize_post_data(
+            form(body),
+            custom_patterns={"fields": {"auto_redact_patterns": ["extra"]}},
+        )
+
+        # Default call AFTER the custom calls must be identical to the baseline
+        # — proof that neither module globals nor the ContextVar leaked into it.
+        result_default = sanitize_post_data(form(body))
+
+        assert (
+            baseline is not None
+            and result_a is not None
+            and result_b is not None
+            and result_default is not None
+        )
+        assert result_default == baseline
+
+        # A redacts pws but not extra; B redacts extra but not pws.
+        assert "pws=[REDACTED]" in result_a["text"]
+        assert "extra=three" in result_a["text"]
+        assert "extra=[REDACTED]" in result_b["text"]
+        assert "pws=one" in result_b["text"]
+
+        # Built-in loginPassword is redacted in every variant.
+        for r in (baseline, result_a, result_b, result_default):
+            assert "loginPassword=[REDACTED]" in r["text"]
+
+
+# -----------------------------------------------------------------------------
+# Internals — resolver / cache / scope / compiler fallbacks
+# -----------------------------------------------------------------------------
+
+
+# (desc, input_dict, expected_auto_matches, expected_flag_matches_or_none)
+# Each row compiles a sensitive-patterns dict and asserts which names match
+# the resulting auto-redact regex and the flag regex (None when no flag
+# patterns are declared).
+COMPILE_FIELD_PATTERN_CASES = [
+    (
+        "current_schema_both_sections",
+        {"fields": {"auto_redact_patterns": ["pws"], "flag_patterns": ["deployenv"]}},
+        ["pws"],
+        ["deployenv"],
+    ),
+    (
+        "legacy_patterns_key_only",
+        {"fields": {"patterns": ["legacytok"]}},
+        ["legacytok"],
+        None,
+    ),
+    (
+        "hardcoded_fallback_when_fields_empty",
+        {"fields": {}},
+        ["password", "secret", "token", "key", "auth"],
+        None,
+    ),
+    (
+        "hardcoded_fallback_when_fields_missing_entirely",
+        {},
+        ["password", "secret", "token"],
+        None,
+    ),
+]
+
+
+class TestCompileSensitiveFieldPatterns:
+    """Direct coverage for :func:`_compile_sensitive_field_patterns` legacy paths."""
+
+    @pytest.mark.parametrize(
+        ("desc", "sensitive_data", "auto_matches", "flag_matches"),
+        COMPILE_FIELD_PATTERN_CASES,
+        ids=[c[0] for c in COMPILE_FIELD_PATTERN_CASES],
+    )
+    def test_compile_matrix(
+        self,
+        desc: str,
+        sensitive_data: dict,
+        auto_matches: list[str],
+        flag_matches: list[str] | None,
+    ) -> None:
+        from har_capture.sanitization.har import _compile_sensitive_field_patterns
+
+        auto_re, flag_re = _compile_sensitive_field_patterns(sensitive_data)
+        for name in auto_matches:
+            assert auto_re.search(name), f"{desc}: auto regex should match {name!r}"
+        if flag_matches is None:
+            assert flag_re is None, f"{desc}: flag regex should be None"
+        else:
+            assert flag_re is not None, f"{desc}: flag regex should be compiled"
+            for name in flag_matches:
+                assert flag_re.search(name), f"{desc}: flag regex should match {name!r}"
+
+
+class TestFieldPatternSet:
+    """Direct coverage for the :class:`_FieldPatternSet` helper methods."""
+
+    def test_matches_flaggable_returns_false_when_flag_re_is_none(self) -> None:
+        """Guard the explicit None branch in matches_flaggable."""
+        import re as _re
+
+        from har_capture.sanitization.har import _FieldPatternSet
+
+        pset = _FieldPatternSet(field_re=_re.compile("password"), flag_re=None)
+        assert pset.matches_sensitive("password") is True
+        assert pset.matches_flaggable("anything") is False
+
+
+class TestCustomPatternsCacheKey:
+    """Direct coverage for :func:`_custom_patterns_cache_key`."""
+
+    def test_dict_produces_stable_key_regardless_of_insertion_order(self) -> None:
+        from har_capture.sanitization.har import _custom_patterns_cache_key
+
+        a = {"fields": {"auto_redact_patterns": ["pws"], "flag_patterns": ["env"]}}
+        b = {"fields": {"flag_patterns": ["env"], "auto_redact_patterns": ["pws"]}}
+        assert _custom_patterns_cache_key(a) == _custom_patterns_cache_key(b)
+
+    def test_path_input_normalized_to_absolute(self, tmp_path: Path) -> None:
+        from har_capture.sanitization.har import _custom_patterns_cache_key
+
+        path = tmp_path / "does-not-exist.json"
+        key = _custom_patterns_cache_key(str(path))
+        assert key is not None and key.startswith("path:")
+        assert key.endswith("/does-not-exist.json")
+
+    def test_non_serializable_dict_returns_none(self) -> None:
+        """Objects that neither JSON-serialize nor string-coerce return None.
+
+        A None cache key means the caller compiles fresh each call instead of
+        crashing on the unstringifiable dict.
+        """
+        from har_capture.sanitization.har import _custom_patterns_cache_key
+
+        class _Unserializable:
+            def __str__(self) -> str:
+                raise TypeError("refuses to serialize")
+
+        key = _custom_patterns_cache_key({"fields": {"x": _Unserializable()}})
+        assert key is None
+
+
+class TestResolveFieldPatterns:
+    """Direct coverage for :func:`_resolve_field_patterns` caching behavior."""
+
+    def _clear_cache(self) -> None:
+        from har_capture.sanitization.har import _CUSTOM_FIELD_RE_CACHE
+
+        _CUSTOM_FIELD_RE_CACHE.clear()
+
+    def test_none_returns_default_set_without_touching_cache(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_FIELD_RE_CACHE,
+            _DEFAULT_FIELD_PATTERNS,
+            _resolve_field_patterns,
+        )
+
+        self._clear_cache()
+        result = _resolve_field_patterns(None)
+        assert result is _DEFAULT_FIELD_PATTERNS
+        assert len(_CUSTOM_FIELD_RE_CACHE) == 0
+
+    def test_same_dict_returns_cached_instance(self) -> None:
+        from har_capture.sanitization.har import _resolve_field_patterns
+
+        self._clear_cache()
+        custom = {"fields": {"auto_redact_patterns": ["pws"]}}
+        first = _resolve_field_patterns(custom)
+        second = _resolve_field_patterns(custom)
+        assert first is second, "second call should hit the cache and return the same instance"
+
+    def test_different_dicts_produce_different_instances(self) -> None:
+        from har_capture.sanitization.har import _resolve_field_patterns
+
+        self._clear_cache()
+        a = _resolve_field_patterns({"fields": {"auto_redact_patterns": ["pws"]}})
+        b = _resolve_field_patterns({"fields": {"auto_redact_patterns": ["extra"]}})
+        assert a is not b
+        assert a.matches_sensitive("pws") and not b.matches_sensitive("pws")
+        assert b.matches_sensitive("extra") and not a.matches_sensitive("extra")
+
+    def test_cache_eviction_bounded_by_max(self) -> None:
+        """Cache size is capped at _CUSTOM_FIELD_RE_CACHE_MAX entries.
+
+        When exceeded, the oldest entry is evicted so the dict never grows
+        unboundedly.
+        """
+        from har_capture.sanitization.har import (
+            _CUSTOM_FIELD_RE_CACHE,
+            _CUSTOM_FIELD_RE_CACHE_MAX,
+            _resolve_field_patterns,
+        )
+
+        self._clear_cache()
+        for i in range(_CUSTOM_FIELD_RE_CACHE_MAX + 5):
+            _resolve_field_patterns({"fields": {"auto_redact_patterns": [f"p{i}"]}})
+
+        assert len(_CUSTOM_FIELD_RE_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
+
+
+class TestFieldPatternsScope:
+    """Direct coverage for the :func:`_field_patterns_scope` context manager."""
+
+    def test_scope_restores_previous_value_on_normal_exit(self) -> None:
+        from har_capture.sanitization.har import (
+            _DEFAULT_FIELD_PATTERNS,
+            _FIELD_PATTERNS_CTX,
+            _field_patterns_scope,
+        )
+
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
+        with _field_patterns_scope({"fields": {"auto_redact_patterns": ["pws"]}}):
+            assert _FIELD_PATTERNS_CTX.get().matches_sensitive("pws")
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
+
+    def test_scope_restores_previous_value_on_exception(self) -> None:
+        from har_capture.sanitization.har import (
+            _DEFAULT_FIELD_PATTERNS,
+            _FIELD_PATTERNS_CTX,
+            _field_patterns_scope,
+        )
+
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
+        with (
+            pytest.raises(RuntimeError, match="boom"),
+            _field_patterns_scope({"fields": {"auto_redact_patterns": ["pws"]}}),
+        ):
+            raise RuntimeError("boom")
+        assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
+
+    def test_nested_scopes_stack_correctly(self) -> None:
+        from har_capture.sanitization.har import (
+            _FIELD_PATTERNS_CTX,
+            _field_patterns_scope,
+        )
+
+        with _field_patterns_scope({"fields": {"auto_redact_patterns": ["outer"]}}):
+            outer = _FIELD_PATTERNS_CTX.get()
+            assert outer.matches_sensitive("outer")
+            assert not outer.matches_sensitive("inner")
+            with _field_patterns_scope({"fields": {"auto_redact_patterns": ["inner"]}}):
+                inner = _FIELD_PATTERNS_CTX.get()
+                assert inner.matches_sensitive("inner")
+            # Inner scope exited — outer set is restored.
+            assert _FIELD_PATTERNS_CTX.get() is outer
+
+
+class TestContextVarIsolatesThreads:
+    """The ContextVar must not bleed between concurrent threads."""
+
+    def test_concurrent_threads_see_independent_patterns(self) -> None:
+        import threading
+
+        from har_capture.sanitization.har import (
+            _FIELD_PATTERNS_CTX,
+            _field_patterns_scope,
+        )
+
+        barrier = threading.Barrier(2)
+        results: dict[str, bool] = {}
+
+        def worker(name: str, custom_field: str) -> None:
+            with _field_patterns_scope({"fields": {"auto_redact_patterns": [custom_field]}}):
+                barrier.wait()  # both threads enter their scopes before any checks run
+                results[name] = _FIELD_PATTERNS_CTX.get().matches_sensitive(custom_field)
+                results[f"{name}_cross"] = _FIELD_PATTERNS_CTX.get().matches_sensitive("zzz_other_field")
+
+        t1 = threading.Thread(target=worker, args=("t1", "aaa_only_t1"))
+        t2 = threading.Thread(target=worker, args=("t2", "bbb_only_t2"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results["t1"] is True
+        assert results["t2"] is True
+        # Neither thread sees the other's field — the ContextVar is isolated.
+        assert results["t1_cross"] is False
+        assert results["t2_cross"] is False
+
+
 class TestEntrySanitization:
     """Tests for full HAR entry sanitization."""
 

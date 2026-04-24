@@ -11,6 +11,7 @@ import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +134,24 @@ def _load_custom_patterns(custom: Path | str | dict[str, Any]) -> dict[str, Any]
     return load_json_file(custom)
 
 
+def _apply_pattern_inclusions(patterns: dict[str, Any], inclusions: list[str]) -> None:
+    """Keep only patterns whose names match an entry in the inclusion list.
+
+    Supports exact names (``"mac_address"``) and glob wildcards
+    (``"credit_card_*"``).  Modifies *patterns* in place.
+
+    Args:
+        patterns: The ``patterns`` dict (pattern_name → definition).
+        inclusions: List of pattern names or glob expressions to keep.
+    """
+    exact = {e for e in inclusions if "*" not in e}
+    globs = [e for e in inclusions if "*" in e]
+
+    to_remove = [name for name in patterns if name not in exact and not any(fnmatch(name, g) for g in globs)]
+    for name in to_remove:
+        del patterns[name]
+
+
 def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:
     """Load PII detection patterns.
 
@@ -169,6 +188,9 @@ def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) ->
             builtin["patterns"].update(custom["patterns"])
         if "preserved_gateway_ips" in custom and isinstance(custom["preserved_gateway_ips"], list):
             builtin["preserved_gateway_ips"].extend(custom["preserved_gateway_ips"])
+        # Apply inclusions declared by the domain/custom file
+        if "include_patterns" in custom and isinstance(custom["include_patterns"], list):
+            _apply_pattern_inclusions(builtin["patterns"], custom["include_patterns"])
 
     if cache_key:
         _cache_set(cache_key, builtin)
@@ -209,8 +231,14 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
                 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
             if "cookie_redact" in custom["headers"]:
                 builtin["headers"]["cookie_redact"].extend(custom["headers"]["cookie_redact"])
-        if "fields" in custom and "patterns" in custom["fields"]:
-            builtin["fields"]["patterns"].extend(custom["fields"]["patterns"])
+        if "fields" in custom and isinstance(custom["fields"], dict):
+            custom_fields = custom["fields"]
+            # Extend each known list key. "patterns" is the legacy key; the current
+            # schema uses "auto_redact_patterns" and "flag_patterns".
+            for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
+                values = custom_fields.get(key)
+                if isinstance(values, list):
+                    builtin["fields"].setdefault(key, []).extend(values)
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
         if "heuristics" in custom:
@@ -535,6 +563,10 @@ def merge_pattern_files(paths: list[Path]) -> dict[str, Any]:
                     merged[section][key].update(val)
                 else:
                     merged[section][key] = val
+        # Accumulate include_patterns across files (list extend)
+        if "include_patterns" in extra and isinstance(extra["include_patterns"], list):
+            merged.setdefault("include_patterns", [])
+            merged["include_patterns"].extend(extra["include_patterns"])
     return merged
 
 

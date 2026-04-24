@@ -98,6 +98,107 @@ patterns_dict = {
 sanitize_har_file("capture.har", custom_patterns=patterns_dict)
 ```
 
+## Extending Sensitive Field Detection
+
+The examples above extend `pii.patterns` — value-based regexes that match anywhere in content (e.g. a customer-ID string format). Field-level redaction is a separate pass: when sanitizing form bodies, JSON bodies, XML elements, `postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field name** against two regex sets loaded from `sensitive.json`:
+
+- **`fields.auto_redact_patterns`** — field names that trigger automatic redaction of the associated value (100% confidence, e.g. `password`, `secret`, `token`).
+- **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
+
+To add a field name that the built-ins don't recognize — for instance, a device-specific credential field like `pws`, `loginPassword`, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. Extensions are additive (built-ins continue to apply) and scoped to the single call via a `ContextVar`, so module state is never mutated and concurrent callers don't observe each other's patterns.
+
+### Schema
+
+```json
+{
+  "fields": {
+    "auto_redact_patterns": ["pws", "custom_token"],
+    "flag_patterns": ["deploy_env"]
+  }
+}
+```
+
+Each entry is a regex (same syntax as the built-in `sensitive.json`). Matching is case-insensitive; use `\b` boundaries to avoid accidental substring hits.
+
+### Python API — per-call extension
+
+```python
+from har_capture.sanitization import sanitize_post_data
+
+# Device-specific credential field from a product catalog at runtime.
+custom = {"fields": {"auto_redact_patterns": ["pws"]}}
+
+post_data = {
+    "mimeType": "application/x-www-form-urlencoded",
+    "text": "user=admin&pws=hunter2",
+}
+
+result = sanitize_post_data(post_data, custom_patterns=custom)
+# result["text"] == "user=admin&pws=[REDACTED]"
+```
+
+The same extension applies to `sanitize_html` for inline-script field matching:
+
+```python
+from har_capture.sanitization import sanitize_html
+
+html = 'localStorage.setItem("pws", "hunter2")'
+clean = sanitize_html(html, custom_patterns=custom)
+# "hunter2" is redacted; key name "pws" is preserved.
+```
+
+And to the top-level entry points that delegate to these:
+
+```python
+from har_capture.sanitization import sanitize_har_file
+
+sanitize_har_file(
+    "capture.har",
+    custom_patterns={"fields": {"auto_redact_patterns": ["pws"]}},
+)
+```
+
+### File form (same schema)
+
+Anywhere a dict works, a file path containing the same JSON works too:
+
+```json
+{
+  "_comment": "custom_fields.json",
+  "fields": {
+    "auto_redact_patterns": ["pws", "custom_token"]
+  }
+}
+```
+
+```bash
+har-capture sanitize capture.har --patterns custom_fields.json
+```
+
+### Scope and isolation
+
+- The override applies only to the call that passes `custom_patterns`.
+- Module-level patterns (`sensitive.json`) are never mutated.
+- The override uses a `ContextVar`, so concurrent threads / asyncio tasks observe their own patterns with no cross-talk.
+- Compiled regexes are cached per canonical key, so repeated calls with the same extension skip the recompile.
+
+### Combining with `pii.patterns`
+
+A single dict (or file) can extend both `pii.patterns` and `fields` at once:
+
+```python
+custom = {
+    "patterns": {
+        "modem_serial": {"regex": r"SN[0-9]{10}", "replacement_prefix": "MODEM_SN"},
+    },
+    "fields": {
+        "auto_redact_patterns": ["pws"],
+        "flag_patterns": ["deploy_env"],
+    },
+}
+sanitize_har_file("capture.har", custom_patterns=custom)
+```
+
 ## Pattern Examples
 
 ### Serial Numbers
