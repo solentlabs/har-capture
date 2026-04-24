@@ -285,6 +285,85 @@ def _resolve_field_patterns(
     return resolved
 
 
+# --- Header-set per-call override --------------------------------------------
+#
+# Parallel to _FieldPatternSet but for HTTP header names, which are matched by
+# lowercase exact-match against two sets (full_redact, cookie_redact) rather
+# than compiled regex. Same ContextVar / resolver / cache shape so the two
+# subsystems evolve together.
+
+
+@dataclass(frozen=True)
+class _HeaderSets:
+    """Resolved header-name sets used for one sanitization call.
+
+    Both sets are frozen and case-normalized to lowercase so callers can do
+    ``name.lower() in sets.full_redact`` without repeated normalization.
+    """
+
+    full_redact: frozenset[str]
+    cookie_redact: frozenset[str]
+
+
+def _compile_header_sets(sensitive_data: dict[str, Any]) -> _HeaderSets:
+    """Build (full_redact, cookie_redact) frozensets from a loaded sensitive-patterns dict."""
+    headers = sensitive_data.get("headers", {})
+    full = frozenset(h.lower() for h in headers.get("full_redact", []))
+    cookie = frozenset(h.lower() for h in headers.get("cookie_redact", []))
+    return _HeaderSets(full, cookie)
+
+
+_DEFAULT_HEADER_SETS = _HeaderSets(frozenset(_FULL_REDACT_HEADERS), frozenset(_COOKIE_REDACT_HEADERS))
+
+_HEADER_SETS_CTX: contextvars.ContextVar[_HeaderSets] = contextvars.ContextVar(
+    "har_capture_header_sets", default=_DEFAULT_HEADER_SETS
+)
+
+_CUSTOM_HEADER_SETS_CACHE: OrderedDict[str, _HeaderSets] = OrderedDict()
+
+
+def _resolve_header_sets(
+    custom_patterns: str | dict[str, Any] | None,
+) -> _HeaderSets:
+    """Resolve the (full_redact, cookie_redact) header sets for this call.
+
+    ``custom_patterns=None`` returns the shared default set (zero-cost).
+    Otherwise the custom patterns are merged with built-ins via the loader
+    and the compiled result is cached per canonical key.
+    """
+    if custom_patterns is None:
+        return _DEFAULT_HEADER_SETS
+
+    key = _custom_patterns_cache_key(custom_patterns)
+    if key is not None:
+        cached = _CUSTOM_HEADER_SETS_CACHE.get(key)
+        if cached is not None:
+            _CUSTOM_HEADER_SETS_CACHE.move_to_end(key)
+            return cached
+
+    resolved = _compile_header_sets(load_sensitive_patterns(custom_patterns))
+
+    if key is not None:
+        _CUSTOM_HEADER_SETS_CACHE[key] = resolved
+        while len(_CUSTOM_HEADER_SETS_CACHE) > _CUSTOM_FIELD_RE_CACHE_MAX:
+            _CUSTOM_HEADER_SETS_CACHE.popitem(last=False)
+    return resolved
+
+
+@contextmanager
+def _header_sets_scope(custom_patterns: str | dict[str, Any] | None) -> Iterator[None]:
+    """Apply ``custom_patterns`` as the active header-set for this scope.
+
+    Parallel to ``_field_patterns_scope``; public entry points that want
+    header-name extensions to take effect for the call must enter this scope.
+    """
+    token = _HEADER_SETS_CTX.set(_resolve_header_sets(custom_patterns))
+    try:
+        yield
+    finally:
+        _HEADER_SETS_CTX.reset(token)
+
+
 # Redaction placeholder - single source of truth
 REDACTED = "[REDACTED]"
 
@@ -369,6 +448,11 @@ def sanitize_header_value(
 ) -> str:
     """Sanitize a header value if it's sensitive.
 
+    Reads the active header-name set from ``_header_sets_scope`` when one is
+    entered (top-level entry points like ``sanitize_entry`` set it from
+    ``custom_patterns``); otherwise uses the module-wide defaults from
+    ``sensitive.json``.
+
     Args:
         name: Header name
         value: Header value
@@ -385,11 +469,12 @@ def sanitize_header_value(
         'text/html'
     """
     name_lower = name.lower()
+    sets = _HEADER_SETS_CTX.get()
 
-    if name_lower in _FULL_REDACT_HEADERS:
+    if name_lower in sets.full_redact:
         return _redact_value(value, hasher, "AUTH", collector)
 
-    if name_lower in _COOKIE_REDACT_HEADERS:
+    if name_lower in sets.cookie_redact:
         # Detect cookie attribute metadata (e.g., "HttpOnly: true, Secure: true")
         # that was incorrectly serialized as the header value
         if is_cookie_attribute_metadata(value):
@@ -503,7 +588,10 @@ def sanitize_post_data(
 
     result = copy.deepcopy(post_data)
 
-    with _field_patterns_scope(custom_patterns):
+    with (
+        _field_patterns_scope(custom_patterns),
+        _header_sets_scope(custom_patterns),
+    ):
         # Sanitize params array
         if "params" in result and isinstance(result["params"], list):
             for param in result["params"]:
@@ -1101,13 +1189,15 @@ def sanitize_entry(
         salt: Salt for hashed redaction (ignored if collector provided)
         custom_patterns: Optional additive custom patterns (file path or dict
             matching the ``load_sensitive_patterns`` schema). Extends the
-            built-in ``pii.patterns``, allowlist, and sensitive-field sets
-            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``) for
-            this call only. Propagates end-to-end: the scope is entered by
-            ``sanitize_post_data`` and ``sanitize_html`` downstream, so
-            field-name extensions reach form params, JSON/XML bodies, and
-            inline-script scanners. Module-global state is never mutated.
-            See ``sanitize_post_data`` for the full contract.
+            built-in ``pii.patterns``, allowlist, sensitive-field sets
+            (``fields.auto_redact_patterns`` / ``fields.flag_patterns``), and
+            header sets (``headers.full_redact`` / ``headers.cookie_redact``)
+            for this call only. Both the field-pattern and header-set scopes
+            are entered at this level, so every downstream detection site —
+            request/response headers, cookies, ``queryString`` params, URL
+            query params, POST bodies (form / JSON / XML), and inline-script
+            scanners — sees the extensions. Module-global state is never
+            mutated. See ``sanitize_post_data`` for the full contract.
         collector: Optional collector for tracking redactions
         heuristics: Heuristic mode for pipe-delimited value detection
         _skip_copy: If True, skip deep copy (caller already copied). Internal use only.
@@ -1125,11 +1215,15 @@ def sanitize_entry(
         # No salt and no collector - create collector with no hashing
         collector = RedactionCollector(hasher=Hasher.create(None))
 
-    if "request" in result:
-        _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
+    with (
+        _field_patterns_scope(custom_patterns),
+        _header_sets_scope(custom_patterns),
+    ):
+        if "request" in result:
+            _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
 
-    if "response" in result:
-        _sanitize_response(result["response"], collector, custom_patterns, heuristics)
+        if "response" in result:
+            _sanitize_response(result["response"], collector, custom_patterns, heuristics)
 
     return result
 

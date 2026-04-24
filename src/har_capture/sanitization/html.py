@@ -275,15 +275,19 @@ def sanitize_html(
         hasher = Hasher.create(salt)
         collector = RedactionCollector(hasher=hasher)
 
-    # Enter the field-pattern scope so is_sensitive_field() calls inside the
-    # HTML scanner honor custom_patterns. Lazy import: har imports html at
-    # module level, so we'd cycle if this were top-level.
+    # Enter the field-pattern + header-set scopes so is_sensitive_field() and
+    # sanitize_header_value() calls inside the HTML scanner honor custom_patterns.
+    # Lazy import: har imports html at module level, so we'd cycle if this were
+    # top-level.
     from har_capture.sanitization.har import (
         _FIELD_PATTERNS_CTX,
+        _HEADER_SETS_CTX,
         _resolve_field_patterns,
+        _resolve_header_sets,
     )
 
-    _scope_token = _FIELD_PATTERNS_CTX.set(_resolve_field_patterns(custom_patterns))
+    _field_token = _FIELD_PATTERNS_CTX.set(_resolve_field_patterns(custom_patterns))
+    _header_token = _HEADER_SETS_CTX.set(_resolve_header_sets(custom_patterns))
     try:
         return _sanitize_html_impl(
             html,
@@ -293,7 +297,8 @@ def sanitize_html(
             heuristics=heuristics,
         )
     finally:
-        _FIELD_PATTERNS_CTX.reset(_scope_token)
+        _HEADER_SETS_CTX.reset(_header_token)
+        _FIELD_PATTERNS_CTX.reset(_field_token)
 
 
 def _sanitize_html_impl(
