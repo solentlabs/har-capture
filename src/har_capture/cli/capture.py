@@ -14,7 +14,9 @@ if TYPE_CHECKING:
 def capture(
     target: Annotated[
         str,
-        typer.Argument(help="URL to capture (must include http:// or https://)"),
+        typer.Argument(
+            help="URL or bare hostname/IP to capture. Scheme auto-detected when omitted.",
+        ),
     ],
     output: Annotated[
         Path | None,
@@ -85,7 +87,7 @@ def capture(
     Use --include-fonts, --include-images, or --include-media to keep them.
 
     Args:
-        target: URL to capture (must include http:// or https://)
+        target: URL or bare hostname/IP to capture (scheme auto-detected via TCP/TLS probes when omitted)
         output: Output HAR filename (auto-generated if not provided)
         browser: Browser engine to use (chromium, firefox, webkit)
         username: Username for HTTP Basic Auth if required
@@ -102,6 +104,7 @@ def capture(
 
     Example:
         har-capture https://example.com
+        har-capture 192.168.100.1                # auto-detect HTTP vs HTTPS
         har-capture http://192.168.100.1 --output capture.har
         har-capture get http://router.local --include-images
     """

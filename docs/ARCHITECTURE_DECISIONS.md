@@ -32,9 +32,12 @@ HTTP requests. The browser handles auth dialogs, redirects, and errors
 naturally — the user is present to respond.
 
 - **Connectivity check (1 GET):** Retained. Validates the device is reachable
-  on the user-provided scheme before launching Playwright. The URL must
-  include an explicit `http://` or `https://` scheme. Without the check,
-  Playwright would hang silently on unreachable devices.
+  before launching Playwright; without the check, Playwright would hang
+  silently on unreachable devices. The original 0.6.0 form required an
+  explicit `http://` or `https://` scheme — this was reversed in 0.8.0
+  after the CM1200 trap (contributor guesses HTTP, misses HTTPS-only auth
+  challenge). Bare hostnames now auto-detect via TCP+TLS probes; explicit
+  schemes still bypass detection. See ADR-10.
 - **Auth detection:** Not needed in interactive mode. When a device responds
   with 401, Playwright shows a native Basic Auth dialog. The user enters
   credentials. Both the 401 and the authenticated retry are captured in the
@@ -198,3 +201,61 @@ The login flow is missing, making the HAR useless for auth analysis.
 check). `--minimal` skips it for session-constrained devices. The
 pre-capture cookie audit has zero network cost — it reads local context
 state. All three defenses are additive and composable.
+
+## ADR-10: Auto-Detect Protocol for Bare Hostnames (supersedes 0.6.0 explicit-scheme rule)
+
+**Context:** v0.6.0 hardened the connectivity phase to require an
+explicit `http://` or `https://` scheme, rejecting bare hostnames with a
+"Missing scheme" error. The intent was to eliminate ambiguity and avoid
+duplicate connectivity probes. In practice this restored a contributor
+trap that v0.4.4's raw-probe feature had originally been built to
+diagnose: cable_modem_monitor #121 (CM1200) closed only after weeks of
+debugging because the device serves its auth challenge on `:443` and
+silently 200s on `:80`. A contributor guessing `http://` captures a
+useless redirect stub; a contributor guessing `https://` captures the
+real auth flow. The "helpful error" the v0.6.0 rejection produces does
+not help — both choices look equally plausible at the CLI.
+
+**Decision:** When the target lacks an explicit scheme, auto-detect via
+stdlib TCP+TLS probes. Probe `:80` and `:443`; prefer HTTPS when its
+TCP connection accepts *and* the TLS handshake completes. Explicit
+schemes still bypass detection — the user has chosen and we do not
+second-guess.
+
+The probe code is adapted from `cable_modem_monitor_core/connectivity.py`
+(both projects owned by solentlabs). It is duplicated, not shared, so
+har-capture's runtime stays stdlib-only — CMM Core's `requests`/`urllib3`
+deps would land in every har-capture install, and a shared package would
+also drag playwright into CMM Core's tree.
+
+The implementation defaults `getaddrinfo` to IPv4: most consumer devices
+are IPv4-only on the LAN side, and a dual-stack resolver may otherwise
+return IPv6 first and false-fail before falling back. Bracketed IPv6
+input (`[::1]:8443`) is treated as the user's explicit v6 signal and
+auto-selects `AF_INET6` for the probe — capture-everything beats default-
+to-fail when the user is asking us to look at v6. Unbracketed inputs
+that happen to contain colons stay on AF_INET (heuristic IPv6 detection
+on bare strings is too risky to do silently). The TLS handshake uses a
+`SECLEVEL=0` cipher context so it completes against legacy devices (TLS
+1.0/1.1, 3DES/RC4) — this tolerance is the entire point. Without it, we
+would false-fail HTTPS on old modems and incorrectly fall back to HTTP,
+inverting the trap this feature exists to close.
+
+har-capture deliberately does **not** classify or surface the negotiated
+TLS version. Unlike CMM Core (whose `requests`-based runtime can mount a
+`LegacySSLAdapter` to keep polling working), har-capture's runtime is
+Chromium driven by Playwright — we don't control its TLS stack and
+cannot act on a "legacy" classification. Carrying that flag would be
+ceremony without consequence. The version is logged for diagnostics so
+operators tailing logs can see what got negotiated, but the
+`ProtocolDetectionResult` returns only `success`/`protocol`/`working_url`/
+`error`. This is a deliberate divergence from CMM Core, recorded here so
+future re-syncs do not reintroduce the flag.
+
+**Consequence:** Bare hostnames work again (`har-capture 192.168.100.1`).
+The CM1200 trap is closed by default, and the inverse trap (false-failing
+HTTPS on legacy devices) is closed by the cipher tolerance. One additional
+pre-flight TCP probe in the bare-hostname path (the TCP connect on the
+unused port — closed ports return immediately, so latency is bounded by
+`timeout`). When an explicit scheme is given, behavior is byte-identical
+to v0.7.x.

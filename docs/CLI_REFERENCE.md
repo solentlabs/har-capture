@@ -12,7 +12,7 @@ ______________________________________________________________________
 
 Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
 
-`get` is the default command — you can omit it when the first argument is a URL. The URL must include a scheme (`http://` or `https://`).
+`get` is the default command — you can omit it when the first argument is a URL. The target may be a full URL (`http://`/`https://`) or a bare hostname/IP; when the scheme is omitted, har-capture probes TCP `:80` and `:443` and prefers HTTPS when its TLS handshake completes (see ADR-10).
 
 ### Basic Usage
 
@@ -23,7 +23,7 @@ har-capture get <TARGET>
 
 ### Arguments
 
-- `TARGET` - URL with scheme (`http://` or `https://`)
+- `TARGET` - URL (`http://` or `https://`), bare hostname/IP, or `host:port`. Scheme is auto-detected when omitted.
 
 ### Options
 
@@ -59,6 +59,9 @@ har-capture https://example.com
 # Explicit 'get' subcommand (equivalent)
 har-capture get https://example.com
 
+# Bare hostname — scheme auto-detected (HTTPS preferred when reachable)
+har-capture 192.168.100.1
+
 # Custom output path
 har-capture http://192.168.1.1 --output modem.har
 
@@ -76,7 +79,7 @@ har-capture https://example.com --no-wait-for-data
 
 Before launching the browser, `get` runs two checks (skipped with `--minimal`):
 
-1. **Connectivity** — validates the target is reachable on the given scheme
+1. **Connectivity** — validates the target is reachable. If the target lacks a scheme, har-capture probes TCP `:80` and `:443` to pick HTTP vs HTTPS (HTTPS wins when its TLS handshake completes); explicit schemes bypass this and are used as given.
 
 1. **Session contamination** — detects if the device has a live session that would skip the login flow. If the device returns data content without requiring authentication, the capture aborts with:
 

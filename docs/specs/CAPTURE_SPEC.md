@@ -11,7 +11,7 @@ This spec describes the full Playwright-based capture lifecycle — from browser
 | `src/har_capture/capture/browser.py`      | Core capture orchestration: Playwright session, wait-for-data, HAR recording, state capture, filtering/compression |
 | `src/har_capture/capture/workflow.py`     | Multi-phase workflow: browser check → connectivity → probes → auth → capture                                       |
 | `src/har_capture/capture/probes.py`       | Pre-capture diagnostics: auth challenge, HEAD support, ICMP ping                                                   |
-| `src/har_capture/capture/connectivity.py` | Reachability check (requires explicit scheme), Basic Auth detection                                                |
+| `src/har_capture/capture/connectivity.py` | Reachability check, protocol auto-detection (TCP+TLS probe), Basic Auth detection                                  |
 | `src/har_capture/capture/deps.py`         | Browser installation and system dependency checking                                                                |
 | `src/har_capture/cli/capture.py`          | CLI `har-capture get` command, interactive prompts                                                                 |
 
@@ -40,12 +40,16 @@ result = check_connectivity_phase(target, result)
 `check_device_connectivity()` in `connectivity.py` sends an unauthenticated GET request via stdlib urllib:
 
 1. Parse target via `_parse_target()` — handles URLs with schemes (including IPv6 with brackets, ports)
-1. Require an explicit scheme (`http://` or `https://`); bare hostnames/IPs are rejected with a helpful error
-1. Send a single GET to `{scheme}://{host}/`
+1. If no scheme is provided, run `detect_protocol()` (see below) to choose between HTTP and HTTPS via TCP+TLS probes; if both transports fail, return the detection error
+1. Send a single GET to `{scheme}://{host}/` (using either the provided or detected scheme)
 1. Any response (including 401/403) = reachable
 1. Self-signed certificates accepted via `make_ssl_context()` (`check_hostname=False, verify_mode=CERT_NONE`)
 
-Returns `(reachable, scheme, error)`.
+Returns `(reachable, scheme, error)`. Explicit schemes bypass auto-detection — the user has chosen.
+
+#### Protocol auto-detection (`detect_protocol`)
+
+Stdlib-only protocol probe used when the target lacks an explicit scheme. Probes TCP `:80` and `:443`; if `:443` accepts a TCP connection *and* completes a TLS handshake, HTTPS wins — devices that expose both ports almost always intend HTTPS for authenticated traffic, and `:80` is typically a redirect or legacy stub. The handshake uses a `SECLEVEL=0` cipher context so it completes against legacy devices (TLS 1.0/1.1, 3DES/RC4) — this tolerance is load-bearing: without it, the probe would false-fail HTTPS on old modems and capture HTTP instead. `getaddrinfo` defaults to `AF_INET` (protects against dual-stack false-fail on IPv4-only LAN devices); bracketed IPv6 input (`[::1]:8443`) auto-selects `AF_INET6` so v6-only targets are not silently dropped. Scheme matching is case-insensitive. If the user supplies an explicit `:port` (e.g. `127.0.0.1:8443`), only that port is probed. Returns a `ProtocolDetectionResult` with `success`, `protocol`, `working_url`, and `error`. The negotiated TLS version is logged for diagnostics but not classified or surfaced — har-capture cannot act on it (Chromium runs its own TLS stack); see ADR-10 for the rationale. Adapted from `cable_modem_monitor_core/connectivity.py` and intentionally duplicated rather than shared so har-capture's runtime stays stdlib-only.
 
 ### Phase 3: Session Contamination Check (`check_session_phase`)
 
