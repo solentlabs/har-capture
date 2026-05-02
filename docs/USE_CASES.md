@@ -60,9 +60,9 @@ ______________________________________________________________________
 
 **Flow**:
 
-1. User runs capture command targeting the device (URL must include `http://` or `https://`)
+1. User runs capture command targeting the device (full URL with `http://`/`https://`, or a bare hostname/IP)
 1. System checks browser availability
-1. System checks device connectivity on the provided scheme
+1. System checks device connectivity. If the user did not supply a scheme, system probes TCP `:80` and `:443` and prefers HTTPS when its TLS handshake completes (see ADR-10); explicit schemes are used as given
 1. System checks for session contamination — aborts if the device has a live session (serves data without login)
 1. System launches Playwright browser with a clean context (empty cookie jar), navigates to device URL
 1. Browser records all HTTP traffic to a temp HAR file with embedded response bodies
@@ -83,6 +83,10 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
+# Scheme auto-detected (HTTPS preferred when reachable)
+har-capture 192.168.1.1
+
+# Explicit scheme bypasses auto-detection
 har-capture http://192.168.1.1
 har-capture http://192.168.100.1 --output modem_capture.har
 ```
@@ -545,7 +549,7 @@ ______________________________________________________________________
 
 1. User runs capture with `--minimal` flag
 1. System checks browser availability (Phase 1)
-1. System checks connectivity with a single GET (Phase 2) — determines http/https scheme
+1. System checks connectivity with a single GET — auto-detects http/https when no scheme is provided (TCP+TLS probe; HTTPS preferred), or uses the explicit scheme as given
 1. Session check, probes, and auth check are **skipped** — no additional HTTP requests
 1. Browser opens with a clean context and `domcontentloaded` page load strategy (no `networkidle` wait)
 1. Wait-for-data XHR/fetch tracking is disabled
@@ -556,7 +560,7 @@ ______________________________________________________________________
 
 - Device needs Basic Auth → provide `--username`/`--password` on command line (auth check phase is skipped, credentials passed directly to Playwright)
 - Device uses form-based auth → user logs in through the browser UI (captured in HAR)
-- Even `--minimal` connectivity check triggers lockout → user can provide explicit scheme: `http://192.168.100.1`
+- Even `--minimal` connectivity check triggers lockout → user can provide an explicit scheme (`http://192.168.100.1`) to skip the auto-detect TCP+TLS probes
 
 **CLI Example**:
 

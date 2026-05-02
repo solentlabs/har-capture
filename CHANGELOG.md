@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-01
+
+### Changed
+
+- **Bare hostnames/IPs now auto-detect HTTP vs HTTPS** — `har-capture <target>` and `check_device_connectivity(target)` accept a bare hostname/IP again. When no scheme is provided, a stdlib-only TCP+TLS probe of `:80` and `:443` runs first; HTTPS is preferred when its handshake completes. Reverses the 0.6.0 hard rejection of bare hostnames, which traded ambiguity for a contributor trap: guessing `http://` on an HTTPS-only device misses the auth challenge that lives on `:443`. Explicit schemes still bypass detection entirely — the user has chosen.
+
+### Added
+
+- **`detect_protocol()` + `ProtocolDetectionResult`** — New stdlib-only protocol detection in `har_capture.capture.connectivity`. Probes TCP `:80` and `:443`; if `:443` accepts a TCP connection *and* completes a TLS handshake, HTTPS wins. The handshake uses a `SECLEVEL=0` cipher context so it succeeds against legacy modems (TLS 1.0/1.1, 3DES/RC4) — without that tolerance, we'd false-fail HTTPS and silently capture an HTTP redirect stub instead of the auth challenge, the inverse of the CM1200 trap this whole feature exists to close. har-capture does not classify or surface the negotiated TLS version (Chromium runs its own TLS stack and har-capture cannot act on the classification); the version is logged for diagnostics only. Helpers `_strip_protocol`, `_split_host_port`, `_tcp_probe`, `_tls_handshake` are exposed for direct testing. Adapted from `cable_modem_monitor_core/connectivity.py` (both projects owned by solentlabs); duplicated rather than shared so har-capture's runtime stays stdlib-only and CMM Core does not pull playwright via a shared package. `getaddrinfo` defaults to IPv4 (avoids dual-stack false-fails on consumer LAN devices) but bracketed IPv6 literals (`[::1]:8443`) auto-select `AF_INET6` so v6-only targets are not silently dropped. Explicit `:port` overrides and case-insensitive scheme prefixes (`HTTPS://...`) are supported.
+- **Table-driven `DETECT_PROTOCOL_CASES` test bench** — 12 rows covering HTTP-only, HTTPS-handshake-completes, handshake-fails-falls-back-to-HTTP, both-closed, explicit-scheme-skip-half, custom-port, and bracketed IPv6 (HTTP-only and HTTPS-with-port). Adding a row adds a test.
+
+### Changed (internal cleanup)
+
+- **`_parse_target` is now a thin wrapper over `_strip_protocol`** — Eliminates the parallel-helper duplication left over from the v0.8.0 port. Public callers (`browser.py`, `workflow.py`) keep the `(host, scheme)` tuple shape; new code in `connectivity.py` uses `_strip_protocol` directly. Drops the unused `urllib.parse.urlparse` import. Non-http/https schemes (`ftp://`, etc.) are now returned with `scheme=None` since har-capture cannot capture them anyway — previously `_parse_target("ftp://x")` returned `("x", "ftp")` and the connectivity check immediately fell through to auto-detect, producing the same outcome via a different code path.
+
 ## [0.7.1] - 2026-04-24
 
 ### Fixed
@@ -496,4 +511,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.6.1]: https://github.com/solentlabs/har-capture/compare/v0.6.0...v0.6.1
 [0.7.0]: https://github.com/solentlabs/har-capture/compare/v0.6.1...v0.7.0
 [0.7.1]: https://github.com/solentlabs/har-capture/compare/v0.7.0...v0.7.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.7.1...HEAD
+[0.8.0]: https://github.com/solentlabs/har-capture/compare/v0.7.1...v0.8.0
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.0...HEAD
