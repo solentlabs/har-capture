@@ -54,6 +54,22 @@ class MockHandler(BaseHTTPRequestHandler):
             )
         elif self.path == "/api/data":
             self._send_json({"status": "ok", "value": 42})
+        elif self.path == "/popup-trigger":
+            # Mimics the S33-class reboot flow: the page opens a popup
+            # via window.open. The popup's traffic must land in the HAR
+            # for downstream tools to reconstruct the auth/config exchange.
+            self._send_html(
+                "<html><head><title>Popup Trigger</title></head>"
+                "<body><h1>Opens Popup</h1>"
+                "<script>window.open('/popup-content', '_blank');</script>"
+                "</body></html>"
+            )
+        elif self.path == "/popup-content":
+            self._send_html(
+                "<html><head><title>Popup Content</title></head>"
+                "<body><h1>Popup Body</h1>"
+                "<p>This popup must appear in the HAR.</p></body></html>"
+            )
         elif self.path == "/sensitive":
             # Page with sensitive data that should be sanitized
             self._send_html(
@@ -107,6 +123,50 @@ def mock_server() -> Generator[str, None, None]:
     thread.start()
 
     # Wait for server to be ready
+    time.sleep(0.1)
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.shutdown()
+    server.server_close()
+
+
+class PopupRootHandler(MockHandler):
+    """Variant that serves the popup-trigger HTML at ``/``.
+
+    ``capture_device_har`` always navigates to the target's root path,
+    so to exercise the popup-capture path without disturbing other
+    tests' fixtures, we use a dedicated server whose root opens a popup
+    on load. The popup destination (``/popup-content``) is inherited
+    from MockHandler.
+    """
+
+    def do_GET(self) -> None:
+        """Serve popup-trigger at root; defer everything else to MockHandler."""
+        if self.path == "/":
+            self._send_html(
+                "<html><head><title>Popup Trigger</title></head>"
+                "<body><h1>Opens Popup</h1>"
+                "<script>window.open('/popup-content', '_blank');</script>"
+                "</body></html>"
+            )
+            return
+        super().do_GET()
+
+
+@pytest.fixture(scope="module")
+def popup_mock_server() -> Generator[str, None, None]:
+    """Mock server whose root opens a popup on load.
+
+    Yields:
+        Base URL of the popup-emitting mock server.
+    """
+    server = HTTPServer(("127.0.0.1", 0), PopupRootHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+
     time.sleep(0.1)
 
     yield f"http://127.0.0.1:{port}"
@@ -362,3 +422,78 @@ class TestCaptureHelpers:
 
         assert _sanitize_error_message(error, None) == error
         assert _sanitize_error_message(error, {}) == error
+
+
+# =============================================================================
+# Popup Capture Tests
+# =============================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@skip_no_browser
+class TestPopupCapture:
+    """Real-browser tests that popup traffic lands in the HAR.
+
+    Models the failure mode reported in CMM #146 (S33 reboot button opens a
+    popup that the integrated browser does not capture). Without the
+    ``context.on("page")`` subscription, popup responses can be evicted from
+    Chromium's buffer before the HAR is flushed, and consumers have no signal
+    that a popup occurred. Capture-everything: silent popups poison analysis.
+    """
+
+    def test_popup_traffic_lands_in_har(self, popup_mock_server: str, tmp_path: Path) -> None:
+        """Popup opened via ``window.open`` is captured in HAR entries."""
+        output = tmp_path / "popup.har"
+
+        result = capture_device_har(
+            ip=popup_mock_server,
+            output=str(output),
+            browser="chromium",
+            sanitize=False,
+            compress=False,
+            headless=True,
+            timeout=3,
+        )
+
+        assert result.success, f"Capture failed: {result.error}"
+        assert result.har_path is not None
+
+        with open(result.har_path) as f:
+            har = json.load(f)
+
+        urls = [e["request"]["url"] for e in har["log"]["entries"]]
+        popup_urls = [u for u in urls if u.endswith("/popup-content")]
+        assert popup_urls, f"Popup URL /popup-content not in HAR entries. URLs captured: {urls}"
+
+    def test_popup_event_recorded_in_solentlabs_metadata(
+        self, popup_mock_server: str, tmp_path: Path
+    ) -> None:
+        """``_solentlabs.popups`` records that a popup happened.
+
+        Even when popup traffic interleaves with main-page traffic in the
+        HAR entries, consumers need an explicit signal that a popup occurred
+        so they can correlate the auth/config exchange across pages.
+        """
+        output = tmp_path / "popup_meta.har"
+
+        result = capture_device_har(
+            ip=popup_mock_server,
+            output=str(output),
+            browser="chromium",
+            sanitize=False,
+            compress=False,
+            headless=True,
+            timeout=3,
+        )
+
+        assert result.success, f"Capture failed: {result.error}"
+        assert result.har_path is not None
+
+        with open(result.har_path) as f:
+            har = json.load(f)
+
+        solentlabs = har["log"].get("_solentlabs", {})
+        popups = solentlabs.get("popups", [])
+        assert popups, f"_solentlabs.popups is empty; full _solentlabs: {solentlabs}"
+        assert all("opened_at" in p for p in popups), f"popup entries missing opened_at: {popups}"

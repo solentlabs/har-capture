@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "har-capture"
-version = "0.8.0"
+version = "0.8.1"
 description = "HAR capture and PII sanitization library for network traffic analysis"
 readme = "README.md"
 license = "MIT"
@@ -293,7 +293,7 @@ addopts = [
     "--cov=har_capture",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=75",
+    "--cov-fail-under=90",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -316,7 +316,7 @@ branch = true
 source = ["src/har_capture"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 90
 show_missing = true
 skip_covered = false
 exclude_lines = [

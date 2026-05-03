@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import unittest.mock
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1498,6 +1499,11 @@ class TestWaitForData:
         # Eager body capture listener is always registered
         mock_page.on.assert_any_call("response", unittest.mock.ANY)
 
+        # Popup / new-page subscription is always registered at the context
+        # level — without it, popups (S33 reboot confirmation, router config
+        # wizards, etc.) get their response bodies silently dropped.
+        mock_context.on.assert_any_call("page", unittest.mock.ANY)
+
         if expect_nav_listener:
             mock_page.on.assert_any_call("framenavigated", unittest.mock.ANY)
         else:
@@ -2149,6 +2155,120 @@ class TestResolveCapturePathsUnit:
 INJECT_METADATA_CASES = _FIXTURE_DATA["inject_metadata_cases"]
 
 
+class TestPopupHandler:
+    """Behavior of the ``context.on('page', ...)`` popup handler.
+
+    The handler runs as a closure inside ``_run_browser_session``. The
+    ``test_routing_strategy`` test asserts ``context.on('page', ANY)`` is
+    *registered*; these tests reach into the recorded mock call args to
+    extract the actual handler and exercise its body — the eager-body
+    attachment to popup pages and the defensive log-and-continue path
+    when popup setup fails.
+    """
+
+    @staticmethod
+    def _extract_popup_handler(mock_context: MagicMock) -> Any:
+        """Find the ``context.on('page', handler)`` call and return the handler."""
+        for call in mock_context.on.call_args_list:
+            if call[0][0] == "page":
+                return call[0][1]
+        raise AssertionError(
+            f"context.on('page', ...) never invoked; calls: {mock_context.on.call_args_list}"
+        )
+
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_handler_attaches_response_listener_to_popup(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A popup page receives the same eager-body listener as the main page.
+
+        Without this, popup response bodies can be evicted from Chromium's
+        buffer before HAR flush — the same failure mode the main page had
+        before v0.6.1 (CDP Network.getResponseBody race).
+        """
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(tmp_path / "test.har"),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        handler = self._extract_popup_handler(mock_context)
+
+        popup_page = MagicMock()
+        popup_page.url = "http://127.0.0.1/popup"
+        handler(popup_page)
+
+        popup_page.on.assert_any_call("response", unittest.mock.ANY)
+
+    @patch("har_capture.capture.browser._wait_for_network_quiescence")
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_handler_swallows_setup_failure(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        mock_quiescence: MagicMock,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """If the popup tears down before we can subscribe, log and continue.
+
+        Capture-everything: a failed popup-handler attach is preferable to
+        crashing the entire capture session. The warning surfaces the
+        failure for postmortem; the main page's HAR continues uninterrupted.
+        """
+        import logging as _logging
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(tmp_path / "test.har"),
+            headless=True,
+            timeout=1,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        handler = self._extract_popup_handler(mock_context)
+
+        # Popup that's already torn down — calling .on raises.
+        bad_popup = MagicMock()
+        bad_popup.on.side_effect = RuntimeError("page closed")
+
+        with caplog.at_level(_logging.WARNING, logger="har_capture.capture.browser"):
+            handler(bad_popup)  # must not raise
+
+        assert any("Failed to attach handlers to popup page" in rec.message for rec in caplog.records), (
+            f"Expected warning log; got: {[r.message for r in caplog.records]}"
+        )
+
+
 class TestInjectHarMetadataUnit:
     """Tests for _inject_har_metadata — zero mocks, real temp files."""
 
@@ -2170,6 +2290,7 @@ class TestInjectHarMetadataUnit:
         temp_har.write_text(json.dumps(har_data))
 
         probes = {"auth_challenge": {"status": 401}} if case["has_probes"] else None
+        popup_record = {"url": "http://10.0.0.1/popup", "opened_at": "2026-05-02T10:00:00"}
         session = BrowserSessionResult(
             browser_cookies=[{"name": "SID", "value": "abc"}] if case["has_cookies"] else [],
             web_storage_local=(
@@ -2179,6 +2300,7 @@ class TestInjectHarMetadataUnit:
             ),
             web_storage_session={"token": "xyz"} if case["has_storage"] else {},
             pre_capture_cookies=[],
+            popups=[popup_record] if case.get("has_popups") else [],
         )
 
         _inject_har_metadata(temp_har, "http://10.0.0.1/", probes, session)
@@ -2188,6 +2310,14 @@ class TestInjectHarMetadataUnit:
 
         # _solentlabs.pre_capture_cookies is always present
         assert log["_solentlabs"]["pre_capture_cookies"] == []
+
+        # _solentlabs.popups round-trips whatever the session carried.
+        # Empty for sessions where no popup occurred (the common case);
+        # populated when the device opened popups (e.g., S33 reboot).
+        if case.get("has_popups"):
+            assert log["_solentlabs"]["popups"] == [popup_record]
+        else:
+            assert log["_solentlabs"]["popups"] == []
 
         if case["has_probes"]:
             assert log["_probes"]["auth_challenge"]["status"] == 401

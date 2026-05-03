@@ -11,6 +11,26 @@ if TYPE_CHECKING:
     from har_capture.capture.workflow import CaptureWorkflowResult
 
 
+def _resolve_custom_patterns(patterns: list[str] | None) -> str | dict[str, Any] | None:
+    """Resolve ``--patterns`` arguments into the library's ``custom_patterns=`` value.
+
+    A single pattern (built-in name or path) is passed through as a path
+    string; multiple patterns are merged into a single dict at the CLI
+    layer because the library accepts only one ``custom_patterns`` value
+    per call. Pulled out of ``capture()`` so the resolution logic is
+    unit-testable without driving the full Playwright capture flow.
+    """
+    if not patterns:
+        return None
+
+    from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
+
+    resolved = [resolve_patterns_arg(p) for p in patterns]
+    if len(resolved) == 1:
+        return str(resolved[0])
+    return merge_pattern_files(resolved)
+
+
 def capture(
     target: Annotated[
         str,
@@ -187,15 +207,7 @@ def capture(
     _display_instructions()
 
     # Resolve --patterns args
-    custom_patterns: str | dict[str, Any] | None = None
-    if patterns:
-        from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
-
-        resolved = [resolve_patterns_arg(p) for p in patterns]
-        if len(resolved) == 1:
-            custom_patterns = str(resolved[0])
-        else:
-            custom_patterns = merge_pattern_files(resolved)
+    custom_patterns = _resolve_custom_patterns(patterns)
 
     # Phase 3: Run capture — pass pre-computed target_url to avoid duplicate connectivity check
     page_load_strategy = "domcontentloaded" if minimal else "networkidle"
