@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -275,3 +276,251 @@ class TestSanitizeOutput:
         assert "WARNING: Automated sanitization is best-effort" in result.stdout
         # Verify output shows redacted categories
         assert "Auto-redacted" in result.stdout
+
+
+# =============================================================================
+# Branch coverage: already-sanitized detection, interactive review, exceptions
+# =============================================================================
+#
+# These tests target the branches not exercised by the basic happy-path tests
+# above. The ``_stdin_is_tty`` helper in cli/sanitize.py is monkeypatched
+# where we need to simulate a real terminal — that's a single private
+# seam, not a test override of internal state. Click's CliRunner replaces
+# ``sys.stdin`` with a non-TTY stream during ``invoke``, so patching
+# ``sys.stdin.isatty`` directly does not stick. The helper isolates that
+# OS-level question into one stable patch point.
+
+
+class TestSanitizeAlreadySanitized:
+    """Branch: ``appears_sanitized`` returns True (lines 156-167)."""
+
+    @pytest.fixture
+    def already_redacted_har(self, tmp_path: Path) -> Path:
+        """A HAR whose body contains 15 well-formed redaction placeholders.
+
+        ``appears_sanitized`` counts patterns like ``MAC_[a-f0-9]{8}``
+        and trips at >= 10 matches. Producing the placeholders directly
+        avoids depending on the sanitizer's actual hash format and the
+        threshold staying constant.
+        """
+        placeholders = " ".join(f"MAC_{i:08x}" for i in range(15))
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [
+                    {
+                        "request": {"method": "GET", "url": "http://test/", "headers": []},
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {"text": placeholders, "mimeType": "text/plain"},
+                        },
+                    }
+                ],
+            }
+        }
+        har_file = tmp_path / "already_sanitized.har"
+        har_file.write_text(json.dumps(har_data))
+        return har_file
+
+    def test_warning_printed_in_non_interactive_mode(self, already_redacted_har: Path) -> None:
+        """Non-interactive (CliRunner) path: warn but proceed."""
+        result = runner.invoke(app, ["sanitize", str(already_redacted_har)])
+        assert result.exit_code == 0
+        assert "already be sanitized" in result.output
+        assert "Non-interactive mode: proceeding anyway" in result.output
+
+    def test_interactive_confirm_no_aborts(
+        self,
+        already_redacted_har: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """isatty=True + user answers "n" -> exit 0 with "Aborted"."""
+        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+        result = runner.invoke(app, ["sanitize", str(already_redacted_har)], input="n\n")
+        assert "already be sanitized" in result.output
+        assert "Aborted" in result.output
+        assert result.exit_code == 0
+
+    def test_interactive_confirm_yes_continues(
+        self,
+        already_redacted_har: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """isatty=True + user answers "y" -> sanitization proceeds."""
+        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+        result = runner.invoke(app, ["sanitize", str(already_redacted_har)], input="y\n")
+        assert "already be sanitized" in result.output
+        assert "Aborted" not in result.output
+        assert result.exit_code == 0
+
+
+class TestSanitizeInteractiveReview:
+    r"""Branch: TTY + flagged values trigger ``run_interactive_review`` (184-201).
+
+    The interactive review machinery itself lives in ``cli/interactive.py``
+    and is tested separately. Here we only verify the wiring: that the
+    sanitize command calls into it when the conditions are right, and
+    skips it when they aren't.
+
+    The fixture HAR uses form fields named ``username`` / ``login`` /
+    ``account_id`` — these are the live "flag" field-name patterns
+    (``\buser(?:_?name)?\b|login|...|account_id|...``) compiled at
+    module load. Any value pinned to those keys gets flagged for review,
+    so we get a populated ``report.flagged`` without mocking the core
+    library.
+    """
+
+    @pytest.fixture
+    def har_with_flagged_fields(self, tmp_path: Path) -> Path:
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [
+                    {
+                        "request": {
+                            "method": "POST",
+                            "url": "http://test/login",
+                            "headers": [],
+                            "postData": {
+                                "text": ("username=alice&login=bob&account_id=12345"),
+                                "mimeType": "application/x-www-form-urlencoded",
+                            },
+                        },
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {"text": "", "mimeType": "text/plain"},
+                        },
+                    }
+                ],
+            }
+        }
+        har_file = tmp_path / "flagged.har"
+        har_file.write_text(json.dumps(har_data))
+        return har_file
+
+    def test_review_invoked_when_tty_and_flagged(
+        self,
+        har_with_flagged_fields: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """isatty=True + non-empty ``report.flagged`` -> review runs.
+
+        ``run_interactive_review`` is replaced at the import boundary
+        (``har_capture.cli.interactive``) — that's a module-level seam,
+        not internal state. ``display_summary`` and
+        ``apply_reviewed_redactions`` get the same treatment so the
+        test doesn't actually drive an interactive prompt loop.
+        """
+        from har_capture.cli import interactive as interactive_mod
+
+        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+
+        review_calls: list[dict[str, Any]] = []
+        summary_calls: list[Any] = []
+
+        def fake_review(report: Any, **kwargs: Any) -> bool:
+            review_calls.append(kwargs)
+            # User reviewed but redacted nothing -> apply path skipped.
+            return True
+
+        monkeypatch.setattr(interactive_mod, "run_interactive_review", fake_review)
+        monkeypatch.setattr(interactive_mod, "display_summary", summary_calls.append)
+        monkeypatch.setattr(
+            interactive_mod,
+            "apply_reviewed_redactions",
+            lambda *a, **k: pytest.fail("apply must not run when user redacted nothing"),
+        )
+
+        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields)])
+
+        assert result.exit_code == 0
+        assert review_calls, "run_interactive_review was not invoked"
+        assert summary_calls, "display_summary must run after review"
+        # Review received the kwargs the CLI is contracted to pass.
+        kwargs = review_calls[0]
+        assert "input_path" in kwargs
+        assert "output_path" in kwargs
+        assert "salt_mode" in kwargs
+
+    def test_apply_redactions_when_user_redacted(
+        self,
+        har_with_flagged_fields: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Branch 193->196: ``total_user_redacted > 0`` -> apply runs."""
+        from har_capture.cli import interactive as interactive_mod
+
+        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+
+        apply_calls: list[tuple[Any, str]] = []
+
+        def fake_review(report: Any, **kwargs: Any) -> bool:
+            # Force the post-review counter so the apply branch fires.
+            for f in report.flagged:
+                from har_capture.sanitization.report import RedactionStatus
+
+                f.status = RedactionStatus.USER_REDACTED
+                f.user_replacement = "REDACTED"
+            return True
+
+        def fake_apply(report: Any, path: str) -> None:
+            apply_calls.append((report, path))
+
+        monkeypatch.setattr(interactive_mod, "run_interactive_review", fake_review)
+        monkeypatch.setattr(interactive_mod, "apply_reviewed_redactions", fake_apply)
+        monkeypatch.setattr(interactive_mod, "display_summary", lambda r: None)
+
+        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields)])
+
+        assert result.exit_code == 0
+        assert apply_calls, "apply_reviewed_redactions must run when user redacted"
+
+
+class TestSanitizeReportOption:
+    """Branch: ``--report`` writes JSON report (lines 213-217)."""
+
+    def test_report_written(self, valid_har: Path, tmp_path: Path) -> None:
+        report_path = tmp_path / "report.json"
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--report", str(report_path)])
+        assert result.exit_code == 0
+        assert report_path.exists()
+        # Report is valid JSON.
+        json.loads(report_path.read_text())
+
+    def test_report_auto_path_in_non_interactive_mode(self, valid_har: Path) -> None:
+        """Non-TTY without --report -> auto-named .review.json beside input."""
+        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        # The auto-path is created next to the input file.
+        auto_path = Path(str(valid_har) + ".review.json")
+        # Whether it actually exists depends on whether anything was
+        # flagged — we assert only the no-crash path.
+        assert result.exit_code == 0
+        # If it does exist, it should be valid JSON.
+        if auto_path.exists():
+            json.loads(auto_path.read_text())
+
+
+# Note on remaining uncovered lines in cli/sanitize.py
+# -----------------------------------------------------
+# Lines 239-243 (FileNotFoundError, PermissionError) and 247-252
+# (PatternLoadError, OSError) are defensive exception handlers that
+# are not naturally reachable from the CLI surface:
+#
+#   * typer's ``Path`` argument conversion rejects unreadable / missing
+#     files at parse time (exit code 2), so the input-file branches
+#     of these handlers never fire.
+#   * ``resolve_patterns_arg`` is called outside the try block, so
+#     bad ``--patterns`` paths propagate directly without hitting
+#     line 247 — and the pattern loader inside ``sanitize_har_file``
+#     is lenient with malformed-shape patterns rather than raising.
+#
+# These handlers exist as a safety net for downstream library callers
+# that bypass typer's parameter validation, which is a reasonable
+# defensive shape. Adding tests that mock low-level I/O to drag
+# coverage over them would be theatrical (rule 12). The per-module
+# floor for cli/sanitize.py is set at the post-test coverage so any
+# new uncovered code lowers the floor.

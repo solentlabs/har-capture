@@ -24,15 +24,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
+        # ``[capture]`` is required even for unit tests: 169 tests
+        # ``importorskip("playwright")`` and would silently skip without
+        # it, dropping ``capture/browser.py`` coverage from 87% to 36%
+        # and total below the 90% gate. The chromium binary is *not*
+        # installed here — only the Playwright Python package, which is
+        # what those unit tests actually need.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,cli]"
+          pip install -e ".[dev,cli,capture]"
 
       - name: Lint with ruff
         run: ruff check .
 
       - name: Run unit tests
         run: pytest -m "not integration" --cov=har_capture --cov-report=term-missing
+
+      - name: Enforce per-module coverage floors
+        run: python scripts/check_coverage_floors.py
 
   # Full test suite with Playwright - uploads combined coverage
   coverage:

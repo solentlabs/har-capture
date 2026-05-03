@@ -105,3 +105,5 @@ RAW_DATA/
 
 # Ruff
 .ruff_cache/
+
+.venv-ci/

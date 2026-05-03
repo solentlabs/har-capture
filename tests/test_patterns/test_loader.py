@@ -259,7 +259,7 @@ class TestResolvePatternsArg:
     def test_missing_file_raises(self) -> None:
         """Missing file path raises PatternLoadError."""
         with pytest.raises(PatternLoadError, match="not found"):
-            resolve_patterns_arg("/tmp/no_such_file.json")  # noqa: S108
+            resolve_patterns_arg("/nonexistent/dir/no_such_file.json")
 
 
 class TestCompileSafeValuePatterns:

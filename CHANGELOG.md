@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-03
+
+### Fixed
+
+- **Popup / `window.open` traffic now captured** — Surfaced by CMM #146 against the Arris S33 reboot button: clicking reboot opens a confirmation popup whose request stream is the actual reboot command, but har-capture's recorder did not subscribe to `context.on("page")`, so the popup's response bodies could be evicted from Chromium's buffer before HAR flush, and consumers had no signal that a popup happened. Subscribing to the context-level new-page event (a) attaches the same eager-body-capture handler the main page has, closing the response-body eviction window for popup traffic, and (b) appends a record to `_solentlabs.popups` (`url`, `opened_at`) so consumers can see *that* a popup occurred even when its entries are interleaved with the main page's. Capture-everything: silent popups poison downstream analysis. Adds `BrowserSessionResult.popups: list[dict]`. Two integration-test fixtures verify the popup URL lands in the HAR entries and the `_solentlabs.popups` list is populated.
+
+### Changed
+
+- **CLI testability + per-module coverage floors** — Internal restructure of the CLI layer; no user-visible behavior change. The project-wide 75% coverage gate had averaged high-coverage core modules against decayed CLI modules (`cli/patterns.py` 7%, `cli/capture.py` 38%, `cli/interactive.py` 48%) and silently hidden the rot. v0.8.1 lifts every `cli/*` module above 90% and adds `scripts/check_coverage_floors.py`, run from CI, to make per-module decay a build failure. Two production-code shape changes earned their place under CLAUDE.md rule 12 ("test overrides are a code smell — restructure code, don't paper over with mocks"): (1) `_stdin_is_tty()` helper extracted in `cli/sanitize.py` because click's `CliRunner` swaps `sys.stdin` on entry and patching the OS-level `isatty` did not stick — the helper gives tests a single stable patch point that all three call sites share; (2) `_resolve_custom_patterns()` extracted from the 230-line `capture()` orchestration so the `--patterns` resolution branches are unit-testable without driving the full Playwright flow. Defensive exception handlers in `cli/sanitize.py` (lines 251–264, FileNotFoundError / PermissionError / PatternLoadError / OSError) are unreachable from the CLI surface — typer rejects bad paths at parse time and the pattern loader is lenient — so they remain as a library-consumer safety net rather than chasing theatrical coverage. Project total: 86% → 94%. Global `--cov-fail-under` raised from 75 to 90.
+
 ## [0.8.0] - 2026-05-01
 
 ### Changed
@@ -512,4 +522,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.7.0]: https://github.com/solentlabs/har-capture/compare/v0.6.1...v0.7.0
 [0.7.1]: https://github.com/solentlabs/har-capture/compare/v0.7.0...v0.7.1
 [0.8.0]: https://github.com/solentlabs/har-capture/compare/v0.7.1...v0.8.0
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.0...HEAD
+[0.8.1]: https://github.com/solentlabs/har-capture/compare/v0.8.0...v0.8.1
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.1...HEAD

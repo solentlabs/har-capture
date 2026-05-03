@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -11,6 +12,19 @@ import typer
 
 from har_capture.patterns import PatternLoadError
 from har_capture.sanitization.report import HeuristicMode
+
+
+def _stdin_is_tty() -> bool:
+    """Return True if stdin is a real terminal.
+
+    Extracted as a single seam so tests can override the
+    "interactive vs non-interactive" branch without monkeypatching
+    click's runtime-replaced ``sys.stdin``. The CLI checks this in
+    three places (gating the auto-report fallback, the
+    already-sanitized confirmation, and the interactive review) —
+    one helper keeps the answer consistent across the three.
+    """
+    return sys.stdin.isatty()
 
 
 def sanitize(
@@ -81,8 +95,6 @@ def sanitize(
         har-capture sanitize device.har --max-size 0  # No size limit
         har-capture sanitize device.har --report sanitize-report.json
     """
-    import sys
-
     from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
 
     if not input_file.exists():
@@ -101,9 +113,9 @@ def sanitize(
 
     # Interactive review is always enabled — fall back to report if no TTY
     run_heuristics = True
-    interactive_terminal = sys.stdin.isatty()
+    interactive_terminal = _stdin_is_tty()
 
-    if not sys.stdin.isatty():
+    if not _stdin_is_tty():
         typer.echo(
             "Note: No terminal detected. Writing flagged values to report instead.",
             err=True,
@@ -158,7 +170,7 @@ def sanitize(
             typer.echo(f"  Found {match_count} redaction placeholder(s) (MAC_xxxxx, PASS_xxxxx, etc.)")
             typer.echo("  Proceeding may double-hash already redacted values.")
             typer.echo()
-            if sys.stdin.isatty():
+            if _stdin_is_tty():
                 confirm = typer.confirm("Continue anyway?", default=False)
                 if not confirm:
                     typer.echo("Aborted.")

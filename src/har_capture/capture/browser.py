@@ -262,6 +262,14 @@ class BrowserSessionResult:
         captured_bodies: Eagerly captured response bodies keyed by
             ``"<method>|<url>|<status>"`` — used to patch HAR entries
             whose bodies were evicted before Playwright flushed the HAR.
+        popups: One entry per page opened in the context after the initial
+            page (i.e., popups via ``window.open`` / ``target="_blank"`` /
+            ``context.new_page``). Each entry records the popup's initial
+            URL and an opened-at timestamp. The popup's request/response
+            traffic appears in the HAR via the context-level ``record_har_path``;
+            this list exists so consumers can tell *that* a popup happened
+            even if its traffic is otherwise indistinguishable from the
+            main page's. Capture-everything: silent popups poison analysis.
         success: True if the session completed without error
         error: Error message if session failed
     """
@@ -271,6 +279,7 @@ class BrowserSessionResult:
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
     captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
 
@@ -561,6 +570,29 @@ def _run_browser_session(
 
         page.on("response", _on_response)
 
+        # Subscribe to popup / new-page events at the context level. Without
+        # this, popups opened by the device (e.g., S33 reboot confirmation,
+        # router config wizards) don't get their response bodies eagerly
+        # captured, and the user has no signal that a popup happened — silent
+        # capture loss. Context-level ``record_har_path`` already records the
+        # popup's traffic in the HAR; this handler adds the same eager-body
+        # safety net the main page has, plus a ``_solentlabs.popups`` audit
+        # entry so consumers can see *that* a popup occurred even when its
+        # entries are interleaved with the main page's.
+        def _on_new_page(popup_page: Any) -> None:
+            try:
+                popup_page.on("response", _on_response)
+                result.popups.append(
+                    {
+                        "url": popup_page.url,  # may be "about:blank" if not yet navigated
+                        "opened_at": datetime.now().isoformat(timespec="seconds"),
+                    }
+                )
+            except Exception as e:
+                _LOGGER.warning("Failed to attach handlers to popup page: %s", e)
+
+        context.on("page", _on_new_page)
+
         # Navigate with auto-fallback
         if page_load_strategy == "networkidle":
             try:
@@ -753,6 +785,7 @@ def _inject_har_metadata(
             ]
         raw_har["log"]["_solentlabs"] = {
             "pre_capture_cookies": session.pre_capture_cookies,
+            "popups": session.popups,
         }
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(raw_har, f)
