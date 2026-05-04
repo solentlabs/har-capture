@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-04
+
+### Changed
+
+- **CI install profile is a single source of truth** — `scripts/install-ci-deps.sh` is now the one place that defines what gets installed for CI parity. Both `scripts/ci-local.sh` (the matrix-parity pre-push hook) and the two jobs in `.github/workflows/ci.yml` invoke it instead of hand-maintaining duplicate `pip install` lines. This closes the v0.8.1 push-regression mode where `ci-local.sh` claimed to "mirror CI" while actually running a different install profile, plus the duplication-drift hazard introduced when `ci-local.sh` was first rewritten.
+- **`scripts/release.py` waits for in-flight CI** — the CI verification step previously failed immediately if any check run was still `in_progress`, forcing a manual retry. It now polls every 20 s for up to 10 min with progress feedback before failing, eliminating the stale-read papercut that hit twice during v0.8.1 / v0.8.2.
+- **Release-discipline audit gates added to `release.py`** — three reinforcing checks driven by the v0.8.1 → v0.8.3 case study, where three releases shipped for what should have been one because Claude made decisions at "should I push?" that violated rules just written down (the AI knowing-not-applying flaw). (A) `scan_for_anti_patterns` greps recent git log for known anti-pattern signatures (`pre-existing` framing, `--no-verify` / `--no-cov` bypass, deferral words like *papercut* / *flake* / *deferred*); BLOCKER findings abort the release unless `--acknowledged "<reason>"` is supplied. (B) A diff-grounded checklist prints on every invocation (including `--dry-run`) — five questions tied to today's failure modes, each rubber-stampable in isolation but harder to ignore when bundled with commit/file context. (E) The unfakeable component: a per-release sign-off phrase (`RELEASE OK X.Y.Z`) the developer must type exactly before tag-push proceeds; no `--yes` flag exists because the bypass defeats the purpose. The audit catches today's known anti-patterns and produces a stdout artifact for review; it does not pretend to catch failure modes that haven't been observed yet.
+
 ## [0.8.2] - 2026-05-03
 
 ### Fixed
@@ -530,4 +538,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.0]: https://github.com/solentlabs/har-capture/compare/v0.7.1...v0.8.0
 [0.8.1]: https://github.com/solentlabs/har-capture/compare/v0.8.0...v0.8.1
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.2...HEAD
+[0.8.3]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.8.3
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.3...HEAD
