@@ -49,13 +49,13 @@
   "wait_for_pending_data_cases": [
     {"id": "immediate_zero",       "pending_values": [0],           "timeout_s": 1.0, "expect_timeout": false, "description": "returns immediately when pending is 0"},
     {"id": "drains_to_zero",       "pending_values": [3, 2, 1, 0], "timeout_s": 1.0, "expect_timeout": false, "description": "waits until pending drains to 0"},
-    {"id": "stays_pending",        "pending_values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "timeout_s": 0.05, "expect_timeout": true, "description": "times out when requests never complete"},
+    {"id": "stays_pending",        "pending_values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "timeout_s": 0.5,  "expect_timeout": true, "description": "times out when requests never complete (timeout_s=0.5 not 0.05: tighter values flake under local CPU pressure when 1969 other tests compete; CI's clean container hid this for releases)"},
     {"id": "evaluate_exception",   "pending_values": "exception",  "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
   ],
   "wait_for_quiescence_cases": [
     {"id": "already_quiet",      "pending_values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns when already quiescent"},
     {"id": "activity_then_quiet", "pending_values": [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "waits through activity then detects quiescence"},
-    {"id": "never_quiet",        "pending_values": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0], "quiescence_s": 5.0,  "timeout_s": 0.05, "expect_timeout": true, "description": "times out when activity oscillates"},
+    {"id": "never_quiet",        "pending_values": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0], "quiescence_s": 5.0,  "timeout_s": 0.5,  "expect_timeout": true, "description": "times out when activity oscillates (timeout_s=0.5 not 0.05; same flake mode as stays_pending)"},
     {"id": "evaluate_exception", "pending_values": "exception",    "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
   ],
   "output_path_cases": [
