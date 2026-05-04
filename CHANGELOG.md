@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-03
+
 ### Fixed
 
-- **Test-fixture timing flake (`stays_pending` / `never_quiet`)** — `tests/fixtures/test_browser.json` had `timeout_s: 0.05` for the two timing-loop test cases that assert `evaluate.call_count >= 2`. The 50ms budget passed in CI's clean Linux container but flaked under local CPU pressure (e.g., when `release.py` runs the full 1970-test suite back-to-back), failing with `assert 1 >= 2` because the loop only iterated once. Surfaced — and shipped through — during the v0.8.1 release. Bumping to `timeout_s: 0.5` gives 10× headroom; verified across three concurrent stress runs.
+- **Test-fixture timing flake (`stays_pending` / `never_quiet`)** — `tests/fixtures/test_browser.json` had `timeout_s: 0.05` for the two timing-loop test cases that assert `evaluate.call_count >= 2`. The 50ms budget passed in CI's clean Linux container but flaked under local CPU pressure (e.g., when `release.py` runs the full 1970-test suite back-to-back), failing with `assert 1 >= 2` because the loop only iterated once. Surfaced — and shipped through — during the v0.8.1 release; framed as "pre-existing" at the time, which is exactly the deferred-fix pattern v0.8.1's own changelog called out for the per-module coverage rot. Bumping to `timeout_s: 0.5` gives 10× headroom; verified across three concurrent stress runs.
 
 ## [0.8.1] - 2026-05-03
 
@@ -527,4 +529,5 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.7.1]: https://github.com/solentlabs/har-capture/compare/v0.7.0...v0.7.1
 [0.8.0]: https://github.com/solentlabs/har-capture/compare/v0.7.1...v0.8.0
 [0.8.1]: https://github.com/solentlabs/har-capture/compare/v0.8.0...v0.8.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.1...HEAD
+[0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.8.2...HEAD
