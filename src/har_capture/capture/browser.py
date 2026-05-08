@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -100,6 +101,44 @@ _WAIT_FOR_DATA_INIT_SCRIPT = """\
 })();
 """
 
+_DIALOG_OBSERVER_INIT_SCRIPT = """\
+(function () {
+    window.__harCaptureDialogOutcomes = window.__harCaptureDialogOutcomes || [];
+
+    var _alert = window.alert;
+    window.alert = function (message) {
+        _alert.call(window, message);
+        window.__harCaptureDialogOutcomes.push({
+            type: "alert",
+            message: String(message),
+            action: "accept"
+        });
+    };
+
+    var _confirm = window.confirm;
+    window.confirm = function (message) {
+        var accepted = _confirm.call(window, message);
+        window.__harCaptureDialogOutcomes.push({
+            type: "confirm",
+            message: String(message),
+            action: accepted ? "accept" : "dismiss"
+        });
+        return accepted;
+    };
+
+    var _prompt = window.prompt;
+    window.prompt = function (message, defaultValue) {
+        var value = _prompt.call(window, message, defaultValue);
+        window.__harCaptureDialogOutcomes.push({
+            type: "prompt",
+            message: String(message),
+            action: value === null ? "dismiss" : "accept"
+        });
+        return value;
+    };
+})();
+"""
+
 
 def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_S) -> None:
     """Wait until in-flight JS requests (XHR/fetch) reach zero.
@@ -121,6 +160,25 @@ def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_
             return
         page.wait_for_timeout(_DATA_WAIT_POLL_MS)
     _LOGGER.debug("Pending-data wait timed out after %.1fs", timeout_s)
+
+
+def _get_dialog_outcome(page: Any, outcome_index: int) -> dict[str, Any] | None:
+    """Return the recorded dialog outcome for a given dialog index."""
+    try:
+        outcomes = page.evaluate("window.__harCaptureDialogOutcomes || []")
+    except Exception:
+        return None
+
+    if not isinstance(outcomes, list):
+        return None
+    if len(outcomes) <= outcome_index:
+        return None
+
+    outcome = outcomes[outcome_index]
+    if not isinstance(outcome, dict):
+        return None
+
+    return outcome
 
 
 def _wait_for_network_quiescence(
@@ -262,6 +320,11 @@ class BrowserSessionResult:
         captured_bodies: Eagerly captured response bodies keyed by
             ``"<method>|<url>|<status>"`` — used to patch HAR entries
             whose bodies were evicted before Playwright flushed the HAR.
+        dialogs: Browser dialogs observed during interactive capture.
+            For headed, user-driven runs, each entry records the dialog type,
+            message, default value, inferred action (accept/dismiss), and that
+            the dialog was resolved by the browser UI. Headless or timed
+            captures keep Playwright's default auto-dismiss behavior.
         popups: One entry per page opened in the context after the initial
             page (i.e., popups via ``window.open`` / ``target="_blank"`` /
             ``context.new_page``). Each entry records the popup's initial
@@ -279,6 +342,7 @@ class BrowserSessionResult:
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
     captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    dialogs: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
@@ -527,6 +591,41 @@ def _run_browser_session(
             result.pre_capture_cookies = []
 
         page = context.new_page()
+        interactive_dialog_capture = not headless and timeout is None
+        if interactive_dialog_capture:
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+
+            def _on_dialog(dialog: Any) -> None:
+                dialog_index = len(result.dialogs)
+                dialog_info = {
+                    "type": getattr(dialog, "type", None),
+                    "message": getattr(dialog, "message", None),
+                    "default_value": getattr(dialog, "default_value", None),
+                    "opened_at": datetime.now().isoformat(timespec="seconds"),
+                    "action": "unknown",
+                    "resolved_by": "unknown",
+                }
+                sys.stderr.write(f"[har-capture dialog] {dialog_info['type']}: {dialog_info['message']}\n")
+                sys.stderr.flush()
+                try:
+                    while True:
+                        outcome = _get_dialog_outcome(page, dialog_index)
+                        if outcome is not None:
+                            dialog_info["action"] = outcome.get("action", "unknown")
+                            dialog_info["resolved_by"] = "browser_ui"
+                            break
+                        time.sleep(0.1)
+                except Exception as e:
+                    _LOGGER.warning("Failed to handle dialog: %s", e)
+                result.dialogs.append(dialog_info)
+                sys.stderr.write(
+                    "[har-capture dialog] "
+                    f"resolved_by={dialog_info['resolved_by']} action={dialog_info['action']} "
+                    f"{dialog_info['type']}: {dialog_info['message']}\n"
+                )
+                sys.stderr.flush()
+
+            page.on("dialog", _on_dialog)
 
         _is_first_nav = [True]
         _quiescence_disabled = [not wait_for_data]
@@ -786,6 +885,7 @@ def _inject_har_metadata(
         raw_har["log"]["_solentlabs"] = {
             "pre_capture_cookies": session.pre_capture_cookies,
             "popups": session.popups,
+            "dialogs": session.dialogs,
         }
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(raw_har, f)
