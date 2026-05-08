@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interactive JavaScript dialogs now surface in headed captures** — For interactive browser sessions (`headless=False`, `timeout=None`), native `alert` / `confirm` / `prompt` dialogs are allowed to appear in the Playwright window instead of being silently auto-dismissed immediately. The resulting HAR now records `_solentlabs.dialogs` entries with the dialog type, message, default value, inferred action (`accept` or `dismiss`), and `resolved_by="browser_ui"`. This follows the same audit-trail shape as `_solentlabs.popups`, and we also tightened the surrounding docs by updating `ARCHITECTURE.md` to describe both popup and dialog metadata surfaces rather than leaving popup behavior implicit.
+
 ## [0.8.3] - 2026-05-04
 
 ### Changed
