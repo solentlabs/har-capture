@@ -329,6 +329,7 @@ def _sanitize_html_impl(
     BUILTIN_PATTERNS = {
         "mac_address",
         "serial_number",
+        "wps_pin",
         "account_id",
         "private_ip",
         "public_ip",
@@ -448,6 +449,25 @@ def _sanitize_html_impl(
     html = re.sub(
         r"(<td[^>]*>(?:<[^>]*>)*\s*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>)*\s*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>)*\s*</td>)",
         replace_serial_table,
+        html,
+        flags=re.IGNORECASE,
+    )
+
+    # 2d. WPS / pairing / default PIN — 8-digit value anchored by a known label.
+    # Pure-digit values can't be flagged heuristically (the universal `^\d+$`
+    # safe pattern would have to be relaxed, drowning the review UI in counter
+    # noise). The label is what makes the regex layer's 100% confidence bar
+    # achievable. See issue #47 and CLAUDE.md principle #7.
+    def replace_wps_pin(match: re.Match[str]) -> str:
+        collector.record_auto_redaction("wps_pin")
+        label = match.group(1)
+        pin = match.group(2)
+        hashed = hasher.hash_generic(pin, "PIN")
+        return f"{label}: {hashed}"
+
+    html = re.sub(
+        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b\s*[:\s=]*(?:<[^>]*>)*\s*(\d{8})\b",
+        replace_wps_pin,
         html,
         flags=re.IGNORECASE,
     )

@@ -9,9 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.9.0] - 2026-05-11
 
+### Changed (BREAKING)
+
+- **`--patterns` is now required on `get`, `sanitize`, and `validate`.** Running any of these subcommands without `--patterns` prints a listing of available choices (`base`, built-in domains like `network-device`, or a custom JSON path) and exits with code 2. The previous behavior — silently using only universal PII rules when `--patterns` was omitted — was the structural cause behind issues #47 and #49 (contributors didn't know to load the network-device domain, so device-specific PII shipped unredacted in HARs submitted to `cable_modem_monitor`). Making the choice explicit turns the privacy promise from aspirational into structural. `--patterns base` is reserved as an explicit opt-in to core-universal-PII-only for non-device captures. `validate`'s `--patterns` shape changed from a single `Path` to a repeatable list to match `get` and `sanitize`. The library API (`sanitize_har_file()`, `sanitize_har()`, `validate_har()`) is unchanged — the core remains domain-agnostic and library callers continue to pass `custom_patterns=` directly.
+
+  **Migration:**
+
+  ```bash
+  # Before
+  har-capture get https://router.local
+  har-capture sanitize device.har
+  har-capture validate device.har
+
+  # After
+  har-capture get https://router.local --patterns network-device
+  har-capture sanitize device.har --patterns network-device
+  har-capture validate device.har --patterns network-device
+  # Or for non-device captures:
+  har-capture sanitize webapp.har --patterns base
+  ```
+
+  See `har-capture patterns` for the full list of choices.
+
 ### Added
 
 - **Heuristic detectors for default-device PII (issues #47, #49)** — `network_device.json` now ships a `serial_number` detector (Netgear cable-modem format `[0-9][A-Z]{2}[0-9]{4}[A-Z0-9]{6}` plus a broader uppercase-alphanumeric backstop) and an extended `wifi_ssid` detector that recognises common default-SSID prefixes (SPSETUP, MOTO, ATTwifi, XFINITY, HOMEHUB). Detector order was changed so keyword-based `device_name` runs before shape-based `wifi_ssid`, preventing `NETGEAR-C7000` from being miscategorized. New regression test file `tests/test_sanitization/test_pii_regressions.py` keys cases on issue numbers so future reports add a fixture row rather than a new test.
+- **JSON-escape-trap warning at pattern load (issue #51)** — When a custom `--patterns` JSON file contains `\b` (intended as a regex word-boundary) instead of `\\b`, JSON's string-escape rules collapse it to ASCII backspace `\x08` before the regex compiler sees it. The pattern then compiles silently and matches nothing — a silent PII leak. The loader now scans regex strings for `\x08` and `\x0c` at load time and logs a warning identifying the offending key path and the likely intended escape. Same hazard, same warning, for `\f` (form-feed). Doesn't reject the pattern — the user might genuinely want a backspace match — just makes the silent case loud. Documented in `CUSTOM_PATTERNS.md` with a worked example. Two regression tests in `test_patterns/test_loader.py` cover the warn-on-trap and no-warn-on-correct-escape paths.
+- **WPS-PIN labeled-regex coverage (completes issue #47)** — A new `wps_pin` pattern in `pii.json` plus a dedicated scanner pass in `html.py` (Pass 2d) redact 8-digit values whose label is `WPS PIN`, `PIN Code`, `Pairing PIN`, or `Default PIN`. The label is what makes 100%-confidence deterministic redaction achievable per CLAUDE.md principle #7: pure-digit values can't be flagged heuristically (the universal `^\d+$` safe pattern would have to be relaxed, drowning the review UI in counter noise). Format is `PIN_<hash>`. Five regex-layer regression cases added to `test_pii_regressions.py`.
 - **`docs/RELEASE.md`** — Release flow extracted from `CLAUDE.md` so the entry-point file is dominated by principles rather than reference material. CLAUDE.md drops from 218 → 162 lines; principles section goes from ~52% to ~72% of the file.
 
 ### Changed

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -11,24 +11,7 @@ if TYPE_CHECKING:
     from har_capture.capture.workflow import CaptureWorkflowResult
 
 
-def _resolve_custom_patterns(patterns: list[str] | None) -> str | dict[str, Any] | None:
-    """Resolve ``--patterns`` arguments into the library's ``custom_patterns=`` value.
-
-    A single pattern (built-in name or path) is passed through as a path
-    string; multiple patterns are merged into a single dict at the CLI
-    layer because the library accepts only one ``custom_patterns`` value
-    per call. Pulled out of ``capture()`` so the resolution logic is
-    unit-testable without driving the full Playwright capture flow.
-    """
-    if not patterns:
-        return None
-
-    from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
-
-    resolved = [resolve_patterns_arg(p) for p in patterns]
-    if len(resolved) == 1:
-        return str(resolved[0])
-    return merge_pattern_files(resolved)
+from har_capture.cli._patterns_resolver import require_patterns
 
 
 def capture(
@@ -80,7 +63,10 @@ def capture(
     ] = False,
     patterns: Annotated[
         list[str] | None,
-        typer.Option("--patterns", help="Pattern names or JSON file paths (repeatable)"),
+        typer.Option(
+            "--patterns",
+            help="Required. Pattern domain (e.g. 'network-device'), 'base' for universal PII only, or JSON path. Repeatable.",
+        ),
     ] = None,
     wait_for_data: Annotated[
         bool,
@@ -128,6 +114,11 @@ def capture(
         har-capture http://192.168.100.1 --output capture.har
         har-capture get http://router.local --include-images
     """
+    # Validate --patterns up front so a user running `har-capture get URL`
+    # without choosing a domain gets the listing error before we trigger
+    # the browser install prompt.
+    custom_patterns = require_patterns(patterns)
+
     try:
         from har_capture.capture.deps import install_browser
         from har_capture.capture.workflow import (
@@ -205,9 +196,6 @@ def capture(
 
     # Display instructions
     _display_instructions()
-
-    # Resolve --patterns args
-    custom_patterns = _resolve_custom_patterns(patterns)
 
     # Phase 3: Run capture — pass pre-computed target_url to avoid duplicate connectivity check
     page_load_strategy = "domcontentloaded" if minimal else "networkidle"

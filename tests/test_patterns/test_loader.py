@@ -171,6 +171,56 @@ class TestCustomPatternsLoading:
         with pytest.raises(PatternLoadError, match="not found"):
             load_pii_patterns("/nonexistent/path/patterns.json")
 
+    def test_json_backspace_escape_trap_warns(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        r"""Warn when JSON parses ``\b`` to ASCII backspace in a pattern regex.
+
+        A custom pattern file with ``\b`` instead of ``\\b`` parses to ASCII
+        backspace, compiles silently, and matches nothing - exactly the silent
+        no-op behind issue #51. The loader should log a warning so the user
+        has some diagnostic rather than a quiet PII leak.
+        """
+        import logging
+
+        # Write the file directly so we can hit the JSON parser's interpretation
+        # of "\b" (which produces ASCII backspace 0x08). Using json.dumps would
+        # not reproduce the user's mistake.
+        custom_file = tmp_path / "buggy_patterns.json"
+        custom_file.write_text(
+            '{"patterns": {"test_pattern": {"regex": "\\b[0-9]{8}\\b", "replacement_prefix": "TEST"}}}'
+        )
+
+        with caplog.at_level(logging.WARNING, logger="har_capture.patterns.loader"):
+            load_pii_patterns(custom_file)
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings, "Expected a warning about the JSON \\b escape trap"
+        joined = " ".join(r.getMessage() for r in warnings)
+        assert "word-boundary" in joined
+        assert "buggy_patterns.json" in joined
+
+    def test_well_escaped_pattern_does_not_warn(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        r"""A correctly-escaped ``\\b`` pattern should not trigger the warning."""
+        import logging
+
+        custom_file = tmp_path / "good_patterns.json"
+        # \\\\b in Python source = \\b in the file = \b after JSON parsing
+        custom_file.write_text(
+            '{"patterns": {"test_pattern": {"regex": "\\\\b[0-9]{8}\\\\b", "replacement_prefix": "TEST"}}}'
+        )
+
+        with caplog.at_level(logging.WARNING, logger="har_capture.patterns.loader"):
+            load_pii_patterns(custom_file)
+
+        trap_warnings = [
+            r for r in caplog.records if r.levelno >= logging.WARNING and "word-boundary" in r.getMessage()
+        ]
+        assert not trap_warnings, (
+            f"Did not expect a word-boundary warning for the correctly-escaped pattern; "
+            f"got: {[r.getMessage() for r in trap_warnings]}"
+        )
+
 
 class TestCompilePattern:
     """Tests for compile_pattern function."""

@@ -63,6 +63,32 @@ src/har_capture/patterns/
 - **`case_sensitive`** (boolean): Case-sensitive matching (default: false)
 - **`flags`** (array): Regex flags (e.g., `["IGNORECASE", "MULTILINE"]`)
 
+### JSON-vs-Regex Escape Trap
+
+JSON's string-escape rules collide with regex escapes. The most common trap is `\b` (regex word-boundary):
+
+```json
+{
+  "patterns": {
+    "buggy":  {"regex": "\b[0-9]{8}\b"},        // ❌ silent no-op — \b becomes ASCII backspace
+    "fixed":  {"regex": "\\b[0-9]{8}\\b"}       // ✅ \\b in JSON source = \b in compiled regex
+  }
+}
+```
+
+Why the trap matters: `\b` in a JSON string parses to ASCII backspace (`\x08`) **before** the regex compiler ever sees it. The pattern then compiles successfully — no error — and matches nothing. Same hazard exists for `\f` (regex form-feed: write `\\f`).
+
+The loader detects this case and logs a warning at load time so you don't ship a silently-broken pattern:
+
+```
+Pattern file my_patterns.json: patterns.buggy.regex contains ASCII word-boundary (\x08),
+almost certainly an unintended '\b' escape. JSON parses '\b' as the control character;
+a regex word-boundary requires '\\b' in the JSON source. The pattern will compile but
+never match.
+```
+
+If you authored your pattern from a regex tester and the regex looks correct on its own, double-check that all backslashes are doubled when you put it into JSON.
+
 ## Using Custom Patterns
 
 ### CLI

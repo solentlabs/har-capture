@@ -62,7 +62,7 @@ def _check_patterns(value: str, allowlist: dict[str, Any]) -> bool:
     return False
 
 
-def is_redacted(value: str, custom_patterns: str | None = None) -> bool:
+def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
     """Check if a value appears to be properly redacted.
 
     This function checks if a value matches:

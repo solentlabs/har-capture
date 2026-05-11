@@ -38,7 +38,7 @@ har-capture https://example.com
 
 ```bash
 pip install har-capture
-har-capture sanitize myfile.har
+har-capture sanitize myfile.har --patterns network-device
 ```
 
 </details>
@@ -106,15 +106,19 @@ ______________________________________________________________________
 ### Command Line
 
 ```bash
-# Capture and sanitize (interactive review always enabled)
-har-capture https://example.com
+# Capture and sanitize a network device (cable modem, router, AP)
+har-capture https://192.168.100.1 --patterns network-device
 
-# Sanitize existing HAR
-har-capture sanitize capture.har
+# Sanitize an existing HAR with universal PII rules only (no device domain)
+har-capture sanitize capture.har --patterns base
 
 # Validate for PII leaks
-har-capture validate capture.har
+har-capture validate capture.har --patterns network-device
 ```
+
+`--patterns` is required as of 0.9.0 — pick `network-device` for cable
+modems/routers/APs, `base` for generic web/API captures, or a custom
+JSON path. Run `har-capture patterns` for the full list.
 
 [Full CLI reference →](docs/CLI_REFERENCE.md)
 

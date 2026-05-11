@@ -31,7 +31,8 @@ class TestPatternsList:
     def test_list_lists_network_device_domain(self) -> None:
         result = runner.invoke(app, ["patterns"])
         assert result.exit_code == 0
-        assert "Available pattern domains:" in result.stdout
+        assert "Available pattern choices" in result.stdout
+        assert "base" in result.stdout
         assert "network-device" in result.stdout
 
     def test_list_shows_usage_hints(self) -> None:

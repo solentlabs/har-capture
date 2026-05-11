@@ -81,32 +81,32 @@ class TestSanitizeBasic:
 
     def test_sanitize_valid_har(self, valid_har: Path) -> None:
         """Test sanitizing a valid HAR file."""
-        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
         assert result.exit_code == 0
         assert "Sanitization Complete" in result.stdout
 
     def test_sanitize_with_output(self, valid_har: Path, tmp_path: Path) -> None:
         """Test sanitizing with explicit output path."""
         output = tmp_path / "output.har"
-        result = runner.invoke(app, ["sanitize", str(valid_har), "-o", str(output)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "-o", str(output), "--patterns", "base"])
         assert result.exit_code == 0
         assert output.exists()
 
     def test_sanitize_file_not_found(self, tmp_path: Path) -> None:
         """Test error when file doesn't exist."""
-        result = runner.invoke(app, ["sanitize", str(tmp_path / "nonexistent.har")])
+        result = runner.invoke(app, ["sanitize", str(tmp_path / "nonexistent.har"), "--patterns", "base"])
         assert result.exit_code == 1
         assert "File not found" in (result.output)
 
     def test_sanitize_invalid_json(self, invalid_json_file: Path) -> None:
         """Test error on invalid JSON."""
-        result = runner.invoke(app, ["sanitize", str(invalid_json_file)])
+        result = runner.invoke(app, ["sanitize", str(invalid_json_file), "--patterns", "base"])
         assert result.exit_code == 1
         assert "Invalid JSON" in (result.output)
 
     def test_sanitize_invalid_har_structure(self, invalid_har_structure: Path) -> None:
         """Test error on invalid HAR structure."""
-        result = runner.invoke(app, ["sanitize", str(invalid_har_structure)])
+        result = runner.invoke(app, ["sanitize", str(invalid_har_structure), "--patterns", "base"])
         assert result.exit_code == 1
         assert "Invalid HAR" in (result.output)
 
@@ -116,19 +116,19 @@ class TestSanitizeSaltOptions:
 
     def test_sanitize_with_auto_salt(self, valid_har: Path) -> None:
         """Test default auto salt mode."""
-        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
         assert result.exit_code == 0
         assert "random (correlation within file)" in result.stdout
 
     def test_sanitize_with_no_salt(self, valid_har: Path) -> None:
         """Test --no-salt option for static placeholders."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--no-salt"])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--no-salt", "--patterns", "base"])
         assert result.exit_code == 0
         assert "static placeholders" in result.stdout
 
     def test_sanitize_with_custom_salt(self, valid_har: Path) -> None:
         """Test --salt option with custom value."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--salt", "my-salt"])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--salt", "my-salt", "--patterns", "base"])
         assert result.exit_code == 0
         assert "provided (consistent across runs)" in result.stdout
 
@@ -138,7 +138,7 @@ class TestSanitizeCompression:
 
     def test_sanitize_with_compress(self, valid_har: Path) -> None:
         """Test --compress option creates .har.gz file."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--compress"])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--compress", "--patterns", "base"])
         assert result.exit_code == 0
         assert "Compressed:" in result.stdout
 
@@ -149,18 +149,24 @@ class TestSanitizeCompression:
 
     def test_sanitize_compression_level(self, valid_har: Path) -> None:
         """Test --compression-level option."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--compress", "--compression-level", "1"])
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--compress", "--compression-level", "1", "--patterns", "base"]
+        )
         assert result.exit_code == 0
 
     def test_sanitize_invalid_compression_level_high(self, valid_har: Path) -> None:
         """Test error on compression level > 9."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--compression-level", "10"])
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--compression-level", "10", "--patterns", "base"]
+        )
         assert result.exit_code == 1
         assert "compression-level must be 1-9" in (result.output)
 
     def test_sanitize_invalid_compression_level_low(self, valid_har: Path) -> None:
         """Test error on compression level < 1."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--compression-level", "0"])
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--compression-level", "0", "--patterns", "base"]
+        )
         assert result.exit_code == 1
         assert "compression-level must be 1-9" in (result.output)
 
@@ -171,24 +177,24 @@ class TestSanitizeSizeLimit:
     def test_sanitize_default_size_limit(self, large_har: Path) -> None:
         """Test default 100MB limit allows normal files."""
         # Our 1.5MB file should be fine with default 100MB limit
-        result = runner.invoke(app, ["sanitize", str(large_har)])
+        result = runner.invoke(app, ["sanitize", str(large_har), "--patterns", "base"])
         assert result.exit_code == 0
 
     def test_sanitize_small_size_limit(self, large_har: Path) -> None:
         """Test --max-size limit enforced."""
         # Set limit to 1MB, file is ~1.5MB
-        result = runner.invoke(app, ["sanitize", str(large_har), "--max-size", "1"])
+        result = runner.invoke(app, ["sanitize", str(large_har), "--max-size", "1", "--patterns", "base"])
         assert result.exit_code == 1
         assert "File too large" in (result.output)
 
     def test_sanitize_unlimited_size(self, large_har: Path) -> None:
         """Test --max-size 0 disables limit."""
-        result = runner.invoke(app, ["sanitize", str(large_har), "--max-size", "0"])
+        result = runner.invoke(app, ["sanitize", str(large_har), "--max-size", "0", "--patterns", "base"])
         assert result.exit_code == 0
 
     def test_sanitize_negative_size_limit(self, valid_har: Path) -> None:
         """Test error on negative max-size."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--max-size", "-1"])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--max-size", "-1", "--patterns", "base"])
         assert result.exit_code == 1
         assert "max-size must be >= 0" in (result.output)
 
@@ -225,7 +231,7 @@ class TestSanitizeOutput:
 
     def test_sanitize_creates_sanitized_file(self, valid_har: Path) -> None:
         """Test sanitized file is created with correct name."""
-        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
         assert result.exit_code == 0
 
         sanitized_path = valid_har.parent / "test.sanitized.har"
@@ -233,7 +239,7 @@ class TestSanitizeOutput:
 
     def test_sanitize_removes_pii(self, valid_har: Path) -> None:
         """Test PII is actually removed from output."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--no-salt"])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--no-salt", "--patterns", "base"])
         assert result.exit_code == 0
 
         sanitized_path = valid_har.parent / "test.sanitized.har"
@@ -246,7 +252,7 @@ class TestSanitizeOutput:
 
     def test_sanitize_warning_message(self, valid_har: Path) -> None:
         """Test warning message is displayed."""
-        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
         assert result.exit_code == 0
         assert "WARNING: Automated sanitization is best-effort" in result.stdout
         # Verify output shows redacted categories
@@ -290,7 +296,7 @@ class TestSanitizeAlreadySanitized:
 
     def test_warning_printed_in_non_interactive_mode(self, already_redacted_har: Path) -> None:
         """Non-interactive (CliRunner) path: warn but proceed."""
-        result = runner.invoke(app, ["sanitize", str(already_redacted_har)])
+        result = runner.invoke(app, ["sanitize", str(already_redacted_har), "--patterns", "base"])
         assert result.exit_code == 0
         assert "already be sanitized" in result.output
         assert "Non-interactive mode: proceeding anyway" in result.output
@@ -302,7 +308,9 @@ class TestSanitizeAlreadySanitized:
     ) -> None:
         """isatty=True + user answers "n" -> exit 0 with "Aborted"."""
         monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
-        result = runner.invoke(app, ["sanitize", str(already_redacted_har)], input="n\n")
+        result = runner.invoke(
+            app, ["sanitize", str(already_redacted_har), "--patterns", "base"], input="n\n"
+        )
         assert "already be sanitized" in result.output
         assert "Aborted" in result.output
         assert result.exit_code == 0
@@ -314,7 +322,9 @@ class TestSanitizeAlreadySanitized:
     ) -> None:
         """isatty=True + user answers "y" -> sanitization proceeds."""
         monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
-        result = runner.invoke(app, ["sanitize", str(already_redacted_har)], input="y\n")
+        result = runner.invoke(
+            app, ["sanitize", str(already_redacted_har), "--patterns", "base"], input="y\n"
+        )
         assert "already be sanitized" in result.output
         assert "Aborted" not in result.output
         assert result.exit_code == 0
@@ -373,7 +383,7 @@ class TestSanitizeInteractiveReview:
             lambda *a, **k: pytest.fail("apply must not run when user redacted nothing"),
         )
 
-        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields)])
+        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base"])
 
         assert result.exit_code == 0
         assert review_calls, "run_interactive_review was not invoked"
@@ -412,7 +422,7 @@ class TestSanitizeInteractiveReview:
         monkeypatch.setattr(interactive_mod, "apply_reviewed_redactions", fake_apply)
         monkeypatch.setattr(interactive_mod, "display_summary", lambda r: None)
 
-        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields)])
+        result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base"])
 
         assert result.exit_code == 0
         assert apply_calls, "apply_reviewed_redactions must run when user redacted"
@@ -423,7 +433,9 @@ class TestSanitizeReportOption:
 
     def test_report_written(self, valid_har: Path, tmp_path: Path) -> None:
         report_path = tmp_path / "report.json"
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--report", str(report_path)])
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--report", str(report_path), "--patterns", "base"]
+        )
         assert result.exit_code == 0
         assert report_path.exists()
         # Report is valid JSON.
@@ -431,7 +443,7 @@ class TestSanitizeReportOption:
 
     def test_report_auto_path_in_non_interactive_mode(self, valid_har: Path) -> None:
         """Non-TTY without --report -> auto-named .review.json beside input."""
-        result = runner.invoke(app, ["sanitize", str(valid_har)])
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
         # The auto-path is created next to the input file.
         auto_path = Path(str(valid_har) + ".review.json")
         # Whether it actually exists depends on whether anything was

@@ -23,5 +23,43 @@
       "source": "issue #47 — default password format with prefix word + digits + suffix"
     }
   ],
-  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in a labeled-regex regression test, not here. Disambiguating a WPS PIN from a packet counter requires the adjacent 'WPS PIN' / 'PIN Code' label — that's the regex layer's job, not heuristics."
+  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in the regex layer — see regex_layer_regression_cases below. Heuristics can't disambiguate a WPS PIN from a packet counter; the adjacent label is what makes 100% confidence achievable per CLAUDE.md principle #7.",
+
+  "regex_layer_regression_cases": [
+    {
+      "input_html": "WPS PIN: 12345678",
+      "leaked_value": "12345678",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_inline",
+      "source": "issue #47 — WPS PIN sanitization"
+    },
+    {
+      "input_html": "<td>WPS PIN</td><td>87654321</td>",
+      "leaked_value": "87654321",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_inline_html",
+      "source": "issue #47 — WPS PIN sanitization (HTML)"
+    },
+    {
+      "input_html": "PIN Code: 11223344",
+      "leaked_value": "11223344",
+      "expected_prefix": "PIN_",
+      "id": "pin_code_label",
+      "source": "issue #47 — alternate label format"
+    },
+    {
+      "input_html": "WPS-PIN 99887766",
+      "leaked_value": "99887766",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_hyphenated_label",
+      "source": "issue #47 — hyphenated label variant"
+    },
+    {
+      "input_html": "Pairing PIN = 55667788",
+      "leaked_value": "55667788",
+      "expected_prefix": "PIN_",
+      "id": "pairing_pin_equals",
+      "source": "issue #47 — pairing-PIN label, equals separator"
+    }
+  ]
 }

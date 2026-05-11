@@ -76,26 +76,26 @@ class TestValidateBasic:
 
     def test_validate_clean_har(self, clean_har: Path) -> None:
         """Test validating a clean HAR file."""
-        result = runner.invoke(app, ["validate", str(clean_har)])
+        result = runner.invoke(app, ["validate", str(clean_har), "--patterns", "base"])
         assert result.exit_code == 0
         assert "Clean" in result.stdout
 
     def test_validate_har_with_secrets(self, har_with_secrets: Path) -> None:
         """Test validating a HAR file with secrets."""
-        result = runner.invoke(app, ["validate", str(har_with_secrets)])
+        result = runner.invoke(app, ["validate", str(har_with_secrets), "--patterns", "base"])
         # Should fail due to secrets
         assert result.exit_code == 1
         assert "errors" in result.stdout.lower() or "ERROR" in result.stdout
 
     def test_validate_file_not_found(self, tmp_path: Path) -> None:
         """Test error when file doesn't exist."""
-        result = runner.invoke(app, ["validate", str(tmp_path / "nonexistent.har")])
+        result = runner.invoke(app, ["validate", str(tmp_path / "nonexistent.har"), "--patterns", "base"])
         assert result.exit_code == 1
         assert "File not found" in (result.output)
 
     def test_validate_no_input(self) -> None:
         """Test error when no file or directory provided."""
-        result = runner.invoke(app, ["validate"])
+        result = runner.invoke(app, ["validate", "--patterns", "base"])
         assert result.exit_code == 1
         assert "Provide either a HAR file or --dir" in (result.output)
 
@@ -105,19 +105,23 @@ class TestValidateDirectory:
 
     def test_validate_directory(self, har_directory: Path) -> None:
         """Test validating a directory of HAR files."""
-        result = runner.invoke(app, ["validate", "--dir", str(har_directory)])
+        result = runner.invoke(app, ["validate", "--dir", str(har_directory), "--patterns", "base"])
         # Should process multiple files
         assert "clean.har" in result.stdout or "dirty.har" in result.stdout
 
     def test_validate_directory_recursive(self, har_directory: Path) -> None:
         """Test recursive directory scanning."""
-        result = runner.invoke(app, ["validate", "--dir", str(har_directory), "--recursive"])
+        result = runner.invoke(
+            app, ["validate", "--dir", str(har_directory), "--recursive", "--patterns", "base"]
+        )
         # Should find nested.har in subdir
         assert "nested.har" in result.stdout or "subdir" in result.stdout
 
     def test_validate_directory_not_found(self, tmp_path: Path) -> None:
         """Test error when directory doesn't exist."""
-        result = runner.invoke(app, ["validate", "--dir", str(tmp_path / "nonexistent")])
+        result = runner.invoke(
+            app, ["validate", "--dir", str(tmp_path / "nonexistent"), "--patterns", "base"]
+        )
         assert result.exit_code == 1
         assert "Directory not found" in (result.output)
 
@@ -125,7 +129,7 @@ class TestValidateDirectory:
         """Test validating an empty directory."""
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
-        result = runner.invoke(app, ["validate", "--dir", str(empty_dir)])
+        result = runner.invoke(app, ["validate", "--dir", str(empty_dir), "--patterns", "base"])
         assert result.exit_code == 0
         assert "No HAR files found" in result.stdout
 
@@ -135,7 +139,7 @@ class TestValidateStrictMode:
 
     def test_validate_strict_with_warnings(self, har_with_warnings: Path) -> None:
         """Test --strict treats warnings as errors."""
-        result = runner.invoke(app, ["validate", str(har_with_warnings), "--strict"])
+        result = runner.invoke(app, ["validate", str(har_with_warnings), "--strict", "--patterns", "base"])
         # With strict mode, warnings should cause exit code 1
         # (if there are warnings in the file)
         # Note: exit code depends on whether file actually has warnings
@@ -143,7 +147,7 @@ class TestValidateStrictMode:
 
     def test_validate_strict_clean_file(self, clean_har: Path) -> None:
         """Test --strict with clean file passes."""
-        result = runner.invoke(app, ["validate", str(clean_har), "--strict"])
+        result = runner.invoke(app, ["validate", str(clean_har), "--strict", "--patterns", "base"])
         assert result.exit_code == 0
 
 
@@ -163,18 +167,18 @@ class TestValidateOutput:
 
     def test_validate_shows_summary(self, clean_har: Path) -> None:
         """Test summary is displayed."""
-        result = runner.invoke(app, ["validate", str(clean_har)])
+        result = runner.invoke(app, ["validate", str(clean_har), "--patterns", "base"])
         assert "Summary:" in result.stdout
         assert "errors" in result.stdout.lower()
         assert "warnings" in result.stdout.lower()
 
     def test_validate_shows_findings(self, har_with_secrets: Path) -> None:
         """Test findings are displayed with details."""
-        result = runner.invoke(app, ["validate", str(har_with_secrets)])
+        result = runner.invoke(app, ["validate", str(har_with_secrets), "--patterns", "base"])
         # Should show location and reason
         assert "[" in result.stdout  # Location markers like [ERROR] or [WARN]
 
     def test_validate_multiple_files_summary(self, har_directory: Path) -> None:
         """Test summary covers all files."""
-        result = runner.invoke(app, ["validate", "--dir", str(har_directory)])
+        result = runner.invoke(app, ["validate", "--dir", str(har_directory), "--patterns", "base"])
         assert "Summary:" in result.stdout

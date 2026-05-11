@@ -4,6 +4,7 @@
   "include_patterns": [
     "mac_address",
     "serial_number",
+    "wps_pin",
     "account_id",
     "private_ip",
     "public_ip",
