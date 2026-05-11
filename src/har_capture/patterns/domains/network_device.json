@@ -20,21 +20,6 @@
   "heuristics": {
     "detectors": [
       {
-        "category": "wifi_ssid",
-        "confidence": "medium",
-        "min_length": 3,
-        "max_length": 32,
-        "requires_letter": true,
-        "patterns": [
-          {"regex": "[-_](2\\.?4g?|5g|6g|guest|ext|plus)$", "flags": ["IGNORECASE"], "reason": "ends with band/extension suffix"},
-          {"regex": "^(home|office|guest|wifi|network|net)[-_]", "flags": ["IGNORECASE"], "reason": "starts with common prefix"},
-          {"regex": "[-_](home|office|guest|wifi|network|net)$", "flags": ["IGNORECASE"], "reason": "ends with common suffix"},
-          {"regex": "^[A-Z][a-z]+[-_][A-Z][a-z]+", "reason": "CamelCase with separator (likely name)"},
-          {"regex": "^[A-Za-z]+[-_]\\d+$", "reason": "name followed by number"}
-        ],
-        "camelcase": true
-      },
-      {
         "category": "device_name",
         "confidence": "medium",
         "min_length": 3,
@@ -46,6 +31,33 @@
           {"regex": "(laptop|desktop|phone|tablet|tv|speaker|printer|camera)", "flags": ["IGNORECASE"], "reason": "device category"},
           {"regex": "(living|bed|bath|kitchen|office|garage|basement)[-_\\s]?room", "flags": ["IGNORECASE"], "reason": "room name"},
           {"regex": "(netgear|linksys|asus|tp-?link|motorola|arris|ubiquiti|cisco|d-?link|belkin)", "flags": ["IGNORECASE"], "reason": "router/modem brand"}
+        ]
+      },
+      {
+        "category": "wifi_ssid",
+        "confidence": "medium",
+        "min_length": 3,
+        "max_length": 32,
+        "requires_letter": true,
+        "patterns": [
+          {"regex": "[-_](2\\.?4g?|5g|6g|guest|ext|plus)$", "flags": ["IGNORECASE"], "reason": "ends with band/extension suffix"},
+          {"regex": "^(home|office|guest|wifi|network|net)[-_]", "flags": ["IGNORECASE"], "reason": "starts with common prefix"},
+          {"regex": "[-_](home|office|guest|wifi|network|net)$", "flags": ["IGNORECASE"], "reason": "ends with common suffix"},
+          {"regex": "^[A-Z][a-z]+[-_][A-Z][a-z]+", "reason": "CamelCase with separator (likely name)"},
+          {"regex": "^[A-Za-z]+[-_]\\d+$", "reason": "name followed by number"},
+          {"regex": "^(SPSETUP|MOTO|ATTwifi|XFINITY|HOMEHUB)[-_A-Z0-9]*$", "flags": ["IGNORECASE"], "reason": "known default-device-SSID prefix (Spectrum, Motorola, AT&T, Comcast, etc.)"}
+        ],
+        "camelcase": true
+      },
+      {
+        "category": "serial_number",
+        "confidence": "medium",
+        "min_length": 8,
+        "max_length": 20,
+        "requires_letter": true,
+        "patterns": [
+          {"regex": "^[0-9][A-Z]{2}[0-9]{4}[A-Z0-9]{6}$", "reason": "Netgear cable modem serial format (issue #49)"},
+          {"regex": "^[A-Z0-9]{10,16}$", "reason": "uppercase alphanumeric serial-shape token"}
         ]
       }
     ],

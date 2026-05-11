@@ -1,0 +1,27 @@
+{
+  "_comment": "PII regression cases drawn from real user-reported leaks. Each row is a value that should be flagged by the heuristic engine with a meaningful category for the Pass 2 review UI. Sources: issues #47, #49.",
+  "heuristic_regression_cases": [
+    {
+      "value": "6JT1277YDEAAE",
+      "should_flag": true,
+      "expected_category": "serial_number",
+      "id": "netgear_c7000v2_serial",
+      "source": "issue #49 — Netgear C7000v2 RouterStatus.htm serial format [0-9][A-Z]{2}[0-9]{4}[A-Z0-9]{6}"
+    },
+    {
+      "value": "SPSETUP-9F3A2",
+      "should_flag": true,
+      "expected_category": "wifi_ssid",
+      "id": "spsetup_default_ssid",
+      "source": "issue #47 — default SSID format SPSETUP-xxxx"
+    },
+    {
+      "value": "Password999here",
+      "should_flag": true,
+      "expected_category": "credential",
+      "id": "default_password_mixed",
+      "source": "issue #47 — default password format with prefix word + digits + suffix"
+    }
+  ],
+  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in a labeled-regex regression test, not here. Disambiguating a WPS PIN from a packet counter requires the adjacent 'WPS PIN' / 'PIN Code' label — that's the regex layer's job, not heuristics."
+}
