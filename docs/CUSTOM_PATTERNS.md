@@ -8,7 +8,7 @@ har-capture's pattern matching system is fully extensible. You can add custom pa
 
 Patterns are stored in external JSON files:
 
-```
+```text
 src/har_capture/patterns/
 ├── pii.json          # PII detection patterns
 ├── sensitive.json    # Sensitive headers/fields
@@ -80,7 +80,7 @@ Why the trap matters: `\b` in a JSON string parses to ASCII backspace (`\x08`) *
 
 The loader detects this case and logs a warning at load time so you don't ship a silently-broken pattern:
 
-```
+```text
 Pattern file my_patterns.json: patterns.buggy.regex contains ASCII word-boundary (\x08),
 almost certainly an unintended '\b' escape. JSON parses '\b' as the control character;
 a regex word-boundary requires '\\b' in the JSON source. The pattern will compile but
@@ -392,7 +392,7 @@ Always test patterns against real examples before deploying.
 
 ### Multiple Projects
 
-```
+```text
 patterns/
 ├── base.json           # Common patterns
 ├── project_a.json      # Project A specific

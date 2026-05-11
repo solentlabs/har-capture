@@ -4,7 +4,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 
 ## Contents
 
-**Capture**
+### Capture
 
 - [UC-1: Capture HAR from a Device with No Auth](#uc-1-capture-har-from-a-device-with-no-auth)
 - [UC-2: Capture HAR from a Device with HTTP Basic Auth](#uc-2-capture-har-from-a-device-with-http-basic-auth)
@@ -15,7 +15,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-7: Interactive Capture (User Navigates, Closes Browser)](#uc-7-interactive-capture-user-navigates-closes-browser)
 - [UC-8: Capture from a Single-Session Device](#uc-8-capture-from-a-single-session-device)
 
-**Sanitization**
+### Sanitization
 
 - [UC-10: Sanitize an Existing HAR File](#uc-10-sanitize-an-existing-har-file)
 - [UC-11: Sanitize with Domain Patterns for Enhanced Accuracy](#uc-11-sanitize-with-domain-patterns-for-enhanced-accuracy)
@@ -25,19 +25,19 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-15: Preserve Correlation Across Redacted Values](#uc-15-preserve-correlation-across-redacted-values)
 - [UC-16: Sanitize HAR with XML API Device](#uc-16-sanitize-har-with-xml-api-device)
 
-**Validation**
+### Validation
 
 - [UC-20: Validate a Sanitized HAR for PII Leaks](#uc-20-validate-a-sanitized-har-for-pii-leaks)
 - [UC-21: Pre-Commit Hook Validation](#uc-21-pre-commit-hook-validation)
 
-**Patterns**
+### Patterns
 
 - [UC-30: List Available Domain Patterns](#uc-30-list-available-domain-patterns)
 - [UC-31: Create a Custom Domain Pattern File](#uc-31-create-a-custom-domain-pattern-file)
 - [UC-32: Layer Multiple Domain Patterns](#uc-32-layer-multiple-domain-patterns)
 - [UC-33: Inspect Domain Pattern Details](#uc-33-inspect-domain-pattern-details)
 
-**Integration**
+### Integration
 
 - [UC-40: Python API Usage](#uc-40-python-api-usage)
 - [UC-41: Downstream Consumer (Modem Intake)](#uc-41-downstream-consumer-modem-intake)
@@ -949,7 +949,7 @@ ______________________________________________________________________
 
 **Data Flow**:
 
-```
+```text
 Field Engineer                     CMM Pipeline
      │                                  │
      │  har-capture get http://192.168.1.1     │

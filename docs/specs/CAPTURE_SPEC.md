@@ -165,7 +165,7 @@ Controls the `wait_until` argument to Playwright's `page.goto()`. Accepts any Pl
 
 `capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to five extracted functions that can each be tested independently:
 
-```
+```text
 capture_device_har()
 ├── Pre-flight checks (check_playwright, check_browser_installed)
 ├── _resolve_capture_paths()   → CapturePathInfo
@@ -308,7 +308,7 @@ With the clean `storage_state`, this list should always be empty. A non-empty li
 
 ### Wait-for-Data Mechanism
 
-#### Problem
+#### Problem (Wait-for-Data)
 
 Playwright's `wait_until="networkidle"` waits for 500ms of network silence after page load. For SPA-style device interfaces that fire XHR/fetch calls 1-2 seconds after the initial page renders, this is too short — the HAR misses async data loads.
 
@@ -407,7 +407,7 @@ When disabled, no JS injection, no quiescence polling, and no `framenavigated` l
 
 ### Eager Response Body Capture
 
-#### Problem
+#### Problem (Eager Body Capture)
 
 Playwright's `record_har_content="embed"` captures response bodies lazily — it calls CDP `Network.getResponseBody` when `context.close()` flushes the HAR to disk. If a navigation event causes Chrome to evict the response data from its network buffer before the flush, the body is lost. Headers, sizes, and timing are correct (captured synchronously from Network domain events), but `content.text` is absent and `content.size` is `-1`.
 

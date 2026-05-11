@@ -15,7 +15,7 @@ By default, har-capture uses **format-preserving salted hashes** for redaction. 
 
 ## Example
 
-```
+```yaml
 Before:
   MAC: AA:BB:CC:DD:EE:FF (appears 3 times)
   MAC: 11:22:33:44:55:66 (appears 2 times)
@@ -96,9 +96,9 @@ clean = sanitize_html(html, salt=None)
 
 ## Why Correlation Matters
 
-**Example use case: Debugging device connectivity**
+### Example use case: Debugging device connectivity
 
-```
+```text
 Request 1: Device with MAC 02:a1:b2:c3:d4:e5 connects
 Request 2: Same device (02:a1:b2:c3:d4:e5) authenticates
 Request 3: Same device (02:a1:b2:c3:d4:e5) fetches data

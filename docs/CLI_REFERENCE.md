@@ -14,27 +14,27 @@ Capture HTTP traffic using a browser. **By default, the output is sanitized and 
 
 `get` is the default command — you can omit it when the first argument is a URL. The target may be a full URL (`http://`/`https://`) or a bare hostname/IP; when the scheme is omitted, har-capture probes TCP `:80` and `:443` and prefers HTTPS when its TLS handshake completes (see ADR-10).
 
-### Basic Usage
+### Basic Usage (get)
 
 ```bash
 har-capture <TARGET> --patterns <DOMAIN>
 har-capture get <TARGET> --patterns <DOMAIN>
 ```
 
-### Arguments
+### Arguments (get)
 
 - `TARGET` - URL (`http://` or `https://`), bare hostname/IP, or `host:port`. Scheme is auto-detected when omitted.
 
-### Options
+### Options (get)
 
-#### Output Options
+#### Output Options (get)
 
 - `--output PATH` - Output file path (default: `<target>.har`)
 - `--keep-raw` - Keep unsanitized `.har` file (deleted by default)
 - `--no-sanitize` - Skip sanitization (not recommended)
 - `--no-compress` - Skip compression
 
-#### Capture Options
+#### Capture Options (get)
 
 - `--browser {chromium,firefox,webkit}` - Browser engine (default: chromium)
 - `--wait-for-data / --no-wait-for-data` - Wait for async data to load on each page (default: enabled)
@@ -42,7 +42,7 @@ har-capture get <TARGET> --patterns <DOMAIN>
 - `--username TEXT` - Username for HTTP Basic Auth
 - `--password TEXT` - Password for HTTP Basic Auth
 
-#### Sanitization Options
+#### Sanitization Options (get)
 
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
@@ -50,7 +50,7 @@ har-capture get <TARGET> --patterns <DOMAIN>
 
 Interactive review of flagged values is always enabled after capture.
 
-### Examples
+### Examples (get)
 
 ```bash
 # Basic capture (outputs: example.com.sanitized.har.gz)
@@ -75,7 +75,7 @@ har-capture https://example.com --salt my-debug-key --patterns base
 har-capture https://example.com --no-wait-for-data --patterns base
 ```
 
-### Pre-flight Checks
+### Pre-flight Checks (get)
 
 Before launching the browser, `get` runs two checks (skipped with `--minimal`):
 
@@ -87,7 +87,7 @@ Before launching the browser, `get` runs two checks (skipped with `--minimal`):
 
    **Resolution:** log out from other browser tabs, reboot the device, or wait for the session to expire. Use `--minimal` to skip this check for devices that don't require login.
 
-### Default Workflow
+### Default Workflow (get)
 
 1. Captures all HTTP traffic to a raw `.har` file
 1. Sanitizes PII → creates `.sanitized.har`
@@ -102,25 +102,25 @@ ______________________________________________________________________
 
 Remove PII from HAR files.
 
-### Basic Usage
+### Basic Usage (sanitize)
 
 ```bash
 har-capture sanitize INPUT.har --patterns network-device
 ```
 
-### Arguments
+### Arguments (sanitize)
 
 - `INPUT` - HAR file to sanitize
 
-### Options
+### Options (sanitize)
 
-#### Output Options
+#### Output Options (sanitize)
 
 - `--output PATH` - Output file path (default: `INPUT.sanitized.har`)
 - `--compress` - Compress output to `.har.gz`
 - `--compression-level INT` - Compression level 1-9 (default: 9, max compression)
 
-#### Sanitization Options
+#### Sanitization Options (sanitize)
 
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
@@ -133,7 +133,7 @@ Interactive review of flagged values is always enabled. If no TTY is available, 
 
 - `--max-size INT` - Maximum HAR size in MB (default: 100)
 
-### Examples
+### Examples (sanitize)
 
 ```bash
 # Basic sanitization
@@ -161,7 +161,7 @@ har-capture sanitize capture.har --max-size 500 --patterns network-device
 har-capture sanitize capture.har --compress --compression-level 6 --patterns network-device
 ```
 
-### Interactive Review
+### Interactive Review (sanitize)
 
 Interactive review is always enabled. After sanitization, suspicious values that don't match standard patterns (WiFi SSIDs, device names, custom credentials) are presented for review.
 
@@ -176,17 +176,17 @@ ______________________________________________________________________
 
 Check HAR files for PII leaks.
 
-### Basic Usage
+### Basic Usage (validate)
 
 ```bash
 har-capture validate INPUT.har --patterns network-device
 ```
 
-### Arguments
+### Arguments (validate)
 
 - `INPUT` - HAR file or directory to validate
 
-### Options
+### Options (validate)
 
 #### Validation Options
 
@@ -195,7 +195,7 @@ har-capture validate INPUT.har --patterns network-device
 - `--strict` - Fail on warnings (not just errors)
 - `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 
-### Examples
+### Examples (validate)
 
 ```bash
 # Validate single file
@@ -214,7 +214,7 @@ har-capture validate capture.har --strict --patterns network-device
 har-capture validate capture.har --patterns custom.json
 ```
 
-### Exit Codes
+### Exit Codes (validate)
 
 - `0` - No PII found (or warnings only in non-strict mode)
 - `1` - PII found or validation error
@@ -235,7 +235,7 @@ ______________________________________________________________________
 
 ## Examples by Use Case
 
-### Support Diagnostics
+### Support Diagnostics (validate)
 
 User captures and sanitizes HAR file for support ticket:
 
@@ -247,7 +247,7 @@ har-capture https://myapp.example.com --patterns base
 # User attaches to support ticket
 ```
 
-### Automated Testing
+### Automated Testing (validate)
 
 Generate sanitized test fixtures:
 
@@ -256,7 +256,7 @@ Generate sanitized test fixtures:
 har-capture get https://api.example.com --salt test-fixture-key --output api_test.har --patterns base
 ```
 
-### Batch Processing
+### Batch Processing (validate)
 
 Sanitize multiple HAR files:
 
@@ -270,7 +270,7 @@ for file in ./raw_hars/*.har; do
 done
 ```
 
-### Security Review
+### Security Review (validate)
 
 Check for PII leaks before sharing:
 

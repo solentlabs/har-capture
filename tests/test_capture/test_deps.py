@@ -24,6 +24,7 @@ Dependencies:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -302,6 +303,56 @@ class TestCheckBrowserInstalled:
         result = check_browser_installed("chromium")
 
         assert result is False
+
+    @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps.Path.home")
+    def test_windows_layout_detected_without_linux_binary(
+        self,
+        mock_home: MagicMock,
+        mock_check_pw: MagicMock,
+    ) -> None:
+        """End-to-end regression for issue #50.
+
+        Constructs a fake Playwright cache containing only a Windows-style
+        binary (``chrome-win64/chrome.exe``) under the ``chromium-<rev>/``
+        install directory. The old detection — which checked for a hardcoded
+        ``chrome-linux64/chrome`` path — would have returned False here and
+        re-prompted to install. The new directory-marker check returns True
+        because the install directory exists and is non-empty regardless of
+        per-platform binary layout.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_root = Path(tmpdir)
+            mock_home.return_value = tmp_root
+
+            # Fake playwright module so _get_browser_install_dir's import resolves.
+            pkg_dir = tmp_root / "driver" / "package"
+            pkg_dir.mkdir(parents=True)
+            (pkg_dir / "browsers.json").write_text(
+                json.dumps({"browsers": [{"name": "chromium", "revision": "1217"}]})
+            )
+            fake_pw = types.ModuleType("playwright")
+            fake_pw.__file__ = str(tmp_root / "__init__.py")
+
+            # Windows-style install layout — only a chrome-win64/chrome.exe binary,
+            # no Linux binary. Old code looked for chrome-linux64/chrome and missed.
+            cache = tmp_root / ".cache" / "ms-playwright" / "chromium-1217"
+            (cache / "chrome-win64").mkdir(parents=True)
+            (cache / "chrome-win64" / "chrome.exe").write_text("(fake binary)")
+
+            # PLAYWRIGHT_BROWSERS_PATH empty so the cache dir resolves from
+            # Path.home() (mocked to tmp_root above).
+            with (
+                patch.dict(sys.modules, {"playwright": fake_pw}),
+                patch.dict(os.environ, {"PLAYWRIGHT_BROWSERS_PATH": ""}, clear=False),
+            ):
+                result = check_browser_installed("chromium")
+
+            assert result is True, (
+                "Issue #50 regression: Windows-layout install dir (chrome-win64/chrome.exe "
+                "only, no Linux binary) should be detected as installed via the directory "
+                "marker. If this fails, the per-platform binary-path lookup has crept back in."
+            )
 
 
 class TestInstallBrowser:

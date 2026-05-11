@@ -10,8 +10,7 @@ Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/
 
 ## Quick Start
 
-<details open>
-<summary><b>Windows</b></summary>
+### Windows
 
 1. Install Python from the [Microsoft Store](https://apps.microsoft.com/detail/9NRWMJP3717K) or [python.org](https://www.python.org/downloads/)
 1. Open PowerShell and run:
@@ -21,27 +20,19 @@ pip install har-capture[full]
 python -m har_capture https://example.com
 ```
 
-</details>
-
-<details>
-<summary><b>macOS / Linux</b></summary>
+### macOS / Linux
 
 ```bash
 pip install har-capture[full]
 har-capture https://example.com
 ```
 
-</details>
-
-<details>
-<summary><b>Already have a HAR file?</b></summary>
+### Already have a HAR file?
 
 ```bash
 pip install har-capture
 har-capture sanitize myfile.har --patterns network-device
 ```
-
-</details>
 
 ______________________________________________________________________
 

@@ -153,7 +153,7 @@ Create a JSON file with any of the structures above. Custom patterns are **merge
 
 This library provides **generic** PII patterns that work across domains. For domain-specific patterns (modems, IoT devices, specific vendors), create custom pattern files in your project.
 
-**Example: Modem-specific patterns (in your project, not here)**
+### Example: Modem-specific patterns (in your project, not here)
 
 ```json
 {

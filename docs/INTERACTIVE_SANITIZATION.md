@@ -53,7 +53,7 @@ Common technical values are automatically considered safe:
 
 When flagged values are found, you'll see a table for review:
 
-```
+```text
 ┌─ Flagged Values for Review ─────────────────────────────────────────┐
 │  #  Match  Type            Value                  Context           │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -97,7 +97,7 @@ har-capture sanitize device.har
 
 Output:
 
-```
+```yaml
 Sanitizing device.har...
   Auto-redacted: 47 values
 
@@ -170,7 +170,7 @@ har-capture sanitize device.har 2>&1
 
 ### No Suspicious Values
 
-```
+```text
 Sanitizing device.har...
   Auto-redacted: 47 values
   Flagged for review: 0
@@ -183,7 +183,7 @@ Sanitized: device.sanitized.har
 
 If a flagged value appears many times, you'll see a warning:
 
-```
+```text
   WARNING: "Guest" appears 47 times in the file.
   Redacting will replace ALL occurrences.
 ```
@@ -192,7 +192,7 @@ This helps you make informed decisions about common words.
 
 ### Already Sanitized Files
 
-```
+```text
 Warning: This file appears to already be sanitized.
   Found redaction placeholders (MAC_xxxxx, PASS_xxxxx, etc.)
   Proceeding may double-hash already redacted values.

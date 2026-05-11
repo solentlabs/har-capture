@@ -15,7 +15,7 @@ No separate release PR. No tagging from feature branches.
 
 ## Pipeline: PR → PyPI
 
-```
+```text
 1. Push to feature branch
    └─ No CI (only main + PRs trigger CI)
 

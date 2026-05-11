@@ -78,7 +78,7 @@ def validate_har(
 
 Detects base64-encoded credentials in URL query parameters:
 
-```
+```text
 https://device.local/api?auth=dXNlcjpwYXNz
                               ^^^^^^^^^^^^^^^^
                               base64("user:pass")
@@ -304,7 +304,7 @@ See [Pattern Spec — Redaction Checking](PATTERN_SPEC.md#redaction-checking-red
 
 Both validation and sanitization load from `sensitive.json`:
 
-```
+```text
 sensitive.json
 ├── headers.full_redact      → Used by: validation (check_headers)
 │                                        sanitization (sanitize_header_value)

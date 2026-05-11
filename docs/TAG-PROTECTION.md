@@ -37,7 +37,7 @@ This project has multiple layers of tag protection to ensure releases only happe
 
 ### 3. GitHub Tag Protection Rules (Optional - Manual Setup)
 
-**Recommended for production repos**
+Recommended for production repos.
 
 #### Setup Steps:
 
