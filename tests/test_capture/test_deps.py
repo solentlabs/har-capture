@@ -15,7 +15,7 @@ Test Strategy:
     - Table-driven tests with @pytest.mark.parametrize
     - Mock-heavy: subprocess, filesystem, and module imports are all mocked
       to avoid requiring real Playwright or browser installs in CI
-    - Edge cases for _get_browser_executable cover every early-return path
+    - Edge cases for _get_browser_install_dir cover every early-return path
 
 Dependencies:
     - pytest for test framework
@@ -35,7 +35,7 @@ import pytest
 
 from har_capture.capture.deps import (
     LINUX_BROWSER_DEPS,
-    _get_browser_executable,
+    _get_browser_install_dir,
     check_browser_installed,
     check_playwright,
     install_browser,
@@ -60,11 +60,10 @@ BROWSER_TYPES = [
 # │ JSON content or None (skip)  │ browser name to look up                  │ Path |   │ test case name               │
 # │                              │                                          │ None     │                              │
 # └──────────────────────────────┴──────────────────────────────────────────┴──────────┴──────────────────────────────┘
-GET_BROWSER_EXE_NONE_CASES = [
+GET_BROWSER_DIR_NONE_CASES = [
     (None,                                                   "chromium",         "browsers_json_missing"),
     ({"browsers": [{"name": "chromium"}]},                   "chromium",         "revision_missing"),
     ({"browsers": [{"name": "chromium", "revision": ""}]},   "chromium",         "revision_empty"),
-    ({"browsers": [{"name": "unknown", "revision": "100"}]}, "unknown",          "unknown_browser_no_mapping"),
     ({"browsers": [{"name": "firefox", "revision": "100"}]}, "chromium",         "no_matching_entry"),
     ({"browsers": []},                                       "chromium",         "empty_browsers_list"),
 ]
@@ -95,12 +94,12 @@ class TestCheckPlaywright:
             assert isinstance(result, bool)
 
 
-class TestGetBrowserExecutable:
-    """Tests for _get_browser_executable helper."""
+class TestGetBrowserInstallDir:
+    """Tests for _get_browser_install_dir helper."""
 
     @patch("har_capture.capture.deps.Path.home")
-    def test_resolves_chromium_path(self, mock_home: MagicMock) -> None:
-        """Test resolves chromium executable path from browsers.json."""
+    def test_resolves_chromium_install_dir(self, mock_home: MagicMock) -> None:
+        """Test resolves the chromium install directory from browsers.json."""
         with tempfile.TemporaryDirectory() as tmpdir:
             mock_home.return_value = Path(tmpdir)
             pkg_dir = Path(tmpdir) / "driver" / "package"
@@ -109,15 +108,19 @@ class TestGetBrowserExecutable:
             browsers_json.write_text(json.dumps({"browsers": [{"name": "chromium", "revision": "1200"}]}))
 
             # Create a fake playwright module so the import inside
-            # _get_browser_executable resolves without the real package.
+            # _get_browser_install_dir resolves without the real package.
             fake_pw = types.ModuleType("playwright")
             fake_pw.__file__ = str(Path(tmpdir) / "__init__.py")
             with patch.dict(sys.modules, {"playwright": fake_pw}):
-                result = _get_browser_executable("chromium")
+                result = _get_browser_install_dir("chromium")
 
+            # Returns the <browser>-<revision>/ directory itself, NOT a per-
+            # platform binary path inside it. Issue #50 traced back to a
+            # hardcoded chrome-linux64/chrome path being checked on Windows;
+            # the directory marker is the platform-agnostic install signal.
             assert result is not None
+            assert result.name == "chromium-1200"
             assert "chromium-1200" in str(result)
-            assert "chrome-linux64/chrome" in str(result)
 
     def test_returns_none_without_playwright(self) -> None:
         """Test returns None when playwright is not importable."""
@@ -125,13 +128,13 @@ class TestGetBrowserExecutable:
             patch.dict("sys.modules", {"playwright": None}),
             patch("builtins.__import__", side_effect=ImportError),
         ):
-            result = _get_browser_executable("chromium")
+            result = _get_browser_install_dir("chromium")
             assert result is None
 
     @pytest.mark.parametrize(
         ("browsers_json_content", "browser_arg", "desc"),
-        GET_BROWSER_EXE_NONE_CASES,
-        ids=[c[2] for c in GET_BROWSER_EXE_NONE_CASES],
+        GET_BROWSER_DIR_NONE_CASES,
+        ids=[c[2] for c in GET_BROWSER_DIR_NONE_CASES],
     )
     def test_returns_none_on_edge_cases(
         self,
@@ -139,7 +142,7 @@ class TestGetBrowserExecutable:
         browser_arg: str,
         desc: str,
     ) -> None:
-        """Test _get_browser_executable returns None for various edge cases."""
+        """Test _get_browser_install_dir returns None for various edge cases."""
         with tempfile.TemporaryDirectory() as tmpdir:
             pkg_dir = Path(tmpdir) / "driver" / "package"
             pkg_dir.mkdir(parents=True)
@@ -150,7 +153,7 @@ class TestGetBrowserExecutable:
             fake_pw = types.ModuleType("playwright")
             fake_pw.__file__ = str(Path(tmpdir) / "__init__.py")
             with patch.dict(sys.modules, {"playwright": fake_pw}):
-                result = _get_browser_executable(browser_arg)
+                result = _get_browser_install_dir(browser_arg)
 
             assert result is None, f"{desc}: expected None"
 
@@ -164,23 +167,24 @@ class TestCheckBrowserInstalled:
         ids=[b[1] for b in BROWSER_TYPES],
     )
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("har_capture.capture.deps._get_browser_executable")
-    def test_browser_installed_when_executable_exists(
+    @patch("har_capture.capture.deps._get_browser_install_dir")
+    def test_browser_installed_when_dir_exists_and_non_empty(
         self,
-        mock_get_exe: MagicMock,
+        mock_get_dir: MagicMock,
         mock_check_pw: MagicMock,
         browser: str,
         desc: str,
     ) -> None:
-        """Test returns True when browser executable exists on disk."""
+        """Test returns True when the install directory exists and is non-empty."""
         mock_path = MagicMock()
-        mock_path.exists.return_value = True
-        mock_get_exe.return_value = mock_path
+        mock_path.is_dir.return_value = True
+        mock_path.iterdir.return_value = iter([MagicMock()])  # at least one entry
+        mock_get_dir.return_value = mock_path
 
         result = check_browser_installed(browser)
 
         assert result is True
-        mock_get_exe.assert_called_once_with(browser)
+        mock_get_dir.assert_called_once_with(browser)
 
     @pytest.mark.parametrize(
         ("browser", "desc"),
@@ -188,22 +192,54 @@ class TestCheckBrowserInstalled:
         ids=[b[1] for b in BROWSER_TYPES],
     )
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("har_capture.capture.deps._get_browser_executable")
-    def test_browser_not_installed_when_executable_missing(
+    @patch("har_capture.capture.deps._get_browser_install_dir")
+    @patch("subprocess.run")
+    def test_browser_not_installed_when_dir_missing(
         self,
-        mock_get_exe: MagicMock,
+        mock_run: MagicMock,
+        mock_get_dir: MagicMock,
         mock_check_pw: MagicMock,
         browser: str,
         desc: str,
     ) -> None:
-        """Test returns False when browser executable does not exist on disk."""
+        """Test returns False when the install directory doesn't exist (falls through to dry-run)."""
         mock_path = MagicMock()
-        mock_path.exists.return_value = False
-        mock_get_exe.return_value = mock_path
+        mock_path.is_dir.return_value = False
+        mock_get_dir.return_value = mock_path
+        # Dry-run fallback reports not installed.
+        mock_run.return_value = MagicMock(stdout="will download", returncode=0)
 
         result = check_browser_installed(browser)
 
         assert result is False
+
+    @pytest.mark.parametrize(
+        ("browser", "desc"),
+        BROWSER_TYPES,
+        ids=[b[1] for b in BROWSER_TYPES],
+    )
+    @patch("har_capture.capture.deps.check_playwright", return_value=True)
+    @patch("har_capture.capture.deps._get_browser_install_dir")
+    @patch("subprocess.run")
+    def test_empty_install_dir_falls_through_to_dry_run(
+        self,
+        mock_run: MagicMock,
+        mock_get_dir: MagicMock,
+        mock_check_pw: MagicMock,
+        browser: str,
+        desc: str,
+    ) -> None:
+        """Test returns False when install dir exists but is empty — dry-run is consulted."""
+        mock_path = MagicMock()
+        mock_path.is_dir.return_value = True
+        mock_path.iterdir.return_value = iter([])  # empty dir
+        mock_get_dir.return_value = mock_path
+        mock_run.return_value = MagicMock(stdout="will download", returncode=0)
+
+        result = check_browser_installed(browser)
+
+        assert result is False
+        mock_run.assert_called_once()
 
     @patch("har_capture.capture.deps.check_playwright", return_value=False)
     def test_returns_false_when_playwright_not_installed(
@@ -215,7 +251,7 @@ class TestCheckBrowserInstalled:
         assert result is False
 
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("har_capture.capture.deps._get_browser_executable", return_value=None)
+    @patch("har_capture.capture.deps._get_browser_install_dir", return_value=None)
     @patch("subprocess.run")
     def test_falls_back_to_dry_run_when_path_unavailable(
         self,
@@ -235,7 +271,7 @@ class TestCheckBrowserInstalled:
         mock_run.assert_called_once()
 
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("har_capture.capture.deps._get_browser_executable", return_value=None)
+    @patch("har_capture.capture.deps._get_browser_install_dir", return_value=None)
     @patch("subprocess.run")
     def test_dry_run_fallback_detects_not_installed(
         self,
@@ -254,7 +290,7 @@ class TestCheckBrowserInstalled:
         assert result is False
 
     @patch("har_capture.capture.deps.check_playwright", return_value=True)
-    @patch("har_capture.capture.deps._get_browser_executable", side_effect=Exception("oops"))
+    @patch("har_capture.capture.deps._get_browser_install_dir", side_effect=Exception("oops"))
     @patch("subprocess.run", side_effect=Exception("subprocess failed"))
     def test_returns_false_on_all_failures(
         self,

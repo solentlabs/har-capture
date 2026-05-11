@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   See `har-capture patterns` for the full list of choices.
 
+### Fixed
+
+- **Chromium re-install prompt on every invocation (issue #50)** — `check_browser_installed` previously resolved Playwright's chromium binary at a hardcoded Linux-only relative path (`chrome-linux64/chrome`). On Windows and macOS that path never matched the actual binary layout (`chrome-win64/chrome.exe`, `chrome-mac/Chromium.app/Contents/MacOS/Chromium`, etc.), and the function returned False without consulting the dry-run fallback — re-prompting the user to "install" a browser that was already installed. The check now resolves the platform-agnostic `<browser>-<revision>/` install directory and confirms it exists and is non-empty. Per-platform binary-layout drift between Playwright versions can no longer break the detection. Helper renamed `_get_browser_executable` → `_get_browser_install_dir`; the per-platform `_BROWSER_EXECUTABLES` mapping is gone. Tests in `test_capture/test_deps.py` updated; coverage of the empty-dir-falls-through-to-dry-run branch added.
+
 ### Added
 
 - **Heuristic detectors for default-device PII (issues #47, #49)** — `network_device.json` now ships a `serial_number` detector (Netgear cable-modem format `[0-9][A-Z]{2}[0-9]{4}[A-Z0-9]{6}` plus a broader uppercase-alphanumeric backstop) and an extended `wifi_ssid` detector that recognises common default-SSID prefixes (SPSETUP, MOTO, ATTwifi, XFINITY, HOMEHUB). Detector order was changed so keyword-based `device_name` runs before shape-based `wifi_ssid`, preventing `NETGEAR-C7000` from being miscategorized. New regression test file `tests/test_sanitization/test_pii_regressions.py` keys cases on issue numbers so future reports add a fixture row rather than a new test.
