@@ -55,6 +55,7 @@ Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **
 - **Zero dependencies** - Core sanitization uses only Python stdlib
 - **Format-preserving hashes** - Track the same device across requests without exposing real values
 - **One-command workflow** - Capture, sanitize, and compress in a single step
+- **Interactive browser flows preserved** - Handle browser auth, popups, and dialogs while still recording the resulting traffic
 
 [See detailed comparison with all tools →](docs/COMPARISON.md)
 

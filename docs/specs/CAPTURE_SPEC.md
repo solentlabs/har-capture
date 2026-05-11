@@ -161,6 +161,14 @@ Controls the `wait_until` argument to Playwright's `page.goto()`. Accepts any Pl
 
 ## Browser Capture Detail
 
+### Browser event auditing
+
+`browser.py` records two browser-event audit trails under `log._solentlabs` so downstream tools can tell that a secondary browser interaction happened even when the underlying HAR entries are interleaved with normal page traffic.
+
+**`_solentlabs.popups`** records popup pages opened after the initial page (`window.open`, `target="_blank"`, or equivalent new-page events). Each entry stores the popup's initial URL and an `opened_at` timestamp. The popup's actual request/response traffic is already captured by the context-level HAR recorder; this list exists to make the popup event itself visible to downstream analysis.
+
+**`_solentlabs.dialogs`** records interactive JavaScript dialogs (`alert`, `confirm`, `prompt`) for headed, user-driven captures only (`headless=False`, `timeout=None`). `browser.py` injects a small wrapper around those APIs so that once the user answers the native browser dialog in the browser UI, the capture records the dialog type, message, default value, an `opened_at` timestamp, inferred action (`accept` or `dismiss`), and `resolved_by="browser_ui"`. This preserves the tool's observability stance: surface what the user did, do not auto-accept on their behalf. Headless or timed captures keep Playwright's default auto-dismiss behavior to avoid hanging unattended runs.
+
 ### Internal Decomposition
 
 `capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to five extracted functions that can each be tested independently:
@@ -191,7 +199,7 @@ Testable with: one mock (`sync_playwright`).
 
 #### `_inject_har_metadata(temp_path, target_url, probes, session)`
 
-Reads the raw HAR from the temp file, injects `_probes`, `_har_capture` (cookies, storage), and `_solentlabs` (pre-capture cookies), writes back. Handles corrupt/unreadable HAR gracefully.
+Reads the raw HAR from the temp file, injects `_probes`, `_har_capture` (cookies, storage), and `_solentlabs` (pre-capture cookies, popup audit trail, dialog audit trail), writes back. Handles corrupt/unreadable HAR gracefully.
 
 Testable with: zero mocks (real temp file).
 
@@ -297,13 +305,7 @@ Immediately after context creation and before any navigation, `context.cookies()
 With the clean `storage_state`, this list should always be empty. A non-empty list indicates the context inherited cookies despite the explicit clean state — a signal for downstream tools that the capture may be contaminated.
 
 ```json
-{
-  "log": {
-    "_solentlabs": {
-      "pre_capture_cookies": []
-    }
-  }
-}
+{"log": {"_solentlabs": {"pre_capture_cookies": []}}}
 ```
 
 ### Wait-for-Data Mechanism
@@ -513,6 +515,8 @@ har_data["log"]["_har_capture"] = {
 }
 har_data["log"]["_solentlabs"] = {
     "pre_capture_cookies": pre_capture_cookies,  # Cookie jar state before navigation
+    "popups": popup_records,                     # Popup audit trail
+    "dialogs": dialog_records,                   # Dialog audit trail
 }
 ```
 
@@ -581,4 +585,4 @@ class CaptureOptions:
 1. **Service workers are always blocked** — This is hardcoded in context config, not configurable, to ensure fresh captures.
 1. **Self-signed certs are always accepted** — Both probes and Playwright context ignore certificate errors.
 1. **Browser context is always clean** — `storage_state={"cookies": [], "origins": []}` is hardcoded. No cookies, localStorage, or credentials leak from previous sessions.
-1. **Pre-capture cookie state is always recorded** — `_solentlabs.pre_capture_cookies` is emitted in every capture, even when empty. Downstream tools can verify context cleanliness without assumptions.
+1. **`_solentlabs` audit surfaces are always present** — `_solentlabs.pre_capture_cookies`, `_solentlabs.popups`, and `_solentlabs.dialogs` are emitted in every capture, even when the popup/dialog lists are empty. Downstream tools can verify context cleanliness and see whether secondary browser events occurred without relying on missing-key heuristics.
