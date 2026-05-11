@@ -1,0 +1,115 @@
+{
+  "_comment": "HAR fixtures for tests/test_cli/test_validate.py.",
+
+  "clean_har": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {"method": "GET", "url": "http://example.com/", "headers": []},
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {"text": "Hello World", "mimeType": "text/html"}
+          }
+        }
+      ]
+    }
+  },
+
+  "har_with_secrets": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://example.com/login",
+            "headers": [
+              {"name": "Authorization", "value": "Bearer secret-token-123"}
+            ],
+            "postData": {
+              "text": "password=mysecretpassword",
+              "mimeType": "application/x-www-form-urlencoded"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {"name": "Set-Cookie", "value": "session=abc123; HttpOnly"}
+            ],
+            "content": {
+              "text": "MAC Address: AA:BB:CC:DD:EE:FF",
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ]
+    }
+  },
+
+  "har_with_warnings": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://example.com/",
+            "headers": [
+              {"name": "User-Agent", "value": "Mozilla/5.0"}
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "text": "Email: test@example.com",
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ]
+    }
+  },
+
+  "directory_clean_har": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": []
+    }
+  },
+
+  "directory_dirty_har": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://test/",
+            "headers": [
+              {"name": "Authorization", "value": "Bearer token123"}
+            ]
+          },
+          "response": {"status": 200, "headers": [], "content": {}}
+        }
+      ]
+    }
+  },
+
+  "custom_secret_pattern": {
+    "_comment": "Inline custom pattern for test_validate_with_custom_patterns — exercises the --patterns custom-file path.",
+    "patterns": {
+      "custom_secret": {
+        "regex": "CUSTOM\\d+",
+        "replacement_prefix": "CUSTOM"
+      }
+    }
+  }
+}

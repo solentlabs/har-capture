@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -12,6 +13,16 @@ from har_capture.cli.main import app
 
 runner = CliRunner()
 
+# Test HAR fixtures live in tests/fixtures/test_validate.json per CLAUDE.md #14.
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_validate.json").read_text())
+
+
+def _write_fixture_har(tmp_path: Path, fixture_key: str, filename: str) -> Path:
+    """Write a fixture HAR (deep-copied so tests don't mutate the loaded dict)."""
+    har_file = tmp_path / filename
+    har_file.write_text(json.dumps(copy.deepcopy(_FIXTURES[fixture_key])))
+    return har_file
+
 
 # =============================================================================
 # Test Fixtures
@@ -20,145 +31,34 @@ runner = CliRunner()
 
 @pytest.fixture
 def clean_har(tmp_path: Path) -> Path:
-    """Create a clean HAR file with no PII."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "GET",
-                        "url": "http://example.com/",
-                        "headers": [],
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": [],
-                        "content": {
-                            "text": "Hello World",
-                            "mimeType": "text/html",
-                        },
-                    },
-                }
-            ],
-        }
-    }
-    har_file = tmp_path / "clean.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    """A clean HAR file with no PII."""
+    return _write_fixture_har(tmp_path, "clean_har", "clean.har")
 
 
 @pytest.fixture
 def har_with_secrets(tmp_path: Path) -> Path:
-    """Create a HAR file with secrets/PII."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "POST",
-                        "url": "http://example.com/login",
-                        "headers": [
-                            {"name": "Authorization", "value": "Bearer secret-token-123"},
-                        ],
-                        "postData": {
-                            "text": "password=mysecretpassword",
-                            "mimeType": "application/x-www-form-urlencoded",
-                        },
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": [
-                            {"name": "Set-Cookie", "value": "session=abc123; HttpOnly"},
-                        ],
-                        "content": {
-                            "text": "MAC Address: AA:BB:CC:DD:EE:FF",
-                            "mimeType": "text/html",
-                        },
-                    },
-                }
-            ],
-        }
-    }
-    har_file = tmp_path / "secrets.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    """A HAR file with secrets/PII."""
+    return _write_fixture_har(tmp_path, "har_with_secrets", "secrets.har")
 
 
 @pytest.fixture
 def har_with_warnings(tmp_path: Path) -> Path:
-    """Create a HAR file with warnings but no errors."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "GET",
-                        "url": "http://example.com/",
-                        "headers": [
-                            {"name": "User-Agent", "value": "Mozilla/5.0"},
-                        ],
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": [],
-                        "content": {
-                            "text": "Email: test@example.com",
-                            "mimeType": "text/html",
-                        },
-                    },
-                }
-            ],
-        }
-    }
-    har_file = tmp_path / "warnings.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    """A HAR file with warnings but no errors."""
+    return _write_fixture_har(tmp_path, "har_with_warnings", "warnings.har")
 
 
 @pytest.fixture
 def har_directory(tmp_path: Path) -> Path:
-    """Create a directory with multiple HAR files."""
+    """A directory with multiple HAR files (mix of clean and dirty)."""
     har_dir = tmp_path / "hars"
     har_dir.mkdir()
 
-    # Create a clean HAR
-    clean_har = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [],
-        }
-    }
-    (har_dir / "clean.har").write_text(json.dumps(clean_har))
+    clean_har = copy.deepcopy(_FIXTURES["directory_clean_har"])
+    dirty_har = copy.deepcopy(_FIXTURES["directory_dirty_har"])
 
-    # Create a HAR with issues
-    dirty_har = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "GET",
-                        "url": "http://test/",
-                        "headers": [
-                            {"name": "Authorization", "value": "Bearer token123"},
-                        ],
-                    },
-                    "response": {"status": 200, "headers": [], "content": {}},
-                }
-            ],
-        }
-    }
+    (har_dir / "clean.har").write_text(json.dumps(clean_har))
     (har_dir / "dirty.har").write_text(json.dumps(dirty_har))
 
-    # Create a subdirectory with another HAR
     subdir = har_dir / "subdir"
     subdir.mkdir()
     (subdir / "nested.har").write_text(json.dumps(clean_har))
@@ -253,18 +153,7 @@ class TestValidateCustomPatterns:
     def test_validate_with_custom_patterns(self, clean_har: Path, tmp_path: Path) -> None:
         """Test --patterns option with custom patterns file."""
         custom_patterns = tmp_path / "custom.json"
-        custom_patterns.write_text(
-            json.dumps(
-                {
-                    "patterns": {
-                        "custom_secret": {
-                            "regex": "CUSTOM\\d+",
-                            "replacement_prefix": "CUSTOM",
-                        }
-                    }
-                }
-            )
-        )
+        custom_patterns.write_text(json.dumps(_FIXTURES["custom_secret_pattern"]))
         result = runner.invoke(app, ["validate", str(clean_har), "--patterns", str(custom_patterns)])
         assert result.exit_code == 0
 

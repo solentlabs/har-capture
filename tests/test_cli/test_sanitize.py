@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,16 @@ from har_capture.cli.main import app
 
 runner = CliRunner()
 
+# Test HAR fixtures live in tests/fixtures/test_sanitize.json per CLAUDE.md #14.
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_sanitize.json").read_text())
+
+
+def _write_fixture_har(tmp_path: Path, fixture_key: str, filename: str) -> Path:
+    """Write a fixture HAR (deep-copied so tests don't mutate the loaded dict)."""
+    har_file = tmp_path / filename
+    har_file.write_text(json.dumps(copy.deepcopy(_FIXTURES[fixture_key])))
+    return har_file
+
 
 # =============================================================================
 # Test Fixtures
@@ -21,40 +32,13 @@ runner = CliRunner()
 
 @pytest.fixture
 def valid_har(tmp_path: Path) -> Path:
-    """Create a valid HAR file with PII for testing."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {
-                        "method": "GET",
-                        "url": "http://192.168.1.1/",
-                        "headers": [
-                            {"name": "Cookie", "value": "session=secret123"},
-                        ],
-                    },
-                    "response": {
-                        "status": 200,
-                        "headers": [],
-                        "content": {
-                            "text": "MAC: AA:BB:CC:DD:EE:FF",
-                            "mimeType": "text/html",
-                        },
-                    },
-                }
-            ],
-        }
-    }
-    har_file = tmp_path / "test.har"
-    har_file.write_text(json.dumps(har_data))
-    return har_file
+    """A valid HAR file with PII for testing."""
+    return _write_fixture_har(tmp_path, "valid_har", "test.har")
 
 
 @pytest.fixture
 def invalid_json_file(tmp_path: Path) -> Path:
-    """Create an invalid JSON file."""
+    """An invalid JSON file (intentional malformed string, behavioural-inline per CLAUDE.md #14)."""
     invalid_file = tmp_path / "invalid.har"
     invalid_file.write_text("{not valid json")
     return invalid_file
@@ -62,7 +46,7 @@ def invalid_json_file(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def invalid_har_structure(tmp_path: Path) -> Path:
-    """Create a JSON file that's not valid HAR."""
+    """A JSON file that's not valid HAR (intentional minimal not-a-HAR string, behavioural-inline)."""
     invalid_file = tmp_path / "invalid_structure.har"
     invalid_file.write_text('{"not": "a har file"}')
     return invalid_file
@@ -70,27 +54,18 @@ def invalid_har_structure(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def large_har(tmp_path: Path) -> Path:
-    """Create a HAR file larger than 1MB for size limit testing."""
-    har_data = {
-        "log": {
-            "version": "1.2",
-            "creator": {"name": "test", "version": "1.0"},
-            "entries": [
-                {
-                    "request": {"method": "GET", "url": "http://test/", "headers": []},
-                    "response": {
-                        "status": 200,
-                        "headers": [],
-                        "content": {
-                            "text": "x" * 500000,  # 500KB of padding
-                            "mimeType": "text/plain",
-                        },
-                    },
-                }
-            ]
-            * 3,  # 1.5MB total
-        }
-    }
+    """A HAR file larger than 1MB for size limit testing.
+
+    Loads the structural HAR template from the fixture, then fills the
+    dynamic 500KB padding and multiplies the entries list to 1.5MB —
+    the size construction is the test's behavioural point and stays in
+    Python; only the static structure is fixture-driven.
+    """
+    har_data = copy.deepcopy(_FIXTURES["large_har_template"])
+    har_data.pop("_dynamic", None)
+    entry = har_data["log"]["entries"][0]
+    entry["response"]["content"]["text"] = "x" * 500000  # 500KB of padding
+    har_data["log"]["entries"] = [entry] * 3  # 1.5MB total
     har_file = tmp_path / "large.har"
     har_file.write_text(json.dumps(har_data))
     return har_file
@@ -301,25 +276,14 @@ class TestSanitizeAlreadySanitized:
         ``appears_sanitized`` counts patterns like ``MAC_[a-f0-9]{8}``
         and trips at >= 10 matches. Producing the placeholders directly
         avoids depending on the sanitizer's actual hash format and the
-        threshold staying constant.
+        threshold staying constant. The HAR structure is fixture-driven;
+        the placeholder-string construction is the behavioural point and
+        stays in Python.
         """
+        har_data = copy.deepcopy(_FIXTURES["already_redacted_har_template"])
+        har_data.pop("_dynamic", None)
         placeholders = " ".join(f"MAC_{i:08x}" for i in range(15))
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {"method": "GET", "url": "http://test/", "headers": []},
-                        "response": {
-                            "status": 200,
-                            "headers": [],
-                            "content": {"text": placeholders, "mimeType": "text/plain"},
-                        },
-                    }
-                ],
-            }
-        }
+        har_data["log"]["entries"][0]["response"]["content"]["text"] = placeholders
         har_file = tmp_path / "already_sanitized.har"
         har_file.write_text(json.dumps(har_data))
         return har_file
@@ -374,33 +338,7 @@ class TestSanitizeInteractiveReview:
 
     @pytest.fixture
     def har_with_flagged_fields(self, tmp_path: Path) -> Path:
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {
-                            "method": "POST",
-                            "url": "http://test/login",
-                            "headers": [],
-                            "postData": {
-                                "text": ("username=alice&login=bob&account_id=12345"),
-                                "mimeType": "application/x-www-form-urlencoded",
-                            },
-                        },
-                        "response": {
-                            "status": 200,
-                            "headers": [],
-                            "content": {"text": "", "mimeType": "text/plain"},
-                        },
-                    }
-                ],
-            }
-        }
-        har_file = tmp_path / "flagged.har"
-        har_file.write_text(json.dumps(har_data))
-        return har_file
+        return _write_fixture_har(tmp_path, "har_with_flagged_fields", "flagged.har")
 
     def test_review_invoked_when_tty_and_flagged(
         self,

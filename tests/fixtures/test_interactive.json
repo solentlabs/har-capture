@@ -1,0 +1,25 @@
+{
+  "_comment": "HAR fixtures for tests/test_cli/test_interactive.py.",
+
+  "sanitized_har_for_apply_redactions": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://test/login",
+            "headers": [],
+            "postData": {"text": "username=alice", "mimeType": "x"}
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {"text": "", "mimeType": "x"}
+          }
+        }
+      ]
+    }
+  }
+}
