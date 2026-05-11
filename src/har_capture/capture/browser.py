@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import shutil
-import sys
 import tempfile
 import time
 from collections.abc import Callable
@@ -103,12 +102,15 @@ _WAIT_FOR_DATA_INIT_SCRIPT = """\
 
 _DIALOG_OBSERVER_INIT_SCRIPT = """\
 (function () {
-    window.__harCaptureDialogOutcomes = window.__harCaptureDialogOutcomes || [];
+    // After the user resolves a native dialog, call straight back into Python
+    // via the page-exposed binding. No window-scoped queue, no Python-side
+    // polling — Playwright's expose_function is the first-class JS→Python
+    // bridge for this kind of cross-context callback.
 
     var _alert = window.alert;
     window.alert = function (message) {
         _alert.call(window, message);
-        window.__harCaptureDialogOutcomes.push({
+        window.__harCaptureDialogResolved({
             type: "alert",
             message: String(message),
             action: "accept"
@@ -118,7 +120,7 @@ _DIALOG_OBSERVER_INIT_SCRIPT = """\
     var _confirm = window.confirm;
     window.confirm = function (message) {
         var accepted = _confirm.call(window, message);
-        window.__harCaptureDialogOutcomes.push({
+        window.__harCaptureDialogResolved({
             type: "confirm",
             message: String(message),
             action: accepted ? "accept" : "dismiss"
@@ -129,7 +131,7 @@ _DIALOG_OBSERVER_INIT_SCRIPT = """\
     var _prompt = window.prompt;
     window.prompt = function (message, defaultValue) {
         var value = _prompt.call(window, message, defaultValue);
-        window.__harCaptureDialogOutcomes.push({
+        window.__harCaptureDialogResolved({
             type: "prompt",
             message: String(message),
             action: value === null ? "dismiss" : "accept"
@@ -160,25 +162,6 @@ def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_
             return
         page.wait_for_timeout(_DATA_WAIT_POLL_MS)
     _LOGGER.debug("Pending-data wait timed out after %.1fs", timeout_s)
-
-
-def _get_dialog_outcome(page: Any, outcome_index: int) -> dict[str, Any] | None:
-    """Return the recorded dialog outcome for a given dialog index."""
-    try:
-        outcomes = page.evaluate("window.__harCaptureDialogOutcomes || []")
-    except Exception:
-        return None
-
-    if not isinstance(outcomes, list):
-        return None
-    if len(outcomes) <= outcome_index:
-        return None
-
-    outcome = outcomes[outcome_index]
-    if not isinstance(outcome, dict):
-        return None
-
-    return outcome
 
 
 def _wait_for_network_quiescence(
@@ -593,10 +576,15 @@ def _run_browser_session(
         page = context.new_page()
         interactive_dialog_capture = not headless and timeout is None
         if interactive_dialog_capture:
-            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            # Two-event model. (1) `page.on("dialog")` fires when the native
+            # dialog OPENS — we create the record and log it. (2) The exposed
+            # `__harCaptureDialogResolved` binding fires when the wrapped JS
+            # confirm/alert/prompt RETURNS after the user clicks — we update
+            # the open record with the outcome. No polling, no per-handler
+            # deadlock surface (Playwright's first-class JS→Python bridge
+            # delivers the resolution event directly).
 
-            def _on_dialog(dialog: Any) -> None:
-                dialog_index = len(result.dialogs)
+            def _on_dialog_open(dialog: Any) -> None:
                 dialog_info = {
                     "type": getattr(dialog, "type", None),
                     "message": getattr(dialog, "message", None),
@@ -605,27 +593,44 @@ def _run_browser_session(
                     "action": "unknown",
                     "resolved_by": "unknown",
                 }
-                sys.stderr.write(f"[har-capture dialog] {dialog_info['type']}: {dialog_info['message']}\n")
-                sys.stderr.flush()
-                try:
-                    while True:
-                        outcome = _get_dialog_outcome(page, dialog_index)
-                        if outcome is not None:
-                            dialog_info["action"] = outcome.get("action", "unknown")
-                            dialog_info["resolved_by"] = "browser_ui"
-                            break
-                        time.sleep(0.1)
-                except Exception as e:
-                    _LOGGER.warning("Failed to handle dialog: %s", e)
                 result.dialogs.append(dialog_info)
-                sys.stderr.write(
-                    "[har-capture dialog] "
-                    f"resolved_by={dialog_info['resolved_by']} action={dialog_info['action']} "
-                    f"{dialog_info['type']}: {dialog_info['message']}\n"
+                _LOGGER.info(
+                    "Dialog opened: type=%s message=%r",
+                    dialog_info["type"],
+                    dialog_info["message"],
                 )
-                sys.stderr.flush()
 
-            page.on("dialog", _on_dialog)
+            def _on_dialog_resolved(outcome: Any) -> None:
+                # ``outcome`` is annotated ``Any`` because it crosses the
+                # JS → Python bridge via ``page.expose_function`` — the
+                # static type is whatever JSON-compatible value JS sends.
+                # Match by (type, message) against the most recent unresolved
+                # dialog. Matching beats positional indexing because nested
+                # or concurrent dialogs would otherwise mis-correlate.
+                if not isinstance(outcome, dict):
+                    return
+                dialog_type = outcome.get("type")
+                message = outcome.get("message")
+                for entry in reversed(result.dialogs):
+                    if (
+                        entry["resolved_by"] == "unknown"
+                        and entry["type"] == dialog_type
+                        and entry["message"] == message
+                    ):
+                        entry["action"] = outcome.get("action", "unknown")
+                        entry["resolved_by"] = "browser_ui"
+                        _LOGGER.info(
+                            "Dialog resolved by browser_ui: type=%s action=%s message=%r",
+                            entry["type"],
+                            entry["action"],
+                            entry["message"],
+                        )
+                        return
+                _LOGGER.warning("Dialog resolution had no matching open record: %r", outcome)
+
+            page.expose_function("__harCaptureDialogResolved", _on_dialog_resolved)
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            page.on("dialog", _on_dialog_open)
 
         _is_first_nav = [True]
         _quiescence_disabled = [not wait_for_data]

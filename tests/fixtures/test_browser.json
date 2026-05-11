@@ -1,276 +1,84 @@
 {
   "private_ip_cases": [
-    { "ip": "10.0.0.1", "expected": true, "id": "10_network_start" },
-    { "ip": "10.0.0.0", "expected": true, "id": "10_network_zero" },
-    { "ip": "10.255.255.255", "expected": true, "id": "10_network_end" },
-    { "ip": "10.100.50.25", "expected": true, "id": "10_network_middle" },
-    { "ip": "172.16.0.1", "expected": true, "id": "172_16_start" },
-    { "ip": "172.31.255.255", "expected": true, "id": "172_31_end" },
-    { "ip": "172.20.100.50", "expected": true, "id": "172_20_middle" },
-    { "ip": "172.15.0.1", "expected": false, "id": "172_15_not_private" },
-    { "ip": "172.32.0.1", "expected": false, "id": "172_32_not_private" },
-    { "ip": "192.168.0.1", "expected": true, "id": "192_168_0_1" },
-    { "ip": "192.168.1.1", "expected": true, "id": "192_168_1_1" },
-    { "ip": "192.168.100.1", "expected": true, "id": "192_168_100_1" },
-    { "ip": "192.168.255.255", "expected": true, "id": "192_168_end" },
-    { "ip": "127.0.0.1", "expected": true, "id": "localhost" },
-    { "ip": "127.0.0.0", "expected": true, "id": "loopback_start" },
-    { "ip": "127.255.255.255", "expected": true, "id": "loopback_end" },
-    { "ip": "0.0.0.0", "expected": true, "id": "all_zeros_redacted" },
-    { "ip": "8.8.8.8", "expected": false, "id": "google_dns" },
-    { "ip": "8.8.4.4", "expected": false, "id": "google_dns_secondary" },
-    { "ip": "1.1.1.1", "expected": false, "id": "cloudflare_dns" },
-    { "ip": "208.67.222.222", "expected": false, "id": "opendns" },
-    { "ip": "9.9.9.9", "expected": false, "id": "quad9" },
-    { "ip": "192.0.2.1", "expected": false, "id": "test_net_1" },
-    { "ip": "203.0.113.1", "expected": false, "id": "test_net_3" },
-    { "ip": "198.51.100.1", "expected": false, "id": "test_net_2" },
-    { "ip": "192.167.1.1", "expected": false, "id": "192_167_not_private" },
-    { "ip": "192.169.1.1", "expected": false, "id": "192_169_not_private" },
-    { "ip": "11.0.0.1", "expected": false, "id": "11_not_private" }
+    {"ip": "10.0.0.1",         "expected": true,  "id": "10_network_start"},
+    {"ip": "10.0.0.0",         "expected": true,  "id": "10_network_zero"},
+    {"ip": "10.255.255.255",   "expected": true,  "id": "10_network_end"},
+    {"ip": "10.100.50.25",     "expected": true,  "id": "10_network_middle"},
+    {"ip": "172.16.0.1",       "expected": true,  "id": "172_16_start"},
+    {"ip": "172.31.255.255",   "expected": true,  "id": "172_31_end"},
+    {"ip": "172.20.100.50",    "expected": true,  "id": "172_20_middle"},
+    {"ip": "172.15.0.1",       "expected": false, "id": "172_15_not_private"},
+    {"ip": "172.32.0.1",       "expected": false, "id": "172_32_not_private"},
+    {"ip": "192.168.0.1",      "expected": true,  "id": "192_168_0_1"},
+    {"ip": "192.168.1.1",      "expected": true,  "id": "192_168_1_1"},
+    {"ip": "192.168.100.1",    "expected": true,  "id": "192_168_100_1"},
+    {"ip": "192.168.255.255",  "expected": true,  "id": "192_168_end"},
+    {"ip": "127.0.0.1",        "expected": true,  "id": "localhost"},
+    {"ip": "127.0.0.0",        "expected": true,  "id": "loopback_start"},
+    {"ip": "127.255.255.255",  "expected": true,  "id": "loopback_end"},
+    {"ip": "0.0.0.0",          "expected": true,  "id": "all_zeros_redacted"},
+    {"ip": "8.8.8.8",          "expected": false, "id": "google_dns"},
+    {"ip": "8.8.4.4",          "expected": false, "id": "google_dns_secondary"},
+    {"ip": "1.1.1.1",          "expected": false, "id": "cloudflare_dns"},
+    {"ip": "208.67.222.222",   "expected": false, "id": "opendns"},
+    {"ip": "9.9.9.9",          "expected": false, "id": "quad9"},
+    {"ip": "192.0.2.1",        "expected": false, "id": "test_net_1"},
+    {"ip": "203.0.113.1",      "expected": false, "id": "test_net_3"},
+    {"ip": "198.51.100.1",     "expected": false, "id": "test_net_2"},
+    {"ip": "192.167.1.1",      "expected": false, "id": "192_167_not_private"},
+    {"ip": "192.169.1.1",      "expected": false, "id": "192_169_not_private"},
+    {"ip": "11.0.0.1",         "expected": false, "id": "11_not_private"}
   ],
   "parse_target_cases": [
-    {
-      "target": "https://example.com",
-      "expected_host": "example.com",
-      "scheme": "https",
-      "id": "https_url"
-    },
-    {
-      "target": "http://example.com",
-      "expected_host": "example.com",
-      "scheme": "http",
-      "id": "http_url"
-    },
-    {
-      "target": "https://example.com/",
-      "expected_host": "example.com",
-      "scheme": "https",
-      "id": "https_trailing_slash"
-    },
-    {
-      "target": "https://example.com/path/page",
-      "expected_host": "example.com",
-      "scheme": "https",
-      "id": "https_with_path"
-    },
-    {
-      "target": "http://example.com:8080",
-      "expected_host": "example.com:8080",
-      "scheme": "http",
-      "id": "http_with_port"
-    },
-    {
-      "target": "https://192.168.1.1:8443",
-      "expected_host": "192.168.1.1:8443",
-      "scheme": "https",
-      "id": "https_ip_with_port"
-    },
-    {
-      "target": "example.com",
-      "expected_host": "example.com",
-      "scheme": null,
-      "id": "hostname_only"
-    },
-    {
-      "target": "sub.example.com",
-      "expected_host": "sub.example.com",
-      "scheme": null,
-      "id": "subdomain"
-    },
-    {
-      "target": "router.local",
-      "expected_host": "router.local",
-      "scheme": null,
-      "id": "local_hostname"
-    },
-    {
-      "target": "192.168.1.1",
-      "expected_host": "192.168.1.1",
-      "scheme": null,
-      "id": "ipv4_address"
-    },
-    {
-      "target": "192.168.1.1:8080",
-      "expected_host": "192.168.1.1:8080",
-      "scheme": null,
-      "id": "ipv4_with_port"
-    },
-    {
-      "target": "10.0.0.1",
-      "expected_host": "10.0.0.1",
-      "scheme": null,
-      "id": "private_ip"
-    },
-    {
-      "target": "HTTPS://EXAMPLE.COM",
-      "expected_host": "EXAMPLE.COM",
-      "scheme": "https",
-      "id": "uppercase_scheme"
-    },
-    {
-      "target": "http://localhost",
-      "expected_host": "localhost",
-      "scheme": "http",
-      "id": "localhost"
-    },
-    {
-      "target": "http://127.0.0.1",
-      "expected_host": "127.0.0.1",
-      "scheme": "http",
-      "id": "loopback_ip"
-    }
+    {"target": "https://example.com",           "expected_host": "example.com",      "scheme": "https", "id": "https_url"},
+    {"target": "http://example.com",            "expected_host": "example.com",      "scheme": "http",  "id": "http_url"},
+    {"target": "https://example.com/",          "expected_host": "example.com",      "scheme": "https", "id": "https_trailing_slash"},
+    {"target": "https://example.com/path/page", "expected_host": "example.com",      "scheme": "https", "id": "https_with_path"},
+    {"target": "http://example.com:8080",       "expected_host": "example.com:8080", "scheme": "http",  "id": "http_with_port"},
+    {"target": "https://192.168.1.1:8443",      "expected_host": "192.168.1.1:8443", "scheme": "https", "id": "https_ip_with_port"},
+    {"target": "example.com",                   "expected_host": "example.com",      "scheme": null,    "id": "hostname_only"},
+    {"target": "sub.example.com",               "expected_host": "sub.example.com",  "scheme": null,    "id": "subdomain"},
+    {"target": "router.local",                  "expected_host": "router.local",     "scheme": null,    "id": "local_hostname"},
+    {"target": "192.168.1.1",                   "expected_host": "192.168.1.1",      "scheme": null,    "id": "ipv4_address"},
+    {"target": "192.168.1.1:8080",              "expected_host": "192.168.1.1:8080", "scheme": null,    "id": "ipv4_with_port"},
+    {"target": "10.0.0.1",                      "expected_host": "10.0.0.1",         "scheme": null,    "id": "private_ip"},
+    {"target": "HTTPS://EXAMPLE.COM",           "expected_host": "EXAMPLE.COM",      "scheme": "https", "id": "uppercase_scheme"},
+    {"target": "http://localhost",              "expected_host": "localhost",         "scheme": "http",  "id": "localhost"},
+    {"target": "http://127.0.0.1",              "expected_host": "127.0.0.1",        "scheme": "http",  "id": "loopback_ip"}
   ],
   "wait_for_pending_data_cases": [
-    {
-      "id": "immediate_zero",
-      "pending_values": [0],
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "returns immediately when pending is 0"
-    },
-    {
-      "id": "drains_to_zero",
-      "pending_values": [3, 2, 1, 0],
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "waits until pending drains to 0"
-    },
-    {
-      "id": "stays_pending",
-      "pending_values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-      "timeout_s": 0.5,
-      "expect_timeout": true,
-      "description": "times out when requests never complete (timeout_s=0.5 not 0.05: tighter values flake under local CPU pressure when 1969 other tests compete; CI's clean container hid this for releases)"
-    },
-    {
-      "id": "evaluate_exception",
-      "pending_values": "exception",
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "returns on page.evaluate exception"
-    }
+    {"id": "immediate_zero",       "pending_values": [0],           "timeout_s": 1.0, "expect_timeout": false, "description": "returns immediately when pending is 0"},
+    {"id": "drains_to_zero",       "pending_values": [3, 2, 1, 0], "timeout_s": 1.0, "expect_timeout": false, "description": "waits until pending drains to 0"},
+    {"id": "stays_pending",        "pending_values": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], "timeout_s": 0.5,  "expect_timeout": true, "description": "times out when requests never complete (timeout_s=0.5 not 0.05: tighter values flake under local CPU pressure when 1969 other tests compete; CI's clean container hid this for releases)"},
+    {"id": "evaluate_exception",   "pending_values": "exception",  "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
   ],
   "wait_for_quiescence_cases": [
-    {
-      "id": "already_quiet",
-      "pending_values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-      "quiescence_s": 0.01,
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "returns when already quiescent"
-    },
-    {
-      "id": "activity_then_quiet",
-      "pending_values": [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-      "quiescence_s": 0.01,
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "waits through activity then detects quiescence"
-    },
-    {
-      "id": "never_quiet",
-      "pending_values": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
-      "quiescence_s": 5.0,
-      "timeout_s": 0.5,
-      "expect_timeout": true,
-      "description": "times out when activity oscillates (timeout_s=0.5 not 0.05; same flake mode as stays_pending)"
-    },
-    {
-      "id": "evaluate_exception",
-      "pending_values": "exception",
-      "quiescence_s": 0.01,
-      "timeout_s": 1.0,
-      "expect_timeout": false,
-      "description": "returns on page.evaluate exception"
-    }
+    {"id": "already_quiet",      "pending_values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns when already quiescent"},
+    {"id": "activity_then_quiet", "pending_values": [2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "waits through activity then detects quiescence"},
+    {"id": "never_quiet",        "pending_values": [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0], "quiescence_s": 5.0,  "timeout_s": 0.5,  "expect_timeout": true, "description": "times out when activity oscillates (timeout_s=0.5 not 0.05; same flake mode as stays_pending)"},
+    {"id": "evaluate_exception", "pending_values": "exception",    "quiescence_s": 0.01, "timeout_s": 1.0, "expect_timeout": false, "description": "returns on page.evaluate exception"}
   ],
   "output_path_cases": [
-    {
-      "id": "har_suffix_preserved",
-      "input": "capture.har",
-      "expected_suffix": ".har"
-    },
-    {
-      "id": "non_har_gets_har",
-      "input": "capture.json",
-      "expected_suffix": ".har"
-    },
-    { "id": "no_ext_gets_har", "input": "capture", "expected_suffix": ".har" }
+    {"id": "har_suffix_preserved",   "input": "capture.har",   "expected_suffix": ".har"},
+    {"id": "non_har_gets_har",       "input": "capture.json",  "expected_suffix": ".har"},
+    {"id": "no_ext_gets_har",        "input": "capture",       "expected_suffix": ".har"}
   ],
   "capture_error_cases": [
-    {
-      "id": "playwright_not_installed",
-      "mock_check_pw": false,
-      "expect_error": "Playwright not installed"
-    },
-    {
-      "id": "connectivity_failure",
-      "mock_connectivity": [false, "http", "Connection refused"],
-      "expect_error": "Connection refused"
-    }
+    {"id": "playwright_not_installed",   "mock_check_pw": false, "expect_error": "Playwright not installed"},
+    {"id": "connectivity_failure",       "mock_connectivity": [false, "http", "Connection refused"], "expect_error": "Connection refused"}
   ],
   "browser_selection_cases": [
-    { "id": "chromium", "browser": "chromium", "launch_attr": "chromium" },
-    { "id": "firefox", "browser": "firefox", "launch_attr": "firefox" },
-    { "id": "webkit", "browser": "webkit", "launch_attr": "webkit" }
+    {"id": "chromium", "browser": "chromium", "launch_attr": "chromium"},
+    {"id": "firefox",  "browser": "firefox",  "launch_attr": "firefox"},
+    {"id": "webkit",   "browser": "webkit",   "launch_attr": "webkit"}
   ],
   "inject_metadata_cases": [
-    {
-      "id": "all_metadata",
-      "has_probes": true,
-      "has_cookies": true,
-      "has_storage": true,
-      "has_popups": false,
-      "has_dialogs": true
-    },
-    {
-      "id": "probes_only",
-      "has_probes": true,
-      "has_cookies": false,
-      "has_storage": false,
-      "has_popups": false,
-      "has_dialogs": false
-    },
-    {
-      "id": "cookies_only",
-      "has_probes": false,
-      "has_cookies": true,
-      "has_storage": false,
-      "has_popups": false,
-      "has_dialogs": false
-    },
-    {
-      "id": "storage_only",
-      "has_probes": false,
-      "has_cookies": false,
-      "has_storage": true,
-      "has_popups": false,
-      "has_dialogs": false
-    },
-    {
-      "id": "empty_session",
-      "has_probes": false,
-      "has_cookies": false,
-      "has_storage": false,
-      "has_popups": false,
-      "has_dialogs": false
-    },
-    {
-      "id": "with_popups",
-      "has_probes": false,
-      "has_cookies": false,
-      "has_storage": false,
-      "has_popups": true,
-      "has_dialogs": false
-    },
-    {
-      "id": "with_dialogs",
-      "has_probes": false,
-      "has_cookies": false,
-      "has_storage": false,
-      "has_popups": false,
-      "has_dialogs": true
-    }
+    {"id": "all_metadata",  "has_probes": true,  "has_cookies": true,  "has_storage": true,  "has_popups": false, "has_dialogs": true},
+    {"id": "probes_only",   "has_probes": true,  "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "cookies_only",  "has_probes": false, "has_cookies": true,  "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "storage_only",  "has_probes": false, "has_cookies": false, "has_storage": true,  "has_popups": false, "has_dialogs": false},
+    {"id": "empty_session", "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "with_popups",   "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": true,  "has_dialogs": false},
+    {"id": "with_dialogs",  "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": true}
   ]
 }

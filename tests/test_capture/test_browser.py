@@ -2352,7 +2352,13 @@ class TestDialogHandler:
         mock_check_pw: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Dialog handler logs the inferred browser-UI outcome into HAR metadata."""
+        """Dialog handler logs the inferred browser-UI outcome into HAR metadata.
+
+        Two-event model: ``page.on("dialog")`` creates the open record;
+        the ``__harCaptureDialogResolved`` binding (exposed via
+        ``page.expose_function``) updates it with the user's action.
+        Mocks drive both events to assert the recorded HAR shape.
+        """
         import os
 
         mock_pw = MagicMock()
@@ -2365,13 +2371,20 @@ class TestDialogHandler:
         mock_context.storage_state.return_value = {"cookies": [], "origins": []}
 
         def evaluate_side_effect(expression: str) -> Any:
-            if expression == "window.__harCaptureDialogOutcomes || []":
-                return [{"action": "dismiss"}]
             if expression == "() => Object.fromEntries(Object.entries(sessionStorage))":
                 return {}
             return 0
 
         mock_page.evaluate.side_effect = evaluate_side_effect
+
+        # Capture the exposed-function callback so we can fire it ourselves
+        # after the dialog-open handler runs.
+        exposed_callbacks: dict[str, Any] = {}
+
+        def expose_function_side_effect(name: str, handler: Any) -> None:
+            exposed_callbacks[name] = handler
+
+        mock_page.expose_function.side_effect = expose_function_side_effect
 
         def on_side_effect(event_name: str, handler: Any) -> None:
             if event_name == "dialog":
@@ -2380,6 +2393,13 @@ class TestDialogHandler:
                 dialog.message = "Are you sure?"
                 dialog.default_value = ""
                 handler(dialog)
+                # Simulate the JS init script firing the exposed callback
+                # after the user resolves the dialog in the browser UI.
+                resolve_cb = exposed_callbacks.get("__harCaptureDialogResolved")
+                assert resolve_cb is not None, (
+                    "expose_function('__harCaptureDialogResolved', ...) was not called"
+                )
+                resolve_cb({"type": "confirm", "message": "Are you sure?", "action": "dismiss"})
 
         mock_page.on.side_effect = on_side_effect
 
