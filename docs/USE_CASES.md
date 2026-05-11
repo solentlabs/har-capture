@@ -4,7 +4,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 
 ## Contents
 
-**Capture**
+### Capture
 
 - [UC-1: Capture HAR from a Device with No Auth](#uc-1-capture-har-from-a-device-with-no-auth)
 - [UC-2: Capture HAR from a Device with HTTP Basic Auth](#uc-2-capture-har-from-a-device-with-http-basic-auth)
@@ -15,7 +15,7 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-7: Interactive Capture (User Navigates, Closes Browser)](#uc-7-interactive-capture-user-navigates-closes-browser)
 - [UC-8: Capture from a Single-Session Device](#uc-8-capture-from-a-single-session-device)
 
-**Sanitization**
+### Sanitization
 
 - [UC-10: Sanitize an Existing HAR File](#uc-10-sanitize-an-existing-har-file)
 - [UC-11: Sanitize with Domain Patterns for Enhanced Accuracy](#uc-11-sanitize-with-domain-patterns-for-enhanced-accuracy)
@@ -25,19 +25,19 @@ A complete catalog of what har-capture does, organized by actor and goal.
 - [UC-15: Preserve Correlation Across Redacted Values](#uc-15-preserve-correlation-across-redacted-values)
 - [UC-16: Sanitize HAR with XML API Device](#uc-16-sanitize-har-with-xml-api-device)
 
-**Validation**
+### Validation
 
 - [UC-20: Validate a Sanitized HAR for PII Leaks](#uc-20-validate-a-sanitized-har-for-pii-leaks)
 - [UC-21: Pre-Commit Hook Validation](#uc-21-pre-commit-hook-validation)
 
-**Patterns**
+### Patterns
 
 - [UC-30: List Available Domain Patterns](#uc-30-list-available-domain-patterns)
 - [UC-31: Create a Custom Domain Pattern File](#uc-31-create-a-custom-domain-pattern-file)
 - [UC-32: Layer Multiple Domain Patterns](#uc-32-layer-multiple-domain-patterns)
 - [UC-33: Inspect Domain Pattern Details](#uc-33-inspect-domain-pattern-details)
 
-**Integration**
+### Integration
 
 - [UC-40: Python API Usage](#uc-40-python-api-usage)
 - [UC-41: Downstream Consumer (Modem Intake)](#uc-41-downstream-consumer-modem-intake)
@@ -84,11 +84,11 @@ ______________________________________________________________________
 
 ```bash
 # Scheme auto-detected (HTTPS preferred when reachable)
-har-capture 192.168.1.1
+har-capture 192.168.1.1 --patterns network-device
 
 # Explicit scheme bypasses auto-detection
-har-capture http://192.168.1.1
-har-capture http://192.168.100.1 --output modem_capture.har
+har-capture http://192.168.1.1 --patterns network-device
+har-capture http://192.168.100.1 --output modem_capture.har --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -123,8 +123,8 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get http://192.168.1.1 --username admin --password password123
-har-capture get http://192.168.1.1 -u admin -p password123
+har-capture get http://192.168.1.1 --username admin --password password123 --patterns network-device
+har-capture get http://192.168.1.1 -u admin -p password123 --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -162,7 +162,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture get http://192.168.1.1
+har-capture get http://192.168.1.1 --patterns network-device
 # Browser opens, user logs in manually, navigates, then closes browser
 ```
 
@@ -201,10 +201,10 @@ ______________________________________________________________________
 
 ```bash
 # Default: wait-for-data enabled
-har-capture get http://192.168.1.1
+har-capture get http://192.168.1.1 --patterns network-device
 
 # Explicitly disable (for faster capture of simple sites)
-har-capture get http://192.168.1.1 --no-wait-for-data
+har-capture get http://192.168.1.1 --no-wait-for-data --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -275,7 +275,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture http://192.168.1.1 \
+har-capture http://192.168.1.1 \ --patterns network-device
     --username admin --password pass123 \
     --patterns network-device --output captures/modem.har
 ```
@@ -354,8 +354,8 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture sanitize capture.har
-har-capture sanitize capture.har --output clean.har
+har-capture sanitize capture.har --patterns network-device
+har-capture sanitize capture.har --output clean.har --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -423,9 +423,9 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture sanitize capture.har
+har-capture sanitize capture.har --patterns network-device
 # Interactive table shown, user selects values
-har-capture sanitize capture.har --report flagged.json  # Save report to file
+har-capture sanitize capture.har --report flagged.json  # Save report to file --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -453,12 +453,12 @@ ______________________________________________________________________
 
 - Use `--salt` for reproducible hashing across runs
 - Use `--no-salt` for static placeholders (simpler, no correlation)
-- Pipe to validation: `har-capture sanitize f.har && har-capture validate f.sanitized.har`
+- Pipe to validation: `har-capture sanitize f.har --patterns network-device && har-capture validate f.sanitized.har --patterns network-device`
 
 **CLI Example**:
 
 ```bash
-har-capture sanitize capture.har --compress --salt mysalt123
+har-capture sanitize capture.har --compress --salt mysalt123 --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -522,13 +522,13 @@ ______________________________________________________________________
 
 ```bash
 # Correlation-preserving (default)
-har-capture sanitize capture.har
+har-capture sanitize capture.har --patterns network-device
 
 # No correlation (static placeholders)
-har-capture sanitize capture.har --no-salt
+har-capture sanitize capture.har --no-salt --patterns network-device
 
 # Reproducible across runs
-har-capture sanitize capture.har --salt my-stable-salt
+har-capture sanitize capture.har --salt my-stable-salt --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -565,9 +565,9 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture http://192.168.100.1 --minimal
 har-capture http://192.168.100.1 --minimal --patterns network-device
-har-capture http://192.168.100.1 --minimal --username admin --password pass123
+har-capture http://192.168.100.1 --minimal --patterns network-device
+har-capture http://192.168.100.1 --minimal --username admin --password pass123 --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -643,8 +643,8 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture validate capture.sanitized.har
-har-capture validate capture.sanitized.har.gz
+har-capture validate capture.sanitized.har --patterns network-device
+har-capture validate capture.sanitized.har.gz --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -682,7 +682,7 @@ ______________________________________________________________________
   hooks:
     - id: check-har-secrets
       name: Check HAR files for secrets
-      entry: har-capture validate
+      entry: har-capture validate --patterns network-device
       files: '\.har(\.gz)?$'
       types: [file]
 ```
@@ -949,7 +949,7 @@ ______________________________________________________________________
 
 **Data Flow**:
 
-```
+```text
 Field Engineer                     CMM Pipeline
      │                                  │
      │  har-capture get http://192.168.1.1     │

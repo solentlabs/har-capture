@@ -10,8 +10,7 @@ Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/
 
 ## Quick Start
 
-<details open>
-<summary><b>Windows</b></summary>
+### Windows
 
 1. Install Python from the [Microsoft Store](https://apps.microsoft.com/detail/9NRWMJP3717K) or [python.org](https://www.python.org/downloads/)
 1. Open PowerShell and run:
@@ -21,27 +20,19 @@ pip install har-capture[full]
 python -m har_capture https://example.com
 ```
 
-</details>
-
-<details>
-<summary><b>macOS / Linux</b></summary>
+### macOS / Linux
 
 ```bash
 pip install har-capture[full]
 har-capture https://example.com
 ```
 
-</details>
-
-<details>
-<summary><b>Already have a HAR file?</b></summary>
+### Already have a HAR file?
 
 ```bash
 pip install har-capture
-har-capture sanitize myfile.har
+har-capture sanitize myfile.har --patterns network-device
 ```
-
-</details>
 
 ______________________________________________________________________
 
@@ -64,6 +55,7 @@ Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **
 - **Zero dependencies** - Core sanitization uses only Python stdlib
 - **Format-preserving hashes** - Track the same device across requests without exposing real values
 - **One-command workflow** - Capture, sanitize, and compress in a single step
+- **Interactive browser flows preserved** - Handle browser auth, popups, and dialogs while still recording the resulting traffic
 
 [See detailed comparison with all tools →](docs/COMPARISON.md)
 
@@ -106,15 +98,19 @@ ______________________________________________________________________
 ### Command Line
 
 ```bash
-# Capture and sanitize (interactive review always enabled)
-har-capture https://example.com
+# Capture and sanitize a network device (cable modem, router, AP)
+har-capture https://192.168.100.1 --patterns network-device
 
-# Sanitize existing HAR
-har-capture sanitize capture.har
+# Sanitize an existing HAR with universal PII rules only (no device domain)
+har-capture sanitize capture.har --patterns base
 
 # Validate for PII leaks
-har-capture validate capture.har
+har-capture validate capture.har --patterns network-device
 ```
+
+`--patterns` is required as of 0.9.0 — pick `network-device` for cable
+modems/routers/APs, `base` for generic web/API captures, or a custom
+JSON path. Run `har-capture patterns` for the full list.
 
 [Full CLI reference →](docs/CLI_REFERENCE.md)
 

@@ -24,15 +24,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        # ``[capture]`` is required even for unit tests: 169 tests
-        # ``importorskip("playwright")`` and would silently skip without
-        # it, dropping ``capture/browser.py`` coverage from 87% to 36%
-        # and total below the 90% gate. The chromium binary is *not*
-        # installed here — only the Playwright Python package, which is
-        # what those unit tests actually need.
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,cli,capture]"
+        # Single source of truth — the same script ``ci-local.sh`` uses.
+        # See ``scripts/install-ci-deps.sh`` for why this is extracted.
+        run: ./scripts/install-ci-deps.sh
 
       - name: Lint with ruff
         run: ruff check .
@@ -57,9 +51,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,cli,capture]"
+        # Single source of truth — the same script ``ci-local.sh`` uses.
+        run: ./scripts/install-ci-deps.sh
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps

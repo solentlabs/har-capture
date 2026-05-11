@@ -100,6 +100,47 @@ _WAIT_FOR_DATA_INIT_SCRIPT = """\
 })();
 """
 
+_DIALOG_OBSERVER_INIT_SCRIPT = """\
+(function () {
+    // After the user resolves a native dialog, call straight back into Python
+    // via the page-exposed binding. No window-scoped queue, no Python-side
+    // polling — Playwright's expose_function is the first-class JS→Python
+    // bridge for this kind of cross-context callback.
+
+    var _alert = window.alert;
+    window.alert = function (message) {
+        _alert.call(window, message);
+        window.__harCaptureDialogResolved({
+            type: "alert",
+            message: String(message),
+            action: "accept"
+        });
+    };
+
+    var _confirm = window.confirm;
+    window.confirm = function (message) {
+        var accepted = _confirm.call(window, message);
+        window.__harCaptureDialogResolved({
+            type: "confirm",
+            message: String(message),
+            action: accepted ? "accept" : "dismiss"
+        });
+        return accepted;
+    };
+
+    var _prompt = window.prompt;
+    window.prompt = function (message, defaultValue) {
+        var value = _prompt.call(window, message, defaultValue);
+        window.__harCaptureDialogResolved({
+            type: "prompt",
+            message: String(message),
+            action: value === null ? "dismiss" : "accept"
+        });
+        return value;
+    };
+})();
+"""
+
 
 def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_S) -> None:
     """Wait until in-flight JS requests (XHR/fetch) reach zero.
@@ -262,6 +303,11 @@ class BrowserSessionResult:
         captured_bodies: Eagerly captured response bodies keyed by
             ``"<method>|<url>|<status>"`` — used to patch HAR entries
             whose bodies were evicted before Playwright flushed the HAR.
+        dialogs: Browser dialogs observed during interactive capture.
+            For headed, user-driven runs, each entry records the dialog type,
+            message, default value, inferred action (accept/dismiss), and that
+            the dialog was resolved by the browser UI. Headless or timed
+            captures keep Playwright's default auto-dismiss behavior.
         popups: One entry per page opened in the context after the initial
             page (i.e., popups via ``window.open`` / ``target="_blank"`` /
             ``context.new_page``). Each entry records the popup's initial
@@ -279,6 +325,7 @@ class BrowserSessionResult:
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
     captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    dialogs: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
@@ -527,6 +574,63 @@ def _run_browser_session(
             result.pre_capture_cookies = []
 
         page = context.new_page()
+        interactive_dialog_capture = not headless and timeout is None
+        if interactive_dialog_capture:
+            # Two-event model. (1) `page.on("dialog")` fires when the native
+            # dialog OPENS — we create the record and log it. (2) The exposed
+            # `__harCaptureDialogResolved` binding fires when the wrapped JS
+            # confirm/alert/prompt RETURNS after the user clicks — we update
+            # the open record with the outcome. No polling, no per-handler
+            # deadlock surface (Playwright's first-class JS→Python bridge
+            # delivers the resolution event directly).
+
+            def _on_dialog_open(dialog: Any) -> None:
+                dialog_info = {
+                    "type": getattr(dialog, "type", None),
+                    "message": getattr(dialog, "message", None),
+                    "default_value": getattr(dialog, "default_value", None),
+                    "opened_at": datetime.now().isoformat(timespec="seconds"),
+                    "action": "unknown",
+                    "resolved_by": "unknown",
+                }
+                result.dialogs.append(dialog_info)
+                _LOGGER.info(
+                    "Dialog opened: type=%s message=%r",
+                    dialog_info["type"],
+                    dialog_info["message"],
+                )
+
+            def _on_dialog_resolved(outcome: Any) -> None:
+                # ``outcome`` is annotated ``Any`` because it crosses the
+                # JS → Python bridge via ``page.expose_function`` — the
+                # static type is whatever JSON-compatible value JS sends.
+                # Match by (type, message) against the most recent unresolved
+                # dialog. Matching beats positional indexing because nested
+                # or concurrent dialogs would otherwise mis-correlate.
+                if not isinstance(outcome, dict):
+                    return
+                dialog_type = outcome.get("type")
+                message = outcome.get("message")
+                for entry in reversed(result.dialogs):
+                    if (
+                        entry["resolved_by"] == "unknown"
+                        and entry["type"] == dialog_type
+                        and entry["message"] == message
+                    ):
+                        entry["action"] = outcome.get("action", "unknown")
+                        entry["resolved_by"] = "browser_ui"
+                        _LOGGER.info(
+                            "Dialog resolved by browser_ui: type=%s action=%s message=%r",
+                            entry["type"],
+                            entry["action"],
+                            entry["message"],
+                        )
+                        return
+                _LOGGER.warning("Dialog resolution had no matching open record: %r", outcome)
+
+            page.expose_function("__harCaptureDialogResolved", _on_dialog_resolved)
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            page.on("dialog", _on_dialog_open)
 
         _is_first_nav = [True]
         _quiescence_disabled = [not wait_for_data]
@@ -786,6 +890,7 @@ def _inject_har_metadata(
         raw_har["log"]["_solentlabs"] = {
             "pre_capture_cookies": session.pre_capture_cookies,
             "popups": session.popups,
+            "dialogs": session.dialogs,
         }
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(raw_har, f)

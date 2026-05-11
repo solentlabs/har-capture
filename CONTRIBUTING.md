@@ -94,7 +94,7 @@ pre-commit run --all-files
 
 We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 type(scope): description
 
 [optional body]
@@ -115,7 +115,7 @@ Types:
 
 Examples:
 
-```
+```yaml
 feat(sanitization): add WiFi credential detection
 fix(cli): handle missing output directory
 docs: update installation instructions
@@ -160,7 +160,7 @@ test(validation): add PII detection tests
 
 ## Project Structure
 
-```
+```text
 har-capture/
 ├── src/har_capture/       # Main package
 │   ├── sanitization/      # PII removal

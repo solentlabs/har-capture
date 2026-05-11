@@ -73,11 +73,12 @@
     {"id": "webkit",   "browser": "webkit",   "launch_attr": "webkit"}
   ],
   "inject_metadata_cases": [
-    {"id": "all_metadata",  "has_probes": true,  "has_cookies": true,  "has_storage": true,  "has_popups": false},
-    {"id": "probes_only",   "has_probes": true,  "has_cookies": false, "has_storage": false, "has_popups": false},
-    {"id": "cookies_only",  "has_probes": false, "has_cookies": true,  "has_storage": false, "has_popups": false},
-    {"id": "storage_only",  "has_probes": false, "has_cookies": false, "has_storage": true,  "has_popups": false},
-    {"id": "empty_session", "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false},
-    {"id": "with_popups",   "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": true}
+    {"id": "all_metadata",  "has_probes": true,  "has_cookies": true,  "has_storage": true,  "has_popups": false, "has_dialogs": true},
+    {"id": "probes_only",   "has_probes": true,  "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "cookies_only",  "has_probes": false, "has_cookies": true,  "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "storage_only",  "has_probes": false, "has_cookies": false, "has_storage": true,  "has_popups": false, "has_dialogs": false},
+    {"id": "empty_session", "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": false},
+    {"id": "with_popups",   "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": true,  "has_dialogs": false},
+    {"id": "with_dialogs",  "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": true}
   ]
 }

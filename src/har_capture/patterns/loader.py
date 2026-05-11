@@ -130,8 +130,73 @@ def _load_custom_patterns(custom: Path | str | dict[str, Any]) -> dict[str, Any]
         PatternLoadError: If file cannot be loaded
     """
     if isinstance(custom, dict):
-        return custom
-    return load_json_file(custom)
+        data = custom
+        source = "<dict>"
+    else:
+        data = load_json_file(custom)
+        source = str(custom)
+    _warn_on_json_regex_escape_traps(data, source)
+    return data
+
+
+# Control characters that almost certainly indicate a JSON-vs-regex escape mistake
+# rather than an intentional regex literal. JSON parses "\b" to ASCII backspace
+# (\x08); a user writing \b for a regex word-boundary needs "\\b" in their JSON
+# source. Same trap exists for "\f" (form feed \x0c) intended as regex \f.
+# See issue #51.
+_JSON_REGEX_ESCAPE_TRAPS = {
+    "\x08": (r"\b", "word-boundary"),
+    "\x0c": (r"\f", "form-feed"),
+}
+
+
+def _warn_on_json_regex_escape_traps(data: dict[str, Any], source: str) -> None:
+    r"""Scan custom pattern data for regex strings that hit the JSON escape trap.
+
+    JSON's string-escape rules collapse ``\b`` to ASCII backspace before the
+    regex compiler sees it. The pattern then compiles successfully (no error)
+    but matches nothing - a silent failure that ships PII through. This walks
+    the pattern dict and logs a warning per offending value so the user has
+    *some* diagnostic instead of a quiet no-op. See issue #51.
+    """
+
+    def _check_value(value: Any, path: str) -> None:
+        if not isinstance(value, str):
+            return
+        for control_char, (intended, name) in _JSON_REGEX_ESCAPE_TRAPS.items():
+            if control_char in value:
+                _LOGGER.warning(
+                    "Pattern file %s: %s contains ASCII %s (\\x%02x), almost "
+                    "certainly an unintended %r escape. JSON parses %r as the "
+                    "control character; a regex %s requires %r in the JSON "
+                    "source. The pattern will compile but never match.",
+                    source,
+                    path,
+                    name,
+                    ord(control_char),
+                    intended,
+                    intended,
+                    name,
+                    intended.replace("\\", "\\\\"),
+                )
+
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                # Only inspect string values where regex semantics are plausible —
+                # the `regex` key on a pattern definition, and entries inside
+                # `auto_redact_patterns` / `flag_patterns` / `safe_value_patterns` /
+                # other regex-list keys. To stay broad and forgiving, we inspect
+                # any string value under a recognisable key path; that's far
+                # cheaper than hand-maintaining a list of regex-bearing keys.
+                _walk(v, f"{path}.{k}" if path else k)
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                _walk(item, f"{path}[{i}]")
+        else:
+            _check_value(node, path)
+
+    _walk(data, "")
 
 
 def _apply_pattern_inclusions(patterns: dict[str, Any], inclusions: list[str]) -> None:

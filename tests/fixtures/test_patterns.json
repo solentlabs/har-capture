@@ -1,0 +1,31 @@
+{
+  "_comment": "Pattern-file fixtures for tests/test_cli/test_patterns.py. Each entry is the JSON content of a tmp pattern file written during the test — every field is exercised by an assertion in the corresponding test.",
+
+  "show_external_full_domain": {
+    "_description": "Test fixture domain",
+    "heuristics": {
+      "safe_value_patterns": [
+        {"regex": "^foo$", "_comment": "matches literal foo"}
+      ]
+    },
+    "tagValueList": {
+      "safe_values": ["alpha", "beta"]
+    }
+  },
+
+  "show_minimal_only_description": {
+    "_description": "Bare-bones"
+  },
+
+  "show_no_description": {
+    "heuristics": {}
+  },
+
+  "show_safe_pattern_without_comment": {
+    "heuristics": {
+      "safe_value_patterns": [
+        {"regex": "^bareregex$"}
+      ]
+    }
+  }
+}

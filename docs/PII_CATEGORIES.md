@@ -12,7 +12,7 @@ har-capture sanitizes the following categories of personally identifiable inform
 
 **Examples:**
 
-```
+```text
 AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 00-11-22-33-44-55 → 02-7f-8e-9d-2c-01
 ```
@@ -29,7 +29,7 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 
 **Examples:**
 
-```
+```text
 192.168.1.100   → 10.255.42.17
 10.0.0.5        → 10.255.73.29
 172.16.0.1      → 10.255.91.44
@@ -47,7 +47,7 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 
 **Examples:**
 
-```
+```text
 8.8.8.8         → 192.0.2.42
 1.1.1.1         → 192.0.2.73
 203.0.113.5     → 192.0.2.91
@@ -65,7 +65,7 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 
 **Examples:**
 
-```
+```text
 fe80::1                    → 2001:db8::a1b2:c3d4
 2001:0db8::8a2e:0370:7334 → 2001:db8::e5f6:a7b8
 ```
@@ -83,7 +83,7 @@ fe80::1                    → 2001:db8::a1b2:c3d4
 
 **Examples:**
 
-```
+```text
 user@example.com     → user_a1b2c3d4@redacted.invalid
 john.doe@company.org → john.doe_e5f6a7b8@redacted.invalid
 ```
@@ -100,7 +100,7 @@ john.doe@company.org → john.doe_e5f6a7b8@redacted.invalid
 
 **Examples:**
 
-```
+```text
 +1-555-123-4567  → PHONE_a1b2c3d4
 (555) 123-4567   → PHONE_e5f6a7b8
 555.123.4567     → PHONE_1a2b3c4d
@@ -119,7 +119,7 @@ john.doe@company.org → john.doe_e5f6a7b8@redacted.invalid
 
 **Examples:**
 
-```
+```yaml
 password=secret123     → password=PASS_a1b2c3d4  # pragma: allowlist secret
 Authorization: Basic   → Authorization: Basic PASS_e5f6a7b8  # pragma: allowlist secret
 var pwd = "hunter2"    → var pwd = "PASS_1a2b3c4d"  # pragma: allowlist secret
@@ -136,7 +136,7 @@ var pwd = "hunter2"    → var pwd = "PASS_1a2b3c4d"  # pragma: allowlist secret
 
 **Examples:**
 
-```
+```yaml
 Cookie: session=abc123      → Cookie: session=TOKEN_a1b2c3d4
 Authorization: Bearer xyz   → Authorization: Bearer TOKEN_e5f6a7b8
 ?token=def456               → ?token=TOKEN_1a2b3c4d
@@ -148,7 +148,7 @@ Authorization: Bearer xyz   → Authorization: Bearer TOKEN_e5f6a7b8
 
 **Examples:**
 
-```
+```text
 AKIAIOSFODNN7EXAMPLE     → APIKEY_a1b2c3d4  # pragma: allowlist secret
 sk_live_abcd1234         → APIKEY_e5f6a7b8  # pragma: allowlist secret
 ```
@@ -161,7 +161,7 @@ sk_live_abcd1234         → APIKEY_e5f6a7b8  # pragma: allowlist secret
 
 **Examples:**
 
-```
+```text
 SN1234567890    → SERIAL_a1b2c3d4
 S/N: AB-12345   → S/N: SERIAL_e5f6a7b8
 ```
@@ -172,7 +172,7 @@ S/N: AB-12345   → S/N: SERIAL_e5f6a7b8
 
 **Examples:**
 
-```
+```text
 Johns-iPhone        → DEVICE_a1b2c3d4
 MyLaptop-Home       → DEVICE_e5f6a7b8
 SmartTV-LivingRoom  → DEVICE_1a2b3c4d
@@ -184,7 +184,7 @@ SmartTV-LivingRoom  → DEVICE_1a2b3c4d
 
 **Examples:**
 
-```
+```text
 MyHomeWiFi      → SSID_a1b2c3d4
 Apartment_5B    → SSID_e5f6a7b8
 ```
@@ -201,7 +201,7 @@ Apartment_5B    → SSID_e5f6a7b8
 
 **Examples:**
 
-```
+```yaml
 wifiPassword: "secret"  → wifiPassword: "WIFIPASS_a1b2c3d4"  # pragma: allowlist secret
 wpaKey: "hunter2"       → wpaKey: "WIFIPASS_e5f6a7b8"  # pragma: allowlist secret
 ```
@@ -222,7 +222,7 @@ wpaKey: "hunter2"       → wpaKey: "WIFIPASS_e5f6a7b8"  # pragma: allowlist sec
 
 **Examples:**
 
-```
+```yaml
 Authorization: Bearer abc123  → Authorization: Bearer TOKEN_a1b2c3d4
 Cookie: session=xyz           → Cookie: session=TOKEN_e5f6a7b8
 ```
@@ -233,7 +233,7 @@ Cookie: session=xyz           → Cookie: session=TOKEN_e5f6a7b8
 
 **Examples:**
 
-```
+```text
 ?api_key=abc123           → ?api_key=TOKEN_a1b2c3d4
 ?password=secret          → ?password=PASS_e5f6a7b8
 ?oauth_token=xyz          → ?oauth_token=TOKEN_1a2b3c4d
@@ -250,7 +250,7 @@ Cookie: session=xyz           → Cookie: session=TOKEN_e5f6a7b8
 
 **Examples:**
 
-```
+```text
 password=hunter2       → password=PASS_a1b2c3d4
 cc_number=4111111111   → cc_number=CCNUM_e5f6a7b8
 ```
@@ -268,7 +268,7 @@ When enabled (`HeuristicMode.FLAG` or `HeuristicMode.REDACT`), har-capture also 
 
 **Examples:**
 
-```
+```text
 YWJjZGVmMTIzNDU2    → (flagged for review)
 550e8400-e29b-41d4  → (flagged for review)
 ```

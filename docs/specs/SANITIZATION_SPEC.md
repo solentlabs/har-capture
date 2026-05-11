@@ -17,7 +17,7 @@ This spec describes the three-engine sanitization pipeline that processes HAR fi
 
 ## Architecture Overview
 
-```
+```text
                     ┌────────────────────────────┐
                     │      Pattern Loading       │
                     │  pii.json + sensitive.json │
@@ -452,7 +452,7 @@ hasher = Hasher.create(salt)  # salt = "auto" | None | custom_string
 
 ### Algorithm
 
-```
+```text
 input = normalize(value)  # lowercase for MAC/email
 digest = SHA-256(salt + ":" + prefix + ":" + input)
 output = format(digest[:N])  # N bytes depending on output format

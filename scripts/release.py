@@ -30,6 +30,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -116,22 +117,12 @@ def check_tag_exists(version: str) -> bool:
         return False
 
 
-def check_ci_passed_on_head() -> bool:
-    """Verify that CI passed on the current HEAD commit.
+def _fetch_check_runs(head_sha: str) -> tuple[list[str], list[str], int] | None:
+    """Query GitHub for check-run state on ``head_sha``.
 
-    Uses the GitHub CLI to query check runs on HEAD. Ensures at least one
-    CI run exists and all completed successfully. This catches the failure
-    mode where code is merged to main without CI running (e.g. --admin merge).
+    Returns ``(failed, in_progress, total_count)`` or ``None`` on transport
+    error. Empty lists mean every check completed successfully.
     """
-    print_info("Checking CI status on HEAD...")
-
-    head_sha = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-
     try:
         result = subprocess.run(
             ["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{head_sha}/check-runs"],
@@ -141,23 +132,16 @@ def check_ci_passed_on_head() -> bool:
         )
     except FileNotFoundError:
         print_error("GitHub CLI (gh) not found. Install it: https://cli.github.com/")
-        return False
+        return None
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to query GitHub CI status: {e.stderr.strip()}")
-        return False
+        return None
 
     data = json.loads(result.stdout)
     check_runs = data.get("check_runs", [])
 
-    if not check_runs:
-        print_error("No CI check runs found on HEAD commit.")
-        print_error(f"  HEAD: {head_sha[:12]}")
-        print_error("  Trigger CI manually: gh workflow run ci.yml --ref main")
-        print_error("  Then wait for it to complete before re-running this script.")
-        return False
-
-    failed = []
-    in_progress = []
+    failed: list[str] = []
+    in_progress: list[str] = []
     for run in check_runs:
         name = run.get("name", "unknown")
         status = run.get("status", "unknown")
@@ -168,17 +152,75 @@ def check_ci_passed_on_head() -> bool:
         elif conclusion != "success":
             failed.append(f"{name} ({conclusion})")
 
-    if in_progress:
-        print_error(f"CI still running: {', '.join(in_progress)}")
-        print_error("  Wait for CI to complete before tagging.")
-        return False
+    return failed, in_progress, len(check_runs)
+
+
+# How long to wait for an in-progress CI run before giving up.
+# Long enough to cover a typical full matrix + coverage run (~3-4 min)
+# with headroom; short enough that a hung CI eventually fails the script
+# instead of waiting forever.
+_CI_WAIT_TIMEOUT_S = 600
+_CI_POLL_INTERVAL_S = 20
+
+
+def check_ci_passed_on_head() -> bool:
+    """Verify that CI passed on the current HEAD commit.
+
+    Polls the GitHub check-runs API for HEAD; if any check is still
+    in-progress, waits up to ``_CI_WAIT_TIMEOUT_S`` seconds with
+    progress feedback before giving up. The poll loop avoids the
+    "rerun the script in 30 seconds" papercut that surfaced during
+    the v0.8.1 / v0.8.2 releases — twice in the same session — where
+    a stale-read of an in-flight CI run forced a manual retry.
+    """
+    print_info("Checking CI status on HEAD...")
+
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    deadline = time.monotonic() + _CI_WAIT_TIMEOUT_S
+    last_in_progress: list[str] = []
+
+    while True:
+        fetched = _fetch_check_runs(head_sha)
+        if fetched is None:
+            return False
+        failed, in_progress, total = fetched
+
+        if total == 0:
+            print_error("No CI check runs found on HEAD commit.")
+            print_error(f"  HEAD: {head_sha[:12]}")
+            print_error("  Trigger CI manually: gh workflow run ci.yml --ref main")
+            print_error("  Then wait for it to complete before re-running this script.")
+            return False
+
+        if not in_progress:
+            break  # everything is completed; check failures next
+
+        # Progress signal — only re-print when the in-progress set changes
+        # so the log doesn't fill with duplicate lines on long runs.
+        if in_progress != last_in_progress:
+            print_info(f"  CI still running: {', '.join(in_progress)} (waiting up to {_CI_WAIT_TIMEOUT_S}s)")
+            last_in_progress = in_progress
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print_error(f"CI did not complete within {_CI_WAIT_TIMEOUT_S}s: {', '.join(in_progress)}")
+            print_error("  Investigate why CI is slow or stuck before re-running.")
+            return False
+
+        time.sleep(min(_CI_POLL_INTERVAL_S, remaining))
 
     if failed:
         print_error(f"CI failed: {', '.join(failed)}")
         print_error("  Fix CI failures before tagging.")
         return False
 
-    print_success(f"CI passed on HEAD ({head_sha[:12]}, {len(check_runs)} check(s))")
+    print_success(f"CI passed on HEAD ({head_sha[:12]}, {total} check(s))")
     return True
 
 
@@ -318,6 +360,220 @@ def create_and_push_tag(version: str) -> bool:
         return False
 
 
+# =============================================================================
+# Release-discipline audit (gates A + B + E)
+# =============================================================================
+#
+# Three reinforcing checks driven by the v0.8.1 → v0.8.3 case study, where
+# we cut three releases for what should have been one. The pattern across
+# all three: I (Claude) made decisions at the moment of "should I push?"
+# that violated rules I had just written down — the AI knowing-not-applying
+# flaw. Each individual check is rubber-stampable in isolation; the value
+# is the combination plus Ken's external sign-off, which is the only
+# component I cannot route around.
+#
+#   A. ``scan_for_anti_patterns`` — greps recent git log for known
+#      anti-pattern signatures ("pre-existing" framing, retry-past
+#      bypasses, deferral words). Reports findings. Catches naive-honest
+#      Claude. Brittle to phrasing-drift but cheap and high-signal on
+#      today's known modes.
+#   B. ``print_audit_checklist`` — prints a diff-grounded checklist on
+#      every invocation (including ``--dry-run``). Each question is tied
+#      to today's failure modes. Visibility-to-Ken is the actual gate;
+#      I answering "no" doesn't help if the answer is wrong.
+#   E. ``require_signoff`` — blocks tag-push on Ken typing a per-release
+#      phrase. The unfakeable component. Required only on real run, not
+#      dry-run. No bypass flag — auto-release contexts need a different
+#      code path.
+
+# Anti-pattern signatures. ``BLOCK`` aborts the release; ``WARN`` prints
+# a warning that's bundled into the checklist Ken reads before sign-off.
+_ANTI_PATTERN_SCANS: list[tuple[str, str, str]] = [
+    (
+        "BLOCK",
+        r"(?i)\bpre[-\s]?existing\b",
+        '"pre-existing" framing in commit messages — every "pre-existing" '
+        "item I noticed during this session is in-scope for this release. "
+        "Either fix it inline or get explicit deferral sign-off.",
+    ),
+    (
+        "WARN",
+        r"--no-verify\b|--no-cov\b|--no-gpg-sign\b",
+        "commit messages reference a quality-gate bypass flag — verify "
+        "these weren't used to skip checks that would have caught issues.",
+    ),
+    (
+        "WARN",
+        r"(?i)\b(papercut|minor flake|deferred|retry past|retry-past)\b",
+        "commit messages contain words that often mark deferred items "
+        "(papercut / flake / deferred / retry past) — confirm the "
+        "underlying issue is fixed in this release, not punted forward.",
+    ),
+]
+
+
+def _commits_since_last_tag(repo_root: Path) -> tuple[str, str | None, int]:
+    """Return ``(log_text, last_tag_or_None, commit_count)`` since last release."""
+    tags = (
+        subprocess.run(
+            ["git", "tag", "--sort=-v:refname", "-l", "v*"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        .stdout.strip()
+        .splitlines()
+    )
+    last_tag = tags[0] if tags and tags[0] else None
+
+    log_range = f"{last_tag}..HEAD" if last_tag else "HEAD"
+    log_args = ["git", "log", log_range, "--format=%H %s%n%b%n---"]
+    log = subprocess.run(log_args, cwd=repo_root, capture_output=True, text=True, check=True).stdout
+
+    count_args = ["git", "rev-list", "--count", log_range]
+    count = int(
+        subprocess.run(count_args, cwd=repo_root, capture_output=True, text=True, check=True).stdout.strip()
+    )
+    return log, last_tag, count
+
+
+def scan_log_for_anti_patterns(log_text: str) -> tuple[list[str], list[str]]:
+    """Pure: scan arbitrary log text for anti-pattern signatures.
+
+    Returns ``(blockers, warnings)``. Extracted from
+    ``scan_for_anti_patterns`` so the regex behaviour is unit-testable
+    without git fixtures — the wrapper just fetches the log and
+    delegates here.
+    """
+    blockers: list[str] = []
+    warnings: list[str] = []
+    for severity, pattern, message in _ANTI_PATTERN_SCANS:
+        if re.search(pattern, log_text):
+            (blockers if severity == "BLOCK" else warnings).append(message)
+    return blockers, warnings
+
+
+def scan_for_anti_patterns(repo_root: Path) -> tuple[list[str], list[str]]:
+    """Scan commits since last tag for known anti-pattern signatures.
+
+    Returns ``(blockers, warnings)``. ``blockers`` aborts the release
+    unless ``--acknowledged "<reason>"`` is passed; ``warnings`` are
+    advisory and printed in the audit Ken reads before signing off.
+    """
+    log, _, _ = _commits_since_last_tag(repo_root)
+    return scan_log_for_anti_patterns(log)
+
+
+def print_audit_checklist(
+    target_version: str, repo_root: Path, blockers: list[str], warnings: list[str]
+) -> None:
+    """Print the diff-grounded release-discipline audit on stdout.
+
+    Visibility to Ken is the actual gate — these questions are
+    rubber-stampable when self-graded but become harder to ignore
+    when tied to specific commit/diff context and printed in the
+    log Ken reads before sign-off.
+    """
+    _, last_tag, count = _commits_since_last_tag(repo_root)
+    files = (
+        subprocess.run(
+            ["git", "diff", "--name-only", f"{last_tag or 'HEAD~1'}..HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        .stdout.strip()
+        .splitlines()
+    )
+
+    print()
+    print("=" * 72)
+    print(f"  Release-discipline audit — v{target_version}")
+    print("=" * 72)
+    print()
+    print(
+        f"  Diff context: {count} commit(s) since {last_tag or 'project start'}, "
+        f"{len(files)} file(s) changed."
+    )
+    if files:
+        preview = files[:8]
+        for f in preview:
+            print(f"    • {f}")
+        if len(files) > 8:
+            print(f"    … {len(files) - 8} more")
+    print()
+    print("  Self-audit (Claude must have answered NO to each before push):")
+    print()
+    print("    1. Did anything I'd frame as 'pre-existing' surface during this")
+    print("       session? Every such item is in-scope for THIS release;")
+    print("       deferral requires Ken's explicit sign-off, not silence.")
+    print()
+    print("    2. Did I introduce duplication or hidden contracts in files I")
+    print("       touched? CLAUDE.md rule 3: DRY non-negotiable.")
+    print()
+    print("    3. Did I retry past any test failure / flake / CI papercut")
+    print("       during this session? Root cause first, then ship.")
+    print()
+    print("    4. Does the CHANGELOG entry for this release conflate")
+    print("       session-debt with pre-existing follow-ups? Separate them.")
+    print()
+    print("    5. Is this exactly one PR with code+tests+CHANGELOG+version?")
+    print("       No parking on main as [Unreleased] between PRs.")
+    print()
+
+    if warnings:
+        print("  Anti-pattern WARNINGS (advisory):")
+        for w in warnings:
+            print(f"    ⚠ {w}")
+        print()
+    if blockers:
+        print("  Anti-pattern BLOCKERS (release will not proceed):")
+        for b in blockers:
+            print(f"    ✗ {b}")
+        print()
+
+
+def expected_signoff_phrase(target_version: str) -> str:
+    """Pure: the exact phrase that authorizes ``target_version``."""
+    return f"RELEASE OK {target_version}"
+
+
+def check_signoff_phrase(target_version: str, response: str) -> bool:
+    """Pure: does ``response`` match the expected phrase exactly (after strip)?"""
+    return response.strip() == expected_signoff_phrase(target_version)
+
+
+def require_signoff(target_version: str) -> bool:
+    """Block tag-push until Ken types the per-release authorization phrase.
+
+    The phrase is intentionally short enough that it doesn't induce
+    bypass-frustration but specific enough (per-version) that muscle
+    memory can't auto-confirm. There is no ``--yes`` / ``--no-confirm``
+    flag — that escape hatch defeats the purpose. CI auto-release
+    workflows are a separate concern that needs its own design.
+    """
+    expected = expected_signoff_phrase(target_version)
+    print()
+    print("To authorize the tag push, type the following exactly and press Enter:")
+    print(f"    {expected}")
+    print()
+    sys.stdout.write("> ")
+    sys.stdout.flush()
+    try:
+        response = sys.stdin.readline().rstrip("\n").rstrip("\r")
+    except (EOFError, KeyboardInterrupt):
+        print_error("Sign-off cancelled.")
+        return False
+
+    if not check_signoff_phrase(target_version, response):
+        print_error(f"Sign-off phrase mismatch. Expected exactly: {expected!r}")
+        print_error(f"Got: {response.strip()!r}")
+        return False
+    return True
+
+
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -337,6 +593,15 @@ Workflow:
         "--dry-run",
         action="store_true",
         help="Validate only, don't create or push the tag",
+    )
+    parser.add_argument(
+        "--acknowledged",
+        metavar="REASON",
+        help=(
+            "Acknowledge a release-discipline BLOCKER and proceed anyway. "
+            "REASON must explain why the blocker is acceptable for this "
+            "release. Does not bypass Ken's sign-off (E)."
+        ),
     )
 
     args = parser.parse_args()
@@ -396,11 +661,32 @@ Workflow:
         sys.exit(1)
     print()
 
+    # === RELEASE-DISCIPLINE AUDIT (A + B) ===
+    blockers, warnings = scan_for_anti_patterns(repo_root)
+    print_audit_checklist(version, repo_root, blockers, warnings)
+
+    if blockers and not args.acknowledged:
+        print_error(
+            "Release blocked by anti-pattern findings above. Either fix "
+            "each finding inline or re-invoke with "
+            '--acknowledged "<reason this is acceptable>".'
+        )
+        sys.exit(1)
+    if blockers and args.acknowledged:
+        print_info(f"Acknowledged blockers: {args.acknowledged}")
+        print()
+
     # === TAG PHASE ===
     if args.dry_run:
         print_success(f"Dry run passed! v{version} is ready to tag.")
         print_info("  Run without --dry-run to create and push the tag.")
         return
+
+    # === SIGN-OFF (E) — the unfakeable component ===
+    if not require_signoff(version):
+        print_error("Sign-off required to proceed; aborting.")
+        sys.exit(1)
+    print()
 
     print_info("=== Tagging ===")
 

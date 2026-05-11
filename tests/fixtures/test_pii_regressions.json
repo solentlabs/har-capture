@@ -1,0 +1,72 @@
+{
+  "_comment": "PII regression cases drawn from real user-reported leaks. Each row is a value that should be flagged by the heuristic engine with a meaningful category for the Pass 2 review UI. Sources: issues #47, #49.",
+  "heuristic_regression_cases": [
+    {
+      "value": "6JT1277YDEAAE",
+      "should_flag": true,
+      "expected_category": "serial_number",
+      "id": "netgear_c7000v2_serial",
+      "source": "issue #49 — Netgear C7000v2 RouterStatus.htm serial format [0-9][A-Z]{2}[0-9]{4}[A-Z0-9]{6}"
+    },
+    {
+      "value": "SPSETUP-9F3A2",
+      "should_flag": true,
+      "expected_category": "wifi_ssid",
+      "id": "spsetup_default_ssid",
+      "source": "issue #47 — default SSID format SPSETUP-xxxx"
+    },
+    {
+      "value": "Password999here",
+      "should_flag": true,
+      "expected_category": "credential",
+      "id": "default_password_mixed",
+      "source": "issue #47 — default password format with prefix word + digits + suffix"
+    },
+    {
+      "value": "7TH4582JK9QP",
+      "should_flag": true,
+      "expected_category": "serial_number",
+      "id": "generic_uppercase_alnum_serial",
+      "source": "issue #47 — SN-HERE placeholder; representative 12-char uppercase-alphanumeric serial token covered by the broader serial_number backstop"
+    }
+  ],
+  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in the regex layer — see regex_layer_regression_cases below. Heuristics can't disambiguate a WPS PIN from a packet counter; the adjacent label is what makes 100% confidence achievable per CLAUDE.md principle #7.",
+
+  "regex_layer_regression_cases": [
+    {
+      "input_html": "WPS PIN: 12345678",
+      "leaked_value": "12345678",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_inline",
+      "source": "issue #47 — WPS PIN sanitization"
+    },
+    {
+      "input_html": "<td>WPS PIN</td><td>87654321</td>",
+      "leaked_value": "87654321",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_inline_html",
+      "source": "issue #47 — WPS PIN sanitization (HTML)"
+    },
+    {
+      "input_html": "PIN Code: 11223344",
+      "leaked_value": "11223344",
+      "expected_prefix": "PIN_",
+      "id": "pin_code_label",
+      "source": "issue #47 — alternate label format"
+    },
+    {
+      "input_html": "WPS-PIN 99887766",
+      "leaked_value": "99887766",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_hyphenated_label",
+      "source": "issue #47 — hyphenated label variant"
+    },
+    {
+      "input_html": "Pairing PIN = 55667788",
+      "leaked_value": "55667788",
+      "expected_prefix": "PIN_",
+      "id": "pairing_pin_equals",
+      "source": "issue #47 — pairing-PIN label, equals separator"
+    }
+  ]
+}

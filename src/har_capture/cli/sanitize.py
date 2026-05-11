@@ -6,10 +6,11 @@ import gzip
 import json
 import sys
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
 
+from har_capture.cli._patterns_resolver import require_patterns
 from har_capture.patterns import PatternLoadError
 from har_capture.sanitization.report import HeuristicMode
 
@@ -52,7 +53,11 @@ def sanitize(
     ] = False,
     patterns: Annotated[
         list[str] | None,
-        typer.Option("--patterns", "-p", help="Pattern names or JSON file paths (repeatable)"),
+        typer.Option(
+            "--patterns",
+            "-p",
+            help="Required. Pattern domain (e.g. 'network-device'), 'base' for universal PII only, or JSON path. Repeatable.",
+        ),
     ] = None,
     max_size: Annotated[
         int | None,
@@ -97,6 +102,10 @@ def sanitize(
     """
     from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
 
+    # Validate --patterns up front so a user running `har-capture sanitize FILE`
+    # without choosing a domain gets the listing error before any disk I/O.
+    custom_patterns = require_patterns(patterns)
+
     if not input_file.exists():
         typer.echo(f"Error: File not found: {input_file}", err=True)
         raise typer.Exit(1)
@@ -124,17 +133,6 @@ def sanitize(
             report = Path(str(input_file) + ".review.json")
 
     output_path = str(output) if output else None
-
-    # Resolve --patterns args (names → built-in paths, file paths → validated)
-    custom_patterns: str | dict[str, Any] | None = None
-    if patterns:
-        from har_capture.patterns.loader import merge_pattern_files, resolve_patterns_arg
-
-        resolved = [resolve_patterns_arg(p) for p in patterns]
-        if len(resolved) == 1:
-            custom_patterns = str(resolved[0])
-        else:
-            custom_patterns = merge_pattern_files(resolved)
 
     # Convert max_size from MB to bytes (0 = unlimited)
     max_size_bytes: int | None = None
