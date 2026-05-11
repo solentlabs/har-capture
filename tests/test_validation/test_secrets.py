@@ -319,21 +319,12 @@ def test_validate_har(
 
 def test_validate_har_gzipped(tmp_path) -> None:
     """Test validation of gzipped HAR file."""
+    import copy
     import gzip
+    from pathlib import Path
 
-    har_data = {
-        "log": {
-            "entries": [
-                {
-                    "request": {
-                        "url": "http://example.com",
-                        "headers": [{"name": "Cookie", "value": "session=abc123"}],
-                    },
-                    "response": {"headers": []},
-                }
-            ]
-        }
-    }
+    fixtures = json.loads((Path(__file__).parent.parent / "fixtures" / "test_secrets.json").read_text())
+    har_data = copy.deepcopy(fixtures["validate_har_gzipped"])
     har_file = tmp_path / "test.har.gz"
     with gzip.open(har_file, "wt", encoding="utf-8") as f:
         json.dump(har_data, f)

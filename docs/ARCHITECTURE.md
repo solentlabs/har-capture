@@ -120,7 +120,7 @@ The core Playwright session. Key design decisions:
 
 **Wait-for-data**: An init script monkey-patches `XMLHttpRequest.send` and `window.fetch` to track in-flight requests via `window.__harCapturePendingRequests`. After each navigation, the system polls this counter until 2 seconds of network silence (vs Playwright's 500ms `networkidle`). A `framenavigated` event listener ensures async data completes before page transitions. Disabled in `--minimal` mode for devices with persistent connections.
 
-**State capture**: After navigation, cookies (`context.cookies()`), localStorage (`context.storage_state()`), and sessionStorage (JS evaluation) are captured and injected into the HAR as `_har_capture` metadata.
+**State capture**: After navigation, cookies (`context.cookies()`), localStorage (`context.storage_state()`), and sessionStorage (JS evaluation) are captured and injected into the HAR as `_har_capture` metadata. Context-level browser events that matter for downstream analysis are also surfaced under `_solentlabs`: `pre_capture_cookies` for clean-session auditing, `popups` when the device opens a new page, and interactive JavaScript `dialogs` when a headed user-driven capture resolves a native `alert` / `confirm` / `prompt` in the browser UI.
 
 **Error recovery**: Missing browser executables and system dependencies are detected by pattern matching, fixed automatically (reinstall), and retried once.
 
@@ -128,7 +128,7 @@ See [Capture Spec](specs/CAPTURE_SPEC.md) for full details (context config, wait
 
 ### Post-Capture Processing
 
-After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies` audit) → sanitization (Pass 1) → interactive review (Pass 2) → bloat filtering + deduplication → gzip compression → temp file cleanup.
+After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies`, `_solentlabs.popups`, `_solentlabs.dialogs`) → sanitization (Pass 1) → interactive review (Pass 2) → bloat filtering + deduplication → gzip compression → temp file cleanup.
 
 The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
 

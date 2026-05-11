@@ -57,7 +57,7 @@ SERIAL_PATTERNS: list[re.Pattern[str]] = [
 IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
 
 
-def _load_sensitive_headers(custom_patterns: str | None = None) -> list[str]:
+def _load_sensitive_headers(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
     """Load sensitive header names from patterns.
 
     Args:
@@ -73,7 +73,7 @@ def _load_sensitive_headers(custom_patterns: str | None = None) -> list[str]:
     return result
 
 
-def _load_sensitive_fields(custom_patterns: str | None = None) -> list[str]:
+def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
     """Load sensitive field patterns from patterns file.
 
     Pre-commit validation should warn about ALL sensitive patterns
@@ -95,7 +95,7 @@ def _load_sensitive_fields(custom_patterns: str | None = None) -> list[str]:
     return patterns
 
 
-def _compile_sensitive_fields(custom_patterns: str | None = None) -> list[re.Pattern[str]]:
+def _compile_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[re.Pattern[str]]:
     """Compile sensitive field patterns for efficient matching.
 
     Args:
@@ -126,7 +126,7 @@ class Finding:
     reason: str  # Why it's flagged
 
 
-def is_redacted(value: str, custom_patterns: str | None = None) -> bool:
+def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
     """Check if a value appears to be properly redacted.
 
     This function now delegates to the consolidated redaction module for
@@ -214,7 +214,7 @@ def check_url(
     url: str,
     location: str,
     findings: list[Finding],
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check URL query parameters for base64-encoded credentials.
 
@@ -264,7 +264,7 @@ def check_headers(
     headers: list[dict[str, str]],
     location: str,
     findings: list[Finding],
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check headers for sensitive values.
 
@@ -305,7 +305,7 @@ def check_post_data(
     post_data: dict[str, Any] | None,
     location: str,
     findings: list[Finding],
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check POST data for sensitive fields.
 
@@ -358,7 +358,7 @@ def _check_xml_fields(
     text: str,
     location: str,
     findings: list[Finding],
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check XML body for sensitive element names.
 
@@ -423,7 +423,7 @@ def check_json_fields(
     location: str,
     findings: list[Finding],
     path: str = "",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     _sensitive_fields: list[re.Pattern[str]] | None = None,
     _depth: int = 0,
 ) -> None:
@@ -493,7 +493,7 @@ def check_content(
     content: str,
     location: str,
     findings: list[Finding],
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -562,7 +562,7 @@ def check_content(
 
 def validate_har(
     har_path: Path | str,
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> list[Finding]:
     """Validate a HAR file for secrets/PII.
 

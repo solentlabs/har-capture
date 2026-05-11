@@ -62,10 +62,13 @@ def patterns(
         typer.echo("No built-in pattern domains found.")
         return
 
-    typer.echo("Available pattern domains:")
+    typer.echo("Available pattern choices (--patterns is required):")
     typer.echo()
+    typer.echo(f"  {'base':<20} Universal PII only (no domain extensions)")
     for d in domains:
-        typer.echo(f"  {d['name']:<20} {d['description']}")
+        name = d["name"].replace("_", "-")
+        typer.echo(f"  {name:<20} {d['description']}")
+    typer.echo(f"  {'<path/to.json>':<20} Custom pattern file")
     typer.echo()
     typer.echo("Usage: har-capture get <url> --patterns <name>")
     typer.echo("       har-capture sanitize <file> --patterns <name>")

@@ -359,7 +359,7 @@ The built-in network device domain provides:
 
 When multiple `--patterns` arguments are specified:
 
-```
+```text
 Layer 1: Core patterns (always loaded)
   pii.json + sensitive.json + allowlist.json + capture.json
 
@@ -482,7 +482,7 @@ def clear_pattern_cache() -> None:
 
 Example cache keys:
 
-```
+```text
 "pii:/home/user/patterns/custom.json"
 "sensitive:/home/user/.local/lib/python/har_capture/patterns/domains/network_device.json"
 "allowlist:None"  # When no custom path

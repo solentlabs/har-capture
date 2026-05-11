@@ -35,6 +35,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from har_capture.capture.browser import (
+    _DIALOG_OBSERVER_INIT_SCRIPT,
+    _WAIT_FOR_DATA_INIT_SCRIPT,
     BrowserSessionResult,
     CaptureOptions,
     _add_capture_metadata,
@@ -1486,7 +1488,7 @@ class TestWaitForData:
         )
 
         if expect_init_js:
-            mock_page.add_init_script.assert_called_once()
+            mock_page.add_init_script.assert_called_once_with(_WAIT_FOR_DATA_INIT_SCRIPT)
         else:
             mock_page.add_init_script.assert_not_called()
 
@@ -2269,6 +2271,175 @@ class TestPopupHandler:
         )
 
 
+class TestDialogHandler:
+    """Behavior of the ``page.on('dialog', ...)`` handler.
+
+    Dialog capture is enabled only for interactive headed runs. These
+    tests reach into the mocked page event registration to exercise the
+    real handler closure and confirm the inferred browser-UI outcome is
+    recorded into ``_solentlabs.dialogs`` metadata.
+    """
+
+    @staticmethod
+    def _extract_dialog_handler(mock_page: MagicMock) -> Any:
+        """Find the ``page.on('dialog', handler)`` call and return the handler."""
+        for call in mock_page.on.call_args_list:
+            if call[0][0] == "dialog":
+                return call[0][1]
+        raise AssertionError(f"page.on('dialog', ...) never invoked; calls: {mock_page.on.call_args_list}")
+
+    @pytest.mark.parametrize(
+        ("headless", "timeout", "expect_dialog_capture"),
+        [
+            (False, None, True),
+            (True, None, False),
+            (False, 1, False),
+        ],
+        ids=["interactive_headed", "headless", "timed"],
+    )
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_dialog_capture_boundary(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+        headless: bool,
+        timeout: int | None,
+        expect_dialog_capture: bool,
+    ) -> None:
+        """Dialog capture is limited to interactive headed runs."""
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_page.evaluate.side_effect = lambda expr: (
+            [] if expr == "window.__harCaptureDialogOutcomes || []" else {}
+        )
+        mock_page.wait_for_event.side_effect = RuntimeError("stop interactive wait")
+
+        capture_device_har(
+            ip="127.0.0.1",
+            output=str(tmp_path / "test.har"),
+            headless=headless,
+            timeout=timeout,
+            sanitize=False,
+            compress=False,
+            wait_for_data=False,
+        )
+
+        if expect_dialog_capture:
+            mock_page.add_init_script.assert_called_once_with(_DIALOG_OBSERVER_INIT_SCRIPT)
+            mock_page.on.assert_any_call("dialog", unittest.mock.ANY)
+        else:
+            dialog_calls = [c for c in mock_page.on.call_args_list if c[0][0] == "dialog"]
+            assert dialog_calls == []
+            assert _DIALOG_OBSERVER_INIT_SCRIPT not in [
+                c.args[0] for c in mock_page.add_init_script.call_args_list
+            ]
+
+    @patch("har_capture.capture.browser.check_playwright", return_value=True)
+    @patch("har_capture.capture.browser.check_device_connectivity")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_dialog_handler_records_browser_ui_outcome_in_har(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_connectivity: MagicMock,
+        mock_check_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Dialog handler logs the inferred browser-UI outcome into HAR metadata.
+
+        Two-event model: ``page.on("dialog")`` creates the open record;
+        the ``__harCaptureDialogResolved`` binding (exposed via
+        ``page.expose_function``) updates it with the user's action.
+        Mocks drive both events to assert the recorded HAR shape.
+        """
+        import os
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_connectivity.return_value = (True, "http", None)
+
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+        mock_context.cookies.return_value = []
+        mock_context.storage_state.return_value = {"cookies": [], "origins": []}
+
+        def evaluate_side_effect(expression: str) -> Any:
+            if expression == "() => Object.fromEntries(Object.entries(sessionStorage))":
+                return {}
+            return 0
+
+        mock_page.evaluate.side_effect = evaluate_side_effect
+
+        # Capture the exposed-function callback so we can fire it ourselves
+        # after the dialog-open handler runs.
+        exposed_callbacks: dict[str, Any] = {}
+
+        def expose_function_side_effect(name: str, handler: Any) -> None:
+            exposed_callbacks[name] = handler
+
+        mock_page.expose_function.side_effect = expose_function_side_effect
+
+        def on_side_effect(event_name: str, handler: Any) -> None:
+            if event_name == "dialog":
+                dialog = MagicMock()
+                dialog.type = "confirm"
+                dialog.message = "Are you sure?"
+                dialog.default_value = ""
+                handler(dialog)
+                # Simulate the JS init script firing the exposed callback
+                # after the user resolves the dialog in the browser UI.
+                resolve_cb = exposed_callbacks.get("__harCaptureDialogResolved")
+                assert resolve_cb is not None, (
+                    "expose_function('__harCaptureDialogResolved', ...) was not called"
+                )
+                resolve_cb({"type": "confirm", "message": "Are you sure?", "action": "dismiss"})
+
+        mock_page.on.side_effect = on_side_effect
+
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [],
+            }
+        }
+        temp_har = tmp_path / "temp_capture.har"
+        temp_har.write_text(json.dumps(har_data))
+
+        output = tmp_path / "dialog.har"
+        fd = os.open(str(temp_har), os.O_RDWR)
+        with patch("tempfile.mkstemp", return_value=(fd, str(temp_har))):
+            capture_device_har(
+                ip="127.0.0.1",
+                output=str(output),
+                headless=False,
+                timeout=None,
+                sanitize=False,
+                compress=False,
+                keep_raw=True,
+                wait_for_data=False,
+            )
+
+        raw_har = json.loads(output.read_text())
+        dialogs = raw_har["log"]["_solentlabs"]["dialogs"]
+        assert len(dialogs) == 1
+        assert dialogs[0] == {
+            "type": "confirm",
+            "message": "Are you sure?",
+            "default_value": "",
+            "opened_at": dialogs[0]["opened_at"],
+            "action": "dismiss",
+            "resolved_by": "browser_ui",
+        }
+
+
 class TestInjectHarMetadataUnit:
     """Tests for _inject_har_metadata — zero mocks, real temp files."""
 
@@ -2291,6 +2462,14 @@ class TestInjectHarMetadataUnit:
 
         probes = {"auth_challenge": {"status": 401}} if case["has_probes"] else None
         popup_record = {"url": "http://10.0.0.1/popup", "opened_at": "2026-05-02T10:00:00"}
+        dialog_record = {
+            "type": "confirm",
+            "message": "Are you sure?",
+            "default_value": "",
+            "opened_at": "2026-05-02T10:01:00",
+            "action": "dismiss",
+            "resolved_by": "browser_ui",
+        }
         session = BrowserSessionResult(
             browser_cookies=[{"name": "SID", "value": "abc"}] if case["has_cookies"] else [],
             web_storage_local=(
@@ -2300,6 +2479,7 @@ class TestInjectHarMetadataUnit:
             ),
             web_storage_session={"token": "xyz"} if case["has_storage"] else {},
             pre_capture_cookies=[],
+            dialogs=[dialog_record] if case.get("has_dialogs") else [],
             popups=[popup_record] if case.get("has_popups") else [],
         )
 
@@ -2310,6 +2490,11 @@ class TestInjectHarMetadataUnit:
 
         # _solentlabs.pre_capture_cookies is always present
         assert log["_solentlabs"]["pre_capture_cookies"] == []
+
+        if case.get("has_dialogs"):
+            assert log["_solentlabs"]["dialogs"] == [dialog_record]
+        else:
+            assert log["_solentlabs"]["dialogs"] == []
 
         # _solentlabs.popups round-trips whatever the session carried.
         # Empty for sessions where no popup occurred (the common case);

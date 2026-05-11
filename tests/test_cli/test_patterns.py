@@ -5,6 +5,9 @@ The CLI ``patterns`` subcommand is a thin wrapper over
 CliRunner against the real built-in ``network-device`` domain — no
 mocks. Per CLAUDE.md rule 12, hitting coverage with real fixtures
 beats heavy mocking.
+
+Pattern-file fixtures used by the ``--show`` tests live in
+``tests/fixtures/test_patterns.json`` per CLAUDE.md rule 14.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from har_capture.cli.main import app
 
 runner = CliRunner()
 
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_patterns.json").read_text())
+
 
 class TestPatternsList:
     """Default invocation lists available built-in domains."""
@@ -26,7 +31,8 @@ class TestPatternsList:
     def test_list_lists_network_device_domain(self) -> None:
         result = runner.invoke(app, ["patterns"])
         assert result.exit_code == 0
-        assert "Available pattern domains:" in result.stdout
+        assert "Available pattern choices" in result.stdout
+        assert "base" in result.stdout
         assert "network-device" in result.stdout
 
     def test_list_shows_usage_hints(self) -> None:
@@ -77,21 +83,7 @@ class TestPatternsShow:
     def test_show_external_json_file(self, tmp_path: Path) -> None:
         """``--show`` accepts a path to an external JSON file."""
         custom = tmp_path / "custom.json"
-        custom.write_text(
-            json.dumps(
-                {
-                    "_description": "Test fixture domain",
-                    "heuristics": {
-                        "safe_value_patterns": [
-                            {"regex": "^foo$", "_comment": "matches literal foo"},
-                        ],
-                    },
-                    "tagValueList": {
-                        "safe_values": ["alpha", "beta"],
-                    },
-                }
-            )
-        )
+        custom.write_text(json.dumps(_FIXTURES["show_external_full_domain"]))
         result = runner.invoke(app, ["patterns", "--show", str(custom)])
         assert result.exit_code == 0
         assert "Test fixture domain" in result.stdout
@@ -101,7 +93,7 @@ class TestPatternsShow:
     def test_show_minimal_json_file_omits_optional_sections(self, tmp_path: Path) -> None:
         """A domain with no safe_value_patterns / tagValueList still renders."""
         minimal = tmp_path / "minimal.json"
-        minimal.write_text(json.dumps({"_description": "Bare-bones"}))
+        minimal.write_text(json.dumps(_FIXTURES["show_minimal_only_description"]))
         result = runner.invoke(app, ["patterns", "--show", str(minimal)])
         assert result.exit_code == 0
         assert "Bare-bones" in result.stdout
@@ -112,7 +104,7 @@ class TestPatternsShow:
     def test_show_json_file_without_description(self, tmp_path: Path) -> None:
         """A domain JSON with no ``_description`` skips the description line."""
         no_desc = tmp_path / "no_desc.json"
-        no_desc.write_text(json.dumps({"heuristics": {}}))
+        no_desc.write_text(json.dumps(_FIXTURES["show_no_description"]))
         result = runner.invoke(app, ["patterns", "--show", str(no_desc)])
         assert result.exit_code == 0
         # File line is still printed; description line is not.
@@ -121,17 +113,7 @@ class TestPatternsShow:
     def test_show_safe_pattern_falls_back_to_regex_when_no_comment(self, tmp_path: Path) -> None:
         """Safe patterns without ``_comment`` show the raw regex instead."""
         custom = tmp_path / "no_comment.json"
-        custom.write_text(
-            json.dumps(
-                {
-                    "heuristics": {
-                        "safe_value_patterns": [
-                            {"regex": "^bareregex$"},
-                        ],
-                    }
-                }
-            )
-        )
+        custom.write_text(json.dumps(_FIXTURES["show_safe_pattern_without_comment"]))
         result = runner.invoke(app, ["patterns", "--show", str(custom)])
         assert result.exit_code == 0
         assert "bareregex" in result.stdout

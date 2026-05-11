@@ -1,0 +1,10 @@
+{
+  "_comment": "Tiny pattern-file contents used by test_patterns_resolver to exercise the --patterns file-path resolution and multi-file merge branches. Contents are intentionally minimal — the resolver only cares about whether the path exists and whether multiple sources can be merged.",
+  "empty_custom_pattern_file": {},
+  "merge_source_a": {
+    "_description": "first"
+  },
+  "merge_source_b": {
+    "_description": "second"
+  }
+}

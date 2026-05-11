@@ -16,25 +16,28 @@ from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
 
-# Mapping from Playwright browser name to executable relative path
-_BROWSER_EXECUTABLES: dict[str, str] = {
-    "chromium": "chrome-linux64/chrome",
-    "firefox": "firefox/firefox",
-    "webkit": "minibrowser-wpe/MiniBrowser",
-}
 
+def _get_browser_install_dir(browser: str = "chromium") -> Path | None:
+    """Resolve the Playwright install directory for a browser revision.
 
-def _get_browser_executable(browser: str = "chromium") -> Path | None:
-    """Resolve the expected browser executable path from Playwright's manifest.
+    Reads ``browsers.json`` from the Playwright package to determine the
+    expected revision, then returns ``<cache>/<browser>-<revision>/`` — the
+    install directory itself, not the binary inside it.
 
-    Reads browsers.json from the Playwright package to determine the
-    expected revision, then checks the standard cache directory.
+    Why the directory and not the binary: Playwright's per-platform binary
+    layout varies (``chrome-linux64/chrome``, ``chrome-win64/chrome.exe``,
+    ``chrome-mac/Chromium.app/Contents/MacOS/Chromium``, etc.) and changes
+    between versions. Hand-rolling a per-platform lookup table is fragile
+    — issue #50 was caused by a Linux-only mapping ``chrome-linux64/chrome``
+    being checked on Windows, where the binary lives at
+    ``chrome-win/chrome.exe``. The ``<browser>-<revision>/`` directory is
+    the stable Playwright install marker across platforms.
 
     Args:
         browser: Browser name ("chromium", "firefox", "webkit")
 
     Returns:
-        Path to the expected executable, or None if resolution fails
+        Path to the expected install directory, or None if resolution fails
     """
     try:
         import playwright
@@ -56,10 +59,7 @@ def _get_browser_executable(browser: str = "chromium") -> Path | None:
             cache_dir = Path(
                 os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "") or Path.home() / ".cache" / "ms-playwright"
             )
-            rel_path = _BROWSER_EXECUTABLES.get(browser)
-            if not rel_path:
-                return None
-            return cache_dir / f"{browser}-{revision}" / rel_path
+            return cache_dir / f"{browser}-{revision}"
 
     return None
 
@@ -81,9 +81,11 @@ def check_playwright() -> bool:
 def check_browser_installed(browser: str = "chromium") -> bool:
     """Check if Playwright browser is installed.
 
-    Verifies the actual browser executable exists on disk by reading
-    Playwright's browsers.json manifest and checking the expected path.
-    Falls back to a dry-run heuristic if the manifest is unavailable.
+    Verifies the ``<browser>-<revision>/`` install directory exists and
+    contains files (Playwright extracts binaries into it on install). The
+    directory is the platform-agnostic install marker — see
+    ``_get_browser_install_dir`` for the rationale. Falls back to
+    ``playwright install --dry-run`` if the manifest is unavailable.
 
     Args:
         browser: Browser to check ("chromium", "firefox", "webkit")
@@ -94,15 +96,17 @@ def check_browser_installed(browser: str = "chromium") -> bool:
     if not check_playwright():
         return False
 
-    # Primary check: verify the executable exists on disk
+    # Primary check: install directory exists and is non-empty. Platform-
+    # agnostic by design — see _get_browser_install_dir docstring (issue #50).
     try:
-        executable = _get_browser_executable(browser)
-        if executable is not None:
-            return executable.exists()
+        install_dir = _get_browser_install_dir(browser)
+        if install_dir is not None and install_dir.is_dir() and any(install_dir.iterdir()):
+            return True
     except Exception:
-        _LOGGER.debug("Failed to resolve browser executable path, falling back to dry-run")
+        _LOGGER.debug("Failed to resolve browser install directory, falling back to dry-run")
 
-    # Fallback: dry-run check (unreliable — always returns rc=0)
+    # Fallback: dry-run check. Spawns a subprocess but is platform-agnostic
+    # and works when the install dir layout drifts in a future Playwright.
     try:
         result = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "--dry-run", browser],

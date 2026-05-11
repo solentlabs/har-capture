@@ -459,29 +459,14 @@ class TestApplyReviewedRedactions:
 
     @pytest.fixture
     def sanitized_har_file(self, tmp_path):  # type: ignore[no-untyped-def]
+        import copy
         import json
+        from pathlib import Path
 
-        har_data = {
-            "log": {
-                "version": "1.2",
-                "creator": {"name": "test", "version": "1.0"},
-                "entries": [
-                    {
-                        "request": {
-                            "method": "POST",
-                            "url": "http://test/login",
-                            "headers": [],
-                            "postData": {"text": "username=alice", "mimeType": "x"},
-                        },
-                        "response": {
-                            "status": 200,
-                            "headers": [],
-                            "content": {"text": "", "mimeType": "x"},
-                        },
-                    }
-                ],
-            }
-        }
+        fixtures = json.loads(
+            (Path(__file__).parent.parent / "fixtures" / "test_interactive.json").read_text()
+        )
+        har_data = copy.deepcopy(fixtures["sanitized_har_for_apply_redactions"])
         f = tmp_path / "sanitized.har"
         f.write_text(json.dumps(har_data))
         return f

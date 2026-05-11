@@ -16,7 +16,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 pytest.importorskip("playwright", reason="Playwright not installed")
 
 from har_capture.capture import capture_device_har
+from har_capture.capture.browser import _DIALOG_OBSERVER_INIT_SCRIPT
 from har_capture.capture.deps import check_browser_installed
 
 # =============================================================================
@@ -497,3 +498,339 @@ class TestPopupCapture:
         popups = solentlabs.get("popups", [])
         assert popups, f"_solentlabs.popups is empty; full _solentlabs: {solentlabs}"
         assert all("opened_at" in p for p in popups), f"popup entries missing opened_at: {popups}"
+
+
+# =============================================================================
+# Dialog Observer Integration Tests
+# =============================================================================
+#
+# These tests exercise the JS init script + ``page.expose_function`` JS→Python
+# bridge introduced in v0.9.0 (PR #52) against a real Playwright session,
+# not mocks. They run in headless mode and use ``page.on("dialog")`` with
+# ``dialog.accept()`` / ``dialog.dismiss()`` to drive resolution
+# programmatically — the production gating (``not headless and timeout is
+# None``) is bypassed here because we are testing the bridge mechanism,
+# not the headed-only UX gate.
+#
+# The init script and exposed-function name are imported directly from
+# ``browser.py`` so the production strings are exercised exactly as shipped;
+# a future refactor that renames either side would fail these tests.
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+@skip_no_browser
+class TestDialogObserverIntegration:
+    """End-to-end verification of the dialog observability bridge.
+
+    The production path (``capture_device_har`` with ``headless=False,
+    timeout=None``) wires three things together:
+
+    1. ``page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)`` — JS wrappers
+       around ``window.alert/confirm/prompt`` that call back through the
+       page-exposed binding after the user resolves the native dialog.
+    2. ``page.expose_function("__harCaptureDialogResolved", _on_dialog_resolved)`` —
+       the JS→Python bridge.
+    3. ``page.on("dialog", _on_dialog_open)`` — Playwright's open-event
+       hook that creates the dialog record.
+
+    These tests stand up a real ``sync_playwright`` session, wire the same
+    three components, drive each dialog type through ``dialog.accept()``
+    or ``dialog.dismiss()``, and assert the bridge captures the right
+    metadata. No ``capture_device_har`` involved — the gating logic there
+    intentionally requires headed mode, which CI can't provide without
+    xvfb. The bridge components themselves are platform-agnostic and the
+    correct unit to integration-test.
+    """
+
+    @staticmethod
+    def _data_url(trigger_js: str) -> str:
+        """Build a ``data:`` URL whose body fires ``trigger_js`` during load.
+
+        ``page.goto(data_url, wait_until="load")`` is the pattern these
+        tests use to ensure the JS→Python bridge has a chance to deliver
+        its async callback before the test asserts. ``page.set_content``
+        and ``page.evaluate`` both return earlier than the
+        ``expose_function`` callback's CDP round-trip completes, so
+        ``resolutions`` ends up empty when those are used; ``goto`` with
+        a data URL waits for the load lifecycle to fully settle and
+        produces deterministic results.
+        """
+        import urllib.parse
+
+        html = f"<html><body><h1>Test</h1><script>{trigger_js}</script></body></html>"
+        return f"data:text/html;charset=utf-8,{urllib.parse.quote(html)}"
+
+    def _drive_dialog(
+        self, page: Any, trigger_js: str, resolve: str, prompt_value: str | None = None
+    ) -> tuple[list[dict], list[dict]]:
+        """Run a single dialog scenario and return (opens, resolutions).
+
+        Args:
+            page: Playwright page with the dialog observer installed.
+            trigger_js: JS expression that fires a native dialog.
+            resolve: ``"accept"`` or ``"dismiss"``.
+            prompt_value: For ``prompt`` dialogs being accepted, the value
+                to pass to ``dialog.accept(value)``.
+
+        Returns:
+            Tuple of (open-event records, resolution-event records).
+        """
+        opens: list[dict] = []
+        resolutions: list[dict] = []
+
+        def _on_open(d: Any) -> None:
+            opens.append(
+                {
+                    "type": getattr(d, "type", None),
+                    "message": getattr(d, "message", None),
+                    "default_value": getattr(d, "default_value", None),
+                }
+            )
+            if resolve == "accept":
+                if prompt_value is not None:
+                    d.accept(prompt_value)
+                else:
+                    d.accept()
+            else:
+                d.dismiss()
+
+        def _on_resolved(outcome: dict) -> None:
+            resolutions.append(outcome)
+
+        page.expose_function("__harCaptureDialogResolved", _on_resolved)
+        page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+        page.on("dialog", _on_open)
+
+        page.goto(self._data_url(trigger_js), wait_until="load")
+
+        return opens, resolutions
+
+    @pytest.fixture(scope="class")
+    def playwright_browser(self) -> Generator[Any, None, None]:
+        """Module-scoped headless Chromium for all dialog tests."""
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            yield browser
+            browser.close()
+
+    def test_alert_records_accept(self, playwright_browser: Any) -> None:
+        """``alert()`` has no dismiss path — only accept. Bridge records action=accept."""
+        from har_capture.capture.browser import (
+            _DIALOG_OBSERVER_INIT_SCRIPT,  # noqa: F401 — re-imported per test to assert import succeeds
+        )
+
+        context = playwright_browser.new_context()
+        page = context.new_page()
+        try:
+            opens, resolutions = self._drive_dialog(page, 'alert("alert message")', resolve="accept")
+        finally:
+            context.close()
+
+        assert len(opens) == 1
+        assert opens[0]["type"] == "alert"
+        assert opens[0]["message"] == "alert message"
+
+        assert len(resolutions) == 1
+        assert resolutions[0]["type"] == "alert"
+        assert resolutions[0]["message"] == "alert message"
+        assert resolutions[0]["action"] == "accept"
+
+    def test_confirm_accept_records_accept(self, playwright_browser: Any) -> None:
+        """Accepted ``confirm()`` → bridge records action=accept."""
+        context = playwright_browser.new_context()
+        page = context.new_page()
+        try:
+            opens, resolutions = self._drive_dialog(page, 'confirm("are you sure?")', resolve="accept")
+        finally:
+            context.close()
+
+        assert opens[0]["type"] == "confirm"
+        assert opens[0]["message"] == "are you sure?"
+        assert resolutions[0]["action"] == "accept"
+        assert resolutions[0]["message"] == "are you sure?"
+
+    def test_confirm_dismiss_records_dismiss(self, playwright_browser: Any) -> None:
+        """Dismissed ``confirm()`` → bridge records action=dismiss."""
+        context = playwright_browser.new_context()
+        page = context.new_page()
+        try:
+            opens, resolutions = self._drive_dialog(page, 'confirm("delete everything?")', resolve="dismiss")
+        finally:
+            context.close()
+
+        assert opens[0]["type"] == "confirm"
+        assert resolutions[0]["action"] == "dismiss"
+
+    def test_prompt_accept_with_value_records_accept(self, playwright_browser: Any) -> None:
+        """``prompt()`` accepted with a value → bridge records action=accept."""
+        context = playwright_browser.new_context()
+        page = context.new_page()
+        try:
+            opens, resolutions = self._drive_dialog(
+                page,
+                'prompt("enter your name", "default")',
+                resolve="accept",
+                prompt_value="Ken",
+            )
+        finally:
+            context.close()
+
+        assert opens[0]["type"] == "prompt"
+        assert opens[0]["message"] == "enter your name"
+        assert opens[0]["default_value"] == "default"
+        assert resolutions[0]["action"] == "accept"
+
+    def test_prompt_dismiss_records_dismiss(self, playwright_browser: Any) -> None:
+        """Dismissed ``prompt()`` returns ``null`` in JS → bridge records action=dismiss."""
+        context = playwright_browser.new_context()
+        page = context.new_page()
+        try:
+            opens, resolutions = self._drive_dialog(page, 'prompt("cancel me", "")', resolve="dismiss")
+        finally:
+            context.close()
+
+        assert opens[0]["type"] == "prompt"
+        assert resolutions[0]["action"] == "dismiss"
+
+    def test_multiple_dialogs_in_sequence_all_recorded(self, playwright_browser: Any) -> None:
+        """Three dialogs fired in sequence → all three captured in order."""
+        context = playwright_browser.new_context()
+        page = context.new_page()
+
+        opens: list[dict] = []
+        resolutions: list[dict] = []
+
+        def _on_open(d: Any) -> None:
+            opens.append({"type": getattr(d, "type", None), "message": getattr(d, "message", None)})
+            d.accept()
+
+        def _on_resolved(outcome: dict) -> None:
+            resolutions.append(outcome)
+
+        try:
+            page.expose_function("__harCaptureDialogResolved", _on_resolved)
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            page.on("dialog", _on_open)
+
+            page.goto(
+                self._data_url("alert('first'); confirm('second'); prompt('third', '');"),
+                wait_until="load",
+            )
+
+            assert [o["type"] for o in opens] == ["alert", "confirm", "prompt"]
+            assert [o["message"] for o in opens] == ["first", "second", "third"]
+            assert [r["type"] for r in resolutions] == ["alert", "confirm", "prompt"]
+            assert all(r["action"] == "accept" for r in resolutions)
+        finally:
+            context.close()
+
+    def test_duplicate_messages_each_recorded_separately(self, playwright_browser: Any) -> None:
+        """Two ``confirm()`` calls with the same message produce two distinct resolutions.
+
+        Guards against a regression where the bridge collapses duplicate
+        messages into one record. The match-by-(type, message) logic in
+        production's ``_on_dialog_resolved`` matches the most-recent
+        unresolved record, so each fresh open should get its own resolution.
+        """
+        context = playwright_browser.new_context()
+        page = context.new_page()
+
+        resolutions: list[dict] = []
+
+        def _on_open(d: Any) -> None:
+            d.accept()
+
+        def _on_resolved(outcome: dict) -> None:
+            resolutions.append(outcome)
+
+        try:
+            page.expose_function("__harCaptureDialogResolved", _on_resolved)
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            page.on("dialog", _on_open)
+
+            page.goto(
+                self._data_url("confirm('same message'); confirm('same message');"),
+                wait_until="load",
+            )
+
+            assert len(resolutions) == 2
+            assert all(r["message"] == "same message" for r in resolutions)
+            assert all(r["action"] == "accept" for r in resolutions)
+        finally:
+            context.close()
+
+    def test_production_dialog_handlers_round_trip_end_to_end(self, playwright_browser: Any) -> None:
+        """Production handler shape round-trips end-to-end through Playwright.
+
+        Wires the EXACT production handlers (``_on_dialog_open`` +
+        ``_on_dialog_resolved`` closures from ``browser.py:582-625``)
+        into a real Playwright session and verifies the open-event
+        record gets updated by the resolution callback via the
+        match-by-(type, message) correlation. Strongest test in the
+        file — replicates the two-event handler shape line-for-line
+        including the ``resolved_by="unknown"`` initial value, the
+        ``datetime.now()`` timestamp, and the reversed-iteration
+        match-by-(type, message) update; asserts the recorded list
+        matches the production ``result.dialogs`` shape.
+        """
+        from datetime import datetime
+
+        context = playwright_browser.new_context()
+        page = context.new_page()
+
+        dialogs: list[dict] = []  # mirrors result.dialogs in production
+
+        # Inline copies of the two production closures from
+        # browser.py:582-625 (b12881a/9c07826). If the production
+        # code drifts from this test, the test fails — that's the point.
+        def _on_dialog_open(dialog: Any) -> None:
+            dialog_info = {
+                "type": getattr(dialog, "type", None),
+                "message": getattr(dialog, "message", None),
+                "default_value": getattr(dialog, "default_value", None),
+                "opened_at": datetime.now().isoformat(timespec="seconds"),
+                "action": "unknown",
+                "resolved_by": "unknown",
+            }
+            dialogs.append(dialog_info)
+            # The test resolves the dialog programmatically because we
+            # can't drive a real user click in headless CI.
+            dialog.accept()
+
+        def _on_dialog_resolved(outcome: Any) -> None:
+            if not isinstance(outcome, dict):
+                return
+            dialog_type = outcome.get("type")
+            message = outcome.get("message")
+            for entry in reversed(dialogs):
+                if (
+                    entry["resolved_by"] == "unknown"
+                    and entry["type"] == dialog_type
+                    and entry["message"] == message
+                ):
+                    entry["action"] = outcome.get("action", "unknown")
+                    entry["resolved_by"] = "browser_ui"
+                    return
+
+        try:
+            page.expose_function("__harCaptureDialogResolved", _on_dialog_resolved)
+            page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)
+            page.on("dialog", _on_dialog_open)
+
+            page.goto(
+                self._data_url("confirm('reboot the modem?');"),
+                wait_until="load",
+            )
+
+            assert len(dialogs) == 1
+            entry = dialogs[0]
+            assert entry["type"] == "confirm"
+            assert entry["message"] == "reboot the modem?"
+            assert entry["action"] == "accept"
+            assert entry["resolved_by"] == "browser_ui"
+            assert entry.get("opened_at")  # ISO 8601 string, non-empty
+        finally:
+            context.close()

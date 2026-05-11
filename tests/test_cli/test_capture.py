@@ -131,57 +131,6 @@ def test_display_results(
 
 
 # =============================================================================
-# _resolve_custom_patterns() — pure helper, no I/O once paths exist
-# =============================================================================
-
-
-class TestResolveCustomPatterns:
-    """Thin shim between ``--patterns`` and the library's ``custom_patterns=``.
-
-    Pulled out of the 230-line ``capture()`` function so we can test
-    the resolution branches without driving the full Playwright flow.
-    """
-
-    def test_none_returns_none(self) -> None:
-        from har_capture.cli.capture import _resolve_custom_patterns
-
-        assert _resolve_custom_patterns(None) is None
-
-    def test_empty_list_returns_none(self) -> None:
-        from har_capture.cli.capture import _resolve_custom_patterns
-
-        assert _resolve_custom_patterns([]) is None
-
-    def test_single_builtin_returns_path_string(self) -> None:
-        """A single built-in domain name resolves to a path string."""
-        from har_capture.cli.capture import _resolve_custom_patterns
-
-        result = _resolve_custom_patterns(["network-device"])
-        assert isinstance(result, str)
-        assert result.endswith("network_device.json")
-
-    def test_single_file_path_returns_string(self, tmp_path: Path) -> None:
-        from har_capture.cli.capture import _resolve_custom_patterns
-
-        custom = tmp_path / "custom.json"
-        custom.write_text("{}")
-        result = _resolve_custom_patterns([str(custom)])
-        assert isinstance(result, str)
-        assert result == str(custom)
-
-    def test_multiple_patterns_merged_to_dict(self, tmp_path: Path) -> None:
-        """Multiple patterns merge into one dict (library accepts only one)."""
-        from har_capture.cli.capture import _resolve_custom_patterns
-
-        first = tmp_path / "first.json"
-        first.write_text('{"_description": "first"}')
-        second = tmp_path / "second.json"
-        second.write_text('{"_description": "second"}')
-        result = _resolve_custom_patterns([str(first), str(second)])
-        assert isinstance(result, dict)
-
-
-# =============================================================================
 # _run_interactive_review() — branches over a CaptureWorkflowResult
 # =============================================================================
 #
@@ -509,7 +458,7 @@ class TestCaptureCommand:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            ["get", "10.0.0.1", "--minimal", "--output", str(tmp_path / "x.har")],
+            ["get", "10.0.0.1", "--minimal", "--output", str(tmp_path / "x.har"), "--patterns", "base"],
         )
         assert result.exit_code == 0
         assert "HAR CAPTURE" in result.output
@@ -533,7 +482,7 @@ class TestCaptureCommand:
 
         runner = CliRunner()
         # Answer "n" to the install prompt.
-        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal"], input="n\n")
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"], input="n\n")
         assert result.exit_code == 1
         assert "Run manually" in result.output
 
@@ -561,7 +510,7 @@ class TestCaptureCommand:
         monkeypatch.setattr(deps, "install_browser", lambda b: True)
 
         runner = CliRunner()
-        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal"], input="y\n")
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"], input="y\n")
         assert result.exit_code == 0
         assert "installed successfully" in result.output
 
@@ -584,7 +533,7 @@ class TestCaptureCommand:
         monkeypatch.setattr(deps, "install_browser", lambda b: False)
 
         runner = CliRunner()
-        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal"], input="y\n")
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"], input="y\n")
         assert result.exit_code == 1
         assert "Failed to install" in result.output
 
@@ -618,7 +567,7 @@ class TestCaptureCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(app, ["get", "10.0.0.1"])
+        result = runner.invoke(app, ["get", "10.0.0.1", "--patterns", "base"])
         assert result.exit_code == 1
         assert "connection refused" in result.output
 
@@ -670,7 +619,7 @@ class TestCaptureCommand:
             ),
         )
 
-        result = runner.invoke(app, ["get", "10.0.0.1"])
+        result = runner.invoke(app, ["get", "10.0.0.1", "--patterns", "base"])
         assert result.exit_code == 1
         assert "live session detected" in result.output
 
@@ -731,14 +680,7 @@ class TestCaptureCommand:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            [
-                "get",
-                "10.0.0.1",
-                "--username",
-                "alice",
-                "--password",
-                "s3cret",
-            ],
+            ["get", "10.0.0.1", "--username", "alice", "--password", "s3cret", "--patterns", "base"],
         )
         assert result.exit_code == 0
         assert probe_calls, "auth probe must run when credentials are provided"
@@ -771,7 +713,7 @@ class TestCaptureCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal"])
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"])
         assert result.exit_code == 1
         assert "Capture failed: boom" in result.output
 
@@ -804,7 +746,7 @@ class TestCaptureCommand:
         )
 
         runner = CliRunner()
-        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal"])
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"])
         # The report is empty so review short-circuits with the
         # "No suspicious values found" message.
         assert result.exit_code == 0

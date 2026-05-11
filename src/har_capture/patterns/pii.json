@@ -12,6 +12,12 @@
       "flags": ["IGNORECASE"],
       "description": "Device serial numbers with various label formats"
     },
+    "wps_pin": {
+      "regex": "(WPS[\\s_-]*PIN|PIN[\\s_-]*Code|Pairing[\\s_-]*PIN|Default[\\s_-]*PIN)\\b\\s*[:\\s=]*(?:<[^>]*>)*\\s*(\\d{8})\\b",
+      "replacement_prefix": "PIN",
+      "flags": ["IGNORECASE"],
+      "description": "WPS / pairing / default PIN labels followed by an 8-digit code (issue #47)"
+    },
     "account_id": {
       "regex": "(Account|Subscriber|Customer|Device)\\s*(ID|Number)\\s*[:\\s=]+\\S+",
       "replacement_prefix": "ACCOUNT",

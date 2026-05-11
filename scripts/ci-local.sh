@@ -31,19 +31,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-# ─── Single source of truth for the matrix install profile ──────────────────
-# This MUST match the ``test`` job's ``pip install -e ".[...]"`` line in
-# .github/workflows/ci.yml. When the workflow changes, change this too.
-CI_EXTRAS="dev,cli,capture"
+# ─── Install profile is sourced from scripts/install-ci-deps.sh ─────────────
+# That script is the single source of truth used by both this hook and
+# .github/workflows/ci.yml. The cache key is keyed on the install
+# script's contents (so an extras change forces a venv rebuild) plus
+# pyproject.toml and the Python version.
+CI_INSTALL_SCRIPT="$SCRIPT_DIR/install-ci-deps.sh"
 CI_VENV="$REPO_ROOT/.venv-ci"
 HASH_FILE="$CI_VENV/.profile-hash"
 
-# Hash inputs that determine what should be in the venv. If any of them
-# changes (extras list, pyproject.toml dependencies, Python version),
-# rebuild from scratch.
 PROFILE_HASH="$(
     {
-        echo "$CI_EXTRAS"
+        cat "$CI_INSTALL_SCRIPT"
         cat "$REPO_ROOT/pyproject.toml"
         python3 --version
     } | sha256sum | cut -d' ' -f1
@@ -61,16 +60,15 @@ done
 
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${YELLOW}  Local CI — mirrors GitHub Actions ``test`` matrix     ${NC}"
-echo -e "${YELLOW}  Install profile: [${CI_EXTRAS}]                       ${NC}"
+echo -e "${YELLOW}  Install via: scripts/install-ci-deps.sh               ${NC}"
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
 # ─── Bootstrap or reuse the isolated venv ───────────────────────────────────
 if [ ! -f "$HASH_FILE" ] || [ "$(cat "$HASH_FILE" 2>/dev/null)" != "$PROFILE_HASH" ]; then
-    echo -e "\n${YELLOW}Bootstrapping ${CI_VENV} with [${CI_EXTRAS}]...${NC}"
+    echo -e "\n${YELLOW}Bootstrapping ${CI_VENV}...${NC}"
     rm -rf "$CI_VENV"
     python3 -m venv "$CI_VENV"
-    "$CI_VENV/bin/python" -m pip install --upgrade pip --quiet
-    "$CI_VENV/bin/pip" install -e ".[${CI_EXTRAS}]" --quiet
+    "$CI_INSTALL_SCRIPT" "$CI_VENV/bin/python"
     echo "$PROFILE_HASH" > "$HASH_FILE"
     echo -e "${GREEN}✓ venv ready${NC}"
 else

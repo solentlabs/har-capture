@@ -1,0 +1,90 @@
+{
+  "_comment": "HAR fixtures for tests/test_cli/test_sanitize.py. Templates with `_dynamic` keys are wrappers that Python fills in (size padding, computed placeholders) — the static structure lives here, the computed value is the test's behavioral point and stays in Python.",
+
+  "valid_har": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.1.1/",
+            "headers": [
+              {"name": "Cookie", "value": "session=secret123"}
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "text": "MAC: AA:BB:CC:DD:EE:FF",
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ]
+    }
+  },
+
+  "har_with_flagged_fields": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://test/login",
+            "headers": [],
+            "postData": {
+              "text": "username=alice&login=bob&account_id=12345",
+              "mimeType": "application/x-www-form-urlencoded"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {"text": "", "mimeType": "text/plain"}
+          }
+        }
+      ]
+    }
+  },
+
+  "already_redacted_har_template": {
+    "_dynamic": "Python sets log.entries[0].response.content.text to ' '.join(f'MAC_{i:08x}' for i in range(15)) — the placeholder construction is the test's behavioral point.",
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {"method": "GET", "url": "http://test/", "headers": []},
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {"text": "", "mimeType": "text/plain"}
+          }
+        }
+      ]
+    }
+  },
+
+  "large_har_template": {
+    "_dynamic": "Python sets log.entries[0].response.content.text to 'x' * 500000 and multiplies the entries list by 3 — the size construction is the test's behavioral point.",
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "test", "version": "1.0"},
+      "entries": [
+        {
+          "request": {"method": "GET", "url": "http://test/", "headers": []},
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {"text": "", "mimeType": "text/plain"}
+          }
+        }
+      ]
+    }
+  }
+}

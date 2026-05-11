@@ -7,6 +7,8 @@ from typing import Annotated
 
 import typer
 
+from har_capture.cli._patterns_resolver import require_patterns
+
 
 def validate(
     har_file: Annotated[
@@ -26,8 +28,12 @@ def validate(
         typer.Option("--recursive", "-r", help="Scan directory recursively"),
     ] = False,
     patterns: Annotated[
-        Path | None,
-        typer.Option("--patterns", "-p", help="Custom patterns JSON file"),
+        list[str] | None,
+        typer.Option(
+            "--patterns",
+            "-p",
+            help="Required. Pattern domain (e.g. 'network-device'), 'base' for universal PII only, or JSON path. Repeatable.",
+        ),
     ] = None,
 ) -> None:
     """Validate HAR files for secrets and PII.
@@ -40,18 +46,18 @@ def validate(
         directory: Directory containing HAR files to scan
         strict: Treat warnings as errors (exit code 1)
         recursive: Scan directory recursively for HAR files
-        patterns: Custom patterns JSON file to merge with defaults
+        patterns: Pattern names or JSON paths (repeatable); 'base' for universal PII only
 
     Example:
-        har-capture validate device.har
-        har-capture validate --dir ./captures --recursive
-        har-capture validate device.har --strict
-        har-capture validate device.har --patterns custom.json
+        har-capture validate device.har --patterns network-device
+        har-capture validate --dir ./captures --recursive --patterns base
+        har-capture validate device.har --strict --patterns network-device
     """
     from har_capture.validation import validate_har
 
+    custom_patterns = require_patterns(patterns)
+
     har_files: list[Path] = []
-    custom_patterns = str(patterns) if patterns else None
 
     if directory:
         if not directory.exists():
