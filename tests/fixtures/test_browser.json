@@ -80,5 +80,116 @@
     {"id": "empty_session", "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": false},
     {"id": "with_popups",   "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": true,  "has_dialogs": false},
     {"id": "with_dialogs",  "has_probes": false, "has_cookies": false, "has_storage": false, "has_popups": false, "has_dialogs": true}
+  ],
+  "_apply_dialog_resolution_note": "Cases for _apply_dialog_resolution: dialogs_before is the list state before the call, outcome is the resolution payload (any JSON-compatible type), expect_match asserts whether a record was updated. For matches, expect_action / expect_resolved_by assert the entry's post-update state. expect_updated_index pins WHICH entry got updated when multiple are candidates.",
+  "dialog_resolution_cases": [
+    {
+      "id": "matches_most_recent_unresolved_accept",
+      "dialogs_before": [
+        {"type": "confirm", "message": "are you sure?", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "confirm", "message": "are you sure?", "action": "accept"},
+      "expect_match": true,
+      "expect_action": "accept",
+      "expect_resolved_by": "browser_ui"
+    },
+    {
+      "id": "matches_most_recent_unresolved_dismiss",
+      "dialogs_before": [
+        {"type": "confirm", "message": "delete?", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "confirm", "message": "delete?", "action": "dismiss"},
+      "expect_match": true,
+      "expect_action": "dismiss",
+      "expect_resolved_by": "browser_ui"
+    },
+    {
+      "id": "skips_already_resolved_picks_unresolved_lifo",
+      "dialogs_before": [
+        {"type": "confirm", "message": "same", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "accept", "resolved_by": "browser_ui"},
+        {"type": "confirm", "message": "same", "default_value": "", "opened_at": "2026-05-11T20:00:01", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "confirm", "message": "same", "action": "dismiss"},
+      "expect_match": true,
+      "expect_action": "dismiss",
+      "expect_resolved_by": "browser_ui",
+      "expect_updated_index": 1
+    },
+    {
+      "id": "matches_by_message_when_multiple_unresolved",
+      "dialogs_before": [
+        {"type": "confirm", "message": "first",  "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"},
+        {"type": "confirm", "message": "second", "default_value": "", "opened_at": "2026-05-11T20:00:01", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "confirm", "message": "first", "action": "accept"},
+      "expect_match": true,
+      "expect_action": "accept",
+      "expect_resolved_by": "browser_ui",
+      "expect_updated_index": 0
+    },
+    {
+      "id": "missing_action_key_defaults_to_unknown",
+      "dialogs_before": [
+        {"type": "alert", "message": "hi", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "alert", "message": "hi"},
+      "expect_match": true,
+      "expect_action": "unknown",
+      "expect_resolved_by": "browser_ui"
+    },
+    {
+      "id": "no_match_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "open", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "confirm", "message": "different", "action": "accept"},
+      "expect_match": false
+    },
+    {
+      "id": "empty_dialogs_returns_none",
+      "dialogs_before": [],
+      "outcome": {"type": "confirm", "message": "anything", "action": "accept"},
+      "expect_match": false
+    },
+    {
+      "id": "type_mismatch_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "same", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": {"type": "alert", "message": "same", "action": "accept"},
+      "expect_match": false
+    },
+    {
+      "id": "all_already_resolved_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "x", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "accept", "resolved_by": "browser_ui"}
+      ],
+      "outcome": {"type": "confirm", "message": "x", "action": "dismiss"},
+      "expect_match": false
+    },
+    {
+      "id": "non_dict_outcome_string_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "x", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": "not a dict",
+      "expect_match": false
+    },
+    {
+      "id": "non_dict_outcome_none_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "x", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": null,
+      "expect_match": false
+    },
+    {
+      "id": "non_dict_outcome_list_returns_none",
+      "dialogs_before": [
+        {"type": "confirm", "message": "x", "default_value": "", "opened_at": "2026-05-11T20:00:00", "action": "unknown", "resolved_by": "unknown"}
+      ],
+      "outcome": ["confirm", "x", "accept"],
+      "expect_match": false
+    }
   ]
 }
