@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`Authorization` header redaction now preserves the auth scheme.** Previously the entire header value was collapsed to a single opaque tag (`Authorization: AUTH_xxxxxxxx`), stripping the RFC 7235 scheme token (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`). Downstream consumers had no way to classify the auth mechanism from request-side evidence — they had to wait for a `401 + WWW-Authenticate` exchange that often never appeared (e.g., when a browser sends cached credentials from request 1). The redactor now recognizes the closed set of RFC-registered schemes, preserves the scheme token, and tag-redacts only the credential after the first whitespace (`Authorization: Bearer AUTH_xxxxxxxx`). Unknown schemes (or values with no whitespace) fall through to full redaction so non-standard leading tokens cannot escape. Concretely this restores the ability of intake pipelines like `cable_modem_monitor`'s `analyze_har` to determine the auth strategy from a single authenticated request. Implemented as a third header-classification bucket (`headers.scheme_redact` in `sensitive.json`) alongside `full_redact` and `cookie_redact`; the bucket is extensible via custom patterns the same way the other two are.
+
 ## [0.9.0] - 2026-05-11
 
 ### Changed (BREAKING) in 0.9.0

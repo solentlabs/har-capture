@@ -296,6 +296,8 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
                 builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
             if "cookie_redact" in custom["headers"]:
                 builtin["headers"]["cookie_redact"].extend(custom["headers"]["cookie_redact"])
+            if "scheme_redact" in custom["headers"]:
+                builtin["headers"].setdefault("scheme_redact", []).extend(custom["headers"]["scheme_redact"])
         if "fields" in custom and isinstance(custom["fields"], dict):
             custom_fields = custom["fields"]
             # Extend each known list key. "patterns" is the legacy key; the current

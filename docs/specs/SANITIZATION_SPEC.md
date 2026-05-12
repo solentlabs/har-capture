@@ -106,9 +106,10 @@ def sanitize_entry(
 
 ### Header Sanitization
 
-Headers are classified into three tiers from `sensitive.json`:
+Headers are classified into four tiers from `sensitive.json`:
 
-1. **Full redact** (`headers.full_redact`): Authorization, X-Auth-Token, Proxy-Authorization, etc. — entire value replaced.
+1. **Full redact** (`headers.full_redact`): X-Auth-Token, X-Api-Key, etc. — entire value replaced.
+1. **Scheme redact** (`headers.scheme_redact`): Authorization-style headers (RFC 7235 syntax: `Scheme credentials`). The scheme token is preserved when it matches a recognized RFC scheme (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`); the credential after the first whitespace is redacted. Unknown schemes (or values with no whitespace) fall through to full redaction so a non-standard leading token can't escape. Preserving the scheme lets downstream consumers classify the auth mechanism from a single authenticated request without needing a `401 + WWW-Authenticate` exchange.
 1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. Cookie metadata (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`) detected and preserved.
 1. **All other headers**: Passed through unmodified.
 

@@ -45,8 +45,9 @@ Defines sensitive HTTP headers and form fields to redact.
 ```json
 {
   "headers": {
-    "full_redact": ["Authorization", "X-Api-Key"],
-    "cookie_redact": ["Cookie", "Set-Cookie"]
+    "full_redact": ["X-Api-Key"],
+    "cookie_redact": ["Cookie", "Set-Cookie"],
+    "scheme_redact": ["Authorization"]
   },
   "fields": {
     "patterns": ["password", "secret", "token", "credential"]
@@ -61,6 +62,7 @@ Defines sensitive HTTP headers and form fields to redact.
 
 - `headers.full_redact`: Headers to completely redact
 - `headers.cookie_redact`: Headers where cookie values are redacted but names preserved
+- `headers.scheme_redact`: RFC 7235 `Scheme credentials` headers — recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved while the credential is redacted; unknown schemes fall through to full redact
 - `fields.patterns`: Regex patterns matching sensitive form field names
 - `tagValueList.safe_values`: Values to preserve in device tag lists
 

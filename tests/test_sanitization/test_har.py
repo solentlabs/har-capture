@@ -144,6 +144,71 @@ class TestHeaderSanitization:
         assert secret not in result, f"{desc}: secret '{secret}' should be removed"
 
 
+class TestSchemeRedactBranch:
+    """Tests for the ``scheme_redact`` bucket on ``sanitize_header_value``.
+
+    Authorization-style headers carry "Scheme credentials". Preserving the
+    scheme token (when it matches a known RFC scheme) keeps the protocol
+    shape intact for downstream consumers without leaking the secret.
+    Unknown schemes fall through to full redaction so a non-standard
+    leading token can't escape.
+    """
+
+    @pytest.mark.parametrize(
+        ("scheme",),
+        [("Basic",), ("Bearer",), ("Digest",), ("NTLM",), ("Negotiate",), ("OAuth",)],
+        ids=["basic", "bearer", "digest", "ntlm", "negotiate", "oauth"],
+    )
+    def test_known_scheme_preserved_credential_redacted(self, scheme: str) -> None:
+        value = f"{scheme} the_secret_part_abc123"
+        result = sanitize_header_value("Authorization", value)
+        assert result.startswith(f"{scheme} "), f"scheme {scheme!r} must be preserved"
+        assert "the_secret_part_abc123" not in result
+
+    def test_scheme_casing_preserved_as_sent(self) -> None:
+        """Lowercase ``bearer`` is still a known scheme; original casing is preserved in output."""
+        assert sanitize_header_value("Authorization", "bearer xyz") == "bearer [REDACTED]"
+
+    def test_unknown_scheme_falls_through_to_full_redact(self) -> None:
+        """A non-RFC scheme is not preserved — the whole value is redacted."""
+        result = sanitize_header_value("Authorization", "FancyScheme abc123")
+        assert "FancyScheme" not in result
+        assert "abc123" not in result
+        assert result == "[REDACTED]"
+
+    def test_no_whitespace_falls_through_to_full_redact(self) -> None:
+        """A single token with no scheme/credential split → full redact."""
+        assert sanitize_header_value("Authorization", "SoloToken") == "[REDACTED]"
+
+    def test_empty_value_full_redacts(self) -> None:
+        """An empty Authorization value is fully redacted (no token to preserve)."""
+        assert sanitize_header_value("Authorization", "") == "[REDACTED]"
+
+    def test_lowercase_header_name_still_matches(self) -> None:
+        """Header-name matching is case-insensitive."""
+        assert sanitize_header_value("authorization", "Bearer xyz") == "Bearer [REDACTED]"
+
+    def test_scheme_preserved_with_hasher_yields_stable_tag(self) -> None:
+        """With a hasher, the credential becomes a stable AUTH_<hash> tag — same value, same tag."""
+        from har_capture.patterns import Hasher
+
+        hasher = Hasher(salt="test-salt")
+        r1 = sanitize_header_value("Authorization", "Bearer abc123", hasher=hasher)
+        r2 = sanitize_header_value("Authorization", "Bearer abc123", hasher=hasher)
+        assert r1 == r2
+        assert r1.startswith("Bearer ")
+        assert r1.split(" ", 1)[1].startswith("AUTH_")
+        # Different credential → different tag.
+        r3 = sanitize_header_value("Authorization", "Bearer different_value", hasher=hasher)
+        assert r3 != r1
+        assert r3.startswith("Bearer ")
+
+    def test_leading_whitespace_tolerated(self) -> None:
+        """A leading space before the scheme shouldn't defeat the split."""
+        result = sanitize_header_value("Authorization", "  Bearer abc123")
+        assert result == "Bearer [REDACTED]"
+
+
 class TestPostDataSanitization:
     """Tests for POST data sanitization."""
 
@@ -638,12 +703,22 @@ class TestHeaderSetsInternals:
                 "headers": {
                     "full_redact": ["Authorization", "X-Modem-Auth"],
                     "cookie_redact": ["Cookie"],
+                    "scheme_redact": ["Proxy-Authorization"],
                 }
             }
         )
         assert sets.full_redact == frozenset({"authorization", "x-modem-auth"})
         assert sets.cookie_redact == frozenset({"cookie"})
+        assert sets.scheme_redact == frozenset({"proxy-authorization"})
         assert isinstance(sets.full_redact, frozenset)
+        assert isinstance(sets.scheme_redact, frozenset)
+
+    def test_compile_header_sets_missing_scheme_redact_defaults_empty(self) -> None:
+        """A custom pattern dict without scheme_redact yields an empty set, not a KeyError."""
+        from har_capture.sanitization.har import _compile_header_sets
+
+        sets = _compile_header_sets({"headers": {"full_redact": ["X-Custom"]}})
+        assert sets.scheme_redact == frozenset()
 
     def test_resolve_header_sets_none_returns_default(self) -> None:
         from har_capture.sanitization.har import (
@@ -657,9 +732,11 @@ class TestHeaderSetsInternals:
         from har_capture.sanitization.har import _resolve_header_sets
 
         sets = _resolve_header_sets({"headers": {"full_redact": ["X-Modem-Auth"]}})
-        # Built-in Authorization still present, custom header added.
-        assert "authorization" in sets.full_redact
+        # A built-in full_redact entry is still present, custom header added.
+        assert "x-auth-token" in sets.full_redact
         assert "x-modem-auth" in sets.full_redact
+        # Authorization now lives in scheme_redact, unaffected by custom full_redact extension.
+        assert "authorization" in sets.scheme_redact
 
     def test_resolve_header_sets_cache_hit_returns_same_instance(self) -> None:
         from har_capture.sanitization.har import (

@@ -85,8 +85,9 @@ Underscore-prefixed keys are skipped during the merge process.
 ```json
 {
   "headers": {
-    "full_redact": ["authorization", "x-auth-token", "proxy-authorization"],
-    "cookie_redact": ["cookie", "set-cookie"]
+    "full_redact": ["x-auth-token", "x-api-key"],
+    "cookie_redact": ["cookie", "set-cookie"],
+    "scheme_redact": ["authorization"]
   },
   "fields": {
     "auto_redact_patterns": ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"],
@@ -107,10 +108,11 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `headers`**
 
-| Field           | Type       | Description                                                              |
-| --------------- | ---------- | ------------------------------------------------------------------------ |
-| `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced          |
-| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted) |
+| Field           | Type       | Description                                                                                                                                                                                             |
+| --------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced                                                                                                                                         |
+| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted)                                                                                                                                |
+| `scheme_redact` | string\[\] | Header names with RFC 7235 `Scheme credentials` syntax. Recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved; unknown schemes fall through to full redact |
 
 **Schema: `fields`**
 
@@ -376,8 +378,14 @@ Layer N: Nth --patterns argument
 Merge semantics (applied at each layer):
 
 ```python
-# Lists are extended (custom appended to builtin)
-builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
+# Lists are extended (custom appended to builtin).
+# `headers.scheme_redact` is optional in the built-in JSON; the loader uses
+# setdefault to extend whether or not the built-in section declares it.
+for header_key in ("full_redact", "cookie_redact", "scheme_redact"):
+    if header_key in custom["headers"]:
+        builtin["headers"].setdefault(header_key, []).extend(
+            custom["headers"][header_key]
+        )
 
 # Field-name regex lists extend additively. Both the current-schema keys
 # (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are

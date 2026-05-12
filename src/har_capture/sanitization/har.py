@@ -137,17 +137,18 @@ def validate_har_structure(har_data: dict[str, Any], *, strict: bool = False) ->
     return warnings
 
 
-def _load_sensitive_headers() -> tuple[set[str], set[str]]:
+def _load_sensitive_headers() -> tuple[set[str], set[str], set[str]]:
     """Load sensitive header names from patterns.
 
     Returns:
-        Tuple of (full_redact_headers, cookie_redact_headers)
+        Tuple of (full_redact_headers, cookie_redact_headers, scheme_redact_headers)
     """
     sensitive = load_sensitive_patterns()
     headers = sensitive.get("headers", {})
     full_redact = set(h.lower() for h in headers.get("full_redact", []))
     cookie_redact = set(h.lower() for h in headers.get("cookie_redact", []))
-    return full_redact, cookie_redact
+    scheme_redact = set(h.lower() for h in headers.get("scheme_redact", []))
+    return full_redact, cookie_redact, scheme_redact
 
 
 def _compile_sensitive_field_patterns(
@@ -182,8 +183,28 @@ def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] |
 
 
 # Load patterns at module level for efficiency
-_FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS = _load_sensitive_headers()
+_FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS, _SCHEME_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
+
+# Auth schemes recognized by sanitize_header_value when redacting an
+# Authorization-style header. Preserving the scheme token lets downstream
+# tools (e.g. cable_modem_monitor's analyze_har) classify the auth mechanism
+# from a single authenticated request, rather than waiting for a 401 +
+# WWW-Authenticate exchange that may never appear when the browser sends
+# cached credentials. The list is intentionally restricted to RFC-recognized
+# schemes (IANA HTTP Authentication Scheme Registry) so an unrecognized
+# leading token — which could be the start of a secret in a non-standard
+# format — falls through to full redaction.
+_KNOWN_AUTH_SCHEMES: frozenset[str] = frozenset(
+    {
+        "basic",
+        "bearer",
+        "digest",
+        "ntlm",
+        "negotiate",
+        "oauth",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -297,23 +318,31 @@ def _resolve_field_patterns(
 class _HeaderSets:
     """Resolved header-name sets used for one sanitization call.
 
-    Both sets are frozen and case-normalized to lowercase so callers can do
+    All sets are frozen and case-normalized to lowercase so callers can do
     ``name.lower() in sets.full_redact`` without repeated normalization.
+    ``scheme_redact`` is the third bucket alongside ``full_redact`` and
+    ``cookie_redact``; see ``sanitize_header_value`` for the routing.
     """
 
     full_redact: frozenset[str]
     cookie_redact: frozenset[str]
+    scheme_redact: frozenset[str]
 
 
 def _compile_header_sets(sensitive_data: dict[str, Any]) -> _HeaderSets:
-    """Build (full_redact, cookie_redact) frozensets from a loaded sensitive-patterns dict."""
+    """Build header-name frozensets from a loaded sensitive-patterns dict."""
     headers = sensitive_data.get("headers", {})
     full = frozenset(h.lower() for h in headers.get("full_redact", []))
     cookie = frozenset(h.lower() for h in headers.get("cookie_redact", []))
-    return _HeaderSets(full, cookie)
+    scheme = frozenset(h.lower() for h in headers.get("scheme_redact", []))
+    return _HeaderSets(full, cookie, scheme)
 
 
-_DEFAULT_HEADER_SETS = _HeaderSets(frozenset(_FULL_REDACT_HEADERS), frozenset(_COOKIE_REDACT_HEADERS))
+_DEFAULT_HEADER_SETS = _HeaderSets(
+    frozenset(_FULL_REDACT_HEADERS),
+    frozenset(_COOKIE_REDACT_HEADERS),
+    frozenset(_SCHEME_REDACT_HEADERS),
+)
 
 _HEADER_SETS_CTX: contextvars.ContextVar[_HeaderSets] = contextvars.ContextVar(
     "har_capture_header_sets", default=_DEFAULT_HEADER_SETS
@@ -464,7 +493,7 @@ def sanitize_header_value(
 
     Example:
         >>> sanitize_header_value("Authorization", "Bearer abc123")
-        '[REDACTED]'
+        'Bearer [REDACTED]'
         >>> sanitize_header_value("Content-Type", "text/html")
         'text/html'
     """
@@ -472,6 +501,21 @@ def sanitize_header_value(
     sets = _HEADER_SETS_CTX.get()
 
     if name_lower in sets.full_redact:
+        return _redact_value(value, hasher, "AUTH", collector)
+
+    if name_lower in sets.scheme_redact:
+        # RFC 7235: header value is "Scheme credentials". The scheme token is
+        # structural protocol metadata (a closed set of identifiers); the
+        # credential after it is the secret. Preserve a recognized scheme so
+        # downstream consumers can classify the auth mechanism without seeing
+        # the secret. Unknown scheme → fall through to full redaction so a
+        # non-standard format can't leak its leading token.
+        stripped = value.lstrip()
+        parts = stripped.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() in _KNOWN_AUTH_SCHEMES:
+            scheme, credential = parts
+            hashed = _redact_value(credential, hasher, "AUTH", collector)
+            return f"{scheme} {hashed}"
         return _redact_value(value, hasher, "AUTH", collector)
 
     if name_lower in sets.cookie_redact:
@@ -1616,7 +1660,7 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
 
 
 # Legacy exports for backwards compatibility
-SENSITIVE_HEADERS: set[str] = _FULL_REDACT_HEADERS | _COOKIE_REDACT_HEADERS
+SENSITIVE_HEADERS: set[str] = _FULL_REDACT_HEADERS | _COOKIE_REDACT_HEADERS | _SCHEME_REDACT_HEADERS
 _fields = load_sensitive_patterns().get("fields", {})
 SENSITIVE_FIELD_PATTERNS: list[str] = _fields.get("auto_redact_patterns", []) + _fields.get(
     "flag_patterns", []

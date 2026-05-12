@@ -98,8 +98,9 @@ Severity: **error**
 Checks header names against the sensitive headers list from `sensitive.json`:
 
 ```python
-# Sensitive headers (from sensitive.json headers.full_redact + headers.cookie_redact):
-# authorization, cookie, set-cookie, x-auth-token, proxy-authorization, ...
+# Sensitive headers (from sensitive.json: headers.full_redact +
+# headers.cookie_redact + headers.scheme_redact):
+# authorization, cookie, set-cookie, x-auth-token, x-api-key, ...
 ```
 
 For each header:
@@ -310,6 +311,8 @@ sensitive.json
 │                                        sanitization (sanitize_header_value)
 ├── headers.cookie_redact    → Used by: validation (check_headers)
 │                                        sanitization (sanitize_header_value)
+├── headers.scheme_redact    → Used by: validation (check_headers)
+│                                        sanitization (sanitize_header_value, scheme-preserving branch)
 ├── fields.auto_redact_patterns → Used by: validation (check_json_fields, check_post_data)
 │                                           sanitization (is_sensitive_field)
 ├── fields.flag_patterns     → Used by: validation (check_json_fields, check_post_data)
