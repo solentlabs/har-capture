@@ -1,0 +1,11 @@
+{
+  // Directories excluded from markdownlint scans.
+  "ignores": [
+    ".venv/**",
+    ".venv-ci/**",
+    "RAW_DATA/**",
+    "build/**",
+    "dist/**",
+    "htmlcov/**"
+  ]
+}

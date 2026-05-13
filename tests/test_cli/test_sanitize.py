@@ -14,7 +14,7 @@ from har_capture.cli.main import app
 
 runner = CliRunner()
 
-# Test HAR fixtures live in tests/fixtures/test_sanitize.json per CLAUDE.md #14.
+# Test HAR fixtures live in tests/fixtures/test_sanitize.json per docs/CODE_REVIEW.md § Test data lives in JSON fixtures.
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_sanitize.json").read_text())
 
 
@@ -38,7 +38,7 @@ def valid_har(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def invalid_json_file(tmp_path: Path) -> Path:
-    """An invalid JSON file (intentional malformed string, behavioural-inline per CLAUDE.md #14)."""
+    """An invalid JSON file (intentional malformed string, behavioural-inline per docs/CODE_REVIEW.md § Test data lives in JSON fixtures)."""
     invalid_file = tmp_path / "invalid.har"
     invalid_file.write_text("{not valid json")
     return invalid_file
@@ -471,6 +471,7 @@ class TestSanitizeReportOption:
 # These handlers exist as a safety net for downstream library callers
 # that bypass typer's parameter validation, which is a reasonable
 # defensive shape. Adding tests that mock low-level I/O to drag
-# coverage over them would be theatrical (rule 12). The per-module
+# coverage over them would be theatrical (docs/CODE_REVIEW.md § Test
+# overrides are a code smell). The per-module
 # floor for cli/sanitize.py is set at the post-test coverage so any
 # new uncovered code lowers the floor.

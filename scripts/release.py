@@ -511,7 +511,7 @@ def print_audit_checklist(
     print("       deferral requires Ken's explicit sign-off, not silence.")
     print()
     print("    2. Did I introduce duplication or hidden contracts in files I")
-    print("       touched? CLAUDE.md rule 3: DRY non-negotiable.")
+    print("       touched? docs/ARCHITECTURE.md § Code Organization: DRY non-negotiable.")
     print()
     print("    3. Did I retry past any test failure / flake / CI papercut")
     print("       during this session? Root cause first, then ship.")

@@ -2,7 +2,8 @@
 
 ## Overview
 
-By default, har-capture uses **format-preserving salted hashes** for redaction. This preserves the ability to correlate values across multiple requests while maintaining data privacy.
+By default, har-capture uses **format-preserving salted hashes** for redaction. This preserves the ability to correlate
+values across multiple requests while maintaining data privacy.
 
 ## How It Works
 
@@ -105,7 +106,8 @@ Request 3: Same device (02:a1:b2:c3:d4:e5) fetches data
 Request 4: Different device (02:7f:8e:9d:2c:01) connects
 ```
 
-With correlation, you can track the same device across requests. Without it, all MACs become `XX:XX:XX:XX:XX:XX` and you lose the ability to trace device behavior.
+With correlation, you can track the same device across requests. Without it, all MACs become `XX:XX:XX:XX:XX:XX` and you
+lose the ability to trace device behavior.
 
 ## Security Considerations
 

@@ -198,6 +198,17 @@ class TestCustomPatternsLoading:
         assert "word-boundary" in joined
         assert "buggy_patterns.json" in joined
 
+    def test_custom_scheme_redact_merged_additively(self, tmp_path: Path) -> None:
+        """``headers.scheme_redact`` from a custom file extends the built-in list."""
+        custom_file = tmp_path / "custom_scheme.json"
+        custom_file.write_text(json.dumps({"headers": {"scheme_redact": ["Proxy-Authorization"]}}))
+
+        result = load_sensitive_patterns(custom_file)
+        scheme_redact = result["headers"]["scheme_redact"]
+        # Built-in entry still present, custom entry appended.
+        assert "authorization" in scheme_redact
+        assert "Proxy-Authorization" in scheme_redact
+
     def test_well_escaped_pattern_does_not_warn(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:

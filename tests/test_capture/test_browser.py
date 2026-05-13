@@ -71,6 +71,7 @@ WAIT_FOR_QUIESCENCE_CASES = _FIXTURE_DATA["wait_for_quiescence_cases"]
 OUTPUT_PATH_CASES = _FIXTURE_DATA["output_path_cases"]
 CAPTURE_ERROR_CASES = _FIXTURE_DATA["capture_error_cases"]
 BROWSER_SELECTION_CASES = _FIXTURE_DATA["browser_selection_cases"]
+DIALOG_RESOLUTION_CASES = _FIXTURE_DATA["dialog_resolution_cases"]
 
 # ┌─────────────────────────┬─────────────────────────────┐
 # │ extension               │ description                 │
@@ -2641,3 +2642,69 @@ class TestRunPostCapturePipelineUnit:
         )
 
         assert not temp_path.exists(), "Temp file should still be cleaned up"
+
+
+# =============================================================================
+# _apply_dialog_resolution() — pure function extracted from
+# _run_browser_session so the matching logic (including defensive
+# branches) is fixture-driven unit-testable without Playwright mocks.
+# =============================================================================
+
+
+class TestApplyDialogResolution:
+    """Fixture-driven coverage of the dialog-resolution match-and-update logic.
+
+    Each row of ``dialog_resolution_cases`` in ``test_browser.json``
+    declares the ``dialogs`` list state before the call, the resolution
+    ``outcome`` payload, and the expected outcome (match vs. no-match;
+    on match: post-update ``action`` / ``resolved_by``; optionally the
+    index of the entry that should have been updated).
+
+    These cases collectively cover every branch in
+    ``_apply_dialog_resolution``: the ``isinstance(outcome, dict)``
+    defensive guard, the reverse-iteration LIFO match preference,
+    the type/message correlation requirements, the
+    ``resolved_by == "unknown"`` skip-already-resolved condition,
+    the missing-``action``-key default, and the no-match fall-through.
+    """
+
+    @pytest.mark.parametrize(
+        "case",
+        DIALOG_RESOLUTION_CASES,
+        ids=[c["id"] for c in DIALOG_RESOLUTION_CASES],
+    )
+    def test_apply_dialog_resolution(self, case: dict[str, Any]) -> None:
+        """Exercise the resolution logic against a fixture row.
+
+        Pre-copy the dialogs list so the test asserts the function's
+        in-place mutation (or non-mutation) without aliasing the
+        fixture data across parametrize cases.
+        """
+        import copy
+
+        from har_capture.capture.browser import _apply_dialog_resolution
+
+        dialogs_before = copy.deepcopy(case["dialogs_before"])
+        dialogs = copy.deepcopy(case["dialogs_before"])
+        outcome = case["outcome"]
+
+        result = _apply_dialog_resolution(dialogs, outcome)
+
+        if case["expect_match"]:
+            assert result is not None, f"{case['id']}: expected a match but got None (dialogs={dialogs})"
+            assert result["action"] == case["expect_action"]
+            assert result["resolved_by"] == case["expect_resolved_by"]
+            # The function returns the entry; the same entry inside
+            # ``dialogs`` should be mutated in place.
+            if "expect_updated_index" in case:
+                idx = case["expect_updated_index"]
+                assert dialogs[idx]["action"] == case["expect_action"]
+                assert dialogs[idx]["resolved_by"] == case["expect_resolved_by"]
+                # Other entries must be untouched.
+                for other_idx, (before, after) in enumerate(zip(dialogs_before, dialogs, strict=False)):
+                    if other_idx != idx:
+                        assert before == after, f"{case['id']}: entry {other_idx} mutated unexpectedly"
+        else:
+            assert result is None, f"{case['id']}: expected no match but got {result!r}"
+            # No-match → dialogs list must be unchanged.
+            assert dialogs == dialogs_before, f"{case['id']}: dialogs mutated despite no match"

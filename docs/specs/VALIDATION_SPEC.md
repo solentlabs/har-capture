@@ -2,7 +2,10 @@
 
 ## Purpose
 
-This spec describes the post-sanitization validation pipeline that checks HAR files for PII that survived sanitization. It covers what `secrets.py` checks, the difference between the `validate` CLI command and the pre-commit hook usage, how `_sensitive_fields` and `_depth` parameters work in `check_json_fields`, and the relationship between validation patterns and sanitization patterns.
+This spec describes the post-sanitization validation pipeline that checks HAR files for PII that survived sanitization.
+It covers what `secrets.py` checks, the difference between the `validate` CLI command and the pre-commit hook usage, how
+`_sensitive_fields` and `_depth` parameters work in `check_json_fields`, and the relationship between validation
+patterns and sanitization patterns.
 
 ## Key Files
 
@@ -16,7 +19,8 @@ This spec describes the post-sanitization validation pipeline that checks HAR fi
 
 ## Validation vs Sanitization
 
-The validation module and sanitization module use overlapping pattern sources but serve fundamentally different purposes:
+The validation module and sanitization module use overlapping pattern sources but serve fundamentally different
+purposes:
 
 | Aspect              | Validation (`secrets.py`)                      | Sanitization (`har.py`)                     |
 | ------------------- | ---------------------------------------------- | ------------------------------------------- |
@@ -34,7 +38,8 @@ The validation module and sanitization module use overlapping pattern sources bu
 1. Sanitization (Pass 1) processes the HAR, replacing PII with hashes
 1. Validation checks the sanitized output to verify nothing was missed
 1. Validation calls `is_redacted()` to suppress findings for values that are already properly sanitized
-1. Both modules load patterns from `sensitive.json`, but validation also uses hard-coded regexes for MAC, serial, and IP detection in content
+1. Both modules load patterns from `sensitive.json`, but validation also uses hard-coded regexes for MAC, serial, and IP
+   detection in content
 
 ## Finding Dataclass
 
@@ -50,7 +55,8 @@ class Finding:
 
 Severity levels:
 
-- **error**: High-confidence PII leak — should block commit (sensitive headers, base64 credentials, auto-redact field patterns)
+- **error**: High-confidence PII leak — should block commit (sensitive headers, base64 credentials, auto-redact field
+  patterns)
 - **warning**: Lower confidence — informational (MAC addresses in content, serial numbers, public IPs)
 
 ## Entry Point
@@ -98,15 +104,17 @@ Severity: **error**
 Checks header names against the sensitive headers list from `sensitive.json`:
 
 ```python
-# Sensitive headers (from sensitive.json headers.full_redact + headers.cookie_redact):
-# authorization, cookie, set-cookie, x-auth-token, proxy-authorization, ...
+# Sensitive headers (from sensitive.json: headers.full_redact +
+# headers.cookie_redact + headers.scheme_redact):
+# authorization, cookie, set-cookie, x-auth-token, x-api-key, ...
 ```
 
 For each header:
 
 1. Check if header name (case-insensitive) matches sensitive list
 1. If matched, check if value is already redacted via `is_redacted()`
-1. Special handling for Cookie/Set-Cookie: skip if value contains only attributes (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`) via `is_cookie_attribute_metadata()`
+1. Special handling for Cookie/Set-Cookie: skip if value contains only attributes (`HttpOnly`, `Secure`, `SameSite`,
+   `Path`, `Domain`, `Expires`) via `is_cookie_attribute_metadata()`
 1. Skip empty header values
 
 Severity: **error**
@@ -132,7 +140,8 @@ Checks form field names and JSON body content:
 1. Walk element tree, checking element tag names and attribute names against sensitive field patterns
 1. Strip namespace prefixes if present (`{http://ns}tagname` → `tagname`)
 1. Report findings for elements whose text content is not redacted
-1. Report findings for attributes whose values are not redacted (e.g., `<field password="secret"/>`)  <!-- pragma: allowlist secret -->
+1. Report findings for attributes whose values are not redacted (e.g., `<field password="..."/>` where the attribute
+   carries a real credential)
 1. Malformed XML is caught and skipped (no findings, no crash)
 
 Severity: **error**
@@ -284,7 +293,8 @@ Consumers who commit HAR files to their repositories can configure a pre-commit 
       types: [file]
 ```
 
-This hook is not shipped with har-capture's own `.pre-commit-config.yaml` — it is an example configuration for downstream consumers who store HAR files in version control.
+This hook is not shipped with har-capture's own `.pre-commit-config.yaml` — it is an example configuration for
+downstream consumers who store HAR files in version control.
 
 Behavioral differences from CLI:
 
@@ -294,9 +304,12 @@ Behavioral differences from CLI:
 
 ## Redaction Integration
 
-Before reporting a finding, validation checks whether the value is already redacted by delegating to `is_redacted()` from `patterns/redaction.py`. If the value matches any redaction pattern (static placeholders, hash prefixes, format-preserving patterns, or redaction indicators), the finding is suppressed.
+Before reporting a finding, validation checks whether the value is already redacted by delegating to `is_redacted()`
+from `patterns/redaction.py`. If the value matches any redaction pattern (static placeholders, hash prefixes,
+format-preserving patterns, or redaction indicators), the finding is suppressed.
 
-See [Pattern Spec — Redaction Checking](PATTERN_SPEC.md#redaction-checking-redactionpy) for the full `is_redacted()` check order and `allowlist.json` schema.
+See [Pattern Spec — Redaction Checking](PATTERN_SPEC.md#redaction-checking-redactionpy) for the full `is_redacted()`
+check order and `allowlist.json` schema.
 
 ## Pattern Relationship
 
@@ -310,6 +323,8 @@ sensitive.json
 │                                        sanitization (sanitize_header_value)
 ├── headers.cookie_redact    → Used by: validation (check_headers)
 │                                        sanitization (sanitize_header_value)
+├── headers.scheme_redact    → Used by: validation (check_headers)
+│                                        sanitization (sanitize_header_value, scheme-preserving branch)
 ├── fields.auto_redact_patterns → Used by: validation (check_json_fields, check_post_data)
 │                                           sanitization (is_sensitive_field)
 ├── fields.flag_patterns     → Used by: validation (check_json_fields, check_post_data)
@@ -346,15 +361,24 @@ Validation is intentionally simpler than sanitization:
 - It doesn't need heuristics because it runs **after** sanitization — anything suspicious should already be caught
 - It checks **field names** (which are structural and don't change) rather than analyzing **field values** heuristically
 - It uses `is_redacted()` as the primary gate — if the value looks redacted, the finding is suppressed
-- False positives in validation are preferable to false negatives — blocking a clean commit is annoying but safe; allowing a dirty commit is a PII leak
+- False positives in validation are preferable to false negatives — blocking a clean commit is annoying but safe;
+  allowing a dirty commit is a PII leak
 
 ## Constraints / Invariants
 
-1. **Validation runs after sanitization** — It checks sanitized output, not raw captures. Running validation on unsanitized HAR would produce overwhelming findings.
-1. **Redacted values are always suppressed** — If `is_redacted(value)` returns True, no finding is generated. This is the contract between sanitization and validation.
-1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Exceeding this is logged but does not crash or produce findings for deeper content.
-1. **Pattern compilation is done once** — `_sensitive_fields` is compiled on the first call to `check_json_fields` and reused across all recursive invocations and all entries.
-1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`, `SameSite`) are not flagged. Only headers with actual session values trigger findings.
-1. **Severity is deterministic** — Headers and POST data are always "error"; content patterns are always "warning". There is no confidence scoring in validation (unlike sanitization's heuristic engine).
+1. **Validation runs after sanitization** — It checks sanitized output, not raw captures. Running validation on
+   unsanitized HAR would produce overwhelming findings.
+1. **Redacted values are always suppressed** — If `is_redacted(value)` returns True, no finding is generated. This is
+   the contract between sanitization and validation.
+1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Exceeding this is logged but does
+   not crash or produce findings for deeper content.
+1. **Pattern compilation is done once** — `_sensitive_fields` is compiled on the first call to `check_json_fields` and
+   reused across all recursive invocations and all entries.
+1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`,
+   `SameSite`) are not flagged. Only headers with actual session values trigger findings.
+1. **Severity is deterministic** — Headers and POST data are always "error"; content patterns are always "warning".
+   There is no confidence scoring in validation (unlike sanitization's heuristic engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
-1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, successful decode, and exactly one colon in the decoded string. Random base64-looking strings that don't decode to `user:pass` format are not flagged.
+1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, successful decode,
+   and exactly one colon in the decoded string. Random base64-looking strings that don't decode to `user:pass` format
+   are not flagged.

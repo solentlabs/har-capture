@@ -13,7 +13,7 @@ from har_capture.cli.main import app
 
 runner = CliRunner()
 
-# Test HAR fixtures live in tests/fixtures/test_validate.json per CLAUDE.md #14.
+# Test HAR fixtures live in tests/fixtures/test_validate.json per docs/CODE_REVIEW.md § Test data lives in JSON fixtures.
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_validate.json").read_text())
 
 

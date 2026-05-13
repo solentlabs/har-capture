@@ -1,6 +1,8 @@
 # Interactive Sanitization
 
-Interactive review is always enabled. After auto-sanitization, suspicious values that couldn't be automatically classified are presented for your review. This catches edge cases like WiFi SSIDs, device names, or credentials that don't match standard patterns.
+Interactive review is always enabled. After auto-sanitization, suspicious values that couldn't be automatically
+classified are presented for your review. This catches edge cases like WiFi SSIDs, device names, or credentials that
+don't match standard patterns.
 
 ## Quick Start
 
@@ -244,7 +246,8 @@ The salt used for hashing is stored in the report and reused in Pass 2. This ens
 1. **High confidence items** are usually safe to redact (e.g., values next to passwords)
 1. **Medium confidence** often includes SSIDs and device names - review the context
 1. **Low confidence** items need careful review to avoid false positives
-1. Use the **occurrence count** to assess impact - redacting "test" that appears 100 times might affect legitimate content
+1. Use the **occurrence count** to assess impact - redacting "test" that appears 100 times might affect legitimate
+   content
 1. **ESC/Backspace** lets you go back and change your mind
 1. **Ctrl+C** cancels the review (file is still sanitized, but flagged values remain unchanged)
 
@@ -265,7 +268,8 @@ If the interactive prompts crash, the tool falls back gracefully and writes a re
 
 ### Performance with large HAR files
 
-For very large HAR files (>50MB), consider using `--report` to review flagged values separately rather than doing it interactively.
+For very large HAR files (>50MB), consider using `--report` to review flagged values separately rather than doing it
+interactively.
 
 ## Related Documentation
 

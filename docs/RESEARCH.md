@@ -1,7 +1,7 @@
 # HAR Capture - Background Research
 
-> **Note**: This document captures the research that led to creating har-capture.
-> For usage information, see the [README](../README.md).
+> **Note**: This document captures the research that led to creating har-capture. For usage information, see the
+> [README](../README.md).
 
 ## References
 

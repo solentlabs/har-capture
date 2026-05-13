@@ -1,6 +1,10 @@
-______________________________________________________________________
-
-## name: Feature request about: Suggest a new feature or enhancement title: '' labels: enhancement assignees: ''
+---
+name: Feature request
+about: Suggest a new feature or enhancement
+title: ''
+labels: enhancement
+assignees: ''
+---
 
 ## Problem Statement
 

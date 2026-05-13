@@ -1,9 +1,8 @@
 {
   "_comment": "Sensitive fields and headers to redact in HAR files",
   "headers": {
-    "_comment": "HTTP headers that contain sensitive data (case-insensitive)",
+    "_comment": "HTTP headers that contain sensitive data (case-insensitive). 'scheme_redact' is for RFC 7235 challenge/response headers ('Scheme credentials') where the scheme token is structural protocol metadata and the credential is the secret — the scheme is preserved so downstream tools can classify the auth mechanism; unknown schemes fall through to full redaction.",
     "full_redact": [
-      "authorization",
       "x-auth-token",
       "x-api-key",
       "x-session-id",
@@ -12,6 +11,9 @@
     "cookie_redact": [
       "cookie",
       "set-cookie"
+    ],
+    "scheme_redact": [
+      "authorization"
     ]
   },
   "fields": {

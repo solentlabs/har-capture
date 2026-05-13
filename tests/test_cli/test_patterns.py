@@ -3,11 +3,12 @@
 The CLI ``patterns`` subcommand is a thin wrapper over
 ``har_capture.patterns.loader``. These tests run the command via
 CliRunner against the real built-in ``network-device`` domain — no
-mocks. Per CLAUDE.md rule 12, hitting coverage with real fixtures
-beats heavy mocking.
+mocks. Per docs/CODE_REVIEW.md § Test overrides are a code smell,
+hitting coverage with real fixtures beats heavy mocking.
 
 Pattern-file fixtures used by the ``--show`` tests live in
-``tests/fixtures/test_patterns.json`` per CLAUDE.md rule 14.
+``tests/fixtures/test_patterns.json`` per docs/CODE_REVIEW.md
+§ Test data lives in JSON fixtures.
 """
 
 from __future__ import annotations

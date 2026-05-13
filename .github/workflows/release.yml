@@ -23,11 +23,13 @@ jobs:
           # Extract the section for this version from CHANGELOG.md
           version="${GITHUB_REF#refs/tags/v}"
 
-          # Get content between this version and the next version header
-          awk "/^## \[$version\]/,/^## \[/" CHANGELOG.md | \
-            grep -v "^## \[$version\]" | \
-            grep -v "^## \[" | \
-            sed '/^$/d' > release_notes.txt
+          # Extract content between this version header (exclusive) and the
+          # next version header (exclusive). A single-regex range like
+          # /A/,/B/ where both patterns can match the same line yields a
+          # single-line range (the bug that produced empty release notes
+          # through v0.9.0). Flag-toggle pattern starts AFTER the header.
+          awk "/^## \[$version\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md \
+            | sed '/^$/d' > release_notes.txt
 
           # Add installation instructions
           cat >> release_notes.txt << EOF

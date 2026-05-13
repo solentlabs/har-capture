@@ -1,6 +1,10 @@
-______________________________________________________________________
-
-## name: Bug report about: Report a bug in har-capture title: '' labels: bug assignees: ''
+---
+name: Bug report
+about: Report a bug in har-capture
+title: ''
+labels: bug
+assignees: ''
+---
 
 ## Description
 

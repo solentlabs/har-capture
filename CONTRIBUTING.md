@@ -69,7 +69,8 @@ ruff format .
 
 ### Testing
 
-All code must have tests. We require 60% coverage minimum:
+All code must have tests. Coverage gate, command list, and the full quality-gate matrix are in
+[`docs/CODE_REVIEW.md` § Quality Gates](docs/CODE_REVIEW.md#quality-gates):
 
 ```bash
 # Run tests with coverage
@@ -216,7 +217,7 @@ One-time setup for repository maintainers:
 
 Configure OIDC publishing (no API tokens needed):
 
-1. **PyPI:** https://pypi.org/manage/account/publishing/
+1. **PyPI:** <https://pypi.org/manage/account/publishing/>
 
    - Add publisher
    - Owner: `solentlabs`
@@ -224,7 +225,7 @@ Configure OIDC publishing (no API tokens needed):
    - Workflow: `publish.yml`
    - Environment: `pypi`
 
-1. **Test PyPI:** https://test.pypi.org/manage/account/publishing/
+1. **Test PyPI:** <https://test.pypi.org/manage/account/publishing/>
 
    - Same settings, environment: `test-pypi`
 

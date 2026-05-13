@@ -70,6 +70,7 @@ def _load_sensitive_headers(custom_patterns: str | dict[str, Any] | None = None)
     headers = sensitive.get("headers", {})
     result = list(headers.get("full_redact", []))
     result.extend(headers.get("cookie_redact", []))
+    result.extend(headers.get("scheme_redact", []))
     return result
 
 

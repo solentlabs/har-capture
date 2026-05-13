@@ -4,7 +4,7 @@ Each case is a value the heuristic engine must flag for the Pass 2 review UI
 with a meaningful category. Sources are issue numbers — add a new row when a
 user reports a leak the engine missed.
 
-Per CLAUDE.md principle #7, the heuristic layer is intentionally permissive:
+Per docs/ARCHITECTURE.md § Confidence boundary, the heuristic layer is intentionally permissive:
 detectors should flag aggressively, the UI is the filter, and the allowlist
 absorbs reviewed-safe shapes. Failures here mean a detector entry is missing
 or a regex backstop is needed, not that detector strictness should change.
@@ -83,7 +83,7 @@ def test_regex_layer_redacts_labeled_leaks(
 
     Pure-digit values like WPS PINs can't be caught heuristically - they look
     identical to packet counters. The label is what makes a deterministic
-    auto-redaction possible per CLAUDE.md principle #7.
+    auto-redaction possible per docs/ARCHITECTURE.md § Confidence boundary.
     """
     from har_capture.sanitization.html import sanitize_html
 

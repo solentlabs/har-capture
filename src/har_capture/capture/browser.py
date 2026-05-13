@@ -164,6 +164,45 @@ def _wait_for_pending_data(page: Any, timeout_s: float = _DATA_WAIT_NAV_TIMEOUT_
     _LOGGER.debug("Pending-data wait timed out after %.1fs", timeout_s)
 
 
+def _apply_dialog_resolution(dialogs: list[dict[str, Any]], outcome: Any) -> dict[str, Any] | None:
+    """Update the most-recent unresolved dialog matching ``outcome``.
+
+    Pure function: walks ``dialogs`` in reverse, finds the first entry
+    whose ``resolved_by`` is still ``"unknown"`` and whose ``type`` +
+    ``message`` match ``outcome``, mutates that entry's ``action`` and
+    ``resolved_by`` in place, and returns it.
+
+    Extracted from the ``_on_dialog_resolved`` closure inside
+    ``_run_browser_session`` so the matching logic — including the
+    defensive ``isinstance`` guard and the no-match path — is
+    fixture-driven unit-testable without going through Playwright
+    mocks. The session closure is now a thin wrapper that handles
+    logging.
+
+    Args:
+        dialogs: Mutable list of dialog records (``result.dialogs``
+            shape) — each entry has ``type``, ``message``,
+            ``default_value``, ``opened_at``, ``action``, ``resolved_by``.
+        outcome: Resolution payload from the JS-side wrapper. Annotated
+            ``Any`` because it crosses the ``page.expose_function``
+            JS→Python bridge — runtime can be any JSON-compatible value.
+
+    Returns:
+        The updated dialog entry on match, or ``None`` if ``outcome``
+        wasn't a dict or no unresolved matching entry was found.
+    """
+    if not isinstance(outcome, dict):
+        return None
+    dialog_type = outcome.get("type")
+    message = outcome.get("message")
+    for entry in reversed(dialogs):
+        if entry["resolved_by"] == "unknown" and entry["type"] == dialog_type and entry["message"] == message:
+            entry["action"] = outcome.get("action", "unknown")
+            entry["resolved_by"] = "browser_ui"
+            return entry
+    return None
+
+
 def _wait_for_network_quiescence(
     page: Any,
     quiescence_s: float = _DATA_WAIT_QUIESCENCE_S,
@@ -601,32 +640,20 @@ def _run_browser_session(
                 )
 
             def _on_dialog_resolved(outcome: Any) -> None:
-                # ``outcome`` is annotated ``Any`` because it crosses the
-                # JS → Python bridge via ``page.expose_function`` — the
-                # static type is whatever JSON-compatible value JS sends.
-                # Match by (type, message) against the most recent unresolved
-                # dialog. Matching beats positional indexing because nested
-                # or concurrent dialogs would otherwise mis-correlate.
-                if not isinstance(outcome, dict):
-                    return
-                dialog_type = outcome.get("type")
-                message = outcome.get("message")
-                for entry in reversed(result.dialogs):
-                    if (
-                        entry["resolved_by"] == "unknown"
-                        and entry["type"] == dialog_type
-                        and entry["message"] == message
-                    ):
-                        entry["action"] = outcome.get("action", "unknown")
-                        entry["resolved_by"] = "browser_ui"
-                        _LOGGER.info(
-                            "Dialog resolved by browser_ui: type=%s action=%s message=%r",
-                            entry["type"],
-                            entry["action"],
-                            entry["message"],
-                        )
-                        return
-                _LOGGER.warning("Dialog resolution had no matching open record: %r", outcome)
+                # Match-and-update logic lives in the module-level pure
+                # function ``_apply_dialog_resolution`` so it can be
+                # fixture-driven unit-tested without Playwright mocks.
+                # This closure stays thin: delegate, then log.
+                updated = _apply_dialog_resolution(result.dialogs, outcome)
+                if updated is not None:
+                    _LOGGER.info(
+                        "Dialog resolved by browser_ui: type=%s action=%s message=%r",
+                        updated["type"],
+                        updated["action"],
+                        updated["message"],
+                    )
+                else:
+                    _LOGGER.warning("Dialog resolution had no matching open record: %r", outcome)
 
             page.expose_function("__harCaptureDialogResolved", _on_dialog_resolved)
             page.add_init_script(_DIALOG_OBSERVER_INIT_SCRIPT)

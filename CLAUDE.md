@@ -1,168 +1,200 @@
 # Claude Rules
 
-> **This file**: Core principles, behavioral constraints, and development rules.
-> The principles section is the foundation — internalize it before any work.
+> **This file**: how Claude behaves in this repo — diagnostic disciplines, decision sequencing, verification, process
+> guardrails. Architecture, code quality, testing, and release standards live in the docs linked below; this file points
+> rather than restates.
+>
+> **Read this before any work in this repo.** Other contributors' AI tools that skim past this file produce the failure
+> modes catalogued under "AI Shortcut Audit" below — every one of them has already cost us real time.
+
+## Where Things Live
+
+| Topic                                                                    | Authoritative doc                                                    |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| Architecture, code organization, capture pipeline, sanitization pipeline | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       |
+| Capture spec (Playwright session, wait-for-data, workflow phases)        | [`docs/specs/CAPTURE_SPEC.md`](docs/specs/CAPTURE_SPEC.md)           |
+| Sanitization spec (HAR/HTML/heuristic engines, two-pass model, hasher)   | [`docs/specs/SANITIZATION_SPEC.md`](docs/specs/SANITIZATION_SPEC.md) |
+| Pattern spec (schemas, domain files, merge order, loader)                | [`docs/specs/PATTERN_SPEC.md`](docs/specs/PATTERN_SPEC.md)           |
+| Validation spec (PII leak detection, pre-commit hook)                    | [`docs/specs/VALIDATION_SPEC.md`](docs/specs/VALIDATION_SPEC.md)     |
+| Code quality, test standards, quality gates                              | [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)                         |
+| Release flow, version numbering, branching/merging, CHANGELOG            | [`docs/RELEASE.md`](docs/RELEASE.md)                                 |
+| User-facing use cases                                                    | [`docs/USE_CASES.md`](docs/USE_CASES.md)                             |
+| Architecture decision records                                            | [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md)   |
+
+## Contents
+
+| Section                  | Covers                                                       |
+| ------------------------ | ------------------------------------------------------------ |
+| Core Principles          | Specs/docs authority + process guardrails — 7 numbered rules |
+| Diagnosis Discipline     | Asking for data, differential test, external failure modes   |
+| Decision Discipline      | Sequencing, recommendation-not-paper, no judgment shortcuts  |
+| Verification Discipline  | Ground-truth checks, in-flight PR audit, commit-before-done  |
+| Pre-Push Verification    | Local quality-gate run before every push                     |
+| Irreversible Operations  | STOP and VERIFY for force/delete/tag/release                 |
+| PR and Issue Conventions | Conventional commits, one PR per release                     |
+| AI Shortcut Audit        | Encoded session failure modes                                |
 
 ## Core Principles
 
-These principles govern every change to this project. They are not
-guidelines — they are hard constraints. When in doubt, the principle
-wins over convenience.
+These principles are hard constraints. When in doubt, the principle wins over convenience.
 
-Principles are globally numbered 1–19 across the five subsections below.
-They use bullet syntax rather than ordered-list syntax so the per-subsection
-groupings stay visually distinct while the numbering stays continuous
-(an ordered list restarts per section, which would break references like
-"principle #7").
-
-### Architecture
-
-- **1. Separation of Concerns is non-negotiable.** Each module does one
-  thing. `patterns/` loads and merges patterns. `sanitization/` removes
-  PII. `capture/` records traffic. `validation/` checks results.
-  `cli/` wires commands. No module reaches across boundaries.
-
-- **2. DRY is non-negotiable.** If the same logic appears in 2+ places,
-  extract a shared helper. Duplicated pattern loading, redaction
-  checks, or detection logic are architecture bugs, not tech debt.
-
-- **3. The core library has no CLI dependency.** `cli/` is a thin
-  wrapper over the library. If a CLI command requires non-trivial
-  logic, it belongs in the library, not the CLI module. API consumers
-  (`sanitize_har_file()`, `validate_har()`) never import from `cli/`.
-
-- **4. New features are additive only.** New domain pattern, new
-  heuristic detector, new PII pattern, new scanner pass — none of
-  these change existing code. Add a JSON file, register it, done.
-  If adding a feature requires modifying unrelated modules, the
-  architecture is wrong.
-
-- **5. The core is domain-agnostic.** The sanitization engine has no
-  knowledge of any particular device or application. Domain-specific
-  knowledge (safe values, detectors, HTML scanner config) lives in
-  domain pattern files loaded at runtime via `--patterns`. Core
-  pattern files (`pii.json`, `sensitive.json`, `allowlist.json`)
-  contain only universal PII rules.
-
-- **6. Extensibility via data, not code.** Adding support for a new
-  product category requires a JSON file, not code changes. Heuristic
-  detectors, HTML scanners, PII patterns, and safe values are all
-  configured through domain pattern files. If a domain pattern
-  section requires code knowledge, the abstraction is wrong.
-
-- **7. The confidence boundary governs which layer redacts.** The
-  deterministic pattern layer (`pii.json` + HTML scanner passes 0–16)
-  auto-redacts at 100% confidence — a false positive is a bug. The
-  heuristic layer (`heuristics.detectors`) flags values for Pass 2
-  interactive review and can tolerate lower confidence; the
-  interactive UI is the filter, and `safe_value_patterns` is where
-  reviewed-safe shapes accumulate. A pattern that cannot guarantee
-  zero false positives belongs in `heuristics.detectors`, not
-  `pii.patterns`. See `SANITIZATION_SPEC` invariant #11 and
-  `ARCHITECTURE` "Confidence boundary."
+Principles are globally numbered 1–7. They use bullet syntax with bold-prefix numbers so per-subsection groupings stay
+visually distinct while numbering stays continuous (an ordered list restarts per subsection, which would break
+references like "principle 7").
 
 ### Specs and Documentation
 
-- **8. Specs are the authority.** Code follows specs. No silent
-  deviations. If the code needs to diverge, discuss the gap first,
-  update the spec, then update the code.
+- **1. Specs are the authority.** Code follows specs. No silent deviations. If the code needs to diverge, discuss the
+  gap first, update the spec, then update the code.
 
-- **9. Design decisions land in specs, not in conversation.** Every
-  architectural decision made during a session must be committed to
-  the relevant spec or architecture doc before the session ends.
-  Conversation history is ephemeral — specs are durable.
+- **2. Design decisions land in specs, not in conversation.** Every architectural decision made during a session must be
+  committed to the relevant spec or architecture doc before the session ends. Conversation history is ephemeral — specs
+  are durable.
 
-- **10. Docs and code move together.** Every change reconciles the
-  affected specs (ARCHITECTURE, CAPTURE_SPEC, SANITIZATION_SPEC,
-  PATTERN_SPEC, VALIDATION_SPEC). A code change without a
-  corresponding spec update is incomplete.
-
-### Code Quality
-
-- **11. No shortcuts, no deferred structure.** If a better design is
-  obvious, use it now. Don't optimise for speed of first draft.
-  When a module grows past its natural boundary, restructure the
-  whole module — don't bolt on the new thing and leave the rest.
-
-- **12. Quality gates are not negotiable.** If mypy, ruff, or pytest
-  fails, fix the code. Don't exclude files, skip checks, or weaken
-  thresholds. Never bypass pre-commit hooks — fix failures, don't
-  skip them. If hooks break, fix the hook setup first.
-
-- **13. Test overrides are a code smell.** If reaching coverage requires
-  heavy mocking, monkeypatching, or test overrides, the code
-  structure is wrong. Restructure the code (extract dependency, make
-  injectable), don't paper over it with test complexity.
-
-### Testing
-
-- **14. Table-driven tests by default.** Identify the pattern BEFORE
-  writing tests. If 3+ tests share the same setup→call→assert
-  structure, start with `@pytest.mark.parametrize`.
-
-- **15. Test data lives in JSON fixtures.** No inline data blobs in
-  test files. Large test data (dicts, pattern lists, test case
-  tables) goes in `tests/fixtures/*.json`. Test files load fixtures
-  and convert to tuples for parametrize. Schema tests use fixture
-  files; behavioural tests stay inline.
-
-- **16. Coverage threshold is 75%.** Defined in `pyproject.toml`. Patch
-  target 80% informational (`codecov.yml`). Don't game coverage —
-  if a module is hard to test, restructure it.
+- **3. Docs and code move together.** Every change reconciles the affected specs and docs (ARCHITECTURE, CAPTURE_SPEC,
+  SANITIZATION_SPEC, PATTERN_SPEC, VALIDATION_SPEC, CODE_REVIEW, RELEASE). A code change without a corresponding doc
+  update is incomplete.
 
 ### Process
 
-- **17. Only the developer merges PRs and takes irreversible actions.**
-  Never merge a PR, force push, delete branches, or create releases
-  without explicit approval. "Ready to merge?" is not "merge it."
+- **4. Only the developer merges PRs and takes irreversible actions.** Never merge a PR, force-push, delete branches on
+  a remote, or create releases without explicit approval. "Ready to merge?" is not "merge it."
 
-- **18. No external actions without discussion.** Never create GitHub
-  issues, PRs, pushes, label changes, or any external-facing action
-  without explicit discussion first.
+- **5. No external actions without discussion.** Never create GitHub issues, PRs, pushes, label changes, comments, or
+  any external-facing action without explicit discussion first.
 
-- **19. Conventional commits.** Commitizen pre-commit hook requires the
-  format: `type(scope): message` (e.g., `feat(patterns):`,
-  `fix(sanitization):`, `docs:`, `chore(release):`).
+- **6. Only the developer stages files.** Never run `git add`, `git commit`, or `git stash` without an explicit
+  per-action ask. Approval of the *work* is not approval of each *commit*. Show the diff and propose a commit message;
+  let the developer stage.
 
-## Architecture and Specifications
+- **7. Conventional commits.** Commitizen pre-commit hook requires `type(scope): message`. Examples: `feat(patterns):`,
+  `fix(sanitization):`, `docs:`, `chore(release):`. The conventional-commit type does **not** auto-imply a version bump
+  — see [`docs/RELEASE.md`](docs/RELEASE.md#version-numbering) for the binding policy.
 
-| Document                          | Scope                                                     |
-| --------------------------------- | --------------------------------------------------------- |
-| `docs/ARCHITECTURE.md`            | Design constraints, system shape, component relationships |
-| `docs/specs/CAPTURE_SPEC.md`      | Playwright session, wait-for-data, workflow phases        |
-| `docs/specs/SANITIZATION_SPEC.md` | HAR/HTML/heuristic engines, two-pass model, hasher        |
-| `docs/specs/PATTERN_SPEC.md`      | Pattern file schemas, domain files, merge order, loader   |
-| `docs/specs/VALIDATION_SPEC.md`   | PII leak detection, check functions, pre-commit hook      |
-| `docs/USE_CASES.md`               | User-facing use case catalog                              |
+## Diagnosis Discipline
 
-## Project Layout
+When a runtime error surfaces (Playwright session failure, pattern false positive, sanitization regression), ask for the
+data that distinguishes candidate causes before theorizing.
 
-```text
-src/har_capture/
-├── patterns/          # Pattern loading, merging, redaction checking, hashing
-│   └── domains/       # Built-in domain pattern files (network_device.json)
-├── sanitization/      # HAR engine, HTML engine, heuristic engine
-├── capture/           # Playwright recording, wait-for-data (optional dep)
-├── validation/        # PII leak detection for pre-commit and CLI
-└── cli/               # Typer commands (get, sanitize, validate, patterns)
-tests/
-├── fixtures/          # JSON test data (one per test module)
-├── test_capture/
-├── test_sanitization/
-├── test_patterns/
-├── test_validation/
-└── test_cli/
-```
+- **Differential test.** Every theory must answer "why now and not before?" If it can't, it's incomplete — don't commit
+  to a fix built on it.
+- **External failure modes are invisible to grep.** Playwright version drift, system-dep gaps, browser-revision
+  mismatches, network behavior, user actions — none of those show up in codebase searches. When stuck inside the repo,
+  ask: could this be coming from outside the code?
+- **Pattern issues need fixture inputs, not theories.** When a false positive or miss is reported, ask for the exact HAR
+  fragment or value that triggered it. Reproduce against a fixture before proposing a fix.
+- **Don't propose fixes until you can name what specifically broke and why.** "Probably X" is not a fix-ready diagnosis.
 
-## Development
+## Decision Discipline
+
+- **One thing at a time.** Surface decisions sequentially; don't dump 6-row tables of "outstanding work." Long
+  synthesized lists let shortcuts slip through under decision fatigue.
+- **Research returns a recommendation, not a paper.** Default to a 2–3 sentence answer with the single tradeoff that
+  matters. Tables, section headers, and option matrices are opt-in — only expand when the user asks "explain why."
+- **No judgment shortcuts.** Don't dismiss alternatives as "overkill," "churn," or "no payoff" without weighing real
+  costs and benefits. The shortcut costs more later — a missed improvement or a re-litigated decision.
+- **Don't defer obvious cosmetic fixes.** If a review surfaces a stale name, drifted docstring, or minor nit, fix it in
+  the current pass. Never write "separate pass if desired" — that's deferral dressed as a suggestion.
+- **No "revisit later."** When presenting design choices, offer "ratify now" or "drop entirely." Deferred items expire
+  silently.
+
+## Verification Discipline
+
+- **Verify against ground truth, not against doc claims.** When reviewing a planning doc, status doc, or stale README,
+  summarize what's actually true (check code, git, issues), not what the doc says.
+
+- **Before opening a new PR, list open PRs targeting the same release.** Bundle into the existing one rather than
+  opening a parallel PR. See [`docs/RELEASE.md`](docs/RELEASE.md#branching-and-merging).
+
+- **Verify the premise before creating a branch.** For any task that says "remove X" or "clean up Y," `rg` for it on the
+  current branch first. Zero hits means the work is already done — stop before branching.
+
+- **Commit before recording done.** Work must be on a durable branch before journal/memory says "done," "added," or
+  "implemented." Stashed or worktree-only work can be lost.
+
+- **Verify CI install profile matches local.** A local `.venv` with extras can hide what CI actually sees. Re-check
+  against CI's actual install before pushing — passing locally is not the same as passing in CI.
+
+- **There is no such thing as a "pre-existing" issue.** Any issue that surfaces during your work is a current issue. The
+  "pre- existing" framing is a way to deflect ownership and defer fixes — it has no legitimate use. This applies to test
+  failures, doc drift, broken cross-references, malformed config files, stale comments, broken CI extractions, anything.
+  If you find it now, it's in scope now. `scripts/release.py` BLOCKS on this framing in commit messages for a reason:
+  the v0.8.1 → v0.8.3 case study where three releases shipped for what should have been one is the canonical instance.
+
+- **Proactive diagnosis, not reactive.** The corollary to the rule above: surface every issue you find *up front* in the
+  initial audit, not piecemeal as the user pushes for verification. "I found 10 cross-reference breakages and 3 doc
+  drifts and 5 lint violations" stated at audit time is a complete report. "I found 1, the user pushed, I found 4 more,
+  the user pushed again, I found another 8" is reactive diagnosis dressed up as thoroughness — the cost is paid in user
+  trust each time.
+
+- **Before renumbering a numbered list anywhere in the doc tree, grep for cross-references.** Code, tests, fixtures,
+  scripts, and CHANGELOG entries may cite numbered rules (`CLAUDE.md principle #7`, `rule 12`). Renumbering without a
+  pre-flight grep silently breaks every cite. The check:
+
+  ```bash
+  grep -rnE "CLAUDE\.md (rule|principle|#)" src/ tests/ scripts/ docs/ CHANGELOG.md README.md
+  ```
+
+  If hits > 0, fix the live references (code/tests/scripts/fixtures) to point at the authoritative doc and section
+  instead of a numbered CLAUDE.md entry. Leave historical CHANGELOG entries alone — they describe state at release time.
+
+## Pre-Push Verification
+
+Before pushing ANY commits, run the local quality-gate mirror:
 
 ```bash
-# Run tests (excludes integration tests requiring Playwright)
 .venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"
-
-# Release (after merge to main)
-git checkout main && git pull && python scripts/release.py X.Y.Z
+.venv/bin/python3 -m pre_commit run --all-files
 ```
 
-See [`docs/RELEASE.md`](docs/RELEASE.md) for the full release flow (PR
-checklist, PR → PyPI pipeline, CHANGELOG format, tag-push recovery).
+Both must be green locally. Concrete gate commands and thresholds are in
+[`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md#quality-gates).
+
+## Irreversible Operations — STOP and VERIFY
+
+When the user gives explicit constraints (e.g., "without closing the PR," "don't delete X"):
+
+1. **Treat as HARD BLOCKERS** — not suggestions.
+1. **Verify the outcome BEFORE executing** — if unsure, ask.
+1. **If something goes wrong, STOP and ask** — don't try to fix it autonomously.
+
+Operations requiring verification before running:
+
+- Branch renames, deletions, force pushes
+- PR / issue closures
+- Tag deletions, tag re-pushes
+- Any `git` command with `--force` or `--hard`
+- Release-script invocation (`scripts/release.py`)
+
+## PR and Issue Conventions
+
+- **Conventional commits format** (see Core Principle 7).
+- **One PR per release.** All in-flight work for the next release lands on a single PR. Check open PRs before opening a
+  new branch — bundle into the existing one. Detailed policy:
+  [`docs/RELEASE.md`](docs/RELEASE.md#branching-and-merging).
+- **CHANGELOG entries are user-visible.** Test-only commits, internal refactors, and dev-doc changes do not get
+  CHANGELOG entries unless they change observable behavior.
+
+## AI Shortcut Audit
+
+Failure modes encoded from real sessions on this repo. Each one caused real cost; each one is preventable by reading the
+linked doc before acting.
+
+- **Pre-1.0 versioning reflex.** A `feat:` conventional-commit prefix does NOT auto-mean minor bump. The CHANGELOG
+  section header (`Added` / `Changed` / `Fixed`) is the binding signal. →
+  [`docs/RELEASE.md`](docs/RELEASE.md#version-numbering)
+- **Opening a new PR for the next release.** Always list open PRs targeting the same release first and bundle into the
+  existing one. → [`docs/RELEASE.md`](docs/RELEASE.md#branching-and-merging)
+- **CHANGELOG entries for test-only commits.** Test additions, internal refactors, and dev-only doc changes don't get
+  CHANGELOG entries. The CHANGELOG describes user-visible behavior.
+- **Spec-skipping.** Don't propose architectural changes, new pattern types, capture-flow changes, or
+  sanitization-engine edits without first reading the relevant spec. The specs encode invariants that aren't visible
+  from the code alone. → see Where Things Live above.
+- **Restating instead of pointing.** When referencing an established rule, route to its authoritative doc — don't
+  restate the content. Restated content drifts; today's restatement is tomorrow's stale copy.
+- **Reactive diagnosis + "pre-existing" deflection.** Finding issues only when pushed to verify, then framing them as
+  "pre-existing" to imply they weren't in scope. The 0.9.1 doc audit prep session catalogued ten such cases (renumbering
+  breakage, coverage drift, bare URLs, malformed YAML frontmatter, broken release.yml awk extraction, anchor typos,
+  stale hook version, mis-numbered rule in release.py audit, lint violations in my own new edits, orphan remote branch).
+  Every one should have been in the initial audit report, not surfaced reactively. The cost was paid in user trust —
+  re-earning it requires proactive surfacing next time.

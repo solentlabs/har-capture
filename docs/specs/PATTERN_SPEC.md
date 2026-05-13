@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This spec describes the pattern system that drives har-capture's sanitization engine. It covers the file format, core vs domain patterns, merge order, and the section schema for each pattern type. It also documents the loader architecture (compile, cache, invalidate).
+This spec describes the pattern system that drives har-capture's sanitization engine. It covers the file format, core vs
+domain patterns, merge order, and the section schema for each pattern type. It also documents the loader architecture
+(compile, cache, invalidate).
 
 ## Key Files
 
@@ -78,15 +80,17 @@ Underscore-prefixed keys are skipped during the merge process.
 | credit_card   | CC                  | Visa/MC/Amex with Luhn validation                   |
 | config_path   | CONFIG              | .cfg file references                                |
 
-**`preserved_gateway_ips`**: Array of IP addresses that should never be redacted. These are common router gateway addresses that appear in every device capture and don't constitute PII (e.g., `192.168.1.1`, `192.168.0.1`, `10.0.0.1`).
+**`preserved_gateway_ips`**: Array of IP addresses that should never be redacted. These are common router gateway
+addresses that appear in every device capture and don't constitute PII (e.g., `192.168.1.1`, `192.168.0.1`, `10.0.0.1`).
 
 ### sensitive.json — Headers, Fields, Safe Values
 
 ```json
 {
   "headers": {
-    "full_redact": ["authorization", "x-auth-token", "proxy-authorization"],
-    "cookie_redact": ["cookie", "set-cookie"]
+    "full_redact": ["x-auth-token", "x-api-key"],
+    "cookie_redact": ["cookie", "set-cookie"],
+    "scheme_redact": ["authorization"]
   },
   "fields": {
     "auto_redact_patterns": ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"],
@@ -107,10 +111,11 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `headers`**
 
-| Field           | Type       | Description                                                              |
-| --------------- | ---------- | ------------------------------------------------------------------------ |
-| `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced          |
-| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted) |
+| Field           | Type       | Description                                                                                                                                                                                             |
+| --------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced                                                                                                                                         |
+| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted)                                                                                                                                |
+| `scheme_redact` | string\[\] | Header names with RFC 7235 `Scheme credentials` syntax. Recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved; unknown schemes fall through to full redact |
 
 **Schema: `fields`**
 
@@ -199,7 +204,8 @@ Check order:
 }
 ```
 
-Used by `CaptureOptions.get_bloat_extensions()` in `browser.py`. Sourcemaps are always filtered; fonts/images/media are filtered unless `--include-fonts/images/media` flags are set.
+Used by `CaptureOptions.get_bloat_extensions()` in `browser.py`. Sourcemaps are always filtered; fonts/images/media are
+filtered unless `--include-fonts/images/media` flags are set.
 
 ## Domain Pattern Files
 
@@ -308,7 +314,9 @@ Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclie
 
 ### Section: `include_patterns`
 
-Top-level list of PII pattern names that are relevant to this domain. When present, only matching patterns survive the merge — all others are removed. Supports exact names and glob wildcards. Applied by `load_pii_patterns()` after custom patterns are merged into the core set.
+Top-level list of PII pattern names that are relevant to this domain. When present, only matching patterns survive the
+merge — all others are removed. Supports exact names and glob wildcards. Applied by `load_pii_patterns()` after custom
+patterns are merged into the core set.
 
 ```json
 {
@@ -328,17 +336,24 @@ Top-level list of PII pattern names that are relevant to this domain. When prese
 | ------------------ | ---------- | ---------------------------------------------------- |
 | `include_patterns` | string\[\] | Pattern names or globs to keep in the merged PII set |
 
-The domain knows its data. A cable modem page contains MAC addresses, IPs, and serial numbers — not credit cards or SSNs. The domain declares which PII categories are relevant, including both core patterns and domain-added patterns from `pii.patterns`. The inclusion filter runs after the merge, so domain-specific patterns are first-class citizens alongside core patterns.
+The domain knows its data. A cable modem page contains MAC addresses, IPs, and serial numbers — not credit cards or
+SSNs. The domain declares which PII categories are relevant, including both core patterns and domain-added patterns from
+`pii.patterns`. The inclusion filter runs after the merge, so domain-specific patterns are first-class citizens
+alongside core patterns.
 
-When `include_patterns` is absent, all core patterns are applied (backward compatible). When multiple `--patterns` files are specified, `include_patterns` lists are accumulated across all files before being applied.
+When `include_patterns` is absent, all core patterns are applied (backward compatible). When multiple `--patterns` files
+are specified, `include_patterns` lists are accumulated across all files before being applied.
 
-As domain-specific patterns prove valuable across multiple consumers, they can be graduated to core (`pii.json`) — at which point existing domain files that already name them in `include_patterns` continue to work unchanged.
+As domain-specific patterns prove valuable across multiple consumers, they can be graduated to core (`pii.json`) — at
+which point existing domain files that already name them in `include_patterns` continue to work unchanged.
 
 ### Section: `pii.patterns`
 
-Additional PII patterns for deterministic auto-redaction (Pass 0 of the HTML scanner). Same schema as `pii.json` `patterns` entries.
+Additional PII patterns for deterministic auto-redaction (Pass 0 of the HTML scanner). Same schema as `pii.json`
+`patterns` entries.
 
-**Confidence requirement:** Every pattern runs as auto-redact — the matched value is replaced without user review. Patterns MUST achieve 100% confidence. If a pattern cannot meet this bar, use `heuristics.detectors` instead.
+**Confidence requirement:** Every pattern runs as auto-redact — the matched value is replaced without user review.
+Patterns MUST achieve 100% confidence. If a pattern cannot meet this bar, use `heuristics.detectors` instead.
 
 | Criterion      | `pii.patterns`              | `heuristics.detectors`      |
 | -------------- | --------------------------- | --------------------------- |
@@ -376,8 +391,14 @@ Layer N: Nth --patterns argument
 Merge semantics (applied at each layer):
 
 ```python
-# Lists are extended (custom appended to builtin)
-builtin["headers"]["full_redact"].extend(custom["headers"]["full_redact"])
+# Lists are extended (custom appended to builtin).
+# `headers.scheme_redact` is optional in the built-in JSON; the loader uses
+# setdefault to extend whether or not the built-in section declares it.
+for header_key in ("full_redact", "cookie_redact", "scheme_redact"):
+    if header_key in custom["headers"]:
+        builtin["headers"].setdefault(header_key, []).extend(
+            custom["headers"][header_key]
+        )
 
 # Field-name regex lists extend additively. Both the current-schema keys
 # (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are
@@ -392,12 +413,10 @@ builtin["patterns"].update(custom["patterns"])
 builtin.setdefault("heuristics", {})
 ```
 
-> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy
-> `fields.patterns` key and silently dropped `fields.auto_redact_patterns` /
-> `fields.flag_patterns` from custom inputs — even though both keys appear in
-> the built-in `sensitive.json` schema. The merge now honors all three. File-
-> or dict-based consumers that previously worked around this by editing
-> `sensitive.json` directly can switch to the `custom_patterns` kwarg.
+> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy `fields.patterns` key and silently dropped
+> `fields.auto_redact_patterns` / `fields.flag_patterns` from custom inputs — even though both keys appear in the
+> built-in `sensitive.json` schema. The merge now honors all three. File- or dict-based consumers that previously worked
+> around this by editing `sensitive.json` directly can switch to the `custom_patterns` kwarg.
 
 ## Loader Architecture
 
@@ -447,7 +466,8 @@ def compile_pattern(pattern_dict: dict) -> re.Pattern | None:
     """Compile {regex, flags} dict. Returns None on invalid regex (logged, not fatal)."""
 ```
 
-Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are silently skipped to ensure one bad pattern doesn't break the entire system.
+Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are silently
+skipped to ensure one bad pattern doesn't break the entire system.
 
 ### Cache
 
@@ -499,7 +519,8 @@ Example cache keys:
 
 ### `is_redacted(value, custom_patterns=None) -> bool`
 
-Single source of truth for checking whether a value has already been sanitized. Used by both the validation module and the sanitization engine.
+Single source of truth for checking whether a value has already been sanitized. Used by both the validation module and
+the sanitization engine.
 
 Check order:
 
@@ -527,11 +548,19 @@ Used to avoid flagging cookie headers that only contain metadata.
 
 ## Constraints / Invariants
 
-1. **Core patterns are always loaded** — Domain patterns extend but never replace core patterns. Even with `--patterns custom.json`, pii.json and sensitive.json are always present.
-1. **Invalid regex is non-fatal** — `compile_pattern()` returns `None` on invalid regex. The pattern is skipped, other patterns continue to work.
-1. **Underscore keys are metadata** — Any key starting with `_` in a pattern file is skipped during merge. This is a convention for comments and metadata.
-1. **Lists extend, dicts update** — This is the universal merge semantic. Custom lists are appended (never replace), custom dict keys override (but don't delete existing keys).
-1. **Name normalization** — Built-in domain names normalize hyphens to underscores: `network-device` and `network_device` resolve to the same file.
-1. **Cache is session-scoped** — Pattern files are not re-read after initial load within a session. File changes require a new session or explicit `clear_pattern_cache()`.
-1. **Allowlist patterns must not match real PII** — Format-preserving hash ranges (TEST-NET, documentation prefixes, locally administered MACs) are chosen specifically because they cannot appear in legitimate traffic.
-1. **Pattern precedence** — Custom patterns (from domain files) have higher precedence than core patterns for the same key in a dict. For lists, custom patterns are appended (run after core patterns).
+1. **Core patterns are always loaded** — Domain patterns extend but never replace core patterns. Even with
+   `--patterns custom.json`, pii.json and sensitive.json are always present.
+1. **Invalid regex is non-fatal** — `compile_pattern()` returns `None` on invalid regex. The pattern is skipped, other
+   patterns continue to work.
+1. **Underscore keys are metadata** — Any key starting with `_` in a pattern file is skipped during merge. This is a
+   convention for comments and metadata.
+1. **Lists extend, dicts update** — This is the universal merge semantic. Custom lists are appended (never replace),
+   custom dict keys override (but don't delete existing keys).
+1. **Name normalization** — Built-in domain names normalize hyphens to underscores: `network-device` and
+   `network_device` resolve to the same file.
+1. **Cache is session-scoped** — Pattern files are not re-read after initial load within a session. File changes require
+   a new session or explicit `clear_pattern_cache()`.
+1. **Allowlist patterns must not match real PII** — Format-preserving hash ranges (TEST-NET, documentation prefixes,
+   locally administered MACs) are chosen specifically because they cannot appear in legitimate traffic.
+1. **Pattern precedence** — Custom patterns (from domain files) have higher precedence than core patterns for the same
+   key in a dict. For lists, custom patterns are appended (run after core patterns).

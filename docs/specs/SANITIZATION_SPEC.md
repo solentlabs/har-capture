@@ -2,7 +2,10 @@
 
 ## Purpose
 
-This spec describes the three-engine sanitization pipeline that processes HAR files to remove PII. It covers the HAR-level engine (headers, cookies, POST data, query params), the HTML content engine (multi-pass scanner pipeline), and the heuristic engine (safe value check, entropy, credential prefix, adjacency, domain detectors). It documents the two-pass model (auto-sanitize + interactive review) and the format-preserving hasher.
+This spec describes the three-engine sanitization pipeline that processes HAR files to remove PII. It covers the
+HAR-level engine (headers, cookies, POST data, query params), the HTML content engine (multi-pass scanner pipeline), and
+the heuristic engine (safe value check, entropy, credential prefix, adjacency, domain detectors). It documents the
+two-pass model (auto-sanitize + interactive review) and the format-preserving hasher.
 
 ## Key Files
 
@@ -58,7 +61,8 @@ The ~1350-line file is organized into 8 groups:
 
 1. **HAR Structure Validation** — `validate_har_structure()`, `HarSizeError`, `HarValidationError`
 1. **Pattern Loading** — `_load_sensitive_headers()`, `_load_sensitive_field_patterns()` (module-level caching)
-1. **Core Redaction Utilities** — `_redact_value()`, `is_sensitive_field()`, `is_flaggable_field()`, `sanitize_header_value()`
+1. **Core Redaction Utilities** — `_redact_value()`, `is_sensitive_field()`, `is_flaggable_field()`,
+   `sanitize_header_value()`
 1. **Request Sanitization** — Headers, cookies, POST data (form/JSON), query strings, URL paths
 1. **Response Sanitization** — Headers, cookies, content (MIME-type dispatched)
 1. **Pattern-Based String Sanitization** — 10+ regex patterns for MACs, IPs, emails, SSN, credit cards
@@ -106,10 +110,17 @@ def sanitize_entry(
 
 ### Header Sanitization
 
-Headers are classified into three tiers from `sensitive.json`:
+Headers are classified into four tiers from `sensitive.json`:
 
-1. **Full redact** (`headers.full_redact`): Authorization, X-Auth-Token, Proxy-Authorization, etc. — entire value replaced.
-1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. Cookie metadata (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`) detected and preserved.
+1. **Full redact** (`headers.full_redact`): X-Auth-Token, X-Api-Key, etc. — entire value replaced.
+1. **Scheme redact** (`headers.scheme_redact`): Authorization-style headers (RFC 7235 syntax: `Scheme credentials`). The
+   scheme token is preserved when it matches a recognized RFC scheme (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`,
+   `OAuth`); the credential after the first whitespace is redacted. Unknown schemes (or values with no whitespace) fall
+   through to full redaction so a non-standard leading token can't escape. Preserving the scheme lets downstream
+   consumers classify the auth mechanism from a single authenticated request without needing a `401 + WWW-Authenticate`
+   exchange.
+1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. Cookie
+   metadata (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`) detected and preserved.
 1. **All other headers**: Passed through unmodified.
 
 ### Field Sensitivity Classification
@@ -122,9 +133,16 @@ def is_flaggable_field(name: str) -> bool:
     """Lower confidence — flag for review. Matches: username, domain, account_id."""
 ```
 
-Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.flag_patterns`. Fallback patterns (hardcoded): `["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]`.
+Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.flag_patterns`. Fallback patterns
+(hardcoded): `["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]`.
 
-Callers can extend these per-call via `sanitize_post_data(..., custom_patterns=...)` or `sanitize_html(..., custom_patterns=...)`. The extension is additive (never replacing built-ins) and is applied via a `ContextVar`-scoped override that both public entry points enter at the top of the call. Inner helpers (`_sanitize_form_urlencoded`, `_sanitize_json_recursive`, `_sanitize_xml_fields`, the inline-script `setItem` scanner, and any other site that calls `is_sensitive_field` / `is_flaggable_field`) pick up the active set automatically, with no signature plumbing. Because `ContextVar` is thread- and asyncio-scoped, concurrent callers observe only their own patterns.
+Callers can extend these per-call via `sanitize_post_data(..., custom_patterns=...)` or
+`sanitize_html(..., custom_patterns=...)`. The extension is additive (never replacing built-ins) and is applied via a
+`ContextVar`-scoped override that both public entry points enter at the top of the call. Inner helpers
+(`_sanitize_form_urlencoded`, `_sanitize_json_recursive`, `_sanitize_xml_fields`, the inline-script `setItem` scanner,
+and any other site that calls `is_sensitive_field` / `is_flaggable_field`) pick up the active set automatically, with no
+signature plumbing. Because `ContextVar` is thread- and asyncio-scoped, concurrent callers observe only their own
+patterns.
 
 ### POST Data Sanitization
 
@@ -139,13 +157,22 @@ def sanitize_post_data(
 ) -> dict[str, Any] | None:
 ```
 
-1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and `is_flaggable_field()` (flag).
+1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and
+   `is_flaggable_field()` (flag).
 1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted.
-1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against field patterns; values redacted if key is sensitive.
-1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML content engine, which runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are sanitized identically to XML response content.
+1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against
+   field patterns; values redacted if key is sensitive.
+1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML
+   content engine, which runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter
+   endpoints) are sanitized identically to XML response content.
 1. **Raw text**: Falls through to string pattern matching.
 
-**Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON, XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors `sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`. Module-global patterns are never mutated; the override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls with the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to the HTML engine honors the override end-to-end.
+**Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON,
+XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
+`sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`. Module-global patterns are never mutated; the
+override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls with
+the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to the
+HTML engine honors the override end-to-end.
 
 ### URL Sanitization
 
@@ -205,13 +232,15 @@ MIME-type based routing:
 - Repeated octets (8.8.8.8) → always IP
 - First octet ≥ 20 → always IP
 
-**Credit card validation**: Luhn checksum verification before redacting — reduces false positives on random 16-digit numbers.
+**Credit card validation**: Luhn checksum verification before redacting — reduces false positives on random 16-digit
+numbers.
 
 ## HTML Content Engine (html.py)
 
 ### Scanner Pipeline
 
-The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2b, 7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
+The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2b,
+7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
 | Pass | Scanner                       | Pattern                                             | Redaction                              |
 | ---- | ----------------------------- | --------------------------------------------------- | -------------------------------------- |
@@ -239,13 +268,16 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 15   | Pipe-delimited (other)        | Other pipe-delimited variables                      | Per-value heuristic analysis           |
 | 16   | SSID fields in JS             | `ssid_24g: 'value'`, `guest_ssid: 'value'`          | `hasher.hash_value(val, "WIFI")`       |
 
-**Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`, `Baud`, `ization`). Bare `serial` is excluded — too ambiguous for auto-redact.
+**Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
+separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
+`Baud`, `ization`). Bare `serial` is excluded — too ambiguous for auto-redact.
 
 ### Web Storage Scanner (Pass 0b)
 
 Detects `localStorage.setItem()` and `sessionStorage.setItem()` in inline scripts:
 
-- **Tier A**: Key matches `is_sensitive_field()` (password, token, secret, api_key, auth_token, csrf_token) → auto-redact value
+- **Tier A**: Key matches `is_sensitive_field()` (password, token, secret, api_key, auth_token, csrf_token) →
+  auto-redact value
 - **Tier B**: Value contains IPs/MACs → handled by subsequent passes
 - **Tier C**: Heuristic analysis if enabled (`FLAG` or `REDACT` mode)
 
@@ -300,9 +332,12 @@ def analyze_value(
 
 Detection pipeline (in order):
 
-1. **Skip empty/safe values** — Check against 25+ compiled safe patterns (status words, dates, versions, UUIDs, dB values, uptime durations, etc.) plus domain `extra_safe_patterns`
-1. **Run domain detectors** — If `compiled_detectors` provided, first matching detector wins. Checks: length bounds, letter requirement, regex patterns, CamelCase
-1. **Entropy check** — Shannon entropy calculation. Returns `(True, reason)` if entropy ≥ threshold AND mixed character types
+1. **Skip empty/safe values** — Check against 25+ compiled safe patterns (status words, dates, versions, UUIDs, dB
+   values, uptime durations, etc.) plus domain `extra_safe_patterns`
+1. **Run domain detectors** — If `compiled_detectors` provided, first matching detector wins. Checks: length bounds,
+   letter requirement, regex patterns, CamelCase
+1. **Entropy check** — Shannon entropy calculation. Returns `(True, reason)` if entropy ≥ threshold AND mixed character
+   types
 1. **Credential prefix check** — Regex `^(?:pass(?:word|wd)?|pwd|secret|token|key|auth)[\d!@#$%^&*]+$`
 1. **Adjacency check** — If `values_context` provided, checks neighbors for redacted prefixes
 1. **Combine signals** — `should_flag = detector OR entropy OR credential OR adjacent`
@@ -347,7 +382,8 @@ _CREDENTIAL_PREFIX_RE = re.compile(
 
 Checks if the value at `value_index` in `values_context` is adjacent to an already-redacted value:
 
-Redacted prefixes checked: `MAC_`, `PASS_`, `TOKEN_`, `SERIAL_`, `WIFI_`, `DEVICE_`, `CC_`, `ACCOUNT_`, `CRED_`, `SENSITIVE_`, `FIELD_`, `AUTH_`, `COOKIE_`, `STORAGE_`, `CONFIG_`
+Redacted prefixes checked: `MAC_`, `PASS_`, `TOKEN_`, `SERIAL_`, `WIFI_`, `DEVICE_`, `CC_`, `ACCOUNT_`, `CRED_`,
+`SENSITIVE_`, `FIELD_`, `AUTH_`, `COOKIE_`, `STORAGE_`, `CONFIG_`
 
 Also checks static placeholders: `XX:XX:XX:XX:XX:XX`, `0.0.0.0`
 
@@ -477,7 +513,8 @@ Per-hasher instance cache (`dict[str, str]`) keyed by `PREFIX:value`:
 
 - Ensures same value always maps to same hash within a session
 - Grows unbounded (acceptable for typical HAR sizes)
-- Enables correlation preservation: if `AA:BB:CC:DD:EE:FF` appears in 50 entries, it maps to the same `02:xx:xx:xx:xx:xx` every time
+- Enables correlation preservation: if `AA:BB:CC:DD:EE:FF` appears in 50 entries, it maps to the same
+  `02:xx:xx:xx:xx:xx` every time
 
 ### Static Fallbacks (salt=None)
 
@@ -548,14 +585,26 @@ Detects common redaction markers to warn users before double-sanitizing.
 
 ## Constraints / Invariants
 
-1. **Pass ordering is critical** — Pass 1 must complete before Pass 2, because Pass 2 relies on the salt and flagged values from Pass 1's report.
-1. **Same salt for both passes** — Pass 2 recreates the hasher with the salt stored in Pass 1's report, ensuring consistent hashing across passes.
-1. **Scanner order matters** — Earlier scanners in html.py may redact values that later scanners check. For example, MAC scanner (pass 3) runs before IP scanner (pass 5), so MAC addresses aren't misidentified as hex strings.
-1. **Depth limit prevents stack overflow** — JSON recursive traversal is capped at 50 levels. Exceeding the limit is logged, not fatal.
-1. **Malformed input doesn't abort** — JSON decode errors, redaction failures, and invalid regex patterns are logged but don't stop sanitization of other entries.
-1. **Format preservation is collision-free** — Reserved IP ranges (TEST-NET, documentation prefixes, locally administered MACs) cannot appear in real traffic, so hash outputs never collide with genuine values.
-1. **Known patterns always apply** — MACs, IPs, and emails are auto-redacted regardless of heuristic mode. Heuristic mode only affects opaque/suspicious values.
-1. **Cookie metadata is preserved** — Cookie attributes (HttpOnly, Secure, SameSite, Path, Domain, Expires) are detected and not redacted. Only cookie values are redacted.
-1. **Credit card detection requires Luhn** — A 16-digit number is only redacted as a credit card if it passes Luhn checksum validation.
-1. **Global find-replace in Pass 2** — User-selected redactions are applied via string replacement on the serialized JSON, ensuring all occurrences (headers, body, URLs) are caught.
-1. **Scanner passes require 100% confidence** — Every regex in the HTML scanner pipeline (passes 0–16) auto-redacts without user review. A pattern that produces false positives is a bug. Patterns that cannot achieve 100% confidence belong in the heuristic engine (flagged for user review), not the scanner pipeline.
+1. **Pass ordering is critical** — Pass 1 must complete before Pass 2, because Pass 2 relies on the salt and flagged
+   values from Pass 1's report.
+1. **Same salt for both passes** — Pass 2 recreates the hasher with the salt stored in Pass 1's report, ensuring
+   consistent hashing across passes.
+1. **Scanner order matters** — Earlier scanners in html.py may redact values that later scanners check. For example, MAC
+   scanner (pass 3) runs before IP scanner (pass 5), so MAC addresses aren't misidentified as hex strings.
+1. **Depth limit prevents stack overflow** — JSON recursive traversal is capped at 50 levels. Exceeding the limit is
+   logged, not fatal.
+1. **Malformed input doesn't abort** — JSON decode errors, redaction failures, and invalid regex patterns are logged but
+   don't stop sanitization of other entries.
+1. **Format preservation is collision-free** — Reserved IP ranges (TEST-NET, documentation prefixes, locally
+   administered MACs) cannot appear in real traffic, so hash outputs never collide with genuine values.
+1. **Known patterns always apply** — MACs, IPs, and emails are auto-redacted regardless of heuristic mode. Heuristic
+   mode only affects opaque/suspicious values.
+1. **Cookie metadata is preserved** — Cookie attributes (HttpOnly, Secure, SameSite, Path, Domain, Expires) are detected
+   and not redacted. Only cookie values are redacted.
+1. **Credit card detection requires Luhn** — A 16-digit number is only redacted as a credit card if it passes Luhn
+   checksum validation.
+1. **Global find-replace in Pass 2** — User-selected redactions are applied via string replacement on the serialized
+   JSON, ensuring all occurrences (headers, body, URLs) are caught.
+1. **Scanner passes require 100% confidence** — Every regex in the HTML scanner pipeline (passes 0–16) auto-redacts
+   without user review. A pattern that produces false positives is a bug. Patterns that cannot achieve 100% confidence
+   belong in the heuristic engine (flagged for user review), not the scanner pipeline.

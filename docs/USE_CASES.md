@@ -62,7 +62,8 @@ ______________________________________________________________________
 
 1. User runs capture command targeting the device (full URL with `http://`/`https://`, or a bare hostname/IP)
 1. System checks browser availability
-1. System checks device connectivity. If the user did not supply a scheme, system probes TCP `:80` and `:443` and prefers HTTPS when its TLS handshake completes (see ADR-10); explicit schemes are used as given
+1. System checks device connectivity. If the user did not supply a scheme, system probes TCP `:80` and `:443` and
+   prefers HTTPS when its TLS handshake completes (see ADR-10); explicit schemes are used as given
 1. System checks for session contamination — aborts if the device has a live session (serves data without login)
 1. System launches Playwright browser with a clean context (empty cookie jar), navigates to device URL
 1. Browser records all HTTP traffic to a temp HAR file with embedded response bodies
@@ -270,7 +271,8 @@ ______________________________________________________________________
 **Variations**:
 
 - Basic Auth device → `--username` and `--password` required
-- `timeout` and `headless` parameters are available via the Python API (`capture_device_har()`) but not exposed as CLI flags
+- `timeout` and `headless` parameters are available via the Python API (`capture_device_har()`) but not exposed as CLI
+  flags
 
 **CLI Example**:
 
@@ -453,7 +455,8 @@ ______________________________________________________________________
 
 - Use `--salt` for reproducible hashing across runs
 - Use `--no-salt` for static placeholders (simpler, no correlation)
-- Pipe to validation: `har-capture sanitize f.har --patterns network-device && har-capture validate f.sanitized.har --patterns network-device`
+- Pipe to validation:
+  `har-capture sanitize f.har --patterns network-device && har-capture validate f.sanitized.har --patterns network-device`
 
 **CLI Example**:
 
@@ -535,7 +538,8 @@ ______________________________________________________________________
 
 ### UC-8: Capture from a Single-Session Device
 
-**Actor**: Engineer capturing from a device that allows only one concurrent HTTP connection (e.g., Compal CH7465MT cable modem with `max_concurrent: 1`).
+**Actor**: Engineer capturing from a device that allows only one concurrent HTTP connection (e.g., Compal CH7465MT cable
+modem with `max_concurrent: 1`).
 
 **Goal**: Capture HAR without exhausting the device's session limit or timing out on persistent connections.
 
@@ -549,7 +553,8 @@ ______________________________________________________________________
 
 1. User runs capture with `--minimal` flag
 1. System checks browser availability (Phase 1)
-1. System checks connectivity with a single GET — auto-detects http/https when no scheme is provided (TCP+TLS probe; HTTPS preferred), or uses the explicit scheme as given
+1. System checks connectivity with a single GET — auto-detects http/https when no scheme is provided (TCP+TLS probe;
+   HTTPS preferred), or uses the explicit scheme as given
 1. Session check, probes, and auth check are **skipped** — no additional HTTP requests
 1. Browser opens with a clean context and `domcontentloaded` page load strategy (no `networkidle` wait)
 1. Wait-for-data XHR/fetch tracking is disabled
@@ -558,9 +563,11 @@ ______________________________________________________________________
 
 **Variations**:
 
-- Device needs Basic Auth → provide `--username`/`--password` on command line (auth check phase is skipped, credentials passed directly to Playwright)
+- Device needs Basic Auth → provide `--username`/`--password` on command line (auth check phase is skipped, credentials
+  passed directly to Playwright)
 - Device uses form-based auth → user logs in through the browser UI (captured in HAR)
-- Even `--minimal` connectivity check triggers lockout → user can provide an explicit scheme (`http://192.168.100.1`) to skip the auto-detect TCP+TLS probes
+- Even `--minimal` connectivity check triggers lockout → user can provide an explicit scheme (`http://192.168.100.1`) to
+  skip the auto-detect TCP+TLS probes
 
 **CLI Example**:
 
@@ -574,7 +581,8 @@ ______________________________________________________________________
 
 ### UC-16: Sanitize HAR with XML API Device
 
-**Actor**: Engineer sanitizing a HAR capture from a device that uses an XML POST API (e.g., a cable modem with `getter.xml`/`setter.xml` endpoints).
+**Actor**: Engineer sanitizing a HAR capture from a device that uses an XML POST API (e.g., a cable modem with
+`getter.xml`/`setter.xml` endpoints).
 
 **Goal**: Sanitize PII within XML POST request bodies and XML response bodies.
 
@@ -596,7 +604,8 @@ ______________________________________________________________________
 **Variations**:
 
 - Malformed XML → gracefully skipped (logged, sanitization continues)
-- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by existing form-urlencoded handler, not the XML handler
+- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by existing form-urlencoded handler, not the
+  XML handler
 - Mixed HAR with both XML and HTML responses → each entry routed by MIME type
 
 **CLI Example**:
@@ -791,7 +800,8 @@ ______________________________________________________________________
 **Flow**:
 
 1. Engineer creates a JSON file with vendor-specific additions
-1. User specifies multiple `--patterns` arguments — merged left to right (see [Pattern Spec — Merge Order](docs/specs/PATTERN_SPEC.md#merge-order))
+1. User specifies multiple `--patterns` arguments — merged left to right (see
+   [Pattern Spec — Merge Order](docs/specs/PATTERN_SPEC.md#merge-order))
 1. Combined patterns are used for sanitization
 
 **CLI Example**:
@@ -938,7 +948,8 @@ ______________________________________________________________________
    - Reads probe data from `_probes` key (auth challenge, ICMP latency)
    - Reads capture metadata from `_har_capture` key (tool version, timestamp)
    - Reads browser cookies and storage from `_har_capture` metadata
-   - Reads pre-capture cookie audit from `_solentlabs.pre_capture_cookies` — verifies the browser context was clean when capture started
+   - Reads pre-capture cookie audit from `_solentlabs.pre_capture_cookies` — verifies the browser context was clean when
+     capture started
 1. Extracted data is stored in CMM's database
 
 **Variations**:
@@ -968,14 +979,17 @@ ______________________________________________________________________
 
 ### UC-42: Redact Device-Specific Credential Fields at Runtime
 
-**Actor**: A downstream library (e.g. CMM) that captures auth traffic at runtime and knows, from its device catalog, which field names carry credentials for a particular model.
+**Actor**: A downstream library (e.g. CMM) that captures auth traffic at runtime and knows, from its device catalog,
+which field names carry credentials for a particular model.
 
-**Goal**: Feed runtime-known credential field names (from a product catalog, YAML config, or database lookup) into sanitization without modifying the universal `sensitive.json` or maintaining a consumer-side pre-redaction helper.
+**Goal**: Feed runtime-known credential field names (from a product catalog, YAML config, or database lookup) into
+sanitization without modifying the universal `sensitive.json` or maintaining a consumer-side pre-redaction helper.
 
 **Preconditions**:
 
 - Consumer has a `postData`-shaped dict from a live HTTP capture (e.g. via a Playwright session adapter).
-- Consumer has the field-name list for the current device (e.g. a `credential_fields` entry of `["pws"]` loaded from `modem.yaml`).
+- Consumer has the field-name list for the current device (e.g. a `credential_fields` entry of `["pws"]` loaded from
+  `modem.yaml`).
 - Consumer wants one canonical sanitization policy (har-capture's) rather than its own pre-pass.
 
 **Flow**:
@@ -983,8 +997,10 @@ ______________________________________________________________________
 1. Consumer resolves the device's credential field names from its catalog at runtime.
 1. Consumer builds a `custom_patterns` dict of shape `{"fields": {"auto_redact_patterns": [...]}}`.
 1. Consumer passes that dict to `sanitize_post_data(..., custom_patterns=...)`.
-1. har-capture merges the extensions with built-ins for this call only (via a `ContextVar` scope) and returns sanitized `postData`.
-1. Subsequent calls for a different device with a different field list use their own dict; no state bleeds between calls.
+1. har-capture merges the extensions with built-ins for this call only (via a `ContextVar` scope) and returns sanitized
+   `postData`.
+1. Subsequent calls for a different device with a different field list use their own dict; no state bleeds between
+   calls.
 
 **Code Example**:
 
@@ -1017,8 +1033,13 @@ motorola_spec = {"credential_field_names": ["loginPassword"]}
 
 **Variations**:
 
-- Consumer wants to also flag (not auto-redact) a non-credential field for review → pass `{"fields": {"flag_patterns": ["deploy_env"]}}` alongside.
-- Consumer already has a JSON file on disk → pass the path as a string; the loader reads it and the regex cache keys off the resolved absolute path.
-- Concurrent captures for different devices (threaded or asyncio) → each call sees its own pattern set because the override lives in a `ContextVar`.
+- Consumer wants to also flag (not auto-redact) a non-credential field for review → pass
+  `{"fields": {"flag_patterns": ["deploy_env"]}}` alongside.
+- Consumer already has a JSON file on disk → pass the path as a string; the loader reads it and the regex cache keys off
+  the resolved absolute path.
+- Concurrent captures for different devices (threaded or asyncio) → each call sees its own pattern set because the
+  override lives in a `ContextVar`.
 
-**Why not edit `sensitive.json`?** That file captures universal PII rules. Device-specific credential names (`pws`, `loginPassword`, vendor-proprietary tokens) don't belong there because they'd apply to every capture across every consumer. The per-call hook keeps the universal set small and lets each consumer carry its own catalog.
+**Why not edit `sensitive.json`?** That file captures universal PII rules. Device-specific credential names (`pws`,
+`loginPassword`, vendor-proprietary tokens) don't belong there because they'd apply to every capture across every
+consumer. The per-call hook keeps the universal set small and lets each consumer carry its own catalog.
