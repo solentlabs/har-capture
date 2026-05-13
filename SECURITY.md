@@ -2,7 +2,8 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in har-capture, please report it privately using GitHub's security advisory feature:
+If you discover a security vulnerability in har-capture, please report it privately using GitHub's security advisory
+feature:
 
 **[Report a vulnerability](https://github.com/solentlabs/har-capture/security/advisories/new)**
 

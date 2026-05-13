@@ -10,9 +10,12 @@ ______________________________________________________________________
 
 ## get
 
-Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single `.sanitized.har.gz` file ready to share.
+Capture HTTP traffic using a browser. **By default, the output is sanitized and compressed** - you get a single
+`.sanitized.har.gz` file ready to share.
 
-`get` is the default command — you can omit it when the first argument is a URL. The target may be a full URL (`http://`/`https://`) or a bare hostname/IP; when the scheme is omitted, har-capture probes TCP `:80` and `:443` and prefers HTTPS when its TLS handshake completes (see ADR-10).
+`get` is the default command — you can omit it when the first argument is a URL. The target may be a full URL
+(`http://`/`https://`) or a bare hostname/IP; when the scheme is omitted, har-capture probes TCP `:80` and `:443` and
+prefers HTTPS when its TLS handshake completes (see ADR-10).
 
 ### Basic Usage (get)
 
@@ -38,7 +41,8 @@ har-capture get <TARGET> --patterns <DOMAIN>
 
 - `--browser {chromium,firefox,webkit}` - Browser engine (default: chromium)
 - `--wait-for-data / --no-wait-for-data` - Wait for async data to load on each page (default: enabled)
-- `--minimal` - Minimal pre-flight for single-session devices (skips session check, probes, auth check, uses domcontentloaded, disables wait-for-data)
+- `--minimal` - Minimal pre-flight for single-session devices (skips session check, probes, auth check, uses
+  domcontentloaded, disables wait-for-data)
 - `--username TEXT` - Username for HTTP Basic Auth
 - `--password TEXT` - Password for HTTP Basic Auth
 
@@ -46,7 +50,8 @@ har-capture get <TARGET> --patterns <DOMAIN>
 
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
-- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
+- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
+  a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 
 Interactive review of flagged values is always enabled after capture.
 
@@ -79,13 +84,17 @@ har-capture https://example.com --no-wait-for-data --patterns base
 
 Before launching the browser, `get` runs two checks (skipped with `--minimal`):
 
-1. **Connectivity** — validates the target is reachable. If the target lacks a scheme, har-capture probes TCP `:80` and `:443` to pick HTTP vs HTTPS (HTTPS wins when its TLS handshake completes); explicit schemes bypass this and are used as given.
+1. **Connectivity** — validates the target is reachable. If the target lacks a scheme, har-capture probes TCP `:80` and
+   `:443` to pick HTTP vs HTTPS (HTTPS wins when its TLS handshake completes); explicit schemes bypass this and are used
+   as given.
 
-1. **Session contamination** — detects if the device has a live session that would skip the login flow. If the device returns data content without requiring authentication, the capture aborts with:
+1. **Session contamination** — detects if the device has a live session that would skip the login flow. If the device
+   returns data content without requiring authentication, the capture aborts with:
 
    > ERROR: Browser has a live session — clear cookies or use a clean profile.
 
-   **Resolution:** log out from other browser tabs, reboot the device, or wait for the session to expire. Use `--minimal` to skip this check for devices that don't require login.
+   **Resolution:** log out from other browser tabs, reboot the device, or wait for the session to expire. Use
+   `--minimal` to skip this check for devices that don't require login.
 
 ### Default Workflow (get)
 
@@ -124,10 +133,12 @@ har-capture sanitize INPUT.har --patterns network-device
 
 - `--salt TEXT` - Consistent salt for correlation (default: random)
 - `--no-salt` - Use static placeholders instead of salted hashes
-- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
+- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
+  a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 - `--report PATH` - Save sanitization report to JSON file
 
-Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report file instead.
+Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report
+file instead.
 
 #### Size Limits
 
@@ -163,7 +174,8 @@ har-capture sanitize capture.har --compress --compression-level 6 --patterns net
 
 ### Interactive Review (sanitize)
 
-Interactive review is always enabled. After sanitization, suspicious values that don't match standard patterns (WiFi SSIDs, device names, custom credentials) are presented for review.
+Interactive review is always enabled. After sanitization, suspicious values that don't match standard patterns (WiFi
+SSIDs, device names, custom credentials) are presented for review.
 
 - **TTY available**: Interactive table where you select values to redact
 - **No TTY (CI/CD)**: Flagged values written to a JSON report file
@@ -193,7 +205,8 @@ har-capture validate INPUT.har --patterns network-device
 - `--dir PATH` - Validate all `.har` files in directory
 - `--recursive` - Recursively scan subdirectories
 - `--strict` - Fail on warnings (not just errors)
-- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
+- `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
+  a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 
 ### Examples (validate)
 

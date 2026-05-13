@@ -30,7 +30,7 @@
       "source": "issue #47 — SN-HERE placeholder; representative 12-char uppercase-alphanumeric serial token covered by the broader serial_number backstop"
     }
   ],
-  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in the regex layer — see regex_layer_regression_cases below. Heuristics can't disambiguate a WPS PIN from a packet counter; the adjacent label is what makes 100% confidence achievable per CLAUDE.md principle #7.",
+  "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in the regex layer — see regex_layer_regression_cases below. Heuristics can't disambiguate a WPS PIN from a packet counter; the adjacent label is what makes 100% confidence achievable per docs/ARCHITECTURE.md § Confidence boundary.",
 
   "regex_layer_regression_cases": [
     {

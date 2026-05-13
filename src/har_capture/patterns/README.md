@@ -62,7 +62,9 @@ Defines sensitive HTTP headers and form fields to redact.
 
 - `headers.full_redact`: Headers to completely redact
 - `headers.cookie_redact`: Headers where cookie values are redacted but names preserved
-- `headers.scheme_redact`: RFC 7235 `Scheme credentials` headers — recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved while the credential is redacted; unknown schemes fall through to full redact
+- `headers.scheme_redact`: RFC 7235 `Scheme credentials` headers — recognized scheme tokens (`Basic`, `Bearer`,
+  `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved while the credential is redacted; unknown schemes fall through
+  to full redact
 - `fields.patterns`: Regex patterns matching sensitive form field names
 - `tagValueList.safe_values`: Values to preserve in device tag lists
 
@@ -153,7 +155,8 @@ Create a JSON file with any of the structures above. Custom patterns are **merge
 
 ## Domain-Specific Patterns
 
-This library provides **generic** PII patterns that work across domains. For domain-specific patterns (modems, IoT devices, specific vendors), create custom pattern files in your project.
+This library provides **generic** PII patterns that work across domains. For domain-specific patterns (modems, IoT
+devices, specific vendors), create custom pattern files in your project.
 
 ### Example: Modem-specific patterns (in your project, not here)
 

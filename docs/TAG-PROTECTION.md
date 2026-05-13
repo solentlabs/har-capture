@@ -16,7 +16,7 @@ This project has multiple layers of tag protection to ensure releases only happe
 
 **Requirements:**
 
-- Install GitHub CLI: `brew install gh` or https://cli.github.com/
+- Install GitHub CLI: `brew install gh` or <https://cli.github.com/>
 - Authenticate: `gh auth login`
 
 ### 2. GitHub Actions Workflow (Remote)
@@ -39,7 +39,7 @@ This project has multiple layers of tag protection to ensure releases only happe
 
 Recommended for production repos.
 
-#### Setup Steps:
+#### Setup steps
 
 1. Go to **Settings** → **Tags** → **Add rule**
 
@@ -62,7 +62,7 @@ Recommended for production repos.
 
 1. Click **Create**
 
-#### Requirements:
+#### Setup requirements
 
 - GitHub Pro, Team, or Enterprise (not available on free personal repos)
 - Repository admin access

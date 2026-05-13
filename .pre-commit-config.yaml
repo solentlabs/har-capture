@@ -105,9 +105,27 @@ repos:
     rev: 0.7.17
     hooks:
       - id: mdformat
+        # --wrap 120 enforces the same line-length as markdownlint MD013.
+        # The two tools work together: mdformat wraps on commit, markdownlint
+        # catches anything mdformat couldn't auto-fix (very long unbreakable
+        # tokens, etc).
+        args: ["--wrap", "120"]
         additional_dependencies:
           - mdformat-gfm
           - mdformat-tables
+          # Required so YAML frontmatter in GitHub issue templates is not
+          # collapsed to a horizontal rule. Without this, mdformat re-damages
+          # .github/ISSUE_TEMPLATE/*.md every commit.
+          - mdformat-frontmatter
+
+  # markdownlint catches what mdformat doesn't (bare URLs, trailing
+  # punctuation in headings, raw-HTML allowlist, etc). Rule disables and
+  # the allowlist of HTML elements live in .markdownlint.jsonc. Ignore
+  # patterns (build artifacts, .venv, etc) live in .markdownlint-cli2.jsonc.
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.22.1
+    hooks:
+      - id: markdownlint-cli2
 
 # CI configuration
 ci:

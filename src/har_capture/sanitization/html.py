@@ -457,7 +457,7 @@ def _sanitize_html_impl(
     # Pure-digit values can't be flagged heuristically (the universal `^\d+$`
     # safe pattern would have to be relaxed, drowning the review UI in counter
     # noise). The label is what makes the regex layer's 100% confidence bar
-    # achievable. See issue #47 and CLAUDE.md principle #7.
+    # achievable. See issue #47 and docs/ARCHITECTURE.md § Confidence boundary.
     def replace_wps_pin(match: re.Match[str]) -> str:
         collector.record_auto_redaction("wps_pin")
         label = match.group(1)

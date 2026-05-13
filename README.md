@@ -6,13 +6,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![AI Assisted](https://img.shields.io/badge/AI-Claude%20Assisted-5A67D8.svg)](https://claude.ai)
 
-Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/specs/HAR/Overview.html) files with deep PII removal. Perfect for support diagnostics, security reviews, and test fixtures.
+Capture and sanitize [HAR (HTTP Archive)](https://w3c.github.io/web-performance/specs/HAR/Overview.html) files with deep
+PII removal. Perfect for support diagnostics, security reviews, and test fixtures.
 
 ## Quick Start
 
 ### Windows
 
-1. Install Python from the [Microsoft Store](https://apps.microsoft.com/detail/9NRWMJP3717K) or [python.org](https://www.python.org/downloads/)
+1. Install Python from the [Microsoft Store](https://apps.microsoft.com/detail/9NRWMJP3717K) or
+   [python.org](https://www.python.org/downloads/)
 1. Open PowerShell and run:
 
 ```bash
@@ -38,7 +40,9 @@ ______________________________________________________________________
 
 ## Why har-capture?
 
-Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **much more sensitive data**: IP addresses, MAC addresses, emails, passwords in form bodies, serial numbers, device names, WiFi credentials, session tokens, and API keys.
+Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **much more sensitive data**: IP
+addresses, MAC addresses, emails, passwords in form bodies, serial numbers, device names, WiFi credentials, session
+tokens, and API keys.
 
 **How har-capture compares:**
 
@@ -55,7 +59,8 @@ Chrome DevTools now sanitizes cookies and auth headers, but HAR files contain **
 - **Zero dependencies** - Core sanitization uses only Python stdlib
 - **Format-preserving hashes** - Track the same device across requests without exposing real values
 - **One-command workflow** - Capture, sanitize, and compress in a single step
-- **Interactive browser flows preserved** - Handle browser auth, popups, and dialogs while still recording the resulting traffic
+- **Interactive browser flows preserved** - Handle browser auth, popups, and dialogs while still recording the resulting
+  traffic
 
 [See detailed comparison with all tools →](docs/COMPARISON.md)
 
@@ -108,9 +113,8 @@ har-capture sanitize capture.har --patterns base
 har-capture validate capture.har --patterns network-device
 ```
 
-`--patterns` is required as of 0.9.0 — pick `network-device` for cable
-modems/routers/APs, `base` for generic web/API captures, or a custom
-JSON path. Run `har-capture patterns` for the full list.
+`--patterns` is required as of 0.9.0 — pick `network-device` for cable modems/routers/APs, `base` for generic web/API
+captures, or a custom JSON path. Run `har-capture patterns` for the full list.
 
 [Full CLI reference →](docs/CLI_REFERENCE.md)
 

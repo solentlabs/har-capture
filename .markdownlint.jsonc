@@ -1,0 +1,35 @@
+// markdownlint rules for har-capture.
+//
+// Verification methodology: every customization here was tested by
+// running `npx markdownlint-cli2 --config /tmp/test.jsonc` against
+// the actual doc tree in isolation (no nearby config to merge). A
+// rule is only customized when it actually fires on this project's
+// docs — no preemptive disables, no cargo-culted justifications.
+
+{
+  "default": true,
+
+  // MD013 line-length: enabled at 120 chars.
+  //
+  // Defense: mdformat is configured with --wrap 120 in
+  // .pre-commit-config.yaml, so every commit auto-wraps prose to this
+  // limit. markdownlint MD013 catches anything mdformat couldn't
+  // auto-fix (genuinely unbreakable long tokens, edge cases).
+  //
+  // Exemptions:
+  //   code_blocks: false — code blocks contain commands with flags
+  //     and full URLs that lose meaning if line-wrapped (copy-paste
+  //     breaks, regex examples become unreadable).
+  //   tables: false — table cells routinely exceed 120 chars (e.g.
+  //     the Quality Gates command column, the Where Things Live
+  //     authoritative-doc column). Manual table re-layout would
+  //     defeat the visual alignment markdownlint expects elsewhere.
+  //   headings: true — headings always fit; > 120 char heading is
+  //     a smell worth flagging.
+  "MD013": {
+    "line_length": 120,
+    "code_blocks": false,
+    "tables": false,
+    "headings": true
+  }
+}

@@ -2,7 +2,8 @@
 
 ## Overview
 
-har-capture's pattern matching system is fully extensible. You can add custom patterns for organization-specific data (employee IDs, product serials, custom tokens) without modifying the package.
+har-capture's pattern matching system is fully extensible. You can add custom patterns for organization-specific data
+(employee IDs, product serials, custom tokens) without modifying the package.
 
 ## Pattern Files
 
@@ -46,9 +47,8 @@ src/har_capture/patterns/
 }
 ```
 
-**Input:** `Customer: CUST-A1B2C3D4`
-**Output:** `Customer: CUSTID_e5f6a7b8` (salted hash)
-**Output (no-salt):** `Customer: CUSTID_REDACTED`
+**Input:** `Customer: CUST-A1B2C3D4` **Output:** `Customer: CUSTID_e5f6a7b8` (salted hash) **Output (no-salt):**
+`Customer: CUSTID_REDACTED`
 
 ## Pattern Fields
 
@@ -76,7 +76,9 @@ JSON's string-escape rules collide with regex escapes. The most common trap is `
 }
 ```
 
-Why the trap matters: `\b` in a JSON string parses to ASCII backspace (`\x08`) **before** the regex compiler ever sees it. The pattern then compiles successfully — no error — and matches nothing. Same hazard exists for `\f` (regex form-feed: write `\\f`).
+Why the trap matters: `\b` in a JSON string parses to ASCII backspace (`\x08`) **before** the regex compiler ever sees
+it. The pattern then compiles successfully — no error — and matches nothing. Same hazard exists for `\f` (regex
+form-feed: write `\\f`).
 
 The loader detects this case and logs a warning at load time so you don't ship a silently-broken pattern:
 
@@ -87,7 +89,8 @@ a regex word-boundary requires '\\b' in the JSON source. The pattern will compil
 never match.
 ```
 
-If you authored your pattern from a regex tester and the regex looks correct on its own, double-check that all backslashes are doubled when you put it into JSON.
+If you authored your pattern from a regex tester and the regex looks correct on its own, double-check that all
+backslashes are doubled when you put it into JSON.
 
 ## Using Custom Patterns
 
@@ -126,12 +129,19 @@ sanitize_har_file("capture.har", custom_patterns=patterns_dict)
 
 ## Extending Sensitive Field Detection
 
-The examples above extend `pii.patterns` — value-based regexes that match anywhere in content (e.g. a customer-ID string format). Field-level redaction is a separate pass: when sanitizing form bodies, JSON bodies, XML elements, `postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field name** against two regex sets loaded from `sensitive.json`:
+The examples above extend `pii.patterns` — value-based regexes that match anywhere in content (e.g. a customer-ID string
+format). Field-level redaction is a separate pass: when sanitizing form bodies, JSON bodies, XML elements,
+`postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field name** against two regex sets
+loaded from `sensitive.json`:
 
-- **`fields.auto_redact_patterns`** — field names that trigger automatic redaction of the associated value (100% confidence, e.g. `password`, `secret`, `token`).
+- **`fields.auto_redact_patterns`** — field names that trigger automatic redaction of the associated value (100%
+  confidence, e.g. `password`, `secret`, `token`).
 - **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
 
-To add a field name that the built-ins don't recognize — for instance, a device-specific credential field like `pws`, `loginPassword`, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. Extensions are additive (built-ins continue to apply) and scoped to the single call via a `ContextVar`, so module state is never mutated and concurrent callers don't observe each other's patterns.
+To add a field name that the built-ins don't recognize — for instance, a device-specific credential field like `pws`,
+`loginPassword`, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema.
+Extensions are additive (built-ins continue to apply) and scoped to the single call via a `ContextVar`, so module state
+is never mutated and concurrent callers don't observe each other's patterns.
 
 ### Schema
 
@@ -144,7 +154,8 @@ To add a field name that the built-ins don't recognize — for instance, a devic
 }
 ```
 
-Each entry is a regex (same syntax as the built-in `sensitive.json`). Matching is case-insensitive; use `\b` boundaries to avoid accidental substring hits.
+Each entry is a regex (same syntax as the built-in `sensitive.json`). Matching is case-insensitive; use `\b` boundaries
+to avoid accidental substring hits.
 
 ### Python API — per-call extension
 
@@ -400,7 +411,8 @@ patterns/
 └── combined.json       # Merged patterns for project A
 ```
 
-**Note:** The CLI currently supports only one `--patterns` file at a time. To use multiple pattern sets, merge them into a single file:
+**Note:** The CLI currently supports only one `--patterns` file at a time. To use multiple pattern sets, merge them into
+a single file:
 
 ```bash
 # Merge patterns (example with jq)
