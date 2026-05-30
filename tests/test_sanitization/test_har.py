@@ -2145,6 +2145,19 @@ _MULTI_ENTRY_CRED = [
     {"request": {"url": "https://device.local/status", "headers": [], "queryString": []}},
     {"request": {"url": "https://device.local/api?YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
 ]
+# Entry with no URL — covers `if url:` False branch
+_NO_URL_ENTRY = [
+    {"request": {"url": "", "headers": [], "queryString": []}},
+]
+# URL with a bare flag segment (no '=', not a credential) — covers `if "=" in segment:` False branch
+_BARE_FLAG_SEGMENT_URL = [
+    {"request": {"url": "https://device.local/api?debug&format=json", "headers": [], "queryString": []}},
+]
+# Non-dict entry in queryString — covers `isinstance(param, dict)` False branch
+_NONDICT_QS_ENTRY = [
+    {"request": {"url": "https://device.local/api", "headers": [],
+                 "queryString": ["not-a-dict", {"name": "session", "value": "abc"}]}},
+]
 
 DETECT_URL_CREDENTIAL_ENTRIES_CASES = [
     # (entries,              expected_annotations,                              description)
@@ -2156,6 +2169,9 @@ DETECT_URL_CREDENTIAL_ENTRIES_CASES = [
     (_NON_CRED_BASE64_URL,  [],                                                  "non_cred_base64_no_colon"),
     ([],                    [],                                                  "empty_entries"),
     (_MULTI_ENTRY_CRED,     [{"entry_index": 1, "location": "url_query_param"}], "correct_entry_index"),
+    (_NO_URL_ENTRY,         [],                                                  "no_url_skipped"),
+    (_BARE_FLAG_SEGMENT_URL, [],                                                 "bare_flag_segment_no_eq"),
+    (_NONDICT_QS_ENTRY,     [],                                                  "nondict_qs_entry_skipped"),
 ]
 
 SANITIZE_HAR_SANITIZED_CRED_CASES = [
