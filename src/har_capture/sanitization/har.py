@@ -1554,13 +1554,14 @@ def sanitize_har(
 
     # Build an index of the raw credential string per entry index so that the
     # response-body sanitizer can apply the server-token preservation heuristic.
+    # Iterate orig_entries directly rather than indexing through url_credential_locations
+    # so that the `if raw is not None` branch is exercised by the common case (no cred).
     _url_cred_by_idx: dict[int, str] = {}
-    for loc in url_credential_locations:
-        idx = loc["entry_index"]
-        if idx not in _url_cred_by_idx and idx < len(orig_entries):
-            raw = _extract_url_credential_raw(orig_entries[idx].get("request", {}))
+    if isinstance(orig_entries, list):
+        for i, orig_entry in enumerate(orig_entries):
+            raw = _extract_url_credential_raw(orig_entry.get("request", {}))
             if raw is not None:
-                _url_cred_by_idx[idx] = raw
+                _url_cred_by_idx[i] = raw
 
     # Sanitize all entries using the shared collector
     if "entries" in log and isinstance(log["entries"], list):
