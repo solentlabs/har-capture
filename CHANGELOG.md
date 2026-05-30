@@ -7,6 +7,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-30
+
+### Added
+
+- **Cookie origin annotation: `_client_side_cookies` in `log._har_capture`.** After sanitization, `sanitize_har` now
+  writes a `_client_side_cookies` list containing the names of any cookies found in request `Cookie` headers that never
+  appeared in a `Set-Cookie` response header across the entire capture. Cookie values are never written — only names. An
+  empty list means all cookies were server-set. Example output: `"_client_side_cookies": ["credential"]`. This lets
+  downstream tooling (e.g. cable_modem_monitor intake pipeline) detect the client-side cookie injection pattern — where
+  firmware sets a credential cookie via JavaScript rather than `Set-Cookie` — without requiring contributors to provide
+  DevTools data manually.
+
+- **URL credential location annotation: `_sanitized_credentials` in `log._har_capture`.** `sanitize_har` now pre-scans
+  the original entries (before sanitization replaces credentials with `AUTH_<hash>` placeholders) and writes a
+  `_sanitized_credentials` list recording the entry index and location of any bare `base64(user:pass)` credential found
+  in URL query params or structured `queryString` arrays. Example:
+  `"_sanitized_credentials": [{"entry_index": 1, "location": "url_query_param"}]`. This allows the intake pipeline to
+  identify the auth entry without pattern-matching the placeholder — the `AUTH_<hash>` format contains an underscore
+  that falls outside the base64 alphabet, breaking regex-based detection in the sanitized HAR.
+
+### Fixed
+
+- **`is_base64_credential` now applied to response body content.** The check was called in four places inside request
+  URL and query-param sanitization but never in `_sanitize_response_content`. A server that echoes a bare
+  `base64(user:pass)` token back in its response body (e.g. a router auth-status page returning `YWRtaW46cGFzcw==`)
+  passed through unsanitized. The guard now runs before the mime-type router so the body is redacted regardless of
+  `text/plain`, `text/html`, or `application/json` content type. The matching gap in `check_content`
+  (`validation/secrets.py`) is also closed: the validator now flags unsanitized HARs containing a bare base64 credential
+  as the entire response body, with `severity="error"`.
+
 ## [0.9.1] - 2026-05-13
 
 ### Changed
@@ -839,6 +869,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.1.0]: https://github.com/solentlabs/har-capture/releases/tag/v0.1.0
 [0.1.1]: https://github.com/solentlabs/har-capture/compare/v0.1.0...v0.1.1
 [0.1.2]: https://github.com/solentlabs/har-capture/compare/v0.1.1...v0.1.2
+[0.10.0]: https://github.com/solentlabs/har-capture/compare/v0.9.1...v0.10.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -866,4 +897,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.9.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.0...HEAD

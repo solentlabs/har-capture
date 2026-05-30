@@ -67,6 +67,16 @@ CHECK_CONTENT_CASES = [
     (c["content"], c["expect_ip"], c["expect_mac"], c["id"]) for c in _DATA["check_content_cases"]
 ]
 
+# YWRtaW46cGFzcw==  = base64("admin:pass")
+# aGVsbG8gd29ybGQ= = base64("hello world") — no colon, not a credential
+CHECK_CONTENT_BASE64_CASES = [
+    # (content, expect_finding, description)
+    ("YWRtaW46cGFzcw==", True, "bare_cred"),
+    ("  YWRtaW46cGFzcw==  ", True, "bare_cred_with_whitespace"),
+    ("aGVsbG8gd29ybGQ=", False, "base64_no_colon"),
+    ("[REDACTED]", False, "already_redacted"),
+]
+
 CHECK_URL_CASES = [(c["url"], c["expected_count"], c["id"]) for c in _DATA["check_url_cases"]]
 
 COOKIE_ATTR_EXTENDED_CASES = [
@@ -294,6 +304,25 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
 
     assert has_ip == expect_ip, f"IP detection failed for {desc}"
     assert has_mac == expect_mac, f"MAC detection failed for {desc}"
+
+
+@pytest.mark.parametrize(
+    ("content", "expect_finding", "desc"),
+    CHECK_CONTENT_BASE64_CASES,
+    ids=[c[2] for c in CHECK_CONTENT_BASE64_CASES],
+)
+def test_check_content_base64_credential(content: str, expect_finding: bool, desc: str) -> None:
+    """Test check_content detects bare base64 credentials and ignores non-credentials."""
+    findings: list[Finding] = []
+    check_content(content, "response.body", findings)
+
+    b64_findings = [f for f in findings if "base64" in f.reason.lower()]
+    if expect_finding:
+        assert len(b64_findings) == 1, f"{desc}: expected one base64 finding"
+        assert b64_findings[0].severity == "error", f"{desc}: finding should be error severity"
+        assert b64_findings[0].field == "content", f"{desc}: field should be 'content'"
+    else:
+        assert len(b64_findings) == 0, f"{desc}: expected no base64 findings"
 
 
 # ---------------------------------------------------------------------------

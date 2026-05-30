@@ -23,14 +23,21 @@ Dependencies:
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
 import pytest
 
+from har_capture.patterns import Hasher
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
+    _detect_client_side_cookies,
+    _detect_url_credential_entries,
     _embed_sanitization_metadata,
+    _parse_cookie_names,
+    _parse_set_cookie_name,
     _sanitize_form_urlencoded,
     _sanitize_json_recursive,
     _sanitize_string_patterns,
@@ -1966,6 +1973,265 @@ class TestBrowserCookieSanitization:
         assert result["log"]["_har_capture"]["browser_cookies"] == []
 
 
+# =============================================================================
+# Client-Side Cookie Detection
+# =============================================================================
+
+# ┌────────────────────────────┬───────────────────┬──────────────────────────────────────┐
+# │ cookie_header_value        │ expected_names    │ description                          │
+# └────────────────────────────┴───────────────────┴──────────────────────────────────────┘
+#
+# fmt: off
+PARSE_COOKIE_NAMES_CASES = [
+    ("session=abc; token=xyz",        ["session", "token"], "two_cookies"),
+    ("session=abc",                   ["session"],          "single_cookie"),
+    ("  session = abc ; token=xyz  ", ["session", "token"], "whitespace_padded"),
+    ("bare_no_eq",                    [],                   "no_equals_ignored"),
+    ("=value; session=abc",           ["session"],          "leading_eq_name_skipped"),
+    ("",                              [],                   "empty_string"),
+]
+
+PARSE_SET_COOKIE_NAME_CASES = [
+    ("session=abc; Path=/; HttpOnly", "session",    "with_attributes"),
+    ("token=xyz",                     "token",      "no_attributes"),
+    ("credential=; Secure",           "credential", "empty_value"),
+    ("HttpOnly",                      None,         "no_equals_at_all"),
+    ("",                              None,         "empty_string"),
+]
+
+# Entries shape: list of {"request": {"headers": [...]}, "response": {"headers": [...]}}
+_JS_ONLY = [
+    {"request": {"headers": [{"name": "Cookie", "value": "credential=abc"}]},
+     "response": {"headers": []}},
+]
+_SERVER_SET = [
+    {"request": {"headers": []},
+     "response": {"headers": [{"name": "Set-Cookie", "value": "session=abc; Path=/"}]}},
+    {"request": {"headers": [{"name": "Cookie", "value": "session=abc"}]},
+     "response": {"headers": []}},
+]
+_MIXED = [
+    {"request": {"headers": []},
+     "response": {"headers": [{"name": "Set-Cookie", "value": "session=abc; Path=/"}]}},
+    {"request": {"headers": [{"name": "Cookie", "value": "session=abc; credential=xyz"}]},
+     "response": {"headers": []}},
+]
+_DEDUP = [
+    {"request": {"headers": [{"name": "Cookie", "value": "credential=abc"}]},
+     "response": {"headers": []}},
+    {"request": {"headers": [{"name": "Cookie", "value": "credential=xyz"}]},
+     "response": {"headers": []}},
+]
+_MULTI = [
+    {"request": {"headers": [{"name": "Cookie", "value": "a=1; b=2"}]},
+     "response": {"headers": []}},
+]
+# Non-dict header entries exercise the isinstance(header, dict) defensive branch
+_NON_DICT_HEADERS = [
+    {"request": {"headers": ["not-a-dict", {"name": "Cookie", "value": "credential=abc"}]},
+     "response": {"headers": ["not-a-dict", {"name": "Set-Cookie", "value": "session=xyz; Path=/"}]}},
+]
+# Set-Cookie with no '=' — _parse_set_cookie_name returns None; cookie must not be suppressed
+_SET_COOKIE_NO_EQ = [
+    {"request": {"headers": []},
+     "response": {"headers": [{"name": "Set-Cookie", "value": "HttpOnly"}]}},
+    {"request": {"headers": [{"name": "Cookie", "value": "credential=abc"}]},
+     "response": {"headers": []}},
+]
+
+DETECT_CLIENT_SIDE_COOKIE_CASES = [
+    # (entries,          expected_names,  description)
+    (_JS_ONLY,          ["credential"],  "js_only_cookie"),
+    (_SERVER_SET,       [],              "server_set_cookie_suppressed"),
+    (_MIXED,            ["credential"],  "mixed_only_js_returned"),
+    ([],                [],              "empty_capture"),
+    (_DEDUP,            ["credential"],  "repeated_js_cookie_deduplicated"),
+    (_MULTI,            ["a", "b"],      "multiple_js_cookies"),
+    (_NON_DICT_HEADERS, ["credential"],  "non_dict_headers_skipped"),
+    (_SET_COOKIE_NO_EQ, ["credential"],  "set_cookie_no_eq_not_suppressed"),
+]
+
+# Full HAR entry shape for sanitize_har integration cases
+_ENTRY = lambda req_headers, resp_headers: {   # noqa: E731
+    "request": {"method": "GET", "url": "http://example.com/", "headers": req_headers, "queryString": []},
+    "response": {"status": 200, "headers": resp_headers, "content": {}},
+}
+
+SANITIZE_HAR_CLIENT_COOKIE_CASES = [
+    # (entries,                                                                    expected,        desc)
+    ([_ENTRY([], [{"name": "Set-Cookie", "value": "session=abc; Path=/"}]),
+      _ENTRY([{"name": "Cookie", "value": "session=abc; credential=xyz"}], [])], ["credential"],  "js_cookie_detected"),
+    ([_ENTRY([], [{"name": "Set-Cookie", "value": "session=abc; Path=/"}]),
+      _ENTRY([{"name": "Cookie", "value": "session=abc"}], [])],                  [],              "all_server_set"),
+    ([],                                                                           [],              "no_entries"),
+]
+# fmt: on
+
+
+class TestClientSideCookieDetection:
+    """Tests for _parse_cookie_names, _parse_set_cookie_name, _detect_client_side_cookies."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        PARSE_COOKIE_NAMES_CASES,
+        ids=[c[2] for c in PARSE_COOKIE_NAMES_CASES],
+    )
+    def test_parse_cookie_names(self, value: str, expected: list[str], desc: str) -> None:
+        assert _parse_cookie_names(value) == expected, desc
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        PARSE_SET_COOKIE_NAME_CASES,
+        ids=[c[2] for c in PARSE_SET_COOKIE_NAME_CASES],
+    )
+    def test_parse_set_cookie_name(self, value: str, expected: str | None, desc: str) -> None:
+        assert _parse_set_cookie_name(value) == expected, desc
+
+    @pytest.mark.parametrize(
+        ("entries", "expected", "desc"),
+        DETECT_CLIENT_SIDE_COOKIE_CASES,
+        ids=[c[2] for c in DETECT_CLIENT_SIDE_COOKIE_CASES],
+    )
+    def test_detect_client_side_cookies(self, entries: list, expected: list[str], desc: str) -> None:
+        assert _detect_client_side_cookies(entries) == expected, desc
+
+    @pytest.mark.parametrize(
+        ("entries", "expected", "desc"),
+        SANITIZE_HAR_CLIENT_COOKIE_CASES,
+        ids=[c[2] for c in SANITIZE_HAR_CLIENT_COOKIE_CASES],
+    )
+    def test_sanitize_har_client_side_cookies_metadata(
+        self, entries: list, expected: list[str], desc: str
+    ) -> None:
+        """Integration: sanitize_har writes correct _client_side_cookies into log._har_capture."""
+        har = {"log": {"entries": entries}}
+        result, _ = sanitize_har(har, salt="test")
+        assert result["log"]["_har_capture"]["_client_side_cookies"] == expected, desc
+
+
+# =============================================================================
+# URL Credential Entry Annotation (_sanitized_credentials)
+# =============================================================================
+
+# ┌─────────────────────────────────────────────────────────┬────────────────────────────────┬──────────────────────────────────────┐
+# │ entries                                                 │ expected_annotations           │ description                          │
+# └─────────────────────────────────────────────────────────┴────────────────────────────────┴──────────────────────────────────────┘
+#
+# YWRtaW46cGFzcw== = base64("admin:pass")
+# aGVsbG8gd29ybGQ= = base64("hello world") — no colon, not a credential
+#
+# fmt: off
+_CRED_BARE_URL = [
+    {"request": {"url": "https://device.local/api?YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
+]
+_CRED_PARAM_VALUE_URL = [
+    {"request": {"url": "https://device.local/api?auth=YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
+]
+_CRED_QS_NAME = [
+    {"request": {"url": "https://device.local/api", "headers": [],
+                 "queryString": [{"name": "YWRtaW46cGFzcw==", "value": ""}]}},
+]
+_CRED_QS_VALUE = [
+    {"request": {"url": "https://device.local/api", "headers": [],
+                 "queryString": [{"name": "auth", "value": "YWRtaW46cGFzcw=="}]}},
+]
+_NO_CRED_URL = [
+    {"request": {"url": "https://device.local/api?id=123&format=json", "headers": [], "queryString": []}},
+]
+_NON_CRED_BASE64_URL = [
+    {"request": {"url": "https://device.local/api?data=aGVsbG8gd29ybGQ=", "headers": [], "queryString": []}},
+]
+_MULTI_ENTRY_CRED = [
+    {"request": {"url": "https://device.local/status", "headers": [], "queryString": []}},
+    {"request": {"url": "https://device.local/api?YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
+]
+# Entry with no URL — covers `if url:` False branch
+_NO_URL_ENTRY = [
+    {"request": {"url": "", "headers": [], "queryString": []}},
+]
+# URL with a bare flag segment (no '=', not a credential) — covers `if "=" in segment:` False branch
+_BARE_FLAG_SEGMENT_URL = [
+    {"request": {"url": "https://device.local/api?debug&format=json", "headers": [], "queryString": []}},
+]
+# Non-dict entry in queryString — covers `isinstance(param, dict)` False branch
+_NONDICT_QS_ENTRY = [
+    {"request": {"url": "https://device.local/api", "headers": [],
+                 "queryString": ["not-a-dict", {"name": "session", "value": "abc"}]}},
+]
+
+DETECT_URL_CREDENTIAL_ENTRIES_CASES = [
+    # (entries,              expected_annotations,                              description)
+    (_CRED_BARE_URL,        [{"entry_index": 0, "location": "url_query_param"}], "bare_cred_in_url"),
+    (_CRED_PARAM_VALUE_URL, [{"entry_index": 0, "location": "url_query_param"}], "cred_in_param_value"),
+    (_CRED_QS_NAME,         [{"entry_index": 0, "location": "url_query_param"}], "cred_in_qs_name"),
+    (_CRED_QS_VALUE,        [{"entry_index": 0, "location": "url_query_param"}], "cred_in_qs_value"),
+    (_NO_CRED_URL,          [],                                                  "no_cred_normal_params"),
+    (_NON_CRED_BASE64_URL,  [],                                                  "non_cred_base64_no_colon"),
+    ([],                    [],                                                  "empty_entries"),
+    (_MULTI_ENTRY_CRED,     [{"entry_index": 1, "location": "url_query_param"}], "correct_entry_index"),
+    (_NO_URL_ENTRY,         [],                                                  "no_url_skipped"),
+    (_BARE_FLAG_SEGMENT_URL, [],                                                 "bare_flag_segment_no_eq"),
+    (_NONDICT_QS_ENTRY,     [],                                                  "nondict_qs_entry_skipped"),
+]
+
+SANITIZE_HAR_SANITIZED_CRED_CASES = [
+    # (entries,              expected_annotations,                              desc)
+    ([_ENTRY([],             []), _ENTRY([], [])],                              [],
+     "no_cred_empty_list"),
+    ([_ENTRY([{"name": "Cookie", "value": "session=abc"}], [])],               [],
+     "cookie_only_not_a_url_cred"),
+]
+# fmt: on
+
+
+class TestSanitizedCredentialAnnotation:
+    """Tests for _detect_url_credential_entries and _sanitized_credentials metadata."""
+
+    @pytest.mark.parametrize(
+        ("entries", "expected", "desc"),
+        DETECT_URL_CREDENTIAL_ENTRIES_CASES,
+        ids=[c[2] for c in DETECT_URL_CREDENTIAL_ENTRIES_CASES],
+    )
+    def test_detect_url_credential_entries(self, entries: list, expected: list[dict], desc: str) -> None:
+        assert _detect_url_credential_entries(entries) == expected, desc
+
+    @pytest.mark.parametrize(
+        ("entries", "expected", "desc"),
+        SANITIZE_HAR_SANITIZED_CRED_CASES,
+        ids=[c[2] for c in SANITIZE_HAR_SANITIZED_CRED_CASES],
+    )
+    def test_sanitize_har_sanitized_credentials_empty(self, entries: list, expected: list, desc: str) -> None:
+        """Integration: _sanitized_credentials is empty when no URL credentials present."""
+        har = {"log": {"entries": entries}}
+        result, _ = sanitize_har(har, salt="test")
+        assert result["log"]["_har_capture"]["_sanitized_credentials"] == expected, desc
+
+    def test_sanitize_har_records_url_credential_location(self) -> None:
+        """Integration: _sanitized_credentials records entry index before placeholder replaces credential."""
+        har = {
+            "log": {
+                "entries": [
+                    _ENTRY([], []),
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": "https://device.local/status?YWRtaW46cGFzcw==",
+                            "headers": [],
+                            "queryString": [{"name": "YWRtaW46cGFzcw==", "value": ""}],
+                        },
+                        "response": {"status": 200, "headers": [], "content": {}},
+                    },
+                ]
+            }
+        }
+        result, _ = sanitize_har(har, salt="test")
+        creds = result["log"]["_har_capture"]["_sanitized_credentials"]
+        assert creds == [{"entry_index": 1, "location": "url_query_param"}]
+        # Confirm the URL was actually sanitized (placeholder is not valid base64 credential)
+        result_url = result["log"]["entries"][1]["request"]["url"]
+        assert "YWRtaW46cGFzcw==" not in result_url
+
+
 # ┌──────────────────────────────┬──────────────┬──────────────────────────────────────────────────────┬──────────────────────────────────────┐
 # │ desc                         │ storage_key  │ har_capture_input                                    │ assertion                            │
 # ├──────────────────────────────┼──────────────┼──────────────────────────────────────────────────────┼──────────────────────────────────────┤
@@ -2334,6 +2600,29 @@ BASE64_CRED_URL_CASES = [
 ]
 # fmt: on
 
+# ┌──────────────────────────┬──────────────────────┬──────────┬──────────────────────────────┐
+# │ body_text                │ mime_type            │ redacted │ description                  │
+# ├──────────────────────────┼──────────────────────┼──────────┼──────────────────────────────┤
+# │ Response body text       │ Content MIME type    │ True/    │ test case name               │
+# │                          │                      │ False    │                              │
+# └──────────────────────────┴──────────────────────┴──────────┴──────────────────────────────┘
+#
+# YWRtaW46cGFzcw==  = base64("admin:pass")
+# aGVsbG8gd29ybGQ= = base64("hello world")  — no colon, not a credential
+#
+# fmt: off
+BASE64_CRED_RESPONSE_BODY_CASES = [
+    # Real credential — should be redacted regardless of mime type
+    ("YWRtaW46cGFzcw==",     "text/plain",       True,  "bare_cred_text_plain"),
+    ("YWRtaW46cGFzcw==",     "text/html",        True,  "bare_cred_text_html"),
+    ("YWRtaW46cGFzcw==",     "application/json", True,  "bare_cred_application_json"),
+    # Whitespace-padded credential — guard strips before checking
+    ("  YWRtaW46cGFzcw==  ", "text/plain",       True,  "bare_cred_with_whitespace"),
+    # Non-credential base64 (decoded value has no colon) — must not be redacted
+    ("aGVsbG8gd29ybGQ=",     "text/plain",       False, "non_cred_base64_no_colon"),
+]
+# fmt: on
+
 
 class TestBase64CredentialDetection:
     """Tests for base64-encoded credential detection in URL query parameters."""
@@ -2388,8 +2677,6 @@ class TestBase64CredentialDetection:
 
     def test_base64_credential_bare_name_without_padding(self) -> None:
         """Test base64 credential as bare param name with padding stripped."""
-        import base64
-
         cred = base64.b64encode(b"user:secret").decode()  # dXNlcjpzZWNyZXQ=
         stripped = cred.rstrip("=")
         entry = {
@@ -2404,6 +2691,53 @@ class TestBase64CredentialDetection:
         result = sanitize_entry(entry, salt="test")
         qs = result["request"]["queryString"]
         assert qs[0]["name"] != stripped, "Base64 cred name (padding stripped) should be redacted"
+
+    @pytest.mark.parametrize(
+        ("body", "mime_type", "should_redact", "desc"),
+        BASE64_CRED_RESPONSE_BODY_CASES,
+        ids=[c[3] for c in BASE64_CRED_RESPONSE_BODY_CASES],
+    )
+    def test_base64_credential_in_response_body(
+        self, body: str, mime_type: str, should_redact: bool, desc: str
+    ) -> None:
+        """Test bare base64 credential in response body is redacted regardless of mime type."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/status",
+                "headers": [],
+                "queryString": [],
+            },
+            "response": {"status": 200, "headers": [], "content": {"text": body, "mimeType": mime_type}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        result_body = result["response"]["content"]["text"]
+        if should_redact:
+            assert result_body != body.strip(), f"{desc}: body should be redacted"
+        else:
+            assert result_body == body, f"{desc}: body should be unchanged"
+
+    def test_base64_credential_in_response_body_records_auth_redaction(self) -> None:
+        """Test that the response body base64 guard records an auth redaction on the collector."""
+        hasher = Hasher.create("test-salt")
+        collector = RedactionCollector(hasher=hasher)
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/status",
+                "headers": [],
+                "queryString": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"text": "YWRtaW46cGFzcw==", "mimeType": "text/plain"},
+            },
+        }
+        sanitize_entry(entry, salt="test", collector=collector)
+        assert collector.auto_redacted_counts.get("auth", 0) >= 1, (
+            "AUTH redaction should be recorded on collector"
+        )
 
 
 class TestUrlQueryBareSegment:

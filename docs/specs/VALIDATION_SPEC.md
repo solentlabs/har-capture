@@ -75,7 +75,7 @@ def validate_har(
    - `check_headers(entry.request.headers)` → Sensitive header detection
    - `check_headers(entry.response.headers)` → Same for response
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
-   - `check_content(entry.response.content)` → MAC, serial, IP in text content
+   - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
@@ -149,6 +149,14 @@ Severity: **error**
 ### `check_content(content, location, findings)`
 
 Detects PII patterns in response content text:
+
+**Bare base64 credentials:**
+
+- Strips whitespace from the content, then calls `is_base64_credential()` on the entire body
+- Matches only when the whole body is a bare `base64(user:pass)` token (e.g. a router echoing its auth token)
+- Returns early after flagging — suppresses MAC/serial/IP checks on the same body to avoid noise
+
+Severity: **error**
 
 **MAC addresses:**
 
