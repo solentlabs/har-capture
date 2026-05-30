@@ -29,6 +29,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Server-issued session tokens preserved in `url_token` auth response bodies.** For firmware that authenticates via
+  `base64(user:pass)` in the URL query string, the server responds with an opaque session token in the response body
+  (not the user's credential). The previous fix redacted any response body that looked like a base64 credential,
+  stripping the token and making the HAR unreplayable without manual patching. The sanitizer now checks whether the
+  response body echoes the URL credential — `btoa(user)`, `btoa(password)`, or `btoa(user:pass)` — and only redacts on a
+  match; opaque server tokens that happen to decode to `x:y` format are preserved. The validator's `check_content` is
+  updated symmetrically: entries listed in `_sanitized_credentials` skip the bare base64 body check, since the sanitizer
+  already made the preservation decision.
+
 - **`is_base64_credential` now applied to response body content.** The check was called in four places inside request
   URL and query-param sanitization but never in `_sanitize_response_content`. A server that echoes a bare
   `base64(user:pass)` token back in its response body (e.g. a router auth-status page returning `YWRtaW46cGFzcw==`)
