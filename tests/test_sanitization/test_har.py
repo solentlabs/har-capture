@@ -36,6 +36,8 @@ from har_capture.sanitization.har import (
     _detect_client_side_cookies,
     _detect_url_credential_entries,
     _embed_sanitization_metadata,
+    _extract_url_credential_raw,
+    _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
     _sanitize_form_urlencoded,
@@ -2230,6 +2232,191 @@ class TestSanitizedCredentialAnnotation:
         # Confirm the URL was actually sanitized (placeholder is not valid base64 credential)
         result_url = result["log"]["entries"][1]["request"]["url"]
         assert "YWRtaW46cGFzcw==" not in result_url
+
+
+# =============================================================================
+# Server-Token Preservation: _extract_url_credential_raw / _is_echoed_credential
+# =============================================================================
+
+# URL cred: admin:pass → YWRtaW46cGFzcw==
+_ADMIN_PASS_RAW = base64.b64encode(b"admin:pass").decode()  # YWRtaW46cGFzcw==
+_ADMIN_RAW = base64.b64encode(b"admin").decode()  # YWRtaW4=
+_PASS_RAW = base64.b64encode(b"pass").decode()  # cGFzcw==
+# A server-issued opaque token that decodes to "session:abc123" — has a colon
+# so is_base64_credential() fires, but it does NOT echo the user's credential.
+_SERVER_TOKEN = base64.b64encode(b"session:abc123").decode()
+
+# url_cred_raw whose b64decode yields non-UTF-8 bytes → triggers the except branch
+_NON_UTF8_CRED_RAW = base64.b64encode(b"\xff\xfe").decode()
+# url_cred_raw that decodes to valid UTF-8 with no colon → triggers the no-colon branch
+_NO_COLON_CRED_RAW = base64.b64encode(b"simple").decode()
+
+# fmt: off
+EXTRACT_URL_CRED_RAW_CASES = [
+    # (request_dict, expected_raw, desc)
+    (
+        {"url": f"https://d.local/login?{_ADMIN_PASS_RAW}", "queryString": []},
+        _ADMIN_PASS_RAW,
+        "bare_cred_in_url",
+    ),
+    (
+        {"url": f"https://d.local/login?token={_ADMIN_PASS_RAW}", "queryString": []},
+        _ADMIN_PASS_RAW,
+        "cred_as_param_value_in_url",
+    ),
+    (
+        {"url": "https://d.local/status", "queryString": []},
+        None,
+        "no_cred_in_url",
+    ),
+    # Bare segment without '=' that isn't a cred — exercises 1417→1411 false branch
+    (
+        {"url": "https://d.local/page?debug", "queryString": []},
+        None,
+        "bare_non_cred_segment_no_eq",
+    ),
+    # key=value pair where value isn't a cred — exercises 1420→1411 false branch
+    (
+        {"url": "https://d.local/page?format=json", "queryString": []},
+        None,
+        "key_value_non_cred_value",
+    ),
+    # Non-string url — exercises line 1408 defensive branch
+    (
+        {"url": 9000, "queryString": []},
+        None,
+        "non_string_url",
+    ),
+    (
+        {"url": "", "queryString": [{"name": "token", "value": _ADMIN_PASS_RAW}]},
+        _ADMIN_PASS_RAW,
+        "cred_in_querystring_value",
+    ),
+    (
+        {"url": "", "queryString": [{"name": _ADMIN_PASS_RAW, "value": ""}]},
+        _ADMIN_PASS_RAW,
+        "cred_as_querystring_name",
+    ),
+    # Non-dict entry in queryString — exercises line 1425 continue branch
+    (
+        {"url": "", "queryString": ["not-a-dict"]},
+        None,
+        "non_dict_querystring_entry",
+    ),
+    # Empty value + non-cred name — exercises 1430→1423 false branch
+    (
+        {"url": "", "queryString": [{"name": "format", "value": ""}]},
+        None,
+        "non_cred_name_empty_value",
+    ),
+    (
+        {"url": "", "queryString": []},
+        None,
+        "empty_request",
+    ),
+]
+
+IS_ECHOED_CRED_CASES = [
+    # (body, url_cred_raw, expected, desc)
+    (_ADMIN_PASS_RAW, _ADMIN_PASS_RAW, True,  "exact_match"),
+    (_ADMIN_RAW,      _ADMIN_PASS_RAW, True,  "btoa_user"),
+    (_PASS_RAW,       _ADMIN_PASS_RAW, True,  "btoa_password"),
+    (_SERVER_TOKEN,   _ADMIN_PASS_RAW, False, "server_token_not_echoed"),
+    # url_cred_raw decodes to plain text with no colon → exercises line 1452 return False
+    ("anything",      _NO_COLON_CRED_RAW, False, "url_cred_no_colon"),
+    # url_cred_raw decodes to non-UTF-8 bytes → exercises except branch (lines 1449-1450)
+    ("anything",      _NON_UTF8_CRED_RAW, False, "url_cred_non_utf8_bytes"),
+]
+
+SERVER_TOKEN_PRESERVATION_CASES = [
+    # (url_cred, response_body, body_preserved, desc)
+    # Server token: decodes to "session:abc123" — looks like a credential but isn't the user's
+    (
+        _ADMIN_PASS_RAW,
+        _SERVER_TOKEN,
+        True,
+        "server_token_preserved_when_url_cred_present",
+    ),
+    # Echoed credential: response body IS the URL credential
+    (
+        _ADMIN_PASS_RAW,
+        _ADMIN_PASS_RAW,
+        False,
+        "echoed_cred_redacted",
+    ),
+    # No URL cred context → conservative: redact anything that looks like a credential
+    (
+        None,
+        _SERVER_TOKEN,
+        False,
+        "no_url_cred_context_still_redacted",
+    ),
+]
+# fmt: on
+
+
+class TestUrlCredentialRawExtraction:
+    """Tests for _extract_url_credential_raw."""
+
+    @pytest.mark.parametrize(
+        ("request_dict", "expected", "desc"),
+        EXTRACT_URL_CRED_RAW_CASES,
+        ids=[c[2] for c in EXTRACT_URL_CRED_RAW_CASES],
+    )
+    def test_extract_url_credential_raw(self, request_dict: dict, expected: str | None, desc: str) -> None:
+        assert _extract_url_credential_raw(request_dict) == expected, desc
+
+
+class TestIsEchoedCredential:
+    """Tests for _is_echoed_credential."""
+
+    @pytest.mark.parametrize(
+        ("body", "url_cred_raw", "expected", "desc"),
+        IS_ECHOED_CRED_CASES,
+        ids=[c[3] for c in IS_ECHOED_CRED_CASES],
+    )
+    def test_is_echoed_credential(self, body: str, url_cred_raw: str, expected: bool, desc: str) -> None:
+        assert _is_echoed_credential(body, url_cred_raw) == expected, desc
+
+
+class TestServerTokenPreservation:
+    """Integration tests for server-token preservation in sanitize_har."""
+
+    @pytest.mark.parametrize(
+        ("url_cred", "response_body", "body_preserved", "desc"),
+        SERVER_TOKEN_PRESERVATION_CASES,
+        ids=[c[3] for c in SERVER_TOKEN_PRESERVATION_CASES],
+    )
+    def test_server_token_preservation(
+        self, url_cred: str | None, response_body: str, body_preserved: bool, desc: str
+    ) -> None:
+        url = f"https://device.local/login?{url_cred}" if url_cred else "https://device.local/login"
+        qs = [{"name": url_cred, "value": ""}] if url_cred else []
+        har = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": url,
+                            "headers": [],
+                            "queryString": qs,
+                        },
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {"text": response_body, "mimeType": "text/plain"},
+                        },
+                    }
+                ]
+            }
+        }
+        result, _ = sanitize_har(har, salt="test")
+        result_body = result["log"]["entries"][0]["response"]["content"]["text"]
+        if body_preserved:
+            assert result_body == response_body, f"{desc}: server token should be preserved"
+        else:
+            assert result_body != response_body, f"{desc}: credential should be redacted"
 
 
 # ┌──────────────────────────────┬──────────────┬──────────────────────────────────────────────────────┬──────────────────────────────────────┐

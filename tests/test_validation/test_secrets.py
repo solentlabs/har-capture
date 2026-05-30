@@ -5,6 +5,7 @@ Test data loaded from tests/fixtures/test_secrets.json.
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -535,3 +536,120 @@ class TestCheckPostDataXml:
         assert len(findings) == expected_count, (
             f"{desc}: expected {expected_count} findings, got {len(findings)}: {[f.field for f in findings]}"
         )
+
+
+# =============================================================================
+# has_sanitized_url_credential flag on check_content and validate_har
+# =============================================================================
+
+# A server token that decodes to "session:abc123" — has a colon so is_base64_credential()
+# fires, but it is NOT the user's credential.
+_SERVER_TOKEN = base64.b64encode(b"session:abc123").decode()
+_ADMIN_PASS = base64.b64encode(b"admin:pass").decode()
+
+# fmt: off
+CHECK_CONTENT_SERVER_TOKEN_CASES = [
+    # (content, has_sanitized_url_credential, expect_base64_finding, desc)
+    (_SERVER_TOKEN, False, True,  "server_token_flagged_without_context"),
+    (_SERVER_TOKEN, True,  False, "server_token_suppressed_with_context"),
+    (_ADMIN_PASS,   True,  False, "echoed_cred_suppressed_with_context"),  # sanitizer already handled it
+    (_ADMIN_PASS,   False, True,  "echoed_cred_flagged_without_context"),
+]
+# fmt: on
+
+
+class TestCheckContentServerTokenFlag:
+    """Tests for has_sanitized_url_credential flag on check_content."""
+
+    @pytest.mark.parametrize(
+        ("content", "has_sanitized_url_credential", "expect_finding", "desc"),
+        CHECK_CONTENT_SERVER_TOKEN_CASES,
+        ids=[c[3] for c in CHECK_CONTENT_SERVER_TOKEN_CASES],
+    )
+    def test_check_content_server_token_flag(
+        self, content: str, has_sanitized_url_credential: bool, expect_finding: bool, desc: str
+    ) -> None:
+        findings: list[Finding] = []
+        check_content(content, "Entry 0", findings, has_sanitized_url_credential=has_sanitized_url_credential)
+        b64_findings = [f for f in findings if "base64" in f.reason.lower()]
+        if expect_finding:
+            assert len(b64_findings) == 1, f"{desc}: expected one base64 finding"
+        else:
+            assert len(b64_findings) == 0, f"{desc}: expected no base64 findings"
+
+
+class TestValidateHarSanitizedCredentials:
+    """validate_har uses _sanitized_credentials annotation to suppress server-token false positives."""
+
+    def test_server_token_not_flagged_when_annotated(self, tmp_path) -> None:
+        """Response body that looks like a credential is not flagged when the entry had URL creds."""
+        har = {
+            "log": {
+                "_har_capture": {
+                    "_sanitized_credentials": [{"entry_index": 0, "location": "url_query_param"}]
+                },
+                "entries": [
+                    {
+                        "request": {
+                            "url": "https://d.local/login?AUTH_abc12345",
+                            "headers": [],
+                        },
+                        "response": {
+                            "headers": [],
+                            "content": {"text": _SERVER_TOKEN, "mimeType": "text/plain"},
+                        },
+                    }
+                ],
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har))
+        findings = validate_har(har_file)
+        b64_findings = [f for f in findings if "base64" in f.reason.lower()]
+        assert len(b64_findings) == 0, "Server token in annotated entry should not be flagged"
+
+    def test_server_token_flagged_when_not_annotated(self, tmp_path) -> None:
+        """Response body that looks like a credential IS flagged when entry has no URL cred annotation."""
+        har = {
+            "log": {
+                "_har_capture": {"_sanitized_credentials": []},
+                "entries": [
+                    {
+                        "request": {"url": "https://d.local/status", "headers": []},
+                        "response": {
+                            "headers": [],
+                            "content": {"text": _SERVER_TOKEN, "mimeType": "text/plain"},
+                        },
+                    }
+                ],
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har))
+        findings = validate_har(har_file)
+        b64_findings = [f for f in findings if "base64" in f.reason.lower()]
+        assert len(b64_findings) == 1, "Server-token-shaped body should be flagged without annotation"
+
+    def test_other_checks_still_run_for_annotated_entry(self, tmp_path) -> None:
+        """MAC/IP checks still run for annotated entries; only base64 body check is suppressed."""
+        har = {
+            "log": {
+                "_har_capture": {
+                    "_sanitized_credentials": [{"entry_index": 0, "location": "url_query_param"}]
+                },
+                "entries": [
+                    {
+                        "request": {"url": "https://d.local/login", "headers": []},
+                        "response": {
+                            "headers": [],
+                            "content": {"text": "device mac: AA:BB:CC:DD:EE:01", "mimeType": "text/plain"},
+                        },
+                    }
+                ],
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har))
+        findings = validate_har(har_file)
+        mac_findings = [f for f in findings if "MAC" in f.reason or "mac" in f.reason.lower()]
+        assert len(mac_findings) >= 1, "MAC check should still fire for annotated entries"

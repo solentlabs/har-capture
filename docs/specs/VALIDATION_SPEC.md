@@ -146,7 +146,7 @@ Checks form field names and JSON body content:
 
 Severity: **error**
 
-### `check_content(content, location, findings)`
+### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential)`
 
 Detects PII patterns in response content text:
 
@@ -155,6 +155,9 @@ Detects PII patterns in response content text:
 - Strips whitespace from the content, then calls `is_base64_credential()` on the entire body
 - Matches only when the whole body is a bare `base64(user:pass)` token (e.g. a router echoing its auth token)
 - Returns early after flagging — suppresses MAC/serial/IP checks on the same body to avoid noise
+- When `has_sanitized_url_credential=True`, skips this check. Set by `validate_har` for entries listed in
+  `log._har_capture._sanitized_credentials` — those entries' response bodies were already evaluated by the sanitizer's
+  server-token preservation heuristic, so re-flagging them here would be a false positive.
 
 Severity: **error**
 

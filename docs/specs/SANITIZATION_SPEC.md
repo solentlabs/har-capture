@@ -587,6 +587,40 @@ def _detect_url_credential_entries(entries: list[dict]) -> list[dict]:
     """Return annotations for entries whose URL query params contain bare base64 credentials."""
 ```
 
+### Server-Token Preservation
+
+For `url_token` auth flows the server responds with an opaque session token in the response body after receiving a
+`base64(user:pass)` URL credential. That token is a server-issued artifact, not a user secret, and must be preserved for
+HAR replay fidelity.
+
+**Problem**: The response-body credential guard (`_sanitize_response_content`) fires on any body that
+`is_base64_credential()` matches — including server tokens that happen to decode to the `x:y` format.
+
+**Heuristic** (`_is_echoed_credential`): When the entry's request URL contained a base64 credential, the response body
+is only redacted if it **echoes** that credential:
+
+- body equals the raw URL credential exactly, or
+- body equals `btoa(username)`, `btoa(password)`, or `btoa(username:password)` derived from the decoded credential.
+
+Otherwise the body is a server-generated token and is preserved unchanged.
+
+When no URL credential context is available (e.g. `sanitize_entry` called in isolation), the conservative fallback
+applies: any response body matching `is_base64_credential()` is redacted.
+
+**Helpers**:
+
+```python
+def _extract_url_credential_raw(request: dict) -> str | None:
+    """Return the raw base64 credential from a request's URL query params, or None."""
+
+def _is_echoed_credential(body: str, url_cred_raw: str) -> bool:
+    """True if body echoes the URL credential or a decoded component of it."""
+```
+
+**Context threading**: `sanitize_har` builds a `{entry_index: raw_cred}` map from the pre-scan results, then passes
+`_url_cred_raw` through `sanitize_entry → _sanitize_response → _sanitize_response_content` for each entry that had a URL
+credential.
+
 ### Cookie Origin Annotation
 
 `sanitize_har` compares cookie names across all entries to detect cookies set client-side (via JavaScript) rather than

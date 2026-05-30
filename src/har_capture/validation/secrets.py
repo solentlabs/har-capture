@@ -495,6 +495,8 @@ def check_content(
     location: str,
     findings: list[Finding],
     custom_patterns: str | dict[str, Any] | None = None,
+    *,
+    has_sanitized_url_credential: bool = False,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -503,12 +505,22 @@ def check_content(
         location: Location string for findings
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
+        has_sanitized_url_credential: When True, skip the bare base64 credential
+            check for this entry's response body. Set by ``validate_har`` for
+            entries listed in ``log._har_capture._sanitized_credentials`` —
+            those entries' response bodies were already evaluated by the
+            sanitizer's server-token preservation heuristic, so re-flagging
+            them here would be a false positive.
     """
     if not content or is_redacted(content, custom_patterns):
         return
 
     stripped = content.strip()
-    if is_base64_credential(stripped) and not is_redacted(stripped, custom_patterns):
+    if (
+        not has_sanitized_url_credential
+        and is_base64_credential(stripped)
+        and not is_redacted(stripped, custom_patterns)
+    ):
         findings.append(
             Finding(
                 severity="error",
@@ -603,7 +615,17 @@ def validate_har(
         with open(har_path, encoding="utf-8") as f:
             har_data = json.load(f)
 
-    entries = har_data.get("log", {}).get("entries", [])
+    log = har_data.get("log", {})
+    entries = log.get("entries", [])
+
+    # Entries whose URL credentials were sanitized by har-capture — the sanitizer
+    # already applied the server-token preservation heuristic to their response
+    # bodies, so re-running the bare base64 check here would be a false positive.
+    url_cred_entry_indices: set[int] = {
+        loc["entry_index"]
+        for loc in log.get("_har_capture", {}).get("_sanitized_credentials", [])
+        if isinstance(loc, dict) and isinstance(loc.get("entry_index"), int)
+    }
 
     for i, entry in enumerate(entries):
         request = entry.get("request", {})
@@ -637,7 +659,13 @@ def validate_har(
             with contextlib.suppress(Exception):
                 text = base64.b64decode(text).decode("utf-8", errors="replace")
 
-        check_content(text, f"{location} (content)", findings, custom_patterns)
+        check_content(
+            text,
+            f"{location} (content)",
+            findings,
+            custom_patterns,
+            has_sanitized_url_credential=(i in url_cred_entry_indices),
+        )
 
     return findings
 

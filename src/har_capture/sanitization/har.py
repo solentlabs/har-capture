@@ -9,6 +9,7 @@ Reuses PII patterns from html.py for consistency.
 
 from __future__ import annotations
 
+import base64
 import contextvars
 import copy
 import json
@@ -1153,6 +1154,7 @@ def _sanitize_response_content(
     collector: RedactionCollector | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    url_cred_raw: str | None = None,
 ) -> None:
     """Sanitize response content in-place.
 
@@ -1161,6 +1163,10 @@ def _sanitize_response_content(
         collector: Optional collector with hasher for redaction
         custom_patterns: Optional custom patterns (file path or dict)
         heuristics: Heuristic mode for pipe-delimited value detection
+        url_cred_raw: Raw base64 credential from the request URL (if any). When
+            provided, a response body that looks like a base64 credential is
+            only redacted if it echoes that credential — opaque server-issued
+            session tokens are preserved for replay fidelity.
     """
     if "text" not in content or not content["text"]:
         return
@@ -1170,8 +1176,9 @@ def _sanitize_response_content(
 
     stripped = content["text"].strip()
     if is_base64_credential(stripped):
-        content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
-        return
+        if url_cred_raw is None or _is_echoed_credential(stripped, url_cred_raw):
+            content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
+            return
 
     if "text/html" in mime_type or "text/xml" in mime_type or "application/xml" in mime_type:
         content["text"] = sanitize_html(
@@ -1196,6 +1203,7 @@ def _sanitize_response(
     collector: RedactionCollector | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    url_cred_raw: str | None = None,
 ) -> None:
     """Sanitize a HAR response object in-place.
 
@@ -1204,6 +1212,9 @@ def _sanitize_response(
         collector: Optional collector with hasher for redaction
         custom_patterns: Optional custom patterns (file path or dict)
         heuristics: Heuristic mode for pipe-delimited value detection
+        url_cred_raw: Raw base64 credential from the paired request URL (if any).
+            Forwarded to ``_sanitize_response_content`` for the server-token
+            preservation heuristic.
     """
     hasher = collector.hasher if collector else None
 
@@ -1219,7 +1230,7 @@ def _sanitize_response(
 
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):
-        _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics)
+        _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics, url_cred_raw)
 
 
 def sanitize_entry(
@@ -1230,6 +1241,7 @@ def sanitize_entry(
     collector: RedactionCollector | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
     _skip_copy: bool = False,
+    _url_cred_raw: str | None = None,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
@@ -1272,7 +1284,7 @@ def sanitize_entry(
             _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
 
         if "response" in result:
-            _sanitize_response(result["response"], collector, custom_patterns, heuristics)
+            _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_cred_raw)
 
     return result
 
@@ -1384,6 +1396,64 @@ def _detect_url_credential_entries(entries: list[dict[str, Any]]) -> list[dict[s
     return locations
 
 
+def _extract_url_credential_raw(request: dict[str, Any]) -> str | None:
+    """Return the raw base64 credential from a request's URL query params, or None.
+
+    Checks the URL query string first, then the queryString array. Returns the
+    first raw base64(user:pass) value found so the response-body guard can
+    distinguish an echoed credential from a server-issued session token.
+    """
+    url = request.get("url", "")
+    if not isinstance(url, str):
+        url = ""
+    if url:
+        parsed = urllib.parse.urlparse(url)
+        for segment in parsed.query.split("&"):
+            seg: str = segment
+            if not seg:
+                continue
+            if is_base64_credential(seg):
+                return seg
+            if "=" in seg:
+                _, _, raw_val = seg.partition("=")
+                decoded_val = urllib.parse.unquote_plus(raw_val)
+                if is_base64_credential(decoded_val):
+                    return decoded_val
+
+    for param in request.get("queryString", []):
+        if not isinstance(param, dict):
+            continue
+        p_name: str = str(param.get("name", ""))
+        p_val: str = str(param.get("value", ""))
+        if is_base64_credential(p_val):
+            return p_val
+        if is_base64_credential(p_name) or (not p_val and is_base64_credential(p_name + "=")):
+            return p_name
+
+    return None
+
+
+def _is_echoed_credential(body: str, url_cred_raw: str) -> bool:
+    """True if body echoes the URL credential or a decoded component of it.
+
+    Returns True when body matches the raw credential exactly, or equals
+    btoa(user), btoa(password), or btoa(user:password) derived from it.
+    Returns False for opaque server-issued tokens.
+    """
+    if body == url_cred_raw:
+        return True
+    try:
+        padded = url_cred_raw.rstrip("=")
+        padded += "=" * (-len(padded) % 4)
+        decoded = base64.b64decode(padded).decode("utf-8", errors="strict")
+    except Exception:
+        return False
+    if ":" not in decoded:
+        return False
+    user, _, password = decoded.partition(":")
+    return any(body == base64.b64encode(part.encode()).decode() for part in (user, password, decoded))
+
+
 def _detect_client_side_cookies(entries: list[dict[str, Any]]) -> list[str]:
     """Return cookie names from request headers never set by any Set-Cookie response.
 
@@ -1482,10 +1552,20 @@ def sanitize_har(
         _detect_url_credential_entries(orig_entries) if isinstance(orig_entries, list) else []
     )
 
+    # Build an index of the raw credential string per entry index so that the
+    # response-body sanitizer can apply the server-token preservation heuristic.
+    _url_cred_by_idx: dict[int, str] = {}
+    for loc in url_credential_locations:
+        idx = loc["entry_index"]
+        if idx not in _url_cred_by_idx and idx < len(orig_entries):
+            raw = _extract_url_credential_raw(orig_entries[idx].get("request", {}))
+            if raw is not None:
+                _url_cred_by_idx[idx] = raw
+
     # Sanitize all entries using the shared collector
     if "entries" in log and isinstance(log["entries"], list):
         sanitized_entries = []
-        for entry in log["entries"]:
+        for i, entry in enumerate(log["entries"]):
             sanitized_entries.append(
                 sanitize_entry(
                     entry,
@@ -1493,6 +1573,7 @@ def sanitize_har(
                     collector=collector,
                     heuristics=heuristics,
                     _skip_copy=True,
+                    _url_cred_raw=_url_cred_by_idx.get(i),
                 )
             )
         log["entries"] = sanitized_entries
