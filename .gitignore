@@ -107,3 +107,6 @@ RAW_DATA/
 .ruff_cache/
 
 .venv-ci/
+
+# Claude Code session data (scheduled tasks, memory, tool transcripts)
+.claude/
