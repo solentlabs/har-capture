@@ -1316,6 +1316,103 @@ def _embed_sanitization_metadata(
     }
 
 
+def _parse_cookie_names(cookie_header_value: str) -> list[str]:
+    """Parse cookie names from a Cookie request header value."""
+    names = []
+    for raw in cookie_header_value.split(";"):
+        part = raw.strip()
+        if "=" in part:
+            name = part.split("=", 1)[0].strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
+    """Parse the cookie name from a Set-Cookie response header value."""
+    first = set_cookie_value.split(";", 1)[0].strip()
+    if "=" in first:
+        name = first.split("=", 1)[0].strip()
+        return name or None
+    return None
+
+
+def _detect_url_credential_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return annotations for entries whose URL query params contain bare base64 credentials.
+
+    Must be called on the original (pre-sanitization) entries — placeholders written by
+    the sanitizer no longer match the base64-alphabet regex the intake pipeline uses.
+    Returns a list of ``{"entry_index": i, "location": "url_query_param"}`` dicts.
+    """
+    locations = []
+    for i, entry in enumerate(entries):
+        request = entry.get("request", {})
+        found = False
+
+        url = request.get("url", "")
+        if url:
+            parsed = urllib.parse.urlparse(url)
+            for segment in parsed.query.split("&"):
+                if not segment:
+                    continue
+                if is_base64_credential(segment):
+                    found = True
+                    break
+                if "=" in segment:
+                    _, _, val = segment.partition("=")
+                    if is_base64_credential(urllib.parse.unquote_plus(val)):
+                        found = True
+                        break
+
+        if not found:
+            for param in request.get("queryString", []):
+                if not isinstance(param, dict):
+                    continue
+                name = param.get("name", "")
+                val = param.get("value", "")
+                if (
+                    is_base64_credential(val)
+                    or is_base64_credential(name)
+                    or (not val and is_base64_credential(name + "="))
+                ):
+                    found = True
+                    break
+
+        if found:
+            locations.append({"entry_index": i, "location": "url_query_param"})
+
+    return locations
+
+
+def _detect_client_side_cookies(entries: list[dict[str, Any]]) -> list[str]:
+    """Return cookie names from request headers never set by any Set-Cookie response.
+
+    Scans all entries for Set-Cookie response header names, then returns any
+    cookie name found in a request Cookie header that never appeared in a
+    Set-Cookie header across the entire capture. Order of first appearance in
+    request headers is preserved; duplicates are suppressed.
+    """
+    set_cookie_names: set[str] = set()
+    request_cookie_names: list[str] = []
+    seen: set[str] = set()
+
+    for entry in entries:
+        for header in entry.get("response", {}).get("headers", []):
+            if isinstance(header, dict) and header.get("name", "").lower() == "set-cookie":
+                name = _parse_set_cookie_name(header.get("value", ""))
+                if name:
+                    set_cookie_names.add(name)
+
+        for header in entry.get("request", {}).get("headers", []):
+            if isinstance(header, dict) and header.get("name", "").lower() == "cookie":
+                for name in _parse_cookie_names(header.get("value", "")):
+                    if name not in seen:
+                        seen.add(name)
+                        request_cookie_names.append(name)
+
+    return [n for n in request_cookie_names if n not in set_cookie_names]
+
+
 def sanitize_har(
     har_data: dict[str, Any],
     *,
@@ -1379,6 +1476,12 @@ def sanitize_har(
 
     log = result["log"]
 
+    # Pre-scan original entries for URL credential locations before sanitization replaces them
+    orig_entries = har_data.get("log", {}).get("entries", [])
+    url_credential_locations = (
+        _detect_url_credential_entries(orig_entries) if isinstance(orig_entries, list) else []
+    )
+
     # Sanitize all entries using the shared collector
     if "entries" in log and isinstance(log["entries"], list):
         sanitized_entries = []
@@ -1422,6 +1525,13 @@ def sanitize_har(
                 for item in origin_entry.get("items", []):
                     if isinstance(item, dict) and "value" in item:
                         item["value"] = _redact_value(item["value"], hasher, "STORAGE", collector)
+
+    # Annotate cookies set client-side (via JavaScript, not Set-Cookie)
+    if "entries" in log and isinstance(log["entries"], list):
+        client_side = _detect_client_side_cookies(log["entries"])
+        meta = log.setdefault("_har_capture", {})
+        meta["_client_side_cookies"] = client_side
+        meta["_sanitized_credentials"] = url_credential_locations
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)

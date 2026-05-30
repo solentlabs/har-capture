@@ -555,10 +555,66 @@ Metadata embedded via `_embed_sanitization_metadata()`:
         "salt_mode": "salted",
         "heuristics": "flag",
         "redaction_counts": {"mac": 12, "ip": 8, "email": 3}
-      }
+      },
+      "_client_side_cookies": ["credential"],
+      "_sanitized_credentials": [{"entry_index": 1, "location": "url_query_param"}]
     }
   }
 }
+```
+
+### URL Credential Location Annotation
+
+`sanitize_har` pre-scans the **original** entries (before sanitization replaces credentials with `AUTH_<hash>`
+placeholders) and writes `_sanitized_credentials` to `log._har_capture`. This allows downstream consumers to identify
+auth entries without pattern-matching the placeholder — `AUTH_<hash>` contains an underscore that falls outside the
+base64 alphabet and breaks regex-based detection in the sanitized HAR.
+
+**Algorithm** (`_detect_url_credential_entries`):
+
+1. Called on `har_data["log"]["entries"]` before the sanitization loop runs.
+1. For each entry, check the raw URL query string segments and the structured `queryString` array for bare
+   `base64(user:pass)` credentials via `is_base64_credential()`.
+1. Record `{"entry_index": i, "location": "url_query_param"}` for each matching entry.
+
+**Output**:
+
+- Empty list (`[]`) means no URL query param credentials were detected.
+- Always present after `sanitize_har` — even when empty.
+
+```python
+def _detect_url_credential_entries(entries: list[dict]) -> list[dict]:
+    """Return annotations for entries whose URL query params contain bare base64 credentials."""
+```
+
+### Cookie Origin Annotation
+
+`sanitize_har` compares cookie names across all entries to detect cookies set client-side (via JavaScript) rather than
+via `Set-Cookie` response headers. The result is written to `log._har_capture._client_side_cookies`.
+
+**Algorithm** (`_detect_client_side_cookies`):
+
+1. Scan every response `Set-Cookie` header across all entries; collect cookie names into a set.
+1. Scan every request `Cookie` header across all entries; collect cookie names in first-appearance order (deduped).
+1. Return names present in request cookies but absent from the `Set-Cookie` set.
+
+**Output**:
+
+- Cookie names only — no values are written.
+- Empty list (`[]`) means all cookies in the capture were server-set.
+- Order matches first appearance in request `Cookie` headers across the capture.
+
+**Helpers**:
+
+```python
+def _parse_cookie_names(cookie_header_value: str) -> list[str]:
+    """Parse names from a Cookie request header (name=value; name2=value2)."""
+
+def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
+    """Parse the cookie name from a Set-Cookie response header value."""
+
+def _detect_client_side_cookies(entries: list[dict]) -> list[str]:
+    """Return cookie names from request headers never set by any Set-Cookie response."""
 ```
 
 ### Pass 2: Interactive Review
