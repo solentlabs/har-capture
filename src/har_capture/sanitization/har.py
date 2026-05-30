@@ -1168,6 +1168,11 @@ def _sanitize_response_content(
     mime_type = content.get("mimeType", "")
     hasher = collector.hasher if collector else None
 
+    stripped = content["text"].strip()
+    if is_base64_credential(stripped):
+        content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
+        return
+
     if "text/html" in mime_type or "text/xml" in mime_type or "application/xml" in mime_type:
         content["text"] = sanitize_html(
             content["text"],

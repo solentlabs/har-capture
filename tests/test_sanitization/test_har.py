@@ -23,11 +23,14 @@ Dependencies:
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
 import pytest
 
+from har_capture.patterns import Hasher
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
     _embed_sanitization_metadata,
@@ -2334,6 +2337,29 @@ BASE64_CRED_URL_CASES = [
 ]
 # fmt: on
 
+# ┌──────────────────────────┬──────────────────────┬──────────┬──────────────────────────────┐
+# │ body_text                │ mime_type            │ redacted │ description                  │
+# ├──────────────────────────┼──────────────────────┼──────────┼──────────────────────────────┤
+# │ Response body text       │ Content MIME type    │ True/    │ test case name               │
+# │                          │                      │ False    │                              │
+# └──────────────────────────┴──────────────────────┴──────────┴──────────────────────────────┘
+#
+# YWRtaW46cGFzcw==  = base64("admin:pass")
+# aGVsbG8gd29ybGQ= = base64("hello world")  — no colon, not a credential
+#
+# fmt: off
+BASE64_CRED_RESPONSE_BODY_CASES = [
+    # Real credential — should be redacted regardless of mime type
+    ("YWRtaW46cGFzcw==",     "text/plain",       True,  "bare_cred_text_plain"),
+    ("YWRtaW46cGFzcw==",     "text/html",        True,  "bare_cred_text_html"),
+    ("YWRtaW46cGFzcw==",     "application/json", True,  "bare_cred_application_json"),
+    # Whitespace-padded credential — guard strips before checking
+    ("  YWRtaW46cGFzcw==  ", "text/plain",       True,  "bare_cred_with_whitespace"),
+    # Non-credential base64 (decoded value has no colon) — must not be redacted
+    ("aGVsbG8gd29ybGQ=",     "text/plain",       False, "non_cred_base64_no_colon"),
+]
+# fmt: on
+
 
 class TestBase64CredentialDetection:
     """Tests for base64-encoded credential detection in URL query parameters."""
@@ -2388,8 +2414,6 @@ class TestBase64CredentialDetection:
 
     def test_base64_credential_bare_name_without_padding(self) -> None:
         """Test base64 credential as bare param name with padding stripped."""
-        import base64
-
         cred = base64.b64encode(b"user:secret").decode()  # dXNlcjpzZWNyZXQ=
         stripped = cred.rstrip("=")
         entry = {
@@ -2404,6 +2428,53 @@ class TestBase64CredentialDetection:
         result = sanitize_entry(entry, salt="test")
         qs = result["request"]["queryString"]
         assert qs[0]["name"] != stripped, "Base64 cred name (padding stripped) should be redacted"
+
+    @pytest.mark.parametrize(
+        ("body", "mime_type", "should_redact", "desc"),
+        BASE64_CRED_RESPONSE_BODY_CASES,
+        ids=[c[3] for c in BASE64_CRED_RESPONSE_BODY_CASES],
+    )
+    def test_base64_credential_in_response_body(
+        self, body: str, mime_type: str, should_redact: bool, desc: str
+    ) -> None:
+        """Test bare base64 credential in response body is redacted regardless of mime type."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/status",
+                "headers": [],
+                "queryString": [],
+            },
+            "response": {"status": 200, "headers": [], "content": {"text": body, "mimeType": mime_type}},
+        }
+        result = sanitize_entry(entry, salt="test")
+        result_body = result["response"]["content"]["text"]
+        if should_redact:
+            assert result_body != body.strip(), f"{desc}: body should be redacted"
+        else:
+            assert result_body == body, f"{desc}: body should be unchanged"
+
+    def test_base64_credential_in_response_body_records_auth_redaction(self) -> None:
+        """Test that the response body base64 guard records an auth redaction on the collector."""
+        hasher = Hasher.create("test-salt")
+        collector = RedactionCollector(hasher=hasher)
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "https://example.com/status",
+                "headers": [],
+                "queryString": [],
+            },
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"text": "YWRtaW46cGFzcw==", "mimeType": "text/plain"},
+            },
+        }
+        sanitize_entry(entry, salt="test", collector=collector)
+        assert collector.auto_redacted_counts.get("auth", 0) >= 1, (
+            "AUTH redaction should be recorded on collector"
+        )
 
 
 class TestUrlQueryBareSegment:

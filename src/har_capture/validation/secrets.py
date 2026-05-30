@@ -507,6 +507,19 @@ def check_content(
     if not content or is_redacted(content, custom_patterns):
         return
 
+    stripped = content.strip()
+    if is_base64_credential(stripped) and not is_redacted(stripped, custom_patterns):
+        findings.append(
+            Finding(
+                severity="error",
+                location=location,
+                field="content",
+                value=truncate(stripped),
+                reason="Bare base64 credential in response body",
+            )
+        )
+        return
+
     # Check for MAC addresses
     for match in MAC_PATTERN.finditer(content):
         mac = match.group(0)
