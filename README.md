@@ -19,14 +19,14 @@ PII removal. Perfect for support diagnostics, security reviews, and test fixture
 
 ```bash
 pip install har-capture[full]
-python -m har_capture https://example.com
+python -m har_capture get https://example.com --patterns network-device
 ```
 
 ### macOS / Linux
 
 ```bash
 pip install har-capture[full]
-har-capture https://example.com
+har-capture get https://example.com --patterns network-device
 ```
 
 ### Already have a HAR file?
@@ -104,7 +104,7 @@ ______________________________________________________________________
 
 ```bash
 # Capture and sanitize a network device (cable modem, router, AP)
-har-capture https://192.168.100.1 --patterns network-device
+har-capture get https://192.168.100.1 --patterns network-device
 
 # Sanitize an existing HAR with universal PII rules only (no device domain)
 har-capture sanitize capture.har --patterns base
@@ -170,13 +170,13 @@ ______________________________________________________________________
 
 ## What Gets Sanitized
 
-| Category        | Examples              | Output                                               |
-| --------------- | --------------------- | ---------------------------------------------------- |
-| **Network**     | IPs, MACs             | `192.168.1.1` → `10.255.42.17`                       |
-| **Personal**    | Emails, phones        | `user@example.com` → `user_a1b2@redacted.invalid`    |
-| **Credentials** | Passwords, tokens     | `password=secret` → `password=PASS_a1b2c3d4`         |
-| **Device**      | Serials, WiFi, SSIDs  | `SN123456` → `SERIAL_a1b2c3d4`                       |
-| **HTTP**        | Auth headers, cookies | `Cookie: session=xyz` → `Cookie: session=TOKEN_a1b2` |
+| Category        | Examples              | Output                                                                      |
+| --------------- | --------------------- | --------------------------------------------------------------------------- |
+| **Network**     | IPs, MACs             | `192.168.1.1` → `10.255.42.17` (private), `8.8.8.8` → `192.0.2.42` (public) |
+| **Personal**    | Emails, phones        | `user@example.com` → `user_a1b2@redacted.invalid`                           |
+| **Credentials** | Passwords, tokens     | `password=secret` → `password=PASS_a1b2c3d4`                                |
+| **Device**      | Serials, WiFi, SSIDs  | `SN123456` → `SERIAL_a1b2c3d4`                                              |
+| **HTTP**        | Auth headers, cookies | `Cookie: session=xyz` → `Cookie: session=TOKEN_a1b2`                        |
 
 [See complete PII categories list →](docs/PII_CATEGORIES.md)
 

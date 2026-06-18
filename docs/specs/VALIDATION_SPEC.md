@@ -281,7 +281,7 @@ Key design decisions:
 ### `har-capture validate` CLI Command
 
 ```bash
-har-capture validate capture.har [--patterns custom.json]
+har-capture validate capture.har --patterns <domain|custom.json>
 ```
 
 - Loads and validates a single HAR file
@@ -299,7 +299,7 @@ Consumers who commit HAR files to their repositories can configure a pre-commit 
   hooks:
     - id: check-har-secrets
       name: Check HAR files for secrets
-      entry: har-capture validate
+      entry: har-capture validate --patterns base
       files: '\.har(\.gz)?$'
       types: [file]
 ```

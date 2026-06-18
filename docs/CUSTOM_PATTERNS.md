@@ -431,7 +431,8 @@ Alternatively, use the Python API which accepts pattern dictionaries that can be
 1. **Check regex syntax**: Test with online regex tools
 1. **Check case sensitivity**: Add `"case_sensitive": false`
 1. **Check escaping**: Ensure special chars are escaped
-1. **Enable verbose mode**: `har-capture sanitize --verbose`
+1. **Inspect what was detected**: `har-capture sanitize capture.har --patterns my_patterns.json --report report.json`
+   and review the JSON report
 
 ### Over-Redacting
 

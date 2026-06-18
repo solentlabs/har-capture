@@ -46,7 +46,7 @@ har-capture uses standardized reserved ranges to ensure output doesn't conflict 
 ### Auto (Default)
 
 ```bash
-har-capture sanitize capture.har
+har-capture sanitize capture.har --patterns base
 ```
 
 - Random salt generated per session
@@ -58,7 +58,7 @@ har-capture sanitize capture.har
 ### Consistent Salt
 
 ```bash
-har-capture sanitize capture.har --salt my-secret-key
+har-capture sanitize capture.har --salt my-secret-key --patterns base
 ```
 
 - Same salt used across multiple runs
@@ -70,7 +70,7 @@ har-capture sanitize capture.har --salt my-secret-key
 ### Static Placeholders (Legacy)
 
 ```bash
-har-capture sanitize capture.har --no-salt
+har-capture sanitize capture.har --no-salt --patterns base
 ```
 
 - All IPs become `192.0.2.1`

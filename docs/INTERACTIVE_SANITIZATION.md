@@ -8,10 +8,10 @@ don't match standard patterns.
 
 ```bash
 # Sanitize and review flagged values
-har-capture sanitize device.har
+har-capture sanitize device.har --patterns network-device
 
 # Also save a detailed JSON report
-har-capture sanitize device.har --report sanitization-report.json
+har-capture sanitize device.har --patterns network-device --report sanitization-report.json
 ```
 
 ## How It Works
@@ -94,7 +94,7 @@ Passwords/credentials are pre-selected by default, but you can adjust any select
 ### Basic Interactive Review
 
 ```bash
-har-capture sanitize device.har
+har-capture sanitize device.har --patterns network-device
 ```
 
 Output:
@@ -124,7 +124,7 @@ Sanitized: device.sanitized.har
 ### Generate Report for Later Review
 
 ```bash
-har-capture sanitize device.har --report review.json
+har-capture sanitize device.har --patterns network-device --report review.json
 ```
 
 The report contains:
@@ -162,7 +162,7 @@ The report contains:
 When no terminal is available, flagged values are written to a report file instead of prompting:
 
 ```bash
-har-capture sanitize device.har 2>&1
+har-capture sanitize device.har --patterns network-device 2>&1
 # Note: No terminal detected. Writing flagged values to report instead.
 # Sanitized: device.sanitized.har
 # Report: device.har.review.json

@@ -92,13 +92,13 @@ def sanitize(
         report: Write JSON report to file
 
     Example:
-        har-capture sanitize device.har
-        har-capture sanitize device.har --output clean.har --compress
-        har-capture sanitize device.har --salt my-key  # Consistent hashing
-        har-capture sanitize device.har --no-salt  # Static placeholders
-        har-capture sanitize device.har --max-size 500  # Allow up to 500MB
-        har-capture sanitize device.har --max-size 0  # No size limit
-        har-capture sanitize device.har --report sanitize-report.json
+        har-capture sanitize device.har --patterns network-device
+        har-capture sanitize device.har --patterns network-device --output clean.har --compress
+        har-capture sanitize device.har --patterns network-device --salt my-key  # Consistent hashing
+        har-capture sanitize device.har --patterns network-device --no-salt  # Static placeholders
+        har-capture sanitize device.har --patterns network-device --max-size 500  # Allow up to 500MB
+        har-capture sanitize device.har --patterns network-device --max-size 0  # No size limit
+        har-capture sanitize device.har --patterns network-device --report sanitize-report.json
     """
     from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
 
