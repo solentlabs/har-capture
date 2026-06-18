@@ -517,6 +517,21 @@ class TestPopupCapture:
 # a future refactor that renames either side would fail these tests.
 
 
+@pytest.fixture(scope="class")
+def playwright_browser() -> Generator[Any, None, None]:
+    """Class-scoped headless Chromium shared by the dialog integration tests.
+
+    Defined at module scope (not as an instance method): pytest 9.1+ rejects
+    class-scoped fixtures declared as instance methods.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        yield browser
+        browser.close()
+
+
 @pytest.mark.slow
 @pytest.mark.integration
 @skip_no_browser
@@ -605,16 +620,6 @@ class TestDialogObserverIntegration:
         page.goto(self._data_url(trigger_js), wait_until="load")
 
         return opens, resolutions
-
-    @pytest.fixture(scope="class")
-    def playwright_browser(self) -> Generator[Any, None, None]:
-        """Module-scoped headless Chromium for all dialog tests."""
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            yield browser
-            browser.close()
 
     def test_alert_records_accept(self, playwright_browser: Any) -> None:
         """``alert()`` has no dismiss path — only accept. Bridge records action=accept."""
