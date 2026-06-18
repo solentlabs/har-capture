@@ -36,6 +36,7 @@ words:
   - qpsk
   - RDWR
   - SECLEVEL
+  - Sercomm
   - SJCL
   - sjcl
   - SNMP

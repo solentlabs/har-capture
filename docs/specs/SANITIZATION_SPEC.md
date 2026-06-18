@@ -158,8 +158,11 @@ def sanitize_post_data(
 ```
 
 1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and
-   `is_flaggable_field()` (flag).
-1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted.
+   `is_flaggable_field()` (flag). A parameter whose name is not recognized but whose value is a `base64(user:pass)`
+   credential (`is_base64_credential()`) is redacted as `AUTH` — mirroring the query-param fallback, so base64-wrapped
+   credentials in device-specific field names (e.g. `pws`) do not slip past field-name redaction.
+1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted. The same
+   `base64(user:pass)` value fallback applies (checking the raw and percent-decoded forms).
 1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against
    field patterns; values redacted if key is sensitive.
 1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML
@@ -204,7 +207,15 @@ def _sanitize_json_recursive(data, collector, depth=0, max_depth=50):
 def _sanitize_response_content(content, collector, custom_patterns, heuristics):
 ```
 
-MIME-type based routing:
+**Decode-first discriminator** (`_decode_base64_json`): Before any MIME routing, a body made entirely of base64-alphabet
+characters is tested — if it decodes to UTF-8 that parses as a JSON **object or array**, it is a structured payload, not
+an opaque secret. Such bodies are sanitized value-by-value via `_sanitize_json_recursive` and **re-encoded to base64**
+on the way out, preserving field names and shape. This stops devices that return raw base64-encoded JSON (e.g. the
+Sercomm DM1000 `setup.cgi?todo=...` endpoints, often with an empty Content-Type) from being collapsed to a single
+`AUTH_<hash>` token. Only genuinely token-shaped opaque values (base64 that does not decode to structured JSON) fall
+through to the whole-body credential guard — see [Server-Token Preservation](#server-token-preservation).
+
+MIME-type based routing (after the decode-first check):
 
 - `text/html`, `text/xml`, `application/xml` → `sanitize_html()` from html.py
 - `application/json`, `text/json` → `_sanitize_json_recursive()`
@@ -593,7 +604,8 @@ For `url_token` auth flows the server responds with an opaque session token in t
 `base64(user:pass)` URL credential. That token is a server-issued artifact, not a user secret, and must be preserved for
 HAR replay fidelity.
 
-**Problem**: The response-body credential guard (`_sanitize_response_content`) fires on any body that
+**Problem**: After the [decode-first discriminator](#response-content-dispatch) rules out structured base64-JSON
+payloads, the response-body credential guard (`_sanitize_response_content`) fires on any remaining body that
 `is_base64_credential()` matches — including server tokens that happen to decode to the `x:y` format.
 
 **Heuristic** (`_is_echoed_credential`): When the entry's request URL contained a base64 credential, the response body

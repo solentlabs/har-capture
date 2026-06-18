@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -33,6 +34,7 @@ from har_capture.patterns import Hasher
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
+    _decode_base64_json,
     _detect_client_side_cookies,
     _detect_url_credential_entries,
     _embed_sanitization_metadata,
@@ -2417,6 +2419,256 @@ class TestServerTokenPreservation:
             assert result_body == response_body, f"{desc}: server token should be preserved"
         else:
             assert result_body != response_body, f"{desc}: credential should be redacted"
+
+
+# ── base64-encoded response bodies & credential values ───────────────────────
+# base64(user:pass) strings are opaque credentials; base64(JSON) is a payload.
+_B64_OBJECT = base64.b64encode(b'{"a": 1, "b": {"c": 2}}').decode()
+_B64_ARRAY = base64.b64encode(b'[{"x": 1}, {"y": 2}]').decode()
+_B64_SCALAR_NUM = base64.b64encode(b"42").decode()
+_B64_SCALAR_STR = base64.b64encode(b'"just-a-string"').decode()
+_B64_NON_JSON = base64.b64encode(b"admin:password").decode()
+_B64_NON_UTF8 = base64.b64encode(b"\xff\xfe\xfa\xfb").decode()
+_B64_USERPASS = base64.b64encode(b"admin:hunter2").decode()
+
+# base64-JSON object/array each carry a MAC that must be redacted *in place*;
+# an opaque base64(user:pass) body must collapse to a single AUTH placeholder.
+_B64_JSON_OBJECT_PII = base64.b64encode(json.dumps({"mac": "AA:BB:CC:DD:EE:FF", "ch": 1}).encode()).decode()
+_B64_JSON_ARRAY_PII = base64.b64encode(
+    json.dumps([{"mac": "AA:BB:CC:DD:EE:FF"}, {"ch": 2}]).encode()
+).decode()
+_B64_OPAQUE_CRED = base64.b64encode(b"admin:supersecret").decode()
+
+# fmt: off
+DECODE_BASE64_JSON_CASES = [
+    # (value, is_structured, desc)
+    (_B64_OBJECT,      True,  "base64_json_object"),
+    (_B64_ARRAY,       True,  "base64_json_array"),
+    (_B64_SCALAR_NUM,  False, "base64_json_scalar_number"),
+    (_B64_SCALAR_STR,  False, "base64_json_scalar_string"),
+    (_B64_NON_JSON,    False, "base64_non_json_colon_string"),
+    (_B64_NON_UTF8,    False, "base64_non_utf8_bytes"),
+    ('{"a": 1}',       False, "plain_json_not_base64"),
+    ("<html></html>",  False, "html_not_base64"),
+    ("",               False, "empty_string"),
+]
+
+RESPONSE_BASE64_BODY_CASES = [
+    # (body, structure_preserved, desc)
+    (_B64_JSON_OBJECT_PII, True,  "base64_json_object_preserved"),
+    (_B64_JSON_ARRAY_PII,  True,  "base64_json_array_preserved"),
+    (_B64_OPAQUE_CRED,     False, "opaque_credential_collapsed"),
+]
+
+# base64(user:pass) in an unrecognized field name ('pws' is not default-sensitive)
+# must be redacted by the value fallback — identically across param surfaces.
+BASE64_CRED_PARAM_CASES = [
+    # (desc, request_fragment, accessor)
+    (
+        "post_param",
+        {"postData": {"mimeType": "application/x-www-form-urlencoded",
+                      "params": [{"name": "pws", "value": _B64_USERPASS}]}},
+        lambda r: r["request"]["postData"]["params"][0]["value"],
+    ),
+    (
+        "query_param",
+        {"queryString": [{"name": "pws", "value": _B64_USERPASS}]},
+        lambda r: r["request"]["queryString"][0]["value"],
+    ),
+]
+
+# Benign params (not sensitive, not flaggable, not base64-credential by value or
+# name) fall through every redaction branch untouched.
+BENIGN_PARAM_CASES = [
+    # (desc, request_fragment, accessor)
+    (
+        "post_param",
+        {"postData": {"mimeType": "application/x-www-form-urlencoded",
+                      "params": [{"name": "format", "value": "json"}]}},
+        lambda r: r["request"]["postData"]["params"][0],
+    ),
+    (
+        "query_param",
+        {"queryString": [{"name": "format", "value": "json"}]},
+        lambda r: r["request"]["queryString"][0],
+    ),
+]
+# fmt: on
+
+
+def _entry_with_response_body(body: str) -> dict[str, Any]:
+    """Minimal HAR entry whose response body is ``body`` with an empty Content-Type."""
+    return {
+        "request": {"method": "GET", "url": "http://192.168.0.1/setup.cgi?todo=status", "headers": []},
+        "response": {"status": 200, "headers": [], "content": {"text": body, "mimeType": ""}},
+    }
+
+
+class TestBase64JsonResponseStructure:
+    """Base64-encoded JSON response bodies keep structure; opaque tokens collapse.
+
+    Some devices (e.g. the Sercomm DM1000) return data as raw base64-encoded JSON
+    from ``setup.cgi?todo=...`` endpoints with an empty Content-Type. The decoded
+    body is colon-bearing, so the opaque-credential heuristic used to collapse the
+    whole payload into a single ``AUTH_`` token, destroying every field name and
+    the JSON shape. Structure (not PII) must survive — only values are redacted.
+    """
+
+    @pytest.mark.parametrize(
+        ("body", "structure_preserved", "desc"),
+        RESPONSE_BASE64_BODY_CASES,
+        ids=[c[2] for c in RESPONSE_BASE64_BODY_CASES],
+    )
+    def test_base64_body_preserved_or_collapsed(
+        self, body: str, structure_preserved: bool, desc: str
+    ) -> None:
+        result = sanitize_entry(_entry_with_response_body(body), salt=None)
+        out_text = result["response"]["content"]["text"]
+        if structure_preserved:
+            decoded = json.loads(base64.b64decode(out_text).decode())
+            assert isinstance(decoded, dict | list), desc
+            assert "AA:BB:CC:DD:EE:FF" not in out_text, desc  # MAC redacted in place
+        else:
+            assert out_text == "***AUTH***", desc
+
+    def test_field_names_and_benign_values_survive(self) -> None:
+        """A base64-JSON body keeps field names + benign values; only PII is redacted."""
+        payload = {
+            "status": "ok",
+            "downstream": [{"channel": 1, "power": "-7.0", "snr": "38.5"}],
+            "lan_mac": "AA:BB:CC:DD:EE:FF",
+            "password": "hunter2",
+        }
+        body_b64 = base64.b64encode(json.dumps(payload).encode()).decode()
+
+        result = sanitize_entry(_entry_with_response_body(body_b64), salt=None)
+        decoded = json.loads(base64.b64decode(result["response"]["content"]["text"]).decode())
+
+        assert set(decoded) == {"status", "downstream", "lan_mac", "password"}
+        assert decoded["status"] == "ok"
+        assert decoded["downstream"][0] == {"channel": 1, "power": "-7.0", "snr": "38.5"}
+        assert decoded["lan_mac"] != "AA:BB:CC:DD:EE:FF"  # value-pattern redaction
+        assert decoded["password"] != "hunter2"  # sensitive field-name redaction
+
+
+class TestDecodeBase64Json:
+    """Unit tests for the _decode_base64_json payload-vs-secret discriminator."""
+
+    @pytest.mark.parametrize(
+        ("value", "is_structured", "desc"),
+        DECODE_BASE64_JSON_CASES,
+        ids=[c[2] for c in DECODE_BASE64_JSON_CASES],
+    )
+    def test_decode_base64_json(self, value: str, is_structured: bool, desc: str) -> None:
+        result = _decode_base64_json(value)
+        if is_structured:
+            assert isinstance(result, dict | list), desc
+        else:
+            assert result is None, desc
+
+
+class TestBase64CredentialInFields:
+    """base64(user:pass) values in unrecognized field names are redacted everywhere.
+
+    Mirrors the query-string base64-credential fallback across param surfaces: a
+    value in a field like ``pws`` (not default-sensitive) used to slip past
+    field-name redaction while sibling ``passwd``/``cur_passwd`` were redacted.
+    """
+
+    @pytest.mark.parametrize(
+        ("desc", "request_fragment", "accessor"),
+        BASE64_CRED_PARAM_CASES,
+        ids=[c[0] for c in BASE64_CRED_PARAM_CASES],
+    )
+    def test_base64_credential_value_redacted(
+        self, desc: str, request_fragment: dict[str, Any], accessor: Any
+    ) -> None:
+        entry = {
+            "request": {"method": "POST", "url": "http://device/login", "headers": [], **request_fragment},
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt=None)
+        assert accessor(result) == "***AUTH***", desc
+
+    @pytest.mark.parametrize(
+        ("desc", "request_fragment", "accessor"),
+        BENIGN_PARAM_CASES,
+        ids=[c[0] for c in BENIGN_PARAM_CASES],
+    )
+    def test_benign_param_preserved(self, desc: str, request_fragment: dict[str, Any], accessor: Any) -> None:
+        """A param that matches no redaction branch passes through untouched."""
+        entry = {
+            "request": {"method": "POST", "url": "http://device/status", "headers": [], **request_fragment},
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt=None)
+        param = accessor(result)
+        assert param == {"name": "format", "value": "json"}, desc
+
+    def test_malformed_querystring_entries_skipped(self) -> None:
+        """Non-dict and name-less queryString entries are left untouched, not errored."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://device/status",
+                "headers": [],
+                "queryString": ["not-a-dict", {"label": "x"}],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt=None)
+        assert result["request"]["queryString"] == ["not-a-dict", {"label": "x"}]
+
+    def test_malformed_cookie_entries_skipped(self) -> None:
+        """Non-dict and value-less request cookies are left untouched, not errored."""
+        entry = {
+            "request": {
+                "method": "GET",
+                "url": "http://device/status",
+                "headers": [],
+                "cookies": ["not-a-dict", {"name": "n"}],
+            },
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt=None)
+        assert result["request"]["cookies"] == ["not-a-dict", {"name": "n"}]
+
+    def test_request_without_url_is_tolerated(self) -> None:
+        """A request with no 'url' key skips URL sanitization without erroring."""
+        entry = {
+            "request": {"method": "GET", "headers": []},
+            "response": {"status": 200, "headers": [], "content": {}},
+        }
+        result = sanitize_entry(entry, salt=None)
+        assert "url" not in result["request"]
+
+    def test_sibling_named_fields_and_form_text(self) -> None:
+        """Named siblings redact by name; the base64 cred redacts by value (params + text)."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "passwd", "value": "secret"},
+                {"name": "cur_passwd", "value": "classified"},
+                {"name": "pws", "value": _B64_USERPASS},
+            ],
+            "text": f"passwd=secret&cur_passwd=classified&pws={_B64_USERPASS}",
+        }
+
+        result = sanitize_post_data(post_data)
+        assert result is not None
+        params = {p["name"]: p["value"] for p in result["params"]}
+        assert params["passwd"] == "[REDACTED]"
+        assert params["cur_passwd"] == "[REDACTED]"
+        assert params["pws"] == "[REDACTED]"  # base64 value fallback
+        assert _B64_USERPASS not in result["text"]
+
+    def test_percent_encoded_base64_credential_in_form_text(self) -> None:
+        """A percent-encoded base64(user:pass) value is caught via the unquote fallback."""
+        encoded = _B64_USERPASS.replace("=", "%3D")  # padding no longer base64-charset
+        result = _sanitize_form_urlencoded(f"user=admin&pws={encoded}")
+        assert encoded not in result
+        assert _B64_USERPASS not in result
+        assert "pws=[REDACTED]" in result
 
 
 # ┌──────────────────────────────┬──────────────┬──────────────────────────────────────────────────────┬──────────────────────────────────────┐

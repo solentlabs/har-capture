@@ -572,6 +572,10 @@ def _sanitize_form_urlencoded(
                     f"form field '{key}'",
                     f"Flaggable field name '{key}' in form data",
                 )
+            elif is_base64_credential(value) or is_base64_credential(urllib.parse.unquote_plus(value)):
+                # base64(user:pass) value in an unrecognized field name (e.g.
+                # 'pws') — check the raw and percent-decoded forms.
+                value = _redact_value(value, hasher, "AUTH", collector)
             pairs.append(f"{key}={value}")
         else:
             pairs.append(pair)
@@ -651,6 +655,10 @@ def sanitize_post_data(
                             f"POST param '{param['name']}'",
                             f"Flaggable field name '{param['name']}' in POST params",
                         )
+                    elif is_base64_credential(param.get("value", "")):
+                        # base64(user:pass) value in an unrecognized field name
+                        # (e.g. 'pws') — mirrors the queryString fallback.
+                        param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
 
         # Sanitize raw text (form-urlencoded, JSON, or XML)
         if result.get("text"):
@@ -1149,6 +1157,48 @@ def _sanitize_request(
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
+# A body made entirely of base64-alphabet characters is a candidate for
+# base64-encoded-JSON decoding (see _decode_base64_json). Cheap pre-filter so
+# HTML/JSON/text bodies bail before a full decode attempt.
+_BASE64_BODY_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
+
+
+def _decode_base64_json(value: str) -> Any | None:
+    """Decode a base64 body into a structured JSON payload, if it is one.
+
+    Some devices return their data as raw base64-encoded JSON (often with an
+    empty Content-Type). The decoded text is colon-bearing, so it would
+    otherwise trip the opaque-credential heuristic and be collapsed to a single
+    ``AUTH_`` token — destroying the field names and JSON shape, which are not
+    PII. This discriminator answers "payload or secret?": it returns the parsed
+    object only when ``value`` is valid base64 that decodes to UTF-8 parsing as
+    a JSON object or array. Scalars, non-JSON, and non-base64 inputs return
+    ``None`` so the caller falls back to opaque-token handling.
+
+    Args:
+        value: Candidate base64 string (already stripped).
+
+    Returns:
+        The parsed dict/list, or ``None`` when ``value`` is not base64-encoded
+        JSON (object/array).
+    """
+    if not value or not _BASE64_BODY_RE.match(value):
+        return None
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except ValueError:
+        # binascii.Error (bad alphabet/padding) and UnicodeDecodeError are both
+        # ValueError subclasses.
+        return None
+    try:
+        parsed = json.loads(decoded)
+    except ValueError:  # includes json.JSONDecodeError
+        return None
+    if isinstance(parsed, dict | list):
+        return parsed
+    return None
+
+
 def _sanitize_response_content(
     content: dict[str, Any],
     collector: RedactionCollector | None = None,
@@ -1175,6 +1225,19 @@ def _sanitize_response_content(
     hasher = collector.hasher if collector else None
 
     stripped = content["text"].strip()
+
+    # Decode-first discriminator: a base64-encoded *structured* payload (JSON
+    # object or array) must be sanitized value-by-value with its structure
+    # intact — never collapsed to a single AUTH_ token. Devices like the Sercomm
+    # DM1000 return data as raw base64 JSON (empty Content-Type), which decodes
+    # to a colon-bearing string and would otherwise trip the opaque-credential
+    # branch below. Re-encode to base64 on the way out, matching how it arrived.
+    decoded_json = _decode_base64_json(stripped)
+    if decoded_json is not None:
+        sanitized = _sanitize_json_recursive(decoded_json, hasher, collector)
+        content["text"] = base64.b64encode(json.dumps(sanitized).encode()).decode()
+        return
+
     if is_base64_credential(stripped):
         if url_cred_raw is None or _is_echoed_credential(stripped, url_cred_raw):
             content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
