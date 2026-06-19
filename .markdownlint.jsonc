@@ -31,5 +31,16 @@
     "code_blocks": false,
     "tables": false,
     "headings": true
+  },
+
+  // MD024 no-duplicate-heading: scoped to siblings only.
+  //
+  // CHANGELOG.md (Keep a Changelog) repeats `### Added` / `### Changed` /
+  // `### Fixed` under every `## [version]` section — valid by design. The
+  // default flags these doc-wide; siblings_only restricts the rule to
+  // duplicates under the *same* parent heading, which is the real smell.
+  // Fires on CHANGELOG.md at commit time (pre-commit lints the changed file).
+  "MD024": {
+    "siblings_only": true
   }
 }
