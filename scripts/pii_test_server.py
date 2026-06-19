@@ -21,7 +21,7 @@ Usage:
     python scripts/pii_test_server.py --port 9090    # custom port
 
 Then in another terminal:
-    har-capture get http://localhost:8080
+    har-capture get http://localhost:8080 --patterns base
 """
 
 from __future__ import annotations
@@ -390,8 +390,8 @@ def main() -> None:  # noqa: D103
     print("    (all)       Web Storage: localStorage + sessionStorage PII on every page")
     print()
     print("Test with:")
-    print(f"  har-capture get http://{args.host}:{args.port}")
-    print(f"  har-capture get http://{args.host}:{args.port} -u {USERNAME} -p '{PASSWORD}'")
+    print(f"  har-capture get http://{args.host}:{args.port} --patterns base")
+    print(f"  har-capture get http://{args.host}:{args.port} -u {USERNAME} -p '{PASSWORD}' --patterns base")
     print()
     print("Press Ctrl+C to stop.")
     print()

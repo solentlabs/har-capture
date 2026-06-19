@@ -130,6 +130,36 @@ def test_display_results(
         assert s in captured.out, f"{desc}: expected '{s}' in output"
 
 
+def test_display_results_suggestions_include_patterns(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Next-steps suggestions echo the --patterns used so they are copy-paste ready."""
+    from har_capture.capture.workflow import CaptureResult, CaptureWorkflowResult
+    from har_capture.cli.capture import _display_results
+
+    result = CaptureWorkflowResult(capture=CaptureResult(success=True, har_path=Path("output/capture.har")))
+
+    _display_results(result, ["network-device", "./extras.json"])
+
+    out = capsys.readouterr().out
+    assert "har-capture sanitize output/capture.har --patterns network-device --patterns ./extras.json" in out
+    assert "har-capture validate output/capture.har --patterns network-device --patterns ./extras.json" in out
+
+
+def test_display_results_suggestions_placeholder_when_no_patterns(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no patterns supplied, suggestions fall back to a <domain> placeholder."""
+    from har_capture.capture.workflow import CaptureResult, CaptureWorkflowResult
+    from har_capture.cli.capture import _display_results
+
+    result = CaptureWorkflowResult(capture=CaptureResult(success=True, har_path=Path("output/capture.har")))
+
+    _display_results(result)
+
+    assert "--patterns <domain>" in capsys.readouterr().out
+
+
 # =============================================================================
 # _run_interactive_review() — branches over a CaptureWorkflowResult
 # =============================================================================

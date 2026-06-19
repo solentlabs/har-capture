@@ -48,36 +48,33 @@ har-capture get <TARGET> --patterns <DOMAIN>
 
 #### Sanitization Options (get)
 
-- `--salt TEXT` - Consistent salt for correlation (default: random)
-- `--no-salt` - Use static placeholders instead of salted hashes
+- `--no-sanitize` - Skip automatic sanitization (keep the raw capture)
 - `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
   a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 
-Interactive review of flagged values is always enabled after capture.
+Auto-sanitization after capture uses a random salt. To control the correlation salt, capture with `--no-sanitize` and
+run `har-capture sanitize --salt ...` separately. Interactive review of flagged values is always enabled after capture.
 
 ### Examples (get)
 
 ```bash
 # Basic capture (outputs: example.com.sanitized.har.gz)
-har-capture https://example.com --patterns base
-
-# Explicit 'get' subcommand (equivalent)
 har-capture get https://example.com --patterns base
 
+# The 'get' is optional — a bare 'har-capture <target>' infers it
+har-capture https://example.com --patterns base
+
 # Bare hostname — scheme auto-detected (HTTPS preferred when reachable)
-har-capture 192.168.100.1 --patterns network-device
+har-capture get 192.168.100.1 --patterns network-device
 
 # Custom output path
-har-capture http://192.168.1.1 --output modem.har --patterns network-device
+har-capture get http://192.168.1.1 --output modem.har --patterns network-device
 
 # Keep raw unsanitized file for debugging
-har-capture https://example.com --keep-raw --patterns base
-
-# Use consistent salt for correlation across captures
-har-capture https://example.com --salt my-debug-key --patterns base
+har-capture get https://example.com --keep-raw --patterns base
 
 # Disable async data wait for faster capture of simple sites
-har-capture https://example.com --no-wait-for-data --patterns base
+har-capture get https://example.com --no-wait-for-data --patterns base
 ```
 
 ### Pre-flight Checks (get)
@@ -254,7 +251,7 @@ User captures and sanitizes HAR file for support ticket:
 
 ```bash
 # User runs this
-har-capture https://myapp.example.com --patterns base
+har-capture get https://myapp.example.com --patterns base
 
 # Outputs: myapp.example.com.sanitized.har.gz
 # User attaches to support ticket
@@ -265,8 +262,9 @@ har-capture https://myapp.example.com --patterns base
 Generate sanitized test fixtures:
 
 ```bash
-# Capture with consistent salt for reproducible output
-har-capture get https://api.example.com --salt test-fixture-key --output api_test.har --patterns base
+# Capture raw, then sanitize with a consistent salt for reproducible output
+har-capture get https://api.example.com --no-sanitize --output api_test.har --patterns base
+har-capture sanitize api_test.har --salt test-fixture-key --patterns base
 ```
 
 ### Batch Processing (validate)

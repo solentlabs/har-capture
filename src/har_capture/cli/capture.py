@@ -109,10 +109,10 @@ def capture(
         minimal: Minimal pre-flight for single-session devices
 
     Example:
-        har-capture https://example.com
-        har-capture 192.168.100.1                # auto-detect HTTP vs HTTPS
-        har-capture http://192.168.100.1 --output capture.har
-        har-capture get http://router.local --include-images
+        har-capture get https://example.com --patterns base
+        har-capture get 192.168.100.1 --patterns network-device   # auto-detect HTTP vs HTTPS
+        har-capture get http://192.168.100.1 --output capture.har --patterns network-device
+        har-capture get http://router.local --include-images --patterns network-device
     """
     # Validate --patterns up front so a user running `har-capture get URL`
     # without choosing a domain gets the listing error before we trigger
@@ -223,7 +223,7 @@ def capture(
         raise typer.Exit(1)
 
     # Display results
-    _display_results(result)
+    _display_results(result, patterns)
 
     # Interactive review of flagged values (always enabled)
     if result.capture and result.capture.sanitization_report:
@@ -254,7 +254,7 @@ def _display_instructions() -> None:
     typer.echo()
 
 
-def _display_results(result: CaptureWorkflowResult) -> None:
+def _display_results(result: CaptureWorkflowResult, patterns: list[str] | None = None) -> None:
     """Display capture results."""
     typer.echo()
     typer.echo("=" * 60)
@@ -282,12 +282,16 @@ def _display_results(result: CaptureWorkflowResult) -> None:
         result.compressed_path and ".sanitized" in str(result.compressed_path)
     )
 
+    # --patterns is required on sanitize/validate; echo the ones used for this
+    # capture so the suggested commands are copy-paste ready.
+    patterns_args = " ".join(f"--patterns {p}" for p in patterns) if patterns else "--patterns <domain>"
+
     typer.echo("Next steps:")
     if is_sanitized:
         typer.echo(f"  • Share the file (PII removed): {main_file}")
     else:
-        typer.echo(f"  • Sanitize before sharing: har-capture sanitize {main_file}")
-    typer.echo(f"  • Validate for secrets:    har-capture validate {main_file}")
+        typer.echo(f"  • Sanitize before sharing: har-capture sanitize {main_file} {patterns_args}")
+    typer.echo(f"  • Validate for secrets:    har-capture validate {main_file} {patterns_args}")
     typer.echo()
 
     if is_sanitized:

@@ -85,11 +85,11 @@ ______________________________________________________________________
 
 ```bash
 # Scheme auto-detected (HTTPS preferred when reachable)
-har-capture 192.168.1.1 --patterns network-device
+har-capture get 192.168.1.1 --patterns network-device
 
 # Explicit scheme bypasses auto-detection
-har-capture http://192.168.1.1 --patterns network-device
-har-capture http://192.168.100.1 --output modem_capture.har --patterns network-device
+har-capture get http://192.168.1.1 --patterns network-device
+har-capture get http://192.168.100.1 --output modem_capture.har --patterns network-device
 ```
 
 ______________________________________________________________________
@@ -277,7 +277,7 @@ ______________________________________________________________________
 **CLI Example**:
 
 ```bash
-har-capture http://192.168.1.1 \ --patterns network-device
+har-capture get http://192.168.1.1 \
     --username admin --password pass123 \
     --patterns network-device --output captures/modem.har
 ```
@@ -427,7 +427,7 @@ ______________________________________________________________________
 ```bash
 har-capture sanitize capture.har --patterns network-device
 # Interactive table shown, user selects values
-har-capture sanitize capture.har --report flagged.json  # Save report to file --patterns network-device
+har-capture sanitize capture.har --report flagged.json --patterns network-device  # Save report to file
 ```
 
 ______________________________________________________________________
@@ -572,9 +572,8 @@ modem with `max_concurrent: 1`).
 **CLI Example**:
 
 ```bash
-har-capture http://192.168.100.1 --minimal --patterns network-device
-har-capture http://192.168.100.1 --minimal --patterns network-device
-har-capture http://192.168.100.1 --minimal --username admin --password pass123 --patterns network-device
+har-capture get http://192.168.100.1 --minimal --patterns network-device
+har-capture get http://192.168.100.1 --minimal --username admin --password pass123 --patterns network-device
 ```
 
 ______________________________________________________________________

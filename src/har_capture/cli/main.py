@@ -79,10 +79,10 @@ def main(
 
     \b
     Examples:
-        har-capture https://example.com
-        har-capture http://192.168.1.1 --output capture.har
-        har-capture sanitize myfile.har
-        har-capture validate myfile.har
+        har-capture get https://example.com --patterns base
+        har-capture get http://192.168.1.1 --output capture.har --patterns network-device
+        har-capture sanitize myfile.har --patterns network-device
+        har-capture validate myfile.har --patterns network-device
     """
 
 

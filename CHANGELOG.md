@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-06-18
+
+### Fixed
+
+- **Base64-encoded JSON response bodies are sanitized in place, not collapsed.** Devices that return data as raw
+  base64-encoded JSON (e.g. Sercomm DM1000 `setup.cgi?todo=...` endpoints, often with an empty Content-Type) decode to a
+  colon-bearing string, which tripped the opaque-credential guard and replaced the entire body with a single
+  `AUTH_<hash>` token — destroying field names and JSON shape. `_sanitize_response_content` now runs a decode-first
+  discriminator: a body that base64-decodes to a JSON object or array is sanitized value-by-value and re-encoded,
+  preserving structure; only genuinely token-shaped values fall through to whole-body redaction. `base64(user:pass)`
+  values in unrecognized form/query field names (e.g. `pws`) are now also redacted, mirroring the query-param fallback.
+
+- **Post-capture "Next steps" suggestions include the required `--patterns` flag.** The `get` command's printed
+  `sanitize`/`validate` follow-up commands omitted `--patterns` (required since 0.9.0), so copy-pasting them errored.
+  They now echo the patterns used for the capture.
+
 ## [0.10.0] - 2026-05-30
 
 ### Added
@@ -879,6 +895,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.1.1]: https://github.com/solentlabs/har-capture/compare/v0.1.0...v0.1.1
 [0.1.2]: https://github.com/solentlabs/har-capture/compare/v0.1.1...v0.1.2
 [0.10.0]: https://github.com/solentlabs/har-capture/compare/v0.9.1...v0.10.0
+[0.10.1]: https://github.com/solentlabs/har-capture/compare/v0.10.0...v0.10.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -906,4 +923,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.1...HEAD
