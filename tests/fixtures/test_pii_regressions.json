@@ -67,6 +67,27 @@
       "expected_prefix": "PIN_",
       "id": "pairing_pin_equals",
       "source": "issue #47 — pairing-PIN label, equals separator"
+    },
+    {
+      "input_html": "<div class=\"form-row odd\">\n\t<span class=\"readonlyLabel\" id=\"hardmess2\">Serial Number:</span>\n\t<span class=\"value\">\n\t1234567890123456</span>\n</div>",
+      "leaked_value": "1234567890123456",
+      "expected_prefix": "SERIAL_",
+      "id": "technicolor_jst_sibling_span_serial",
+      "source": "cable_modem_monitor issue #101 — Technicolor CGM4981COM hardware.jst renders label and value in sibling spans with whitespace between the tags"
+    },
+    {
+      "input_html": "<span class=\"readonlyLabel\">WPS PIN:</span>\n<span class=\"value\">\n13572468</span>",
+      "leaked_value": "13572468",
+      "expected_prefix": "PIN_",
+      "id": "wps_pin_sibling_span",
+      "source": "cable_modem_monitor issue #101 — sibling-span markup applied to the WPS PIN label pattern, which shares the tag-chain construct"
+    },
+    {
+      "input_html": "<td>\n<strong>Serial Number</strong>\n</td>\n<td>\n9876543210ABCD</td>",
+      "leaked_value": "9876543210ABCD",
+      "expected_prefix": "SERIAL_",
+      "id": "serial_td_whitespace_between_tags",
+      "source": "cable_modem_monitor issue #101 — table-cell variant with newlines between tags, same tag-chain construct in the table pass"
     }
   ]
 }

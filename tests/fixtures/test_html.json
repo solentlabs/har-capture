@@ -67,7 +67,9 @@
     {"content": "Device MAC: DE:AD:BE:EF:CA:FE",           "pattern_name": "mac_address",   "match": "DE:AD:BE:EF:CA:FE",  "id": "mac_detect"},
     {"content": "MAC: 11-22-33-44-55-66",                  "pattern_name": "mac_address",   "match": "11-22-33-44-55-66",  "id": "mac_dash_detect"},
     {"content": "Contact: admin@example.com",              "pattern_name": "email",         "match": "admin@example.com",  "id": "email_detect"},
-    {"content": "DNS: 8.8.8.8",                            "pattern_name": "public_ip",     "match": "8.8.8.8",            "id": "public_ip_detect"}
+    {"content": "DNS: 8.8.8.8",                            "pattern_name": "public_ip",     "match": "8.8.8.8",            "id": "public_ip_detect"},
+    {"content": "<span>Serial Number:</span> <span>ZZ99887766</span>", "pattern_name": "serial_number", "match": "Serial Number:</span> <span>ZZ99887766", "id": "serial_sibling_span_detect"},
+    {"content": "<span>WPS PIN:</span> <span>13572468</span>",         "pattern_name": "wps_pin",       "match": "WPS PIN:</span> <span>13572468",         "id": "wps_pin_sibling_span_detect"}
   ],
 
   "allowlisted_cases": [
@@ -85,6 +87,11 @@
     {"html": "<td>Serial Number</td><td>ABC12345678</td>",                       "serial_value": "ABC12345678",     "id": "serial_in_plain_td"},
     {"html": "<td><strong>SN</strong></td>\n<td>ARRIS-99887766</td>",            "serial_value": "ARRIS-99887766",  "id": "sn_label_in_td"},
     {"html": "<td>Model</td><td>SB8200</td>",                                    "serial_value": null,              "id": "non_serial_table_cell"}
+  ],
+
+  "serial_sibling_span_cases": [
+    {"html": "<div class=\"form-row odd\">\n\t<span class=\"readonlyLabel\" id=\"hardmess2\">Serial Number:</span>\n\t<span class=\"value\">\n\t1234567890123456</span>\n</div>", "redacted_value": "1234567890123456", "preserved_markup": "<span class=\"value\">", "id": "technicolor_sibling_span_serial"},
+    {"html": "<span class=\"readonlyLabel\">WPS PIN:</span>\n<span class=\"value\">\n13572468</span>",                                                                             "redacted_value": "13572468",         "preserved_markup": "<span class=\"value\">", "id": "sibling_span_wps_pin"}
   ],
 
   "setitem_cases": [

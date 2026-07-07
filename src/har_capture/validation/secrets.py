@@ -43,12 +43,14 @@ COOKIE_ATTRIBUTES_ONLY: list[str] = [
 MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
 
 # Serial number patterns (manufacturer-specific)
+# Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
+# label and value sit in sibling elements (Technicolor .jst span pairs) are caught.
 SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"serial[^:]*:\s*[A-Z0-9]{8,}", re.IGNORECASE),
-    re.compile(r"SN[:\s]+[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(r"serial[^:]*:\s*(?:<[^>]*>\s*)*[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*[A-Z0-9]{8,}", re.IGNORECASE),
     # Serial numbers in HTML table cells (label in one td, value in next td)
     re.compile(
-        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*([A-Za-z0-9\-]{8,})",
+        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
         re.IGNORECASE,
     ),
 ]
