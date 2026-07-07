@@ -67,6 +67,11 @@ ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_case
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
+SERIAL_SIBLING_SPAN_CASES = [
+    (c["html"], c["redacted_value"], c["preserved_markup"], c["id"])
+    for c in _FIXTURE["serial_sibling_span_cases"]
+]
+
 SETITEM_CASES = [
     (c["input_html"], c["should_not_contain"], c["should_contain"], c["id"])
     for c in _FIXTURE["setitem_cases"]
@@ -235,6 +240,35 @@ class TestSerialNumberTableCell:
             assert serial_value not in result, f"{desc}: serial should be redacted"
         else:
             assert result == html or "SB8200" in result, f"{desc}: non-serial should be preserved"
+
+
+# =============================================================================
+# Serial Number / PIN Labels in Sibling Elements (Technicolor .jst markup)
+# =============================================================================
+
+
+class TestSerialNumberSiblingSpans:
+    """Label and value in sibling elements with whitespace between the tags.
+
+    Technicolor .jst firmware (XB6/XB7/XB8 family) renders
+    ``<span class="readonlyLabel">Serial Number:</span>`` and the value in a
+    following sibling ``<span class="value">``. Redaction must replace only
+    the value and preserve the intermediate markup so sanitized fixtures keep
+    their DOM structure.
+    """
+
+    @pytest.mark.parametrize(
+        ("html", "redacted_value", "preserved_markup", "desc"),
+        SERIAL_SIBLING_SPAN_CASES,
+        ids=[c[3] for c in SERIAL_SIBLING_SPAN_CASES],
+    )
+    def test_sibling_span_value_redacted_markup_preserved(
+        self, html: str, redacted_value: str, preserved_markup: str, desc: str
+    ) -> None:
+        """Test values in sibling elements are redacted without collapsing markup."""
+        result = sanitize_html(html, salt="test")
+        assert redacted_value not in result, f"{desc}: value should be redacted"
+        assert preserved_markup in result, f"{desc}: intermediate markup should be preserved"
 
 
 # =============================================================================

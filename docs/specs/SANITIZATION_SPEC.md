@@ -261,6 +261,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 2    | Serial numbers (inline)       | `\bSN\b\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`     |
 | 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`     |
 | 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`     |
+| 2d   | WPS / pairing / default PINs  | Known PIN label + 8-digit value (issue #47)         | `hasher.hash_value(val, "PIN")`        |
 | 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value     | `hasher.hash_value(val, "ACCOUNT")`    |
 | 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)             | `hasher.hash_ip(ip, is_private=True)`  |
 | 5    | Public IPs                    | Non-private, non-reserved                           | `hasher.hash_ip(ip, is_private=False)` |
@@ -282,6 +283,14 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
 `Baud`, `ization`). Bare `serial` is excluded — too ambiguous for auto-redact.
+
+**Sibling-element rule (passes 2, 2b, 2d):** The tag chain between a label and its value — `(?:<[^>]*>\s*)*` — permits
+whitespace between tags, so label/value pairs rendered in sibling elements match (e.g. Technicolor .jst on the XB6/XB7/
+XB8 family renders `<span class="readonlyLabel">Serial Number:</span>` with the value in a following sibling
+`<span class="value">`). In passes 2 and 2d the separator-plus-tag run is captured and re-emitted verbatim, so redaction
+replaces only the value and preserves the intermediate markup — sanitized fixtures keep their DOM structure. The same
+whitespace-tolerant chain is used by the `serial_number` / `wps_pin` patterns in `pii.json` (`check_for_pii`) and the
+`SERIAL_PATTERNS` detectors in `validation/secrets.py`.
 
 ### Web Storage Scanner (Pass 0b)
 

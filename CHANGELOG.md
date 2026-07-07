@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-07
+
+### Fixed
+
+- **Serial numbers and WPS PINs split across sibling HTML elements are now redacted.** Technicolor .jst firmware
+  (XB6/XB7/XB8 family) renders the label and value in separate sibling `<span>` elements with whitespace between the
+  tags (`<span class="readonlyLabel">Serial Number:</span>` followed by `<span class="value">`), which the label-based
+  patterns in `sanitize_html()` did not match — the tag chain permitted consecutive tags but not whitespace between
+  them. All label-based tag chains now tolerate whitespace between tags: the serial inline/table and WPS PIN passes in
+  the HTML engine, the `serial_number` / `wps_pin` patterns used by `check_for_pii()`, and the serial detectors in
+  `validate_har()`. Redaction now preserves the intermediate markup instead of collapsing it to `label: hash`, so
+  sanitized fixtures keep their DOM structure. Reported via an unredacted serial in a contributor capture
+  (cable_modem_monitor #101, Technicolor CGM4981COM `hardware.jst`).
+
 ## [0.10.1] - 2026-06-18
 
 ### Fixed
@@ -896,6 +910,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.1.2]: https://github.com/solentlabs/har-capture/compare/v0.1.1...v0.1.2
 [0.10.0]: https://github.com/solentlabs/har-capture/compare/v0.9.1...v0.10.0
 [0.10.1]: https://github.com/solentlabs/har-capture/compare/v0.10.0...v0.10.1
+[0.10.2]: https://github.com/solentlabs/har-capture/compare/v0.10.1...v0.10.2
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -923,4 +938,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.2...HEAD

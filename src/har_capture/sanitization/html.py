@@ -423,15 +423,20 @@ def _sanitize_html_impl(
     html = re.sub(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", replace_mac, html)
 
     # 2. Serial Numbers (various label formats)
+    # The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags so
+    # label/value pairs in sibling elements match (Technicolor .jst renders
+    # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>).
+    # The separator + tag run is captured and re-emitted verbatim so redaction
+    # replaces only the value and preserves the surrounding markup.
     def replace_serial(match: re.Match[str]) -> str:
         collector.record_auto_redaction("serial_number")
         label = match.group(1)
-        serial = match.group(2) if match.lastindex and match.lastindex >= 2 else ""
-        hashed = hasher.hash_generic(serial, "SERIAL") if serial else "***SERIAL***"
-        return f"{label}: {hashed}"
+        sep = match.group(2)
+        serial = match.group(3)
+        return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
 
     html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b\s*[:\s=]*(?:<[^>]*>)*\s*([a-zA-Z0-9\-]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,
@@ -447,7 +452,7 @@ def _sanitize_html_impl(
         return f"{prefix}{hashed}"
 
     html = re.sub(
-        r"(<td[^>]*>(?:<[^>]*>)*\s*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>)*\s*</td>\s*<td[^>]*>(?:<[^>]*>)*\s*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>)*\s*</td>)",
+        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
         replace_serial_table,
         html,
         flags=re.IGNORECASE,
@@ -458,15 +463,17 @@ def _sanitize_html_impl(
     # safe pattern would have to be relaxed, drowning the review UI in counter
     # noise). The label is what makes the regex layer's 100% confidence bar
     # achievable. See issue #47 and docs/ARCHITECTURE.md § Confidence boundary.
+    # Tag chain and separator handling mirror pass 2: whitespace-tolerant
+    # sibling-element matching, with the separator + tag run preserved.
     def replace_wps_pin(match: re.Match[str]) -> str:
         collector.record_auto_redaction("wps_pin")
         label = match.group(1)
-        pin = match.group(2)
-        hashed = hasher.hash_generic(pin, "PIN")
-        return f"{label}: {hashed}"
+        sep = match.group(2)
+        pin = match.group(3)
+        return f"{label}{sep}{hasher.hash_generic(pin, 'PIN')}"
 
     html = re.sub(
-        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b\s*[:\s=]*(?:<[^>]*>)*\s*(\d{8})\b",
+        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)(\d{8})\b",
         replace_wps_pin,
         html,
         flags=re.IGNORECASE,

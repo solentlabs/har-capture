@@ -169,7 +169,9 @@ Severity: **error**
 
 **Serial numbers:**
 
-- Pattern: `SN|S/N|Serial Number|SerialNum` + value in HTML table cells
+- Pattern: `SN|S/N|Serial Number|SerialNum` + value — inline, in HTML table cells, or in sibling elements (tag chains
+  tolerate whitespace between tags, per the sibling-element rule in
+  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#scanner-pipeline))
 - Checks via `is_redacted()` before reporting
 
 **Public IPs:**

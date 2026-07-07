@@ -462,6 +462,28 @@ class TestCheckContentSerialInTable:
         serial_findings = [f for f in findings if "serial" in f.reason.lower()]
         assert len(serial_findings) >= 1, "Should flag serial number in table cell"
 
+    def test_serial_in_table_cell_with_whitespace_between_tags(self) -> None:
+        """Test check_content flags serials in td cells with newlines between tags."""
+        html = "<td>\n<strong>Serial Number</strong>\n</td>\n<td>\n<b>ARRIS99887766ZZ</b></td>"
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        serial_findings = [f for f in findings if "serial" in f.reason.lower()]
+        assert len(serial_findings) >= 1, "Should flag serial in whitespace-separated table cells"
+
+    def test_serial_in_sibling_spans(self) -> None:
+        """Test check_content flags serials split across sibling span elements.
+
+        Technicolor .jst markup — label and value in sibling spans with
+        whitespace between the tags (cable_modem_monitor issue #101).
+        """
+        html = (
+            '<span class="readonlyLabel">Serial Number:</span>\n<span class="value">\n1234567890123456</span>'
+        )
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        serial_findings = [f for f in findings if "serial" in f.reason.lower()]
+        assert len(serial_findings) >= 1, "Should flag serial number in sibling spans"
+
 
 class TestValidateHarBase64Content:
     """Tests for validate_har with base64-encoded response content."""
