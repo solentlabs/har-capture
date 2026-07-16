@@ -138,17 +138,19 @@ loaded from `sensitive.json`:
   confidence, e.g. `password`, `secret`, `token`).
 - **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
 
-To add a field name that the built-ins don't recognize — for instance, a device-specific credential field like `pws`,
-`loginPassword`, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema.
-Extensions are additive (built-ins continue to apply) and scoped to the single call via a `ContextVar`, so module state
-is never mutated and concurrent callers don't observe each other's patterns.
+To add a field name that the built-ins don't recognize — the way Sercomm/Hitron's `pws` was before it was promoted to a
+built-in, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. The examples
+below use `vendorpw` as a stand-in for such a field, since it is deliberately not a real vendor name: real ones get
+promoted once field evidence justifies it, at which point they'd no longer illustrate the mechanism. Extensions are
+additive (built-ins continue to apply) and scoped to the single call via a `ContextVar`, so module state is never
+mutated and concurrent callers don't observe each other's patterns.
 
 ### Schema
 
 ```json
 {
   "fields": {
-    "auto_redact_patterns": ["pws", "custom_token"],
+    "auto_redact_patterns": ["vendorpw", "custom_token"],
     "flag_patterns": ["deploy_env"]
   }
 }
@@ -163,15 +165,15 @@ to avoid accidental substring hits.
 from har_capture.sanitization import sanitize_post_data
 
 # Device-specific credential field from a product catalog at runtime.
-custom = {"fields": {"auto_redact_patterns": ["pws"]}}
+custom = {"fields": {"auto_redact_patterns": ["vendorpw"]}}
 
 post_data = {
     "mimeType": "application/x-www-form-urlencoded",
-    "text": "user=admin&pws=hunter2",
+    "text": "user=admin&vendorpw=hunter2",
 }
 
 result = sanitize_post_data(post_data, custom_patterns=custom)
-# result["text"] == "user=admin&pws=[REDACTED]"
+# result["text"] == "user=admin&vendorpw=[REDACTED]"
 ```
 
 The same extension applies to `sanitize_html` for inline-script field matching:
@@ -179,9 +181,9 @@ The same extension applies to `sanitize_html` for inline-script field matching:
 ```python
 from har_capture.sanitization import sanitize_html
 
-html = 'localStorage.setItem("pws", "hunter2")'
+html = 'localStorage.setItem("vendorpw", "hunter2")'
 clean = sanitize_html(html, custom_patterns=custom)
-# "hunter2" is redacted; key name "pws" is preserved.
+# "hunter2" is redacted; key name "vendorpw" is preserved.
 ```
 
 And to the top-level entry points that delegate to these:
@@ -191,7 +193,7 @@ from har_capture.sanitization import sanitize_har_file
 
 sanitize_har_file(
     "capture.har",
-    custom_patterns={"fields": {"auto_redact_patterns": ["pws"]}},
+    custom_patterns={"fields": {"auto_redact_patterns": ["vendorpw"]}},
 )
 ```
 
@@ -203,7 +205,7 @@ Anywhere a dict works, a file path containing the same JSON works too:
 {
   "_comment": "custom_fields.json",
   "fields": {
-    "auto_redact_patterns": ["pws", "custom_token"]
+    "auto_redact_patterns": ["vendorpw", "custom_token"]
   }
 }
 ```
@@ -229,7 +231,7 @@ custom = {
         "modem_serial": {"regex": r"SN[0-9]{10}", "replacement_prefix": "MODEM_SN"},
     },
     "fields": {
-        "auto_redact_patterns": ["pws"],
+        "auto_redact_patterns": ["vendorpw"],
         "flag_patterns": ["deploy_env"],
     },
 }

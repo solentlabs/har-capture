@@ -332,6 +332,32 @@ class TestCookieAttributeMetadataDetection:
         assert is_cookie_attribute_metadata(value) == expected, desc
 
 
+class TestIsBase64DecodableText:
+    """Tests for the is_base64_decodable_text heuristic helper."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        [
+            ("ZXhhbXBsZS1ub3QtcmVhbA==", True, "base64_bare_password"),
+            ("YWRtaW46aHVudGVyMg==", True, "base64_userpass_also_matches"),
+            ("aGVsbG8gd29ybGQ=", True, "base64_text_with_space"),
+            ("admin", False, "plain_word_invalid_length"),
+            ("login", False, "plain_word_invalid_length_2"),
+            ("test", False, "valid_b64_but_nonprintable_bytes"),
+            ("1234", False, "digits_decode_to_nonprintable"),
+            ("FIELD_9f856745", False, "placeholder_not_base64_charset"),
+            ("not-base64!", False, "invalid_charset"),
+            ("Zg==", False, "decoded_too_short"),
+            ("", False, "empty_string"),
+        ],
+        ids=lambda x: x if isinstance(x, str) and "_" in x else "",
+    )
+    def test_is_base64_decodable_text(self, value: str, expected: bool, desc: str) -> None:
+        from har_capture.patterns.redaction import is_base64_decodable_text
+
+        assert is_base64_decodable_text(value) == expected, desc
+
+
 class TestErrorHandling:
     """Test error handling in redaction checking."""
 

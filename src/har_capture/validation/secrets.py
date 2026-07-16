@@ -25,6 +25,7 @@ from typing import Any
 from har_capture.patterns import load_sensitive_patterns
 from har_capture.patterns.redaction import (
     is_base64_credential,
+    is_base64_decodable_text,
     is_cookie_attribute_metadata,
 )
 from har_capture.patterns.redaction import (
@@ -304,6 +305,57 @@ def check_headers(
                 break
 
 
+def _check_form_params(
+    pairs: list[tuple[str, str]],
+    location: str,
+    findings: list[Finding],
+    sensitive_fields: list[re.Pattern[str]],
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> None:
+    """Check form name/value pairs for sensitive fields and encoded credentials.
+
+    Sensitive-named fields with unredacted values are errors. In a
+    login-shaped form (any field name matches a sensitive pattern), a
+    base64-decodable value in an unrecognized field is a warning — the
+    backstop for vendor credential fields the patterns don't know yet
+    (the Sercomm/Hitron ``pws`` class, cable_modem_monitor issue #92).
+
+    Args:
+        pairs: Form (name, value) pairs
+        location: Location string for findings
+        findings: List to append findings to
+        sensitive_fields: Pre-compiled sensitive field patterns
+        custom_patterns: Optional path to custom patterns file
+    """
+    login_shaped = any(any(p.search(name) for p in sensitive_fields) for name, _ in pairs)
+
+    for name, value in pairs:
+        if not value or is_redacted(value, custom_patterns):
+            continue
+
+        matched = next((p for p in sensitive_fields if p.search(name)), None)
+        if matched:
+            findings.append(
+                Finding(
+                    severity="error",
+                    location=location,
+                    field=name,
+                    value=truncate(value),
+                    reason=f"Sensitive form field matching '{matched.pattern}'",
+                )
+            )
+        elif login_shaped and is_base64_decodable_text(value):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    location=location,
+                    field=name,
+                    value=truncate(value),
+                    reason="Base64-decodable value in unrecognized field of a login-shaped form POST",
+                )
+            )
+
+
 def check_post_data(
     post_data: dict[str, Any] | None,
     location: str,
@@ -325,30 +377,25 @@ def check_post_data(
 
     # Check params (form data)
     params = post_data.get("params", [])
-    for param in params:
-        name = param.get("name", "")
-        value = param.get("value", "")
+    pairs = [(param.get("name", ""), param.get("value", "")) for param in params]
+    _check_form_params(pairs, location, findings, sensitive_fields, custom_patterns)
 
-        if not value or is_redacted(value, custom_patterns):
-            continue
-
-        for pattern in sensitive_fields:
-            if pattern.search(name):
-                findings.append(
-                    Finding(
-                        severity="error",
-                        location=location,
-                        field=name,
-                        value=truncate(value),
-                        reason=f"Sensitive form field matching '{pattern.pattern}'",
-                    )
-                )
-                break
-
-    # Check text (raw body — JSON or XML)
+    # Check text (raw body — form-urlencoded, JSON, or XML)
     text = post_data.get("text", "")
     if text and not is_redacted(text, custom_patterns):
         mime_type = post_data.get("mimeType", "")
+        if "application/x-www-form-urlencoded" in mime_type:
+            # The text copy is checked independently of params — a sanitizer
+            # that redacts one copy but not the other must still be caught.
+            # Manual splitting (not parse_qsl) preserves base64 '=' padding
+            # in values.
+            text_pairs = []
+            for segment in text.split("&"):
+                if "=" in segment:
+                    name, _, val = segment.partition("=")
+                    text_pairs.append((urllib.parse.unquote_plus(name), urllib.parse.unquote_plus(val)))
+            _check_form_params(text_pairs, location + " (body)", findings, sensitive_fields, custom_patterns)
+            return
         try:
             json_data = json.loads(text)
             check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)

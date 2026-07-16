@@ -7,6 +7,8 @@
     {"field_name": "user_password",     "expected": true,  "id": "password_snake"},
     {"field_name": "passwd",            "expected": true,  "id": "passwd"},
     {"field_name": "pwd",               "expected": true,  "id": "pwd"},
+    {"field_name": "pws",               "expected": true,  "id": "pws_sercomm_hitron"},
+    {"field_name": "cur_pws",           "expected": true,  "id": "pws_prefixed"},
     {"field_name": "pass",              "expected": true,  "id": "pass"},
     {"field_name": "oldPassword",       "expected": true,  "id": "password_old"},
     {"field_name": "newPassword",       "expected": true,  "id": "password_new"},
@@ -14,6 +16,12 @@
     {"field_name": "currentPassword",   "expected": true,  "id": "password_current"},
     {"field_name": "userPass",          "expected": false, "id": "password_userpass_camelcase_miss"},
     {"field_name": "passphrase",        "expected": true,  "id": "passphrase"},
+    {"field_name": "wpa_passphrase",    "expected": true,  "id": "passphrase_underscore_prefixed"},
+    {"field_name": "wpaPassphrase",     "expected": true,  "id": "passphrase_camel"},
+    {"field_name": "wpa_psk",           "expected": true,  "id": "psk_wpa"},
+    {"field_name": "wl_wpa_psk",        "expected": true,  "id": "psk_asus_prefixed"},
+    {"field_name": "pskValue",          "expected": true,  "id": "psk_camel"},
+    {"field_name": "psk_type",          "expected": true,  "id": "psk_type_enum_over_redaction_accepted"},
     {"field_name": "auth_token",        "expected": true,  "id": "auth_token"},
     {"field_name": "authToken",         "expected": true,  "id": "auth_token_camel"},
     {"field_name": "authentication",    "expected": true,  "id": "authentication"},
@@ -239,50 +247,60 @@
   ],
   "custom_patterns_cases": [
     {
+      "id": "form_pws_redacted_by_default",
+      "post_data": {
+        "mimeType": "application/x-www-form-urlencoded",
+        "text": "login_user=admin&pws=ZXhhbXBsZS1ub3QtcmVhbA%3D%3D&passwd=example-not-real&todo=login"
+      },
+      "custom_patterns": null,
+      "must_contain": ["pws=[REDACTED]", "passwd=[REDACTED]", "todo=login"],
+      "must_not_contain": ["ZXhhbXBsZS1ub3QtcmVhbA", "example-not-real"]
+    },
+    {
       "id": "form_unknown_field_preserved_without_custom",
       "post_data": {
         "mimeType": "application/x-www-form-urlencoded",
-        "text": "pws=alsosecret"
+        "text": "vendorpw=alsosecret"
       },
       "custom_patterns": null,
-      "must_contain": ["pws=alsosecret"],
+      "must_contain": ["vendorpw=alsosecret"],
       "must_not_contain": []
     },
     {
       "id": "form_unknown_field_redacted_with_custom",
       "post_data": {
         "mimeType": "application/x-www-form-urlencoded",
-        "text": "pws=alsosecret"
+        "text": "vendorpw=alsosecret"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
-      "must_contain": ["pws=[REDACTED]"],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+      "must_contain": ["vendorpw=[REDACTED]"],
       "must_not_contain": ["alsosecret"]
     },
     {
       "id": "form_builtin_field_still_redacted_when_custom_present",
       "post_data": {
         "mimeType": "application/x-www-form-urlencoded",
-        "text": "user=admin&password=secret123&pws=alsosecret"
+        "text": "user=admin&password=secret123&vendorpw=alsosecret"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
-      "must_contain": ["password=[REDACTED]", "pws=[REDACTED]", "user=admin"],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+      "must_contain": ["password=[REDACTED]", "vendorpw=[REDACTED]", "user=admin"],
       "must_not_contain": ["secret123", "alsosecret"]
     },
     {
       "id": "form_multiple_custom_patterns_all_applied",
       "post_data": {
         "mimeType": "application/x-www-form-urlencoded",
-        "text": "pws=one&twofactor=two&user=admin"
+        "text": "vendorpw=one&twofactor=two&user=admin"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws", "twofactor"]}},
-      "must_contain": ["pws=[REDACTED]", "twofactor=[REDACTED]", "user=admin"],
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw", "twofactor"]}},
+      "must_contain": ["vendorpw=[REDACTED]", "twofactor=[REDACTED]", "user=admin"],
       "must_not_contain": ["=one", "=two"]
     },
     {
       "id": "json_unknown_field_preserved_without_custom",
       "post_data": {
         "mimeType": "application/json",
-        "text": "{\"user\": \"admin\", \"pws\": \"alsosecret\"}"
+        "text": "{\"user\": \"admin\", \"vendorpw\": \"alsosecret\"}"
       },
       "custom_patterns": null,
       "must_contain": ["alsosecret"],
@@ -292,9 +310,9 @@
       "id": "json_unknown_field_redacted_with_custom",
       "post_data": {
         "mimeType": "application/json",
-        "text": "{\"user\": \"admin\", \"pws\": \"alsosecret\"}"
+        "text": "{\"user\": \"admin\", \"vendorpw\": \"alsosecret\"}"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
       "must_contain": ["[REDACTED]"],
       "must_not_contain": ["alsosecret"]
     },
@@ -302,9 +320,9 @@
       "id": "json_builtin_field_still_redacted_when_custom_present",
       "post_data": {
         "mimeType": "application/json",
-        "text": "{\"password\": \"secret123\", \"pws\": \"alsosecret\"}"
+        "text": "{\"password\": \"secret123\", \"vendorpw\": \"alsosecret\"}"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
       "must_contain": [],
       "must_not_contain": ["secret123", "alsosecret"]
     },
@@ -312,9 +330,9 @@
       "id": "json_nested_custom_pattern_reaches_deep_key",
       "post_data": {
         "mimeType": "application/json",
-        "text": "{\"outer\": {\"pws\": \"deepsecret\"}}"
+        "text": "{\"outer\": {\"vendorpw\": \"deepsecret\"}}"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
       "must_contain": [],
       "must_not_contain": ["deepsecret"]
     },
@@ -322,7 +340,7 @@
       "id": "xml_unknown_tag_preserved_without_custom",
       "post_data": {
         "mimeType": "text/xml",
-        "text": "<root><pws>alsosecret</pws></root>"
+        "text": "<root><vendorpw>alsosecret</vendorpw></root>"
       },
       "custom_patterns": null,
       "must_contain": ["alsosecret"],
@@ -332,9 +350,9 @@
       "id": "xml_unknown_tag_redacted_with_custom",
       "post_data": {
         "mimeType": "text/xml",
-        "text": "<root><pws>alsosecret</pws></root>"
+        "text": "<root><vendorpw>alsosecret</vendorpw></root>"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
       "must_contain": [],
       "must_not_contain": ["alsosecret"]
     },
@@ -342,9 +360,9 @@
       "id": "xml_builtin_tag_still_redacted_when_custom_present",
       "post_data": {
         "mimeType": "text/xml",
-        "text": "<root><password>secret123</password><pws>alsosecret</pws></root>"
+        "text": "<root><password>secret123</password><vendorpw>alsosecret</vendorpw></root>"
       },
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
       "must_contain": [],
       "must_not_contain": ["secret123", "alsosecret"]
     },
@@ -361,41 +379,51 @@
   ],
   "custom_patterns_params_cases": [
     {
-      "id": "params_unknown_field_preserved_without_custom",
+      "id": "params_pws_redacted_by_default",
       "params": [
-        {"name": "pws", "value": "alsosecret"},
+        {"name": "pws", "value": "ZXhhbXBsZS1ub3QtcmVhbA=="},
+        {"name": "cur_passwd", "value": "example-not-real"},
         {"name": "user", "value": "admin"}
       ],
       "custom_patterns": null,
-      "expected_values": {"pws": "alsosecret", "user": "admin"}
+      "expected_values": {"pws": "[REDACTED]", "cur_passwd": "[REDACTED]", "user": "admin"}
+    },
+    {
+      "id": "params_unknown_field_preserved_without_custom",
+      "params": [
+        {"name": "vendorpw", "value": "alsosecret"},
+        {"name": "user", "value": "admin"}
+      ],
+      "custom_patterns": null,
+      "expected_values": {"vendorpw": "alsosecret", "user": "admin"}
     },
     {
       "id": "params_unknown_field_redacted_with_custom",
       "params": [
-        {"name": "pws", "value": "alsosecret"},
+        {"name": "vendorpw", "value": "alsosecret"},
         {"name": "user", "value": "admin"}
       ],
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
-      "expected_values": {"pws": "[REDACTED]", "user": "admin"}
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+      "expected_values": {"vendorpw": "[REDACTED]", "user": "admin"}
     },
     {
       "id": "params_builtin_field_still_redacted_when_custom_present",
       "params": [
         {"name": "loginPassword", "value": "secret123"},
-        {"name": "pws", "value": "alsosecret"}
+        {"name": "vendorpw", "value": "alsosecret"}
       ],
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws"]}},
-      "expected_values": {"loginPassword": "[REDACTED]", "pws": "[REDACTED]"}
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+      "expected_values": {"loginPassword": "[REDACTED]", "vendorpw": "[REDACTED]"}
     },
     {
       "id": "params_multiple_custom_patterns_each_applied",
       "params": [
-        {"name": "pws", "value": "one"},
+        {"name": "vendorpw", "value": "one"},
         {"name": "twofactor", "value": "two"},
         {"name": "user", "value": "admin"}
       ],
-      "custom_patterns": {"fields": {"auto_redact_patterns": ["pws", "twofactor"]}},
-      "expected_values": {"pws": "[REDACTED]", "twofactor": "[REDACTED]", "user": "admin"}
+      "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw", "twofactor"]}},
+      "expected_values": {"vendorpw": "[REDACTED]", "twofactor": "[REDACTED]", "user": "admin"}
     }
   ]
 }

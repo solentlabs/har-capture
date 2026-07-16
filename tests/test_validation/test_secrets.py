@@ -249,6 +249,83 @@ class TestCheckPostData:
         check_post_data(post_data, "request", findings)
         assert len(findings) == 1
 
+    def test_detects_pws_in_params_and_text(self) -> None:
+        """The issue #92 capture shape: a leaked pws value errors in both copies."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "pws", "value": "ZXhhbXBsZS1ub3QtcmVhbA=="},
+                {"name": "todo", "value": "login"},
+            ],
+            "text": "pws=ZXhhbXBsZS1ub3QtcmVhbA%3D%3D&todo=login",
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        pws_findings = [f for f in findings if f.field == "pws"]
+        assert len(pws_findings) == 2, "one finding per copy (params and body)"
+        assert all(f.severity == "error" for f in pws_findings)
+        locations = {f.location for f in pws_findings}
+        assert locations == {"request", "request (body)"}
+
+    def test_form_text_checked_without_params(self) -> None:
+        """A form body with no params array still gets field-name validation.
+
+        The bare segment (no '=') exercises the skip branch of the splitter.
+        """
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "text": "passwd=example-not-real&todo=login&baresegment",
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        assert len(findings) == 1
+        assert findings[0].field == "passwd"
+        assert findings[0].location == "request (body)"
+
+    def test_base64_value_in_login_shaped_post_warns(self) -> None:
+        """A base64 value in an unrecognized field of a login-shaped POST warns.
+
+        The backstop for vendor credential field names the patterns don't
+        know yet.
+        """
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "login_user", "value": "admin"},
+                {"name": "vendorpw", "value": "ZXhhbXBsZS1ub3QtcmVhbA=="},
+            ],
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        warnings = [f for f in findings if f.severity == "warning"]
+        assert len(warnings) == 1
+        assert warnings[0].field == "vendorpw"
+        assert "Base64-decodable" in warnings[0].reason
+
+    def test_base64_value_without_login_context_not_flagged(self) -> None:
+        """The same base64 value in a non-login-shaped POST stays silent."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [{"name": "payload", "value": "ZXhhbXBsZS1ub3QtcmVhbA=="}],
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        assert findings == []
+
+    def test_redacted_placeholder_in_login_shaped_post_not_flagged(self) -> None:
+        """FIELD_* placeholders are recognized as redacted, not re-flagged."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "login_user", "value": "admin"},
+                {"name": "pws", "value": "FIELD_9f856745"},
+            ],
+            "text": "login_user=admin&pws=FIELD_9f856745",
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        assert all(f.field != "pws" for f in findings)
+
 
 class TestFindingDataclass:
     """Tests for Finding dataclass."""

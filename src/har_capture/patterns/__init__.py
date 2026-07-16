@@ -22,6 +22,7 @@ from har_capture.patterns.loader import (
 from har_capture.patterns.redaction import (
     is_allowlisted,
     is_base64_credential,
+    is_base64_decodable_text,
     is_cookie_attribute_metadata,
     is_redacted,
 )
@@ -39,6 +40,7 @@ __all__ = [
     # Redaction checking
     "is_allowlisted",
     "is_base64_credential",
+    "is_base64_decodable_text",
     "is_cookie_attribute_metadata",
     "is_redacted",
     # Hashing
