@@ -246,8 +246,8 @@ def sanitize_html(
             Field-name extensions reach the inline-script scanner
             (``localStorage.setItem`` / ``sessionStorage.setItem``) via a
             ``ContextVar``-scoped override, so e.g. ``{"fields":
-            {"auto_redact_patterns": ["pws"]}}`` causes values associated
-            with ``"pws"`` keys in inline scripts to be redacted. Module-
+            {"auto_redact_patterns": ["vendorpw"]}}`` causes values associated
+            with ``"vendorpw"`` keys in inline scripts to be redacted. Module-
             global patterns are never mutated; concurrent threads / asyncio
             tasks observe their own patterns.
         collector: Optional collector for tracking redactions

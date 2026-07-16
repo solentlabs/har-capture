@@ -128,6 +128,17 @@ Checks form field names and JSON body content:
 1. For each parameter, check `name` against `auto_redact_patterns` and `flag_patterns`
 1. If matched, check if `value` is already redacted
 1. Report if value is not redacted
+1. If the name did NOT match but the form is **login-shaped** (any parameter name in the form matches a sensitive
+   pattern) and the value is base64 that decodes to printable text (`is_base64_decodable_text()`), report a **warning**
+   — the backstop for vendor credential field names the patterns don't know yet (Sercomm/Hitron `pws`,
+   cable_modem_monitor issue #92)
+
+**Form-urlencoded body** (`postData.text` with `application/x-www-form-urlencoded` content type):
+
+1. Split into name/value pairs manually (not `parse_qsl` — it strips base64 `=` padding), percent-decode both
+1. Run the same checks as form params, with the location suffix `(body)`
+1. The text copy is checked independently of `params` — a sanitizer that redacts one copy but not the other must still
+   be caught
 
 **JSON body** (`postData.text` with JSON content type):
 

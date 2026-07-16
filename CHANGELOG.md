@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-16
+
+### Fixed
+
+- **`pws` form fields are redacted by name, and the same secret gets the same placeholder in both body copies.** Sercomm
+  and Hitron firmware authenticate with a form field literally named `pws` (base64-encoded password), which matched none
+  of the built-in credential name patterns (`password`, `passwd`, `pwd`) — the value survived sanitization verbatim in
+  `postData.params` and the URL-encoded `postData.text` copy, and `validate` (which compiles the same pattern list) did
+  not flag the leak. `pws` is now a built-in `auto_redact_pattern`, covering both `sanitize` and `validate`.
+  Additionally, `_sanitize_form_urlencoded` now hashes the percent-decoded value, so the `FIELD_*` placeholder in the
+  text copy matches the one assigned to the same secret in `params` (percent-encoding previously broke the correlation).
+  Reported via a leaked (factory-default) modem password in a sanitized capture attached to cable_modem_monitor #92; the
+  Sercomm/Hitron modem catalog was swept and `pws` was the only vendor password-field name not already covered.
+- **`psk` and `passphrase` form fields are redacted by name.** WiFi key fields (`wpa_psk`, `wl_wpa_psk`, `pskValue`)
+  matched no built-in pattern, and `passphrase` variants behind an underscore or camelCase hump (`wpa_passphrase`,
+  `wpaPassphrase`) escaped the `\bpass` word-boundary pattern — a router's wifi-settings save request would leak the
+  key. Both are now plain substring patterns, covering `sanitize` and `validate`. Enum metadata fields containing the
+  substring (e.g. `psk_type`) are over-redacted by design — the safe direction.
+- **Base64-decodable values in login-shaped form POSTs no longer pass silently.** The same leak class with a field name
+  nobody has catalogued yet: when a form POST contains at least one credential-named field, any *unrecognized* field
+  whose value is base64 decoding to printable text is flagged for review by `sanitize` (MEDIUM confidence, category
+  `credential` — flagged, not auto-redacted) and reported as a warning by `validate`. Non-login-shaped forms are not
+  affected.
+- **`validate` checks the URL-encoded body copy independently of `params`.** Form-urlencoded `postData.text` was
+  previously only ever parsed as JSON/XML, so a form body without a `params` array — or a text copy whose redaction
+  diverged from `params` — escaped field-name validation entirely. Both copies are now checked, with body findings
+  reported at location suffix `(body)`.
+
 ## [0.10.2] - 2026-07-07
 
 ### Fixed
@@ -911,6 +939,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.10.0]: https://github.com/solentlabs/har-capture/compare/v0.9.1...v0.10.0
 [0.10.1]: https://github.com/solentlabs/har-capture/compare/v0.10.0...v0.10.1
 [0.10.2]: https://github.com/solentlabs/har-capture/compare/v0.10.1...v0.10.2
+[0.10.3]: https://github.com/solentlabs/har-capture/compare/v0.10.2...v0.10.3
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -938,4 +967,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.2...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.3...HEAD

@@ -394,7 +394,7 @@ class TestPostDataCustomPatterns:
         """``custom_patterns=None`` produces identical output to omitting the kwarg."""
         post_data = {
             "mimeType": "application/x-www-form-urlencoded",
-            "text": "user=admin&password=secret123&pws=alsosecret",
+            "text": "user=admin&password=secret123&vendorpw=alsosecret",
         }
         default = sanitize_post_data(post_data)
         explicit_none = sanitize_post_data(post_data, custom_patterns=None)
@@ -406,7 +406,7 @@ class TestPostDataCustomPatterns:
         Module globals and the ContextVar must not be mutated in a way that
         changes the output of a subsequent default call.
         """
-        body = "user=admin&pws=one&loginPassword=two&extra=three"
+        body = "user=admin&vendorpw=one&loginPassword=two&extra=three"
 
         def form(text: str) -> dict:
             return {"mimeType": "application/x-www-form-urlencoded", "text": text}
@@ -416,7 +416,7 @@ class TestPostDataCustomPatterns:
 
         result_a = sanitize_post_data(
             form(body),
-            custom_patterns={"fields": {"auto_redact_patterns": ["pws"]}},
+            custom_patterns={"fields": {"auto_redact_patterns": ["vendorpw"]}},
         )
         result_b = sanitize_post_data(
             form(body),
@@ -435,11 +435,11 @@ class TestPostDataCustomPatterns:
         )
         assert result_default == baseline
 
-        # A redacts pws but not extra; B redacts extra but not pws.
-        assert "pws=[REDACTED]" in result_a["text"]
+        # A redacts vendorpw but not extra; B redacts extra but not vendorpw.
+        assert "vendorpw=[REDACTED]" in result_a["text"]
         assert "extra=three" in result_a["text"]
         assert "extra=[REDACTED]" in result_b["text"]
-        assert "pws=one" in result_b["text"]
+        assert "vendorpw=one" in result_b["text"]
 
         # Built-in loginPassword is redacted in every variant.
         for r in (baseline, result_a, result_b, result_default):
@@ -458,8 +458,8 @@ class TestPostDataCustomPatterns:
 COMPILE_FIELD_PATTERN_CASES = [
     (
         "current_schema_both_sections",
-        {"fields": {"auto_redact_patterns": ["pws"], "flag_patterns": ["deployenv"]}},
-        ["pws"],
+        {"fields": {"auto_redact_patterns": ["vendorpw"], "flag_patterns": ["deployenv"]}},
+        ["vendorpw"],
         ["deployenv"],
     ),
     (
@@ -531,8 +531,8 @@ class TestCustomPatternsCacheKey:
     def test_dict_produces_stable_key_regardless_of_insertion_order(self) -> None:
         from har_capture.sanitization.har import _custom_patterns_cache_key
 
-        a = {"fields": {"auto_redact_patterns": ["pws"], "flag_patterns": ["env"]}}
-        b = {"fields": {"flag_patterns": ["env"], "auto_redact_patterns": ["pws"]}}
+        a = {"fields": {"auto_redact_patterns": ["vendorpw"], "flag_patterns": ["env"]}}
+        b = {"fields": {"flag_patterns": ["env"], "auto_redact_patterns": ["vendorpw"]}}
         assert _custom_patterns_cache_key(a) == _custom_patterns_cache_key(b)
 
     def test_path_input_normalized_to_absolute(self, tmp_path: Path) -> None:
@@ -583,7 +583,7 @@ class TestResolveFieldPatterns:
         from har_capture.sanitization.har import _resolve_field_patterns
 
         self._clear_cache()
-        custom = {"fields": {"auto_redact_patterns": ["pws"]}}
+        custom = {"fields": {"auto_redact_patterns": ["vendorpw"]}}
         first = _resolve_field_patterns(custom)
         second = _resolve_field_patterns(custom)
         assert first is second, "second call should hit the cache and return the same instance"
@@ -592,10 +592,10 @@ class TestResolveFieldPatterns:
         from har_capture.sanitization.har import _resolve_field_patterns
 
         self._clear_cache()
-        a = _resolve_field_patterns({"fields": {"auto_redact_patterns": ["pws"]}})
+        a = _resolve_field_patterns({"fields": {"auto_redact_patterns": ["vendorpw"]}})
         b = _resolve_field_patterns({"fields": {"auto_redact_patterns": ["extra"]}})
         assert a is not b
-        assert a.matches_sensitive("pws") and not b.matches_sensitive("pws")
+        assert a.matches_sensitive("vendorpw") and not b.matches_sensitive("vendorpw")
         assert b.matches_sensitive("extra") and not a.matches_sensitive("extra")
 
     def test_cache_eviction_bounded_by_max(self) -> None:
@@ -628,8 +628,8 @@ class TestFieldPatternsScope:
         )
 
         assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
-        with _field_patterns_scope({"fields": {"auto_redact_patterns": ["pws"]}}):
-            assert _FIELD_PATTERNS_CTX.get().matches_sensitive("pws")
+        with _field_patterns_scope({"fields": {"auto_redact_patterns": ["vendorpw"]}}):
+            assert _FIELD_PATTERNS_CTX.get().matches_sensitive("vendorpw")
         assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
 
     def test_scope_restores_previous_value_on_exception(self) -> None:
@@ -642,7 +642,7 @@ class TestFieldPatternsScope:
         assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
         with (
             pytest.raises(RuntimeError, match="boom"),
-            _field_patterns_scope({"fields": {"auto_redact_patterns": ["pws"]}}),
+            _field_patterns_scope({"fields": {"auto_redact_patterns": ["vendorpw"]}}),
         ):
             raise RuntimeError("boom")
         assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS
@@ -788,7 +788,7 @@ class TestCustomPatternsPropagationThroughEntry:
     """
 
     CUSTOM_MODEM_HEADER = {"headers": {"full_redact": ["x-modem-auth"]}}
-    CUSTOM_PWS_FIELD = {"fields": {"auto_redact_patterns": ["pws"]}}
+    CUSTOM_VENDORPW_FIELD = {"fields": {"auto_redact_patterns": ["vendorpw"]}}
 
     def _entry(self, request: dict, response: dict | None = None) -> dict:
         return {
@@ -829,29 +829,29 @@ class TestCustomPatternsPropagationThroughEntry:
         entry = self._entry(
             {
                 "method": "GET",
-                "url": "http://example.com/path?pws=alsosecret",
+                "url": "http://example.com/path?vendorpw=alsosecret",
                 "headers": [],
-                "queryString": [{"name": "pws", "value": "alsosecret"}],
+                "queryString": [{"name": "vendorpw", "value": "alsosecret"}],
             }
         )
-        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_PWS_FIELD)
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_VENDORPW_FIELD)
         qs = result["request"]["queryString"]
-        pws = next(p for p in qs if p["name"] == "pws")
-        assert pws["value"] != "alsosecret"
-        assert "alsosecret" not in pws["value"]
+        vendorpw = next(p for p in qs if p["name"] == "vendorpw")
+        assert vendorpw["value"] != "alsosecret"
+        assert "alsosecret" not in vendorpw["value"]
 
     def test_custom_field_redacts_url_query_param_in_request_url(self) -> None:
         """The url string itself (via _sanitize_url_query_params) must honor it."""
         entry = self._entry(
             {
                 "method": "GET",
-                "url": "http://example.com/path?pws=alsosecret&safe=ok",
+                "url": "http://example.com/path?vendorpw=alsosecret&safe=ok",
                 "headers": [],
             }
         )
-        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_PWS_FIELD)
+        result = sanitize_entry(entry, salt=None, custom_patterns=self.CUSTOM_VENDORPW_FIELD)
         url = result["request"]["url"]
-        assert "pws=alsosecret" not in url
+        assert "vendorpw=alsosecret" not in url
         assert "safe=ok" in url
 
     def test_builtin_header_still_redacted_when_custom_patterns_provided(self) -> None:
@@ -2460,19 +2460,19 @@ RESPONSE_BASE64_BODY_CASES = [
     (_B64_OPAQUE_CRED,     False, "opaque_credential_collapsed"),
 ]
 
-# base64(user:pass) in an unrecognized field name ('pws' is not default-sensitive)
+# base64(user:pass) in an unrecognized field name ('vendorpw' is not default-sensitive)
 # must be redacted by the value fallback — identically across param surfaces.
 BASE64_CRED_PARAM_CASES = [
     # (desc, request_fragment, accessor)
     (
         "post_param",
         {"postData": {"mimeType": "application/x-www-form-urlencoded",
-                      "params": [{"name": "pws", "value": _B64_USERPASS}]}},
+                      "params": [{"name": "vendorpw", "value": _B64_USERPASS}]}},
         lambda r: r["request"]["postData"]["params"][0]["value"],
     ),
     (
         "query_param",
-        {"queryString": [{"name": "pws", "value": _B64_USERPASS}]},
+        {"queryString": [{"name": "vendorpw", "value": _B64_USERPASS}]},
         lambda r: r["request"]["queryString"][0]["value"],
     ),
 ]
@@ -2571,7 +2571,7 @@ class TestBase64CredentialInFields:
     """base64(user:pass) values in unrecognized field names are redacted everywhere.
 
     Mirrors the query-string base64-credential fallback across param surfaces: a
-    value in a field like ``pws`` (not default-sensitive) used to slip past
+    value in a field like ``vendorpw`` (not default-sensitive) used to slip past
     field-name redaction while sibling ``passwd``/``cur_passwd`` were redacted.
     """
 
@@ -2649,9 +2649,9 @@ class TestBase64CredentialInFields:
             "params": [
                 {"name": "passwd", "value": "secret"},
                 {"name": "cur_passwd", "value": "classified"},
-                {"name": "pws", "value": _B64_USERPASS},
+                {"name": "vendorpw", "value": _B64_USERPASS},
             ],
-            "text": f"passwd=secret&cur_passwd=classified&pws={_B64_USERPASS}",
+            "text": f"passwd=secret&cur_passwd=classified&vendorpw={_B64_USERPASS}",
         }
 
         result = sanitize_post_data(post_data)
@@ -2659,16 +2659,106 @@ class TestBase64CredentialInFields:
         params = {p["name"]: p["value"] for p in result["params"]}
         assert params["passwd"] == "[REDACTED]"
         assert params["cur_passwd"] == "[REDACTED]"
-        assert params["pws"] == "[REDACTED]"  # base64 value fallback
+        assert params["vendorpw"] == "[REDACTED]"  # base64 value fallback
         assert _B64_USERPASS not in result["text"]
 
     def test_percent_encoded_base64_credential_in_form_text(self) -> None:
         """A percent-encoded base64(user:pass) value is caught via the unquote fallback."""
         encoded = _B64_USERPASS.replace("=", "%3D")  # padding no longer base64-charset
-        result = _sanitize_form_urlencoded(f"user=admin&pws={encoded}")
+        result = _sanitize_form_urlencoded(f"user=admin&vendorpw={encoded}")
         assert encoded not in result
         assert _B64_USERPASS not in result
-        assert "pws=[REDACTED]" in result
+        assert "vendorpw=[REDACTED]" in result
+
+    def test_placeholder_correlation_between_params_and_text(self) -> None:
+        """The same secret gets the same FIELD placeholder in params and text.
+
+        The text copy is percent-encoded ('=' padding becomes %3D); hashing
+        must run on the decoded value so both copies correlate (issue #92
+        capture shape).
+        """
+        from har_capture.patterns import Hasher
+
+        secret = "ZXhhbXBsZS1ub3QtcmVhbA=="  # base64('example-not-real')
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "pws", "value": secret},
+                {"name": "passwd", "value": "example-not-real"},
+            ],
+            "text": "pws=ZXhhbXBsZS1ub3QtcmVhbA%3D%3D&passwd=example-not-real",
+        }
+        result = sanitize_post_data(post_data, hasher=Hasher("x" * 32))
+        assert result is not None
+        params = {p["name"]: p["value"] for p in result["params"]}
+        text_values = dict(pair.split("=", 1) for pair in result["text"].split("&"))
+        assert params["pws"].startswith("FIELD_")
+        assert params["pws"] == text_values["pws"]
+        assert params["passwd"] == text_values["passwd"]
+
+
+class TestLoginShapedBase64Heuristic:
+    """Login-shaped-form base64 heuristic: flag for review, never auto-redact.
+
+    The backstop for vendor credential fields the name patterns don't know
+    yet (issue #92 class).
+    """
+
+    _B64_BARE_PASSWORD = base64.b64encode(b"example-not-real").decode()
+
+    def _collector(self) -> RedactionCollector:
+        from har_capture.patterns import Hasher
+
+        return RedactionCollector(hasher=Hasher("x" * 32))
+
+    def test_flagged_in_login_shaped_params_and_text(self) -> None:
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "login_user", "value": "admin"},
+                {"name": "vendorpw", "value": self._B64_BARE_PASSWORD},
+            ],
+            "text": f"login_user=admin&vendorpw={self._B64_BARE_PASSWORD.replace('=', '%3D')}",
+        }
+        collector = self._collector()
+        result = sanitize_post_data(post_data, collector=collector)
+        assert result is not None
+
+        flagged = [f for f in collector.flagged if f.original_value == self._B64_BARE_PASSWORD]
+        assert len(flagged) == 1, "params and text copies must dedupe to one flag"
+        assert flagged[0].category == "credential"
+        assert flagged[0].occurrences == 2
+        # Flagged, not auto-redacted — the value survives pending user review.
+        params = {p["name"]: p["value"] for p in result["params"]}
+        assert params["vendorpw"] == self._B64_BARE_PASSWORD
+
+    def test_not_flagged_without_login_context(self) -> None:
+        """The same base64 value in a form with no credential-named siblings stays silent."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [{"name": "payload", "value": self._B64_BARE_PASSWORD}],
+            "text": f"payload={self._B64_BARE_PASSWORD.replace('=', '%3D')}",
+        }
+        collector = self._collector()
+        sanitize_post_data(post_data, collector=collector)
+        assert collector.flagged == []
+
+    def test_non_base64_values_not_flagged_in_login_shaped_form(self) -> None:
+        """Plain values in unrecognized fields of a login form are untouched."""
+        post_data = {
+            "mimeType": "application/x-www-form-urlencoded",
+            "params": [
+                {"name": "login_user", "value": "admin"},
+                {"name": "todo", "value": "save"},
+            ],
+            "text": "login_user=admin&todo=save",
+        }
+        collector = self._collector()
+        result = sanitize_post_data(post_data, collector=collector)
+        assert result is not None
+        assert all(f.category != "credential" for f in collector.flagged)
+        params = {p["name"]: p["value"] for p in result["params"]}
+        assert params["todo"] == "save"
 
 
 # ┌──────────────────────────────┬──────────────┬──────────────────────────────────────────────────────┬──────────────────────────────────────┐

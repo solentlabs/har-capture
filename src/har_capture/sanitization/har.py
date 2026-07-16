@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from har_capture.patterns import (
     Hasher,
     is_base64_credential,
+    is_base64_decodable_text,
     is_cookie_attribute_metadata,
     load_sensitive_patterns,
 )
@@ -558,24 +559,44 @@ def _sanitize_form_urlencoded(
     Returns:
         Sanitized text with sensitive field values redacted
     """
+    login_shaped = any(
+        is_sensitive_field(pair.split("=", 1)[0]) or is_flaggable_field(pair.split("=", 1)[0])
+        for pair in text.split("&")
+        if "=" in pair
+    )
+
     pairs = []
     for pair in text.split("&"):
         if "=" in pair:
             key, value = pair.split("=", 1)
+            # Hash the percent-decoded value so the placeholder matches the
+            # params copy (HAR stores params decoded).
+            decoded_value = urllib.parse.unquote_plus(value)
             if is_sensitive_field(key):
-                value = _redact_value(value, hasher, "FIELD", collector)
+                value = _redact_value(decoded_value, hasher, "FIELD", collector)
             elif is_flaggable_field(key) and collector and value:
                 collector.flag_value(
-                    value,
+                    decoded_value,
                     "field",
                     ConfidenceLevel.MEDIUM,
                     f"form field '{key}'",
                     f"Flaggable field name '{key}' in form data",
                 )
-            elif is_base64_credential(value) or is_base64_credential(urllib.parse.unquote_plus(value)):
-                # base64(user:pass) value in an unrecognized field name (e.g.
-                # 'pws') — check the raw and percent-decoded forms.
-                value = _redact_value(value, hasher, "AUTH", collector)
+            elif is_base64_credential(value) or is_base64_credential(decoded_value):
+                # base64(user:pass) value in an unrecognized field name —
+                # check the raw and percent-decoded forms.
+                value = _redact_value(decoded_value, hasher, "AUTH", collector)
+            elif login_shaped and collector and is_base64_decodable_text(decoded_value):
+                # Likely a vendor-encoded credential (Sercomm/Hitron style).
+                # Flag, never auto-redact: base64-decodable alone is not a
+                # 100%-confidence signal.
+                collector.flag_value(
+                    decoded_value,
+                    "credential",
+                    ConfidenceLevel.MEDIUM,
+                    f"form field '{key}'",
+                    f"Base64-decodable value in unrecognized field '{key}' of a login-shaped form POST",
+                )
             pairs.append(f"{key}={value}")
         else:
             pairs.append(pair)
@@ -622,7 +643,7 @@ def sanitize_post_data(
         collector: Optional collector to record redactions
         custom_patterns: Optional additive custom patterns (file path or dict
             matching the ``load_sensitive_patterns`` schema, e.g.
-            ``{"fields": {"auto_redact_patterns": ["pws"]}}``). Extends — not
+            ``{"fields": {"auto_redact_patterns": ["vendorpw"]}}``). Extends — not
             replaces — the built-in auto-redact and flag patterns for THIS
             CALL ONLY via a ``ContextVar``-scoped override. Module-global
             state is never mutated, and independent threads / asyncio tasks
@@ -643,6 +664,12 @@ def sanitize_post_data(
     ):
         # Sanitize params array
         if "params" in result and isinstance(result["params"], list):
+            login_shaped = any(
+                isinstance(p, dict)
+                and "name" in p
+                and (is_sensitive_field(p["name"]) or is_flaggable_field(p["name"]))
+                for p in result["params"]
+            )
             for param in result["params"]:
                 if isinstance(param, dict) and "name" in param:
                     if is_sensitive_field(param["name"]):
@@ -657,8 +684,18 @@ def sanitize_post_data(
                         )
                     elif is_base64_credential(param.get("value", "")):
                         # base64(user:pass) value in an unrecognized field name
-                        # (e.g. 'pws') — mirrors the queryString fallback.
+                        # — mirrors the queryString fallback.
                         param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
+                    elif login_shaped and collector and is_base64_decodable_text(param.get("value", "")):
+                        # Mirrors the form-text login-shaped heuristic.
+                        collector.flag_value(
+                            param["value"],
+                            "credential",
+                            ConfidenceLevel.MEDIUM,
+                            f"POST param '{param['name']}'",
+                            f"Base64-decodable value in unrecognized field '{param['name']}' "
+                            "of a login-shaped form POST",
+                        )
 
         # Sanitize raw text (form-urlencoded, JSON, or XML)
         if result.get("text"):

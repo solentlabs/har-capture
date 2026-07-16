@@ -160,9 +160,17 @@ def sanitize_post_data(
 1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and
    `is_flaggable_field()` (flag). A parameter whose name is not recognized but whose value is a `base64(user:pass)`
    credential (`is_base64_credential()`) is redacted as `AUTH` — mirroring the query-param fallback, so base64-wrapped
-   credentials in device-specific field names (e.g. `pws`) do not slip past field-name redaction.
+   credentials in device-specific field names do not slip past field-name redaction. A parameter whose name is not
+   recognized in a **login-shaped** form (any parameter name in the form matches a sensitive or flaggable pattern) whose
+   value is base64 decoding to printable text (`is_base64_decodable_text()`) is flagged for review at MEDIUM confidence,
+   category `credential` — not auto-redacted, since base64-decodable alone is not a 100%-confidence signal. This is the
+   backstop for vendor credential fields the name patterns don't know yet (the Sercomm/Hitron `pws` class,
+   cable_modem_monitor issue #92; `pws` itself is now a built-in auto-redact pattern).
 1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted. The same
-   `base64(user:pass)` value fallback applies (checking the raw and percent-decoded forms).
+   `base64(user:pass)` value fallback and login-shaped flag heuristic apply (checking the raw and percent-decoded
+   forms). Redaction hashes the **percent-decoded** value, so the placeholder assigned to a secret in the text copy
+   matches the one assigned to the same secret in `postData.params` (which HAR stores decoded) — encoding differences
+   must not break correlation.
 1. **JSON body** (`_sanitize_json_recursive`): Recursive traversal with depth limit (50). Object keys checked against
    field patterns; values redacted if key is sensitive.
 1. **XML body** (`sanitize_html`): Detected via `text/xml` or `application/xml` content type. Delegated to the HTML
@@ -172,10 +180,10 @@ def sanitize_post_data(
 
 **Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON,
 XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
-`sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["pws"]}}`. Module-global patterns are never mutated; the
-override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls with
-the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to the
-HTML engine honors the override end-to-end.
+`sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["vendorpw"]}}`. Module-global patterns are never mutated;
+the override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls
+with the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to
+the HTML engine honors the override end-to-end.
 
 ### URL Sanitization
 

@@ -260,7 +260,7 @@ only know their pattern list at runtime — `sanitize_post_data(..., custom_patt
 field-name extensions reach form params, JSON/XML bodies, and inline-script scanners without any signature plumbing. The
 override is thread- and asyncio-scoped, additive to built-ins, and never mutates module state — independent callers with
 different extensions do not observe each other's patterns. This is the mechanism cable_modem_monitor uses to pass
-per-device credential field names (e.g. `pws`) without editing the universal `sensitive.json`.
+per-device credential field names not yet in the built-in set, without editing the universal `sensitive.json`.
 
 See [Pattern Spec](specs/PATTERN_SPEC.md) for file schemas, merge semantics, and the loader/cache architecture;
 [Sanitization Spec](specs/SANITIZATION_SPEC.md) for the ContextVar scope; and

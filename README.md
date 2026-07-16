@@ -142,7 +142,7 @@ sanitize_har_file("capture.har", custom_patterns=custom)
 
 # Redact device-specific credential FIELD NAMES (not just value patterns).
 # See docs/CUSTOM_PATTERNS.md#extending-sensitive-field-detection.
-device_fields = {"fields": {"auto_redact_patterns": ["pws"]}}
+device_fields = {"fields": {"auto_redact_patterns": ["vendorpw"]}}
 sanitize_har_file("capture.har", custom_patterns=device_fields)
 ```
 

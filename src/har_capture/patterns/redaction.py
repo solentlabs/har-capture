@@ -123,6 +123,34 @@ _COOKIE_ATTR_METADATA_RE = re.compile(
 )
 
 
+def _decode_base64_text(value: str) -> str | None:
+    """Strictly decode a value as base64 to UTF-8 text.
+
+    Args:
+        value: String to decode
+
+    Returns:
+        The decoded text, or None if the value is not valid base64 or does
+        not decode to valid UTF-8
+    """
+    if not value or len(value) < 4:
+        return None
+
+    # Quick pre-filter: must be valid base64 characters
+    if not _BASE64_CHARS_RE.match(value):
+        return None
+
+    # Must be plausible base64 length (multiple of 4 or close with padding)
+    stripped = value.rstrip("=")
+    if len(stripped) < 4:
+        return None
+
+    try:
+        return base64.b64decode(value, validate=True).decode("utf-8")
+    except Exception:
+        return None
+
+
 def is_base64_credential(value: str) -> bool:
     """Check if a value is a base64-encoded user:pass credential.
 
@@ -143,21 +171,8 @@ def is_base64_credential(value: str) -> bool:
         >>> is_base64_credential("not-base64!")
         False
     """
-    if not value or len(value) < 4:
-        return False
-
-    # Quick pre-filter: must be valid base64 characters
-    if not _BASE64_CHARS_RE.match(value):
-        return False
-
-    # Must be plausible base64 length (multiple of 4 or close with padding)
-    stripped = value.rstrip("=")
-    if len(stripped) < 4:
-        return False
-
-    try:
-        decoded = base64.b64decode(value, validate=True).decode("utf-8")
-    except Exception:
+    decoded = _decode_base64_text(value)
+    if decoded is None:
         return False
 
     # Check for user:pass pattern — at least one char on each side of colon
@@ -166,6 +181,33 @@ def is_base64_credential(value: str) -> bool:
 
     parts = decoded.split(":", 1)
     return len(parts) == 2 and len(parts[0]) >= 1 and len(parts[1]) >= 1
+
+
+def is_base64_decodable_text(value: str) -> bool:
+    """Check if a value is base64 that decodes to printable text.
+
+    Weaker signal than :func:`is_base64_credential` (no user:pass shape
+    required) — callers must supply the credential context, e.g. a
+    login-shaped form POST. Exists because vendor firmware base64-encodes
+    bare passwords with no recognizable shape of their own.
+
+    Args:
+        value: String to check
+
+    Returns:
+        True if value decodes to printable UTF-8 text of plausible
+        credential length
+
+    Examples:
+        >>> is_base64_decodable_text("ZXhhbXBsZS1ub3QtcmVhbA==")  # example-not-real
+        True
+        >>> is_base64_decodable_text("admin")  # not valid base64 length
+        False
+    """
+    decoded = _decode_base64_text(value)
+    if decoded is None or len(decoded) < 4:
+        return False
+    return decoded.isprintable()
 
 
 def is_cookie_attribute_metadata(value: str) -> bool:

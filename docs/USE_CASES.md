@@ -1015,7 +1015,9 @@ def redact_capture_for_device(post_data: dict, device_spec: dict) -> dict:
     }
     return sanitize_post_data(post_data, custom_patterns=custom)
 
-# Example: a Hitron CODA56 catalog entry lists "pws" as its credential field
+# Example: a Hitron CODA56 catalog entry lists "pws" as its credential field.
+# The consumer passes its catalog names regardless of built-in coverage —
+# overlap (pws is also a built-in since issue #92) is harmlessly redundant.
 hitron_spec = {"credential_field_names": ["pws"]}
 captured = {
     "mimeType": "application/x-www-form-urlencoded",
@@ -1024,8 +1026,8 @@ captured = {
 redact_capture_for_device(captured, hitron_spec)
 # → {"mimeType": "...", "text": "user=admin&pws=[REDACTED]"}
 
-# Same process with a Motorola MB7621 (different field name) using the SAME
-# process — no global state change, no interference.
+# Same process with a Motorola MB7621 (different field name) — no global
+# state change, no interference.
 motorola_spec = {"credential_field_names": ["loginPassword"]}
 # ... etc.
 ```
@@ -1039,6 +1041,8 @@ motorola_spec = {"credential_field_names": ["loginPassword"]}
 - Concurrent captures for different devices (threaded or asyncio) → each call sees its own pattern set because the
   override lives in a `ContextVar`.
 
-**Why not edit `sensitive.json`?** That file captures universal PII rules. Device-specific credential names (`pws`,
-`loginPassword`, vendor-proprietary tokens) don't belong there because they'd apply to every capture across every
-consumer. The per-call hook keeps the universal set small and lets each consumer carry its own catalog.
+**Why not edit `sensitive.json`?** That file captures universal PII rules. One-off, consumer-specific credential names
+don't belong there because they'd apply to every capture across every consumer. The per-call hook keeps the universal
+set small and lets each consumer carry its own catalog. Names that recur across vendors do get promoted to the built-in
+set once field evidence justifies it — `pws` (Sercomm, Hitron) was promoted after cable_modem_monitor issue #92, joining
+`passwd` and `pwd` — at which point consumer catalogs that still pass them are harmlessly redundant.

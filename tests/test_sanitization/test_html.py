@@ -340,7 +340,7 @@ class TestSetItemScanning:
         assert "config_data" in result, "key name should be preserved"
 
 
-_CUSTOM_PWS = {"fields": {"auto_redact_patterns": ["pws"]}}
+_CUSTOM_VENDORPW = {"fields": {"auto_redact_patterns": ["vendorpw"]}}
 
 # (desc, html, custom_patterns, must_contain, must_not_contain)
 # Each row asserts that the setItem scanner honors (or ignores) custom_patterns
@@ -348,36 +348,36 @@ _CUSTOM_PWS = {"fields": {"auto_redact_patterns": ["pws"]}}
 SANITIZE_HTML_CUSTOM_PATTERN_CASES = [
     (
         "unknown_key_preserved_by_default",
-        'localStorage.setItem("pws", "alsosecret")',
+        'localStorage.setItem("vendorpw", "alsosecret")',
         None,
         ["alsosecret"],
         [],
     ),
     (
         "unknown_key_redacted_with_custom",
-        'localStorage.setItem("pws", "alsosecret")',
-        _CUSTOM_PWS,
-        ["pws"],
+        'localStorage.setItem("vendorpw", "alsosecret")',
+        _CUSTOM_VENDORPW,
+        ["vendorpw"],
         ["alsosecret"],
     ),
     (
         "sessionstorage_custom_key_redacted",
-        'sessionStorage.setItem("pws", "alsosecret")',
-        _CUSTOM_PWS,
-        ["pws"],
+        'sessionStorage.setItem("vendorpw", "alsosecret")',
+        _CUSTOM_VENDORPW,
+        ["vendorpw"],
         ["alsosecret"],
     ),
     (
         "builtin_sensitive_key_still_redacts_with_custom",
         'localStorage.setItem("PrivateKey", "secret_value_123")',
-        _CUSTOM_PWS,
+        _CUSTOM_VENDORPW,
         ["PrivateKey"],
         ["secret_value_123"],
     ),
     (
         "unrelated_key_unaffected_by_custom",
         'localStorage.setItem("safeKey", "benign_value")',
-        _CUSTOM_PWS,
+        _CUSTOM_VENDORPW,
         ["safeKey", "benign_value"],
         [],
     ),
@@ -415,10 +415,10 @@ class TestSanitizeHtmlCustomFieldPatterns:
 
     def test_context_scope_does_not_leak_out(self) -> None:
         """After a custom_patterns call, a subsequent default call must behave as default."""
-        custom_html = 'localStorage.setItem("pws", "alsosecret")'
-        default_html = 'localStorage.setItem("pws", "baseline_value")'
+        custom_html = 'localStorage.setItem("vendorpw", "alsosecret")'
+        default_html = 'localStorage.setItem("vendorpw", "baseline_value")'
 
-        sanitize_html(custom_html, salt=None, custom_patterns=_CUSTOM_PWS)
+        sanitize_html(custom_html, salt=None, custom_patterns=_CUSTOM_VENDORPW)
         result_after = sanitize_html(default_html, salt=None)
 
         assert "baseline_value" in result_after, (
@@ -445,7 +445,7 @@ class TestSanitizeHtmlCustomFieldPatterns:
             ),
             pytest.raises(RuntimeError, match="inner boom"),
         ):
-            sanitize_html("<html></html>", salt=None, custom_patterns=_CUSTOM_PWS)
+            sanitize_html("<html></html>", salt=None, custom_patterns=_CUSTOM_VENDORPW)
 
         assert _FIELD_PATTERNS_CTX.get() is _DEFAULT_FIELD_PATTERNS, (
             "sanitize_html must reset the ContextVar even when the inner impl raises"
