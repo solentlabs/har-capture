@@ -18,7 +18,7 @@ graph TD
 
     subgraph core[Core Library]
         sanitization["<b>Sanitization</b><hr/>• HAR engine<br/>• HTML engine<br/>• Heuristic engine<br/>• Format-preserving hasher"]
-        validation["<b>Validation</b><hr/>• PII leak detection<br/>• Pre-commit hook for consumers"]
+        validation["<b>Validation</b><hr/>• PII leak detection<br/>• Capture-completeness check<br/>• Pre-commit hook for consumers"]
         patterns["<b>Patterns</b><hr/>• Universal PII + field rules<br/>• Redaction allowlists<br/>• Domain extension point"]
         sanitization --> patterns
         validation --> patterns
@@ -79,7 +79,7 @@ src/har_capture/
 │   └── domains/   # Built-in domain pattern files (network_device.json)
 ├── sanitization/  # HAR engine, HTML engine, heuristic engine
 ├── capture/       # Playwright recording, wait-for-data (optional dep)
-├── validation/    # PII leak detection for pre-commit and CLI
+├── validation/    # PII leak detection + capture-completeness for pre-commit and CLI
 └── cli/           # Typer commands (get, sanitize, validate, patterns)
 ```
 
@@ -117,7 +117,8 @@ graph TD
 
     subgraph process[Post-Capture Processing]
         direction TB
-        meta[Inject metadata + pre_capture_cookies] --> sanitize[Pass 1: Auto-sanitize PII]
+        meta[Inject metadata + pre_capture_cookies] --> complete[Completeness check<br>mid-session? any POSTs?]
+        complete --> sanitize[Pass 1: Auto-sanitize PII]
         sanitize --> review[Pass 2: Interactive review]
         review --> filter[Filter bloat + deduplicate]
         filter --> compress[Gzip compress]
@@ -190,11 +191,17 @@ timeout vs interactive mode).
 ### Post-Capture Processing
 
 After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies`,
-`_solentlabs.popups`, `_solentlabs.dialogs`) → sanitization (Pass 1) → interactive review (Pass 2) → bloat filtering +
-deduplication → gzip compression → temp file cleanup.
+`_solentlabs.popups`, `_solentlabs.dialogs`) → completeness check → sanitization (Pass 1) → interactive review (Pass 2)
+→ bloat filtering + deduplication → gzip compression → temp file cleanup.
 
 The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See
 [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
+
+**Completeness check**: a HAR that omits the auth exchange still looks structurally complete, so
+[`analyze_capture_completeness()`](specs/VALIDATION_SPEC.md#capture-completeness-validation) reports what the capture
+does and does not contain — warning when a session cookie on the first request shows recording began mid-session, and
+when no POST was captured at all. It runs on the raw HAR (bloat filtering can drop the true first entry) and **only
+warns**: captures are immutable evidence, so nothing is mutated or rejected.
 
 ## Sanitization Pipeline
 

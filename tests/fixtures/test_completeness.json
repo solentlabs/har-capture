@@ -1,0 +1,577 @@
+{
+  "_comment": "HAR fixtures for capture-completeness validation. The mid-session cases reproduce cable_modem_monitor issue #120, where a PHPSESSID cookie on the first request meant the login exchange happened before recording started.",
+  "clean_login_flow": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/api/v1/session/login",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "text": "{\"username\":\"admin\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/api/v1/session/login",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "text": "{\"password\":\"derived-key\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "PHPSESSID=abc123; Path=/; HttpOnly"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/api/v1/status",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc123"
+              }
+            ],
+            "cookies": [
+              {
+                "name": "PHPSESSID",
+                "value": "abc123"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "mid_session_cookie_header": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc123; lang=en"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/api/v1/status",
+            "headers": [],
+            "postData": {
+              "text": "refresh=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "mid_session_cookies_array": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": [
+              {
+                "name": "JSESSIONID",
+                "value": "xyz789"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/data",
+            "headers": [],
+            "postData": {
+              "text": "a=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "mid_session_and_no_post": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "cookie",
+                "value": "sessionid=deadbeef"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "no_post_requests": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/status",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "benign_first_request_cookie": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "lang=en; theme=dark"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "postData": {
+              "text": "user=admin"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "mid_session_duplicate_sources": {
+    "_comment": "Same session cookie in both the cookies array and the Cookie header, plus a malformed header \u2014 names must dedupe to one, case-insensitively",
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "phpsessid=abc123; garbage; =novalue"
+              },
+              {
+                "name": "Accept",
+                "value": "*/*"
+              }
+            ],
+            "cookies": [
+              {
+                "name": "PHPSESSID",
+                "value": "abc123"
+              },
+              {
+                "name": "",
+                "value": "empty-name"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "cookie_probe_template": {
+    "_comment": "Single-entry HAR for probing one cookie name at a time; tests substitute the Cookie header value. Carries a POST body so only the mid-session warning can fire.",
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "SUBSTITUTED_BY_TEST=v"
+              }
+            ],
+            "postData": {
+              "text": "a=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "empty_har": {
+    "log": {
+      "entries": []
+    }
+  },
+  "malformed_entries": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              "not-a-dict",
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc"
+              }
+            ],
+            "cookies": [
+              "not-a-dict"
+            ]
+          }
+        },
+        {
+          "response": {
+            "headers": [
+              "not-a-dict"
+            ]
+          }
+        },
+        {}
+      ]
+    }
+  },
+  "summary_counts": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://d/a",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "s=1"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://d/a",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "get",
+            "url": "http://d/b",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://d/c",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "text": "x=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "set-cookie",
+                "value": "t=2"
+              }
+            ]
+          }
+        },
+        {
+          "request": {
+            "method": "DELETE",
+            "url": "http://d/d",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 204,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "session_cookie_names": {
+    "_comment": "Cookie names checked against the built-in session_cookies.name_patterns list",
+    "session": [
+      "PHPSESSID",
+      "phpsessid",
+      "JSESSIONID",
+      "ASP.NET_SessionId",
+      ".ASPXAUTH",
+      "connect.sid",
+      "ci_session",
+      "laravel_session",
+      "_session_id",
+      "sessionid",
+      "session_id",
+      "sessid",
+      "sess_id",
+      "session",
+      "sid",
+      "sessiontoken",
+      "session_token",
+      "authtoken",
+      "auth_token"
+    ],
+    "benign": [
+      "lang",
+      "theme",
+      "csrftoken",
+      "XSRF-TOKEN",
+      "user_pref",
+      "sidebar",
+      "session_expiry",
+      "my_sid",
+      "tracking_id"
+    ]
+  },
+  "out_of_order_entries": {
+    "_comment": "Foreign HARs are not guaranteed chronological. The earliest request (t=01) carries the session cookie but is written second; ordering must be resolved by startedDateTime.",
+    "log": {
+      "entries": [
+        {
+          "startedDateTime": "2026-01-01T00:00:05.000Z",
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/data",
+            "headers": [],
+            "postData": {
+              "text": "a=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:01.000Z",
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc123"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "partial_timestamps": {
+    "_comment": "Some entries lack startedDateTime, so sorting is unsafe; fall back to file order.",
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc123"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:01.000Z",
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/x",
+            "headers": [],
+            "postData": {
+              "text": "a=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "identical_timestamps": {
+    "_comment": "Two entries recorded in the same millisecond (routine with parallel asset loads). Ordering must break the tie without comparing entry dicts, which would raise TypeError.",
+    "log": {
+      "entries": [
+        {
+          "startedDateTime": "2026-01-01T00:00:01.000Z",
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "PHPSESSID=abc123"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:01.000Z",
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/x",
+            "headers": [],
+            "postData": {
+              "text": "a=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  }
+}

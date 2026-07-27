@@ -33,6 +33,10 @@ from har_capture.capture.deps import (
 )
 from har_capture.patterns import get_bloat_extensions
 from har_capture.sanitization.report import HeuristicMode
+from har_capture.validation.completeness import (
+    CaptureCompletenessReport,
+    analyze_capture_completeness,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -274,6 +278,7 @@ class CaptureResult:
         success: True if capture succeeded
         error: Error message if capture failed
         sanitization_report: Report from sanitization (for interactive review)
+        completeness: What the capture contains and any gaps found in it
     """
 
     har_path: Path | None = None
@@ -281,6 +286,7 @@ class CaptureResult:
     sanitized_path: Path | None = None
     stats: dict[str, Any] | None = None
     sanitization_report: Any | None = None  # SanitizationReport when available
+    completeness: CaptureCompletenessReport | None = None
     success: bool = True
     error: str | None = None
 
@@ -950,9 +956,16 @@ def _run_post_capture_pipeline(
         custom_patterns: Domain pattern for sanitization
 
     Returns:
-        CaptureResult with paths to generated files
+        CaptureResult with paths to generated files and a completeness report
     """
     result = CaptureResult(har_path=None)
+
+    # Runs on the raw HAR: bloat filtering can drop the true first entry.
+    try:
+        with open(temp_path, encoding="utf-8") as f:
+            result.completeness = analyze_capture_completeness(json.load(f))
+    except Exception as e:
+        _LOGGER.warning("Capture-completeness check failed: %s", e)
 
     # Sanitize from temp file to user's output location
     if sanitize:

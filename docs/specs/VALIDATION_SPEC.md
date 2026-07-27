@@ -7,15 +7,21 @@ It covers what `secrets.py` checks, the difference between the `validate` CLI co
 `_sensitive_fields` and `_depth` parameters work in `check_json_fields`, and the relationship between validation
 patterns and sanitization patterns.
 
+It also covers **capture-completeness validation** (`completeness.py`), a second, independent axis: `secrets.py` asks
+"did something leak *into* this file?" while `completeness.py` asks "is the evidence that should be here *missing*?"
+Both run over any HAR regardless of origin.
+
 ## Key Files
 
-| File                                      | Role                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------ |
-| `src/har_capture/validation/secrets.py`   | PII leak detection: `validate_har()`, `check_json_fields()`, finding dataclass |
-| `src/har_capture/patterns/redaction.py`   | `is_redacted()` — checks if a value has already been sanitized                 |
-| `src/har_capture/patterns/sensitive.json` | Sensitive header and field patterns used by validation                         |
-| `src/har_capture/patterns/allowlist.json` | Redaction recognition patterns                                                 |
-| `src/har_capture/cli/validate.py`         | `har-capture validate` CLI command                                             |
+| File                                           | Role                                                                           |
+| ---------------------------------------------- | ------------------------------------------------------------------------------ |
+| `src/har_capture/validation/secrets.py`        | PII leak detection: `validate_har()`, `check_json_fields()`, finding dataclass |
+| `src/har_capture/validation/completeness.py`   | Capture-completeness: mid-session detection, POST coverage, `load_har()`       |
+| `src/har_capture/cli/_completeness_display.py` | Shared renderer used by `get`, `sanitize`, and `validate`                      |
+| `src/har_capture/patterns/redaction.py`        | `is_redacted()` — checks if a value has already been sanitized                 |
+| `src/har_capture/patterns/sensitive.json`      | Sensitive header and field patterns used by validation                         |
+| `src/har_capture/patterns/allowlist.json`      | Redaction recognition patterns                                                 |
+| `src/har_capture/cli/validate.py`              | `har-capture validate` CLI command                                             |
 
 ## Validation vs Sanitization
 
@@ -288,6 +294,72 @@ Key design decisions:
 - **Pattern compilation is lazy**: Only compiled on first call, then reused
 - **Depth limiting is defensive**: Protects against malicious or malformed JSON
 - **Path tracking is informational**: Used in `Finding.field` for precise location
+
+## Capture-Completeness Validation
+
+Before sanitization, `analyze_capture_completeness()` (`validation/completeness.py`) inspects the raw HAR and reports
+what the capture does and does not contain. It runs against the **raw** HAR — bloat filtering can remove the true first
+entry, and "the first request" is the mid-session signal.
+
+```python
+def analyze_capture_completeness(har, custom_patterns_path=None) -> CaptureCompletenessReport
+```
+
+```python
+@dataclass
+class CaptureCompletenessReport:
+    total_entries: int                        # Requests captured
+    method_counts: dict[str, int]             # Count per HTTP method
+    unique_urls: int                          # Distinct request URLs
+    set_cookie_responses: int                 # Responses carrying Set-Cookie (not proof of a session)
+    first_request_session_cookies: list[str]  # Session cookies already on request #1
+    warnings: list[CompletenessWarning]       # Gaps found (empty == complete)
+
+    post_count: int   # property — method_counts["POST"]
+    complete: bool    # property — no warnings
+```
+
+Two gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
+
+| Code                  | Trigger                                         | Meaning                                                               |
+| --------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| `mid_session_capture` | Session cookie present on the **first** request | Browser was already logged in; the auth exchange predates the capture |
+| `no_post_requests`    | Zero `POST` entries                             | No form or auth submission was recorded                               |
+
+"First request" means `entries[0]` as written in the file — entry order is trusted, not re-sorted by `startedDateTime`.
+Playwright writes entries chronologically, so this holds for har-capture's own captures; a foreign HAR with out-of-order
+entries could hide the signal.
+
+Session cookies are matched by name against `session_cookies.name_patterns` in
+[`capture.json`](PATTERN_SPEC.md#capturejson--bloat-extension-filtering-and-session-cookie-names), case-insensitively
+and full-match. Cookie names are read from both the parsed `request.cookies` array and the raw `Cookie` header, since
+HAR producers populate one, the other, or both.
+
+**This layer warns only.** It never mutates or rejects a capture — HAR files are immutable evidence. A failure inside
+the check is logged and degrades `completeness` to `None`; it never fails the capture.
+
+### Where it runs
+
+| Command                | Input analyzed                  | Output                                                  |
+| ---------------------- | ------------------------------- | ------------------------------------------------------- |
+| `har-capture get`      | Raw HAR, before bloat filtering | Summary + warnings after `CAPTURE COMPLETE`             |
+| `har-capture sanitize` | The sanitized output file       | Summary + warnings after the compression line           |
+| `har-capture validate` | Each file scanned               | Summary for an explicit file; warnings only for `--dir` |
+
+`validate` suppresses the coverage block for `--dir` scans (the pre-commit context) so only actionable warnings appear.
+The choice keys on invocation *mode*, not match count, so a `--dir` run renders identically whether it matches one file
+or fifty. Completeness gaps are **never** counted as findings: they report missing evidence, not a leak, so exit codes
+and `--strict` remain driven by PII findings alone.
+
+Analysis works on sanitized files because sanitization redacts cookie *values* but preserves cookie *names*, and names
+are all the mid-session check reads — so a contributor's sanitized `.har.gz` is still checkable at intake. `load_har()`
+handles `.har` and `.har.gz` transparently and is shared with `validate_har()`.
+
+**Why this exists:** cable_modem_monitor issue #120 (Technicolor CGA6444VF) shipped a HAR whose first request already
+carried a `PHPSESSID` cookie. The login exchange was never inside the capture window, the tool reported success, and a
+full auth config was hand-authored downstream from evidence that did not exist — five months and six contributor
+retests. The companion defect (same-URL POST dedup discarding the login submission) is fixed in
+[Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
 
 ## CLI Command vs Pre-Commit Hook
 

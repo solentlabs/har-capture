@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 
+from har_capture.cli._completeness_display import display_completeness
 from har_capture.cli._patterns_resolver import require_patterns
 
 
@@ -53,7 +54,7 @@ def validate(
         har-capture validate --dir ./captures --recursive --patterns base
         har-capture validate device.har --strict --patterns network-device
     """
-    from har_capture.validation import validate_har
+    from har_capture.validation import analyze_har_file, validate_har
 
     custom_patterns = require_patterns(patterns)
 
@@ -86,6 +87,14 @@ def validate(
     total_errors = 0
     total_warnings = 0
 
+    # Completeness gaps are reported, never counted as findings: they say what
+    # evidence the file lacks, not that it leaked something. Exit codes and
+    # --strict stay driven by PII findings alone.
+    #
+    # Keyed on invocation mode, not file count: a --dir scan is a bulk/pre-commit
+    # context and must render the same whether it matches one file or fifty.
+    show_summary = directory is None
+
     for file_path in har_files:
         findings = validate_har(file_path, custom_patterns=custom_patterns)
 
@@ -103,6 +112,13 @@ def validate(
                     total_warnings += 1
         else:
             typer.echo(f"[OK] {file_path}: Clean")
+
+        report = analyze_har_file(file_path)
+        if show_summary or report.warnings:
+            typer.echo()
+            if not show_summary:
+                typer.echo(f"{file_path}:")
+            display_completeness(report, summary=show_summary)
 
     typer.echo(f"\nSummary: {total_errors} errors, {total_warnings} warnings")
 

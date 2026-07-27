@@ -10,9 +10,11 @@ from typing import Annotated
 
 import typer
 
+from har_capture.cli._completeness_display import display_completeness
 from har_capture.cli._patterns_resolver import require_patterns
 from har_capture.patterns import PatternLoadError
 from har_capture.sanitization.report import HeuristicMode
+from har_capture.validation import analyze_har_file
 
 
 def _stdin_is_tty() -> bool:
@@ -236,6 +238,10 @@ def sanitize(
                 f_out.write(f_in.read())
             gz_size = compressed_path.stat().st_size / 1024 / 1024
             typer.echo(f"  Compressed: {compressed_path} ({gz_size:.1f} MB)")
+
+        # Report against the sanitized output — the file the operator shares.
+        typer.echo()
+        display_completeness(analyze_har_file(result_path))
     except HarSizeError as e:
         size_mb = e.size / 1024 / 1024
         limit_mb = e.max_size / 1024 / 1024

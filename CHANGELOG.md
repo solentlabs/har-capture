@@ -7,6 +7,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-27
+
+### Added
+
+- **Capture-completeness validation reports what a HAR does and does not contain.** A HAR missing the auth exchange
+  still looks complete — it parses, the entries are well-formed, the tool reports success — so a full auth config gets
+  hand-authored downstream from evidence that was never in the file (cable_modem_monitor #120, Technicolor CGA6444VF:
+  five months and six contributor retests). `har-capture get`, `sanitize`, and `validate` now each print a coverage
+  summary (requests, methods, POST requests, responses carrying `Set-Cookie`) plus a warning for each gap found:
+
+  - **Recording began mid-session** — a session cookie (`PHPSESSID`, `JSESSIONID`, and similar; matched by name against
+    `session_cookies.name_patterns` in `capture.json`) was already present on the *first* request, meaning the browser
+    was logged in before recording started and the login exchange is not in the file. Remedy: log out or clear cookies,
+    then re-record.
+  - **No POST requests captured** — no form or auth submission was recorded at all.
+
+  Running on `validate` is what catches the #120 case: contributor HARs arrive through intake, not through a capture
+  this tool performed. It works on already-sanitized files because sanitization redacts cookie *values* but preserves
+  cookie *names*, which is all the check reads. `validate` prints the coverage block for a single file and warnings only
+  when scanning a directory, so pre-commit output stays quiet.
+
+  The check warns only: it never mutates or rejects a HAR, and completeness gaps are not counted as findings — exit
+  codes and `--strict` remain driven by PII findings alone. Available to library callers as
+  `har_capture.validation.analyze_har_file(path)` / `analyze_capture_completeness(har)`, and on
+  `CaptureResult.completeness`. A custom capture-settings file can extend `session_cookies.name_patterns` with
+  device-specific cookie names.
+
 ## [0.10.3] - 2026-07-16
 
 ### Fixed
@@ -940,6 +967,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.10.1]: https://github.com/solentlabs/har-capture/compare/v0.10.0...v0.10.1
 [0.10.2]: https://github.com/solentlabs/har-capture/compare/v0.10.1...v0.10.2
 [0.10.3]: https://github.com/solentlabs/har-capture/compare/v0.10.2...v0.10.3
+[0.11.0]: https://github.com/solentlabs/har-capture/compare/v0.10.3...v0.11.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -967,4 +995,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.10.3...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.11.0...HEAD

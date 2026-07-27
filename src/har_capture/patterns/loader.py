@@ -355,6 +355,9 @@ def load_capture_settings(custom_path: Path | str | None = None) -> dict[str, An
                     builtin["bloat_extensions"][category].extend(extensions)
                 else:
                     builtin["bloat_extensions"][category] = extensions
+        custom_session = custom.get("session_cookies", {}).get("name_patterns")
+        if custom_session:
+            builtin.setdefault("session_cookies", {}).setdefault("name_patterns", []).extend(custom_session)
 
     _cache_set(cache_key, builtin)
     return builtin
@@ -395,6 +398,20 @@ def get_bloat_extensions(
         extensions.update(exts)
 
     return extensions
+
+
+def get_session_cookie_patterns(custom_path: Path | str | None = None) -> list[str]:
+    """Get cookie-name regexes that indicate an established login session.
+
+    Args:
+        custom_path: Optional path to custom capture settings
+
+    Returns:
+        List of case-insensitive full-match regex strings
+    """
+    settings = load_capture_settings(custom_path)
+    patterns: list[str] = settings.get("session_cookies", {}).get("name_patterns", [])
+    return patterns
 
 
 def load_allowlist(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:

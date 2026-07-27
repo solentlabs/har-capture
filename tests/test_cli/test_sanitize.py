@@ -475,3 +475,41 @@ class TestSanitizeReportOption:
 # overrides are a code smell). The per-module
 # floor for cli/sanitize.py is set at the post-test coverage so any
 # new uncovered code lowers the floor.
+
+
+class TestCompletenessReporting:
+    """`sanitize` reports completeness against the file it just produced."""
+
+    _COMPLETENESS = json.loads(
+        (Path(__file__).parent.parent / "fixtures" / "test_completeness.json").read_text()
+    )
+
+    def _write(self, tmp_path: Path, fixture_key: str, filename: str) -> Path:
+        """Write a completeness fixture HAR into tmp_path."""
+        har_file = tmp_path / filename
+        har_file.write_text(json.dumps(copy.deepcopy(self._COMPLETENESS[fixture_key])))
+        return har_file
+
+    def test_reports_gaps_after_sanitizing(self, tmp_path: Path) -> None:
+        """Test gaps surface even though sanitization redacted the cookie value.
+
+        Sanitization replaces the cookie *value* but keeps the *name*, which
+        is all the mid-session check reads.
+        """
+        har = self._write(tmp_path, "mid_session_and_no_post", "mid.har")
+
+        result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
+
+        assert result.exit_code == 0
+        assert "Capture coverage:" in result.output
+        assert result.output.count("WARNING: Recording began mid-session") == 1
+
+    def test_complete_capture_reports_no_gaps(self, tmp_path: Path) -> None:
+        """Test a capture holding the login exchange raises no gap warnings."""
+        har = self._write(tmp_path, "clean_login_flow", "clean_flow.har")
+
+        result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
+
+        assert result.exit_code == 0
+        assert "POST requests: 2" in result.output
+        assert "Recording began mid-session" not in result.output

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "har-capture"
-version = "0.10.3"
+version = "0.11.0"
 description = "HAR capture and PII sanitization library for network traffic analysis"
 readme = "README.md"
 license = "MIT"
@@ -56,7 +56,11 @@ dev = [
     # Type checking
     "mypy>=1.10",
     # Linting & formatting
-    "ruff>=0.5.0",
+    # Pinned, not floored: CI runs bare `ruff check .`, so an unpinned floor let
+    # a new ruff release turn CI red with no code change (0.16.0 stabilized
+    # PLR0917, which flags 11 pre-existing wide-signature APIs). Bump
+    # deliberately, with the rule review that implies — never implicitly.
+    "ruff==0.15.4",
     # TLS testing
     "trustme>=1.1",
     # Pre-commit

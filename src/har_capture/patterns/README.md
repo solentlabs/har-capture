@@ -4,12 +4,12 @@ This directory contains JSON configuration files for PII detection, sanitization
 
 ## Files
 
-| File             | Purpose                                          |
-| ---------------- | ------------------------------------------------ |
-| `pii.json`       | PII detection patterns (MAC, IP, email, etc.)    |
-| `sensitive.json` | Sensitive headers and form field patterns        |
-| `allowlist.json` | Patterns for recognizing already-redacted values |
-| `capture.json`   | File extensions to filter during capture         |
+| File             | Purpose                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| `pii.json`       | PII detection patterns (MAC, IP, email, etc.)                  |
+| `sensitive.json` | Sensitive headers and form field patterns                      |
+| `allowlist.json` | Patterns for recognizing already-redacted values               |
+| `capture.json`   | File extensions to filter during capture, session cookie names |
 
 ## File Schemas
 
@@ -97,7 +97,7 @@ Defines patterns for recognizing already-redacted values (to avoid double-flaggi
 
 ### capture.json
 
-Defines file extensions to filter during HAR capture.
+Defines file extensions to filter during HAR capture, and the cookie names that mark an established login session.
 
 ```json
 {
@@ -106,13 +106,18 @@ Defines file extensions to filter during HAR capture.
     "images": [".png", ".jpg", ".gif"],
     "media": [".mp3", ".mp4"],
     "sourcemaps": [".map"]
+  },
+  "session_cookies": {
+    "name_patterns": ["^phpsessid$", "^jsessionid$"]
   }
 }
 ```
 
 **Fields:**
 
-- Categories can be selectively included via CLI flags (`--include-fonts`, etc.)
+- `bloat_extensions` categories can be selectively included via CLI flags (`--include-fonts`, etc.)
+- `session_cookies.name_patterns`: case-insensitive full-match regexes on cookie *names*, used by capture-completeness
+  validation to warn that a recording began mid-session
 
 ## Custom Patterns
 

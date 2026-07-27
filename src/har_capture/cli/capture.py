@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from har_capture.capture.workflow import CaptureWorkflowResult
 
 
+from har_capture.cli._completeness_display import display_completeness
 from har_capture.cli._patterns_resolver import require_patterns
 
 
@@ -273,6 +274,8 @@ def _display_results(result: CaptureWorkflowResult, patterns: list[str] | None =
         filt = result.stats.get("filtered_entries", 0)
         typer.echo(f"  Removed {removed} bloat entries ({orig} -> {filt})")
     typer.echo()
+
+    display_completeness(result.completeness)
 
     # Show next steps
     main_file = result.compressed_path or result.sanitized_path or result.har_path
