@@ -800,7 +800,7 @@ ______________________________________________________________________
 
 1. Engineer creates a JSON file with vendor-specific additions
 1. User specifies multiple `--patterns` arguments — merged left to right (see
-   [Pattern Spec — Merge Order](docs/specs/PATTERN_SPEC.md#merge-order))
+   [Pattern Spec — Merge Order](specs/PATTERN_SPEC.md#merge-order))
 1. Combined patterns are used for sanitization
 
 **CLI Example**:

@@ -264,7 +264,8 @@ Testable with: zero mocks (real temp file).
 
 #### `_run_post_capture_pipeline(...) -> CaptureResult`
 
-Runs sanitization, copies raw HAR if needed, cleans up temp file, compresses. The temp file is always deleted.
+Assesses capture completeness, runs sanitization, copies raw HAR if needed, cleans up temp file, compresses. The temp
+file is always deleted.
 
 Testable with: zero Playwright mocks (one mock for `sanitize_har_file` if isolating, or zero mocks with a real fixture).
 
@@ -305,6 +306,7 @@ class CaptureResult:
     success: bool
     error: str | None
     sanitization_report: SanitizationReport | None
+    completeness: CaptureCompletenessReport | None  # What the capture contains + gaps
 ```
 
 ### `CapturePathInfo` Dataclass
@@ -609,6 +611,16 @@ har_data["log"]["_solentlabs"] = {
 }
 ```
 
+### Capture-Completeness Validation
+
+Before sanitization, `analyze_capture_completeness()` inspects the raw HAR and attaches a `CaptureCompletenessReport` to
+`CaptureResult.completeness`. It runs against the **raw** HAR because bloat filtering can remove the true first entry,
+and the first request is the mid-session signal.
+
+The check itself lives in `validation/` and is shared with `har-capture sanitize` / `har-capture validate` — see
+[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the two warning codes, and
+the ordering rule.
+
 ### Sanitization
 
 The temp file is sanitized via `sanitize_har_file()`:
@@ -629,7 +641,10 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
    - `include_images=False` → filter .png, .jpg, .jpeg, .gif, .ico, .svg, .webp, .bmp
    - `include_media=False` → filter .mp3, .mp4, .wav, .webm, .ogg, .avi, .mov
    - Always filter: .map (sourcemaps)
-1. **Deduplicate**: Remove entries with same method + URL
+1. **Deduplicate**: Remove entries with the same request key. For `GET`/`HEAD`/etc. the key is `(method, url)`. For
+   `POST`/`PUT`/`PATCH` the key is `(method, url, sha256(body))`, so same-URL submissions with different bodies all
+   survive — a device that logs in via two POSTs to one endpoint (salt request, then derived-key submission) keeps both.
+   Identical retries still dedup.
 1. **Write filtered HAR**: Pretty-printed JSON
 1. **Gzip compress**: Compression level 9, output to `.har.gz`
 1. **Return stats**: Entry counts, sizes before/after
@@ -676,6 +691,8 @@ class CaptureOptions:
    executes.
 1. **Probes are optional metadata** — Probe failures do not stop the capture workflow. Probes always succeed (they catch
    all exceptions internally). Probes can be skipped entirely via `--minimal` for session-constrained devices.
+1. **Completeness validation warns, never mutates** — The check reports gaps and cannot alter, reject, or fail a
+   capture. HAR files are immutable evidence; the operator decides whether to re-record.
 1. **Error messages are credential-free** — Any username/password strings are replaced before errors are returned.
 1. **Service workers are always blocked** — This is hardcoded in context config, not configurable, to ensure fresh
    captures.

@@ -107,6 +107,19 @@ duplicate commits.
   CHANGELOG is the user-facing summary; `git log` is the engineering record.
 - **Single-feature / single-fix PR**: squash-merge for a clean main history.
 
+### Delete merged branches
+
+After a merge succeeds (PR merged, CI green on the merge commit), delete the feature branch — remote and local — as part
+of the same flow, not as later cleanup:
+
+```bash
+git push origin --delete <branch>
+git branch -d <branch>    # squash-merges need -D; verify first: git diff <branch-tip> main must be empty
+```
+
+Orphaned remote branches have already cost an audit finding (see the 0.9.1 doc audit); deletion is part of the release
+process, not optional hygiene.
+
 ## CHANGELOG Format
 
 Uses [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Update in the same PR as the code change. Don't forget

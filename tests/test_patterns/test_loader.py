@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,9 @@ from har_capture.patterns.loader import (
     clear_pattern_cache,
     compile_pattern,
     compile_safe_value_patterns,
+    get_bloat_extensions,
     list_domains,
+    load_capture_settings,
     load_json_file,
     load_pii_patterns,
     load_sensitive_patterns,
@@ -244,7 +247,7 @@ class TestCompilePattern:
             ({"regex": "(((unclosed", "replacement_prefix": "BAD"}, "unclosed_paren"),
         ],
     )
-    def test_invalid_regex_returns_none(self, pattern_def: dict, desc: str) -> None:
+    def test_invalid_regex_returns_none(self, pattern_def: dict[str, Any], desc: str) -> None:
         """Test that invalid regex patterns return None instead of raising."""
         result = compile_pattern(pattern_def)
         assert result is None, f"{desc}: invalid regex should return None"
@@ -393,7 +396,7 @@ class TestIncludePatterns:
     def test_load_pii_with_inclusions(
         self,
         tmp_path: Path,
-        domain_config: dict,
+        domain_config: dict[str, Any],
         expected_present: list[str],
         expected_absent: list[str],
         exact_set: bool,
@@ -419,7 +422,7 @@ class TestIncludePatterns:
     def test_check_for_pii_with_inclusions(
         self,
         tmp_path: Path,
-        domain_config: dict,
+        domain_config: dict[str, Any],
         content: str,
         expected_detected: list[str],
         expected_not_detected: list[str],
@@ -478,3 +481,66 @@ class TestSensitivePatternsHeuristicsMerge:
         result = load_sensitive_patterns(None)
         # Should not have heuristics section (not in core sensitive.json)
         assert isinstance(result, dict)
+
+
+class TestCaptureSettingsCustomMerge:
+    """Tests for custom merging in load_capture_settings.
+
+    Both sections extend the built-ins rather than replacing them, and
+    ``_``-prefixed keys are treated as comments.
+    """
+
+    @staticmethod
+    def _write(tmp_path: Path, settings: dict[str, object]) -> Path:
+        """Write a custom capture-settings file and return its path."""
+        path = tmp_path / "custom_capture.json"
+        path.write_text(json.dumps(settings))
+        return path
+
+    def test_bloat_extensions_merge(self, tmp_path: Path) -> None:
+        """Test known categories extend, new ones are added, `_` keys skipped."""
+        clear_pattern_cache()
+        custom = self._write(
+            tmp_path,
+            {
+                "bloat_extensions": {
+                    "_comment": "ignored",
+                    "fonts": [".pfb"],
+                    "archives": [".zip"],
+                }
+            },
+        )
+
+        try:
+            settings = load_capture_settings(custom)
+            bloat = settings["bloat_extensions"]
+
+            assert ".pfb" in bloat["fonts"]
+            assert ".woff" in bloat["fonts"]
+            assert bloat["archives"] == [".zip"]
+            assert bloat["_comment"] != "ignored"  # custom `_` key skipped
+        finally:
+            clear_pattern_cache()
+
+    def test_custom_bloat_reaches_get_bloat_extensions(self, tmp_path: Path) -> None:
+        """Test a merged custom extension is returned by the accessor."""
+        clear_pattern_cache()
+        custom = self._write(tmp_path, {"bloat_extensions": {"archives": [".zip"]}})
+
+        try:
+            assert ".zip" in get_bloat_extensions(custom_path=custom)
+        finally:
+            clear_pattern_cache()
+
+    def test_builtins_unaffected_by_custom_merge(self, tmp_path: Path) -> None:
+        """Test a custom merge does not leak into the built-in settings."""
+        clear_pattern_cache()
+        custom = self._write(tmp_path, {"bloat_extensions": {"fonts": [".pfb"]}})
+
+        try:
+            load_capture_settings(custom)
+            clear_pattern_cache()
+
+            assert ".pfb" not in load_capture_settings()["bloat_extensions"]["fonts"]
+        finally:
+            clear_pattern_cache()

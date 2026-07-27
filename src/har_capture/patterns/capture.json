@@ -6,5 +6,23 @@
     "images": [".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp"],
     "media": [".mp3", ".mp4", ".wav", ".webm", ".ogg", ".avi", ".mov"],
     "sourcemaps": [".map"]
+  },
+  "session_cookies": {
+    "_comment": "Cookie names (case-insensitive full-match regexes) that indicate an already-established login session. Used by capture-completeness validation to detect a recording that began mid-session, where the auth exchange happened before the capture window opened.",
+    "name_patterns": [
+      "^phpsessid$",
+      "^jsessionid$",
+      "^asp\\.net_sessionid$",
+      "^\\.aspxauth$",
+      "^connect\\.sid$",
+      "^ci_session$",
+      "^laravel_session$",
+      "^_session_id$",
+      "^sess(?:ion)?_?id$",
+      "^session$",
+      "^sid$",
+      "^session_?token$",
+      "^auth_?token$"
+    ]
   }
 }

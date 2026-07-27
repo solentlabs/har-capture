@@ -6,10 +6,21 @@ secrets and PII before committing. Useful for CI/pre-commit hooks.
 Exports:
     - validate_har: Validate a HAR file for PII
     - Finding: Dataclass for validation findings
+    - analyze_capture_completeness / analyze_har_file: Report what a capture
+      contains and which evidence is missing from it
 """
 
 from __future__ import annotations
 
+from har_capture.validation.completeness import (
+    MID_SESSION_CAPTURE,
+    NO_POST_REQUESTS,
+    CaptureCompletenessReport,
+    CompletenessWarning,
+    analyze_capture_completeness,
+    analyze_har_file,
+    load_har,
+)
 from har_capture.validation.secrets import (
     COOKIE_ATTRIBUTES_ONLY,
     MAC_PATTERN,
@@ -28,6 +39,15 @@ from har_capture.validation.secrets import (
 )
 
 __all__ = [
+    # Capture-completeness validation
+    "analyze_capture_completeness",
+    "analyze_har_file",
+    "load_har",
+    "CaptureCompletenessReport",
+    "CompletenessWarning",
+    "MID_SESSION_CAPTURE",
+    "NO_POST_REQUESTS",
+    # PII leak detection
     "COOKIE_ATTRIBUTES_ONLY",
     "MAC_PATTERN",
     "SENSITIVE_FIELDS",

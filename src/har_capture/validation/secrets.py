@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import gzip
 import json
 import re
 import urllib.parse
@@ -31,6 +30,7 @@ from har_capture.patterns.redaction import (
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
+from har_capture.validation.completeness import load_har
 
 # Cookie attribute-only values (not actual session data)
 COOKIE_ATTRIBUTES_ONLY: list[str] = [
@@ -656,13 +656,7 @@ def validate_har(
     har_path = Path(har_path)
     findings: list[Finding] = []
 
-    # Load HAR
-    if har_path.suffix == ".gz":
-        with gzip.open(har_path, "rt", encoding="utf-8") as f:
-            har_data = json.load(f)
-    else:
-        with open(har_path, encoding="utf-8") as f:
-            har_data = json.load(f)
+    har_data = load_har(har_path)
 
     log = har_data.get("log", {})
     entries = log.get("entries", [])

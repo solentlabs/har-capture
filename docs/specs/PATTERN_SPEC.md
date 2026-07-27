@@ -14,7 +14,7 @@ domain patterns, merge order, and the section schema for each pattern type. It a
 | `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                              |
 | `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                |
 | `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                            |
-| `src/har_capture/patterns/capture.json`                | Bloat file extension filtering                                |
+| `src/har_capture/patterns/capture.json`                | Bloat file extension filtering, session cookie names          |
 | `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                           |
 | `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                               |
 | `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()` |
@@ -191,7 +191,7 @@ Check order:
 1. Format-preserving patterns — regex match
 1. Redaction patterns — regex match
 
-### capture.json — Bloat Extension Filtering
+### capture.json — Bloat Extension Filtering and Session Cookie Names
 
 ```json
 {
@@ -200,12 +200,24 @@ Check order:
     "images": [".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".bmp"],
     "media": [".mp3", ".mp4", ".wav", ".webm", ".ogg", ".avi", ".mov"],
     "sourcemaps": [".map"]
+  },
+  "session_cookies": {
+    "name_patterns": ["^phpsessid$", "^jsessionid$", "^sess(?:ion)?_?id$", "..."]
   }
 }
 ```
 
-Used by `CaptureOptions.get_bloat_extensions()` in `browser.py`. Sourcemaps are always filtered; fonts/images/media are
-filtered unless `--include-fonts/images/media` flags are set.
+`bloat_extensions` is used by `CaptureOptions.get_bloat_extensions()` in `browser.py`. Sourcemaps are always filtered;
+fonts/images/media are filtered unless `--include-fonts/images/media` flags are set.
+
+`session_cookies.name_patterns` is used by `get_session_cookie_patterns()` and read by
+[capture-completeness validation](VALIDATION_SPEC.md#capture-completeness-validation) to detect a recording that began
+mid-session. Entries are case-insensitive full-match regexes tested against cookie **names** only — no cookie values are
+read, so this list carries no PII risk.
+
+**Merge semantics:** a custom capture-settings file extends both sections. `bloat_extensions` categories extend
+per-category (unknown categories are added); `session_cookies.name_patterns` extends the built-in list. Neither replaces
+built-ins.
 
 ## Domain Pattern Files
 
@@ -433,7 +445,10 @@ def load_sensitive_patterns(custom_path: str | None = None) -> dict:
 def load_allowlist(custom_path: str | None = None) -> dict:
 
 # Load capture settings (capture.json)
-def load_capture_settings() -> dict:
+def load_capture_settings(custom_path: Path | str | None = None) -> dict:
+
+# Session cookie name regexes for capture-completeness validation
+def get_session_cookie_patterns(custom_path: Path | str | None = None) -> list[str]:
 
 # Compile heuristic detectors from sensitive patterns
 def compile_detectors(sensitive: dict) -> list[CompiledDetector]:

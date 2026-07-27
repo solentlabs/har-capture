@@ -182,3 +182,91 @@ class TestValidateOutput:
         """Test summary covers all files."""
         result = runner.invoke(app, ["validate", "--dir", str(har_directory), "--patterns", "base"])
         assert "Summary:" in result.stdout
+
+
+class TestCompletenessReporting:
+    """`validate` reports capture-completeness alongside PII findings.
+
+    This is the intake path: contributor HARs reach the project through
+    `validate`, not through a capture this tool performed, so the gaps have
+    to surface here (cable_modem_monitor #120).
+    """
+
+    _COMPLETENESS = json.loads(
+        (Path(__file__).parent.parent / "fixtures" / "test_completeness.json").read_text()
+    )
+
+    def _write(self, tmp_path: Path, fixture_key: str, filename: str) -> Path:
+        """Write a completeness fixture HAR into tmp_path."""
+        har_file = tmp_path / filename
+        har_file.write_text(json.dumps(copy.deepcopy(self._COMPLETENESS[fixture_key])))
+        return har_file
+
+    def test_single_file_shows_summary_and_warnings(self, tmp_path: Path) -> None:
+        """Test a single-file run prints the coverage block and the gaps."""
+        har = self._write(tmp_path, "mid_session_and_no_post", "mid.har")
+
+        result = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+
+        assert "Capture coverage:" in result.output
+        assert "POST requests: 0" in result.output
+        assert result.output.count("WARNING:") == 2
+
+    def test_complete_capture_reports_no_warnings(self, tmp_path: Path) -> None:
+        """Test a capture holding the login exchange raises no gap warnings."""
+        har = self._write(tmp_path, "clean_login_flow", "clean_flow.har")
+
+        result = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+
+        assert "Capture coverage:" in result.output
+        assert "WARNING:" not in result.output
+
+    def test_gaps_do_not_change_exit_code(self, tmp_path: Path) -> None:
+        """Test completeness gaps never fail a run, even under --strict.
+
+        Gaps report missing evidence, not a leak, so they must stay out of
+        the finding counts that drive the exit code.
+        """
+        har = self._write(tmp_path, "no_post_requests", "gaps.har")
+
+        plain = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+        strict = runner.invoke(app, ["validate", str(har), "--patterns", "base", "--strict"])
+
+        assert "WARNING:" in plain.output
+        assert plain.exit_code == 0
+        assert strict.exit_code == 0
+
+    def test_directory_scan_suppresses_summary(self, tmp_path: Path) -> None:
+        """Test multi-file scans print warnings only, keeping pre-commit quiet."""
+        self._write(tmp_path, "mid_session_and_no_post", "a.har")
+        self._write(tmp_path, "no_post_requests", "b.har")
+
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
+
+        assert "Capture coverage:" not in result.output
+        assert "WARNING:" in result.output
+
+    def test_directory_scan_silent_when_all_complete(self, tmp_path: Path) -> None:
+        """Test a directory of complete captures produces no gap output.
+
+        Also pins the one-file case: a --dir scan matching a single file is
+        still a bulk context and must render like any other --dir run, not
+        like an explicit single-file invocation.
+        """
+        self._write(tmp_path, "clean_login_flow", "a.har")
+
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
+
+        assert "WARNING:" not in result.output
+        assert "Capture coverage:" not in result.output
+
+    def test_single_file_and_dir_of_one_render_differently(self, tmp_path: Path) -> None:
+        """Test the summary follows invocation mode, not how many files matched."""
+        har = self._write(tmp_path, "mid_session_and_no_post", "only.har")
+
+        direct = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+        scanned = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
+
+        assert "Capture coverage:" in direct.output
+        assert "Capture coverage:" not in scanned.output
+        assert "WARNING:" in scanned.output

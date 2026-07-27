@@ -94,6 +94,7 @@ class CaptureResult:
         sanitized_path: Path to sanitized HAR file
         stats: Capture statistics
         sanitization_report: Report from sanitization (for interactive review)
+        completeness: What the capture contains and any gaps found in it
     """
 
     success: bool = False
@@ -103,6 +104,7 @@ class CaptureResult:
     sanitized_path: Path | None = None
     stats: dict[str, Any] = field(default_factory=dict)
     sanitization_report: Any | None = None  # SanitizationReport when available
+    completeness: Any | None = None  # CaptureCompletenessReport when available
 
 
 # =============================================================================
@@ -213,6 +215,11 @@ class CaptureWorkflowResult:
     def stats(self) -> dict[str, Any]:
         """Capture statistics."""
         return self.capture.stats if self.capture else {}
+
+    @property
+    def completeness(self) -> Any | None:
+        """Capture-completeness report (None if capture did not run)."""
+        return self.capture.completeness if self.capture else None
 
 
 # =============================================================================
@@ -439,6 +446,7 @@ def run_capture_phase(
         sanitized_path=capture_result.sanitized_path,
         stats=capture_result.stats or {},
         sanitization_report=capture_result.sanitization_report,
+        completeness=capture_result.completeness,
     )
 
     if capture_result.success:
