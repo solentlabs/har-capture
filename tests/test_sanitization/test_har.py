@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -615,6 +616,36 @@ class TestResolveFieldPatterns:
             _resolve_field_patterns({"fields": {"auto_redact_patterns": [f"p{i}"]}})
 
         assert len(_CUSTOM_FIELD_RE_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
+
+    def test_header_sets_cache_eviction_bounded_by_max(self) -> None:
+        """The header-sets cache is bounded by the same max as the field cache.
+
+        Both caches share `_CUSTOM_FIELD_RE_CACHE_MAX`; only the field one had
+        an eviction test, so the header cache's bound was unverified.
+        """
+        from har_capture.sanitization.har import (
+            _CUSTOM_FIELD_RE_CACHE_MAX,
+            _CUSTOM_HEADER_SETS_CACHE,
+            _resolve_header_sets,
+        )
+
+        _CUSTOM_HEADER_SETS_CACHE.clear()
+        for i in range(_CUSTOM_FIELD_RE_CACHE_MAX + 5):
+            _resolve_header_sets({"headers": {"full_redact": [f"x-hdr-{i}"]}})
+
+        assert len(_CUSTOM_HEADER_SETS_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
+
+    def test_header_sets_cache_returns_cached_instance(self) -> None:
+        """A repeat call with the same patterns must not recompile."""
+        from har_capture.sanitization.har import (
+            _CUSTOM_HEADER_SETS_CACHE,
+            _resolve_header_sets,
+        )
+
+        _CUSTOM_HEADER_SETS_CACHE.clear()
+        patterns = {"headers": {"full_redact": ["x-vendor-token"]}}
+
+        assert _resolve_header_sets(patterns) is _resolve_header_sets(patterns)
 
 
 class TestFieldPatternsScope:
@@ -3875,3 +3906,337 @@ class TestApplicationXmlResponseRouting:
         result = sanitize_entry(entry, salt="test")
         content_text = result["response"]["content"]["text"]
         assert "192.168.1.100" not in content_text
+
+
+# =============================================================================
+# Pass 1b -- Redacted-Value Propagation
+# =============================================================================
+
+# Propagation eligibility: (value, eligible, id)
+PROPAGATION_ELIGIBILITY_CASES = [
+    (c["value"], c["eligible"], c["id"]) for c in _HAR_FIXTURE["propagation_eligibility_cases"]
+]
+
+
+class TestPropagationEligibility:
+    """Tests for _is_propagation_eligible (SANITIZATION_SPEC Pass 1b)."""
+
+    @pytest.mark.parametrize(
+        ("value", "eligible", "desc"),
+        PROPAGATION_ELIGIBILITY_CASES,
+        ids=[c[2] for c in PROPAGATION_ELIGIBILITY_CASES],
+    )
+    def test_eligibility(self, value: str, eligible: bool, desc: str) -> None:
+        """Only values that cannot coincidentally collide are globally replaceable."""
+        from har_capture.sanitization.har import _is_propagation_eligible
+
+        assert _is_propagation_eligible(value) is eligible, (
+            f"{desc}: '{value}' should be {'eligible' if eligible else 'ineligible'}"
+        )
+
+
+def _token_flow_har(token: str, *, path_segment: str | None = None) -> dict:
+    """Build a login -> use -> logout HAR where the token appears on three surfaces."""
+    return {
+        "log": {
+            "version": "1.2",
+            "entries": [
+                {
+                    "request": {
+                        "method": "POST",
+                        "url": "https://10.0.0.1/rest/v1/user/3/token",
+                        "headers": [],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {
+                            "mimeType": "application/json",
+                            "text": json.dumps({"created": {"token": token, "userId": 3}}),
+                        },
+                    },
+                },
+                {
+                    "request": {
+                        "method": "DELETE",
+                        "url": f"https://10.0.0.1/rest/v1/user/3/token/{path_segment or token}",
+                        "headers": [{"name": "Authorization", "value": f"Bearer {token}"}],
+                    },
+                    "response": {
+                        "status": 204,
+                        "headers": [],
+                        "content": {"mimeType": "application/json", "text": ""},
+                    },
+                },
+            ],
+        }
+    }
+
+
+class TestRedactedValuePropagation:
+    """Tests that already-redacted values are replaced on unlabeled surfaces."""
+
+    def test_token_in_url_path_is_redacted(self) -> None:
+        """A token redacted in a body must not survive verbatim in a URL path."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        sanitized, _ = sanitize_har(_token_flow_har(token), salt="test")
+
+        assert token not in json.dumps(sanitized), "token survived somewhere in the HAR"
+
+    def test_url_structure_is_preserved(self) -> None:
+        """Redaction replaces the segment without changing the URL's shape."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        original = _token_flow_har(token)
+        before = original["log"]["entries"][1]["request"]["url"]
+        sanitized, _ = sanitize_har(original, salt="test")
+        after = sanitized["log"]["entries"][1]["request"]["url"]
+
+        assert after.count("/") == before.count("/"), "path segment count changed"
+        assert after.startswith("https://10.0.0.1/rest/v1/user/3/token/")
+
+    def test_propagated_placeholder_matches_original(self) -> None:
+        """The path gets the same placeholder the body was given."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        sanitized, _ = sanitize_har(_token_flow_har(token), salt="test")
+
+        body = json.loads(sanitized["log"]["entries"][0]["response"]["content"]["text"])
+        placeholder = body["created"]["token"]
+        url = sanitized["log"]["entries"][1]["request"]["url"]
+
+        assert url.endswith(f"/{placeholder}"), f"path got a different placeholder than the body: {url}"
+
+    def test_ineligible_value_is_left_alone(self) -> None:
+        """A short redacted value must not be find-replaced across the file."""
+        sanitized, _ = sanitize_har(_token_flow_har("1"), salt="test")
+
+        url = sanitized["log"]["entries"][1]["request"]["url"]
+        assert url == "https://10.0.0.1/rest/v1/user/3/token/1", "short value was propagated"
+        assert "/rest/v1/user/3/" in url, "unrelated digits were rewritten"
+
+    def test_unrelated_path_segments_survive(self) -> None:
+        """Propagation must not touch segments that are not the secret."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        sanitized, _ = sanitize_har(_token_flow_har(token), salt="test")
+
+        for entry in sanitized["log"]["entries"]:
+            assert "/rest/v1/user/3/token" in entry["request"]["url"]
+
+    def test_propagation_count_recorded(self) -> None:
+        """The sweep records what it replaced."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        _, report = sanitize_har(_token_flow_har(token), salt="test")
+
+        assert report.auto_redacted_counts.get("propagated", 0) >= 1
+
+    def test_no_propagation_when_value_absent_elsewhere(self) -> None:
+        """A capture with nothing to propagate is unchanged and records nothing."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        har = _token_flow_har(token, path_segment="somethingelse")
+        sanitized, report = sanitize_har(har, salt="test")
+
+        assert sanitized["log"]["entries"][1]["request"]["url"].endswith("/somethingelse")
+        assert report.auto_redacted_counts.get("propagated", 0) == 0
+
+    def test_propagated_value_leaves_the_review_queue(self) -> None:
+        """A value replaced everywhere is not a decision the user can affect."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        _, report = sanitize_har(_token_flow_har(token), salt="test", heuristics=HeuristicMode.FLAG)
+
+        assert token not in [f.original_value for f in report.flagged]
+
+    def test_unpropagated_flag_stays_in_the_review_queue(self) -> None:
+        """Dropping propagated values must not empty the queue of everything else."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        uuid = "fb75f58f-2821-4c8e-a8e8-b44bd3f9e012"
+        har = _token_flow_har(token)
+        har["log"]["entries"][1]["request"]["url"] = (
+            f"https://10.0.0.1/rest/v1/user/3/token/{token}/session/{uuid}"
+        )
+        sanitized, report = sanitize_har(har, salt="test", heuristics=HeuristicMode.FLAG)
+
+        flagged = [f.original_value for f in report.flagged]
+        assert token not in flagged, "propagated value should have left the queue"
+        assert uuid in flagged, "unrelated flagged value was dropped with it"
+        assert uuid in sanitized["log"]["entries"][1]["request"]["url"], (
+            "a flagged-only value must not be auto-redacted"
+        )
+
+
+class TestPropagationFailureModes:
+    """Pass 1b must degrade to a no-op, never corrupt a HAR (invariant 5)."""
+
+    def test_unserializable_har_is_left_untouched(self) -> None:
+        """A HAR that cannot be serialized skips propagation instead of raising."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        token = "eba954f1f10817e8f36607c4db106999"
+        har = {"log": {"entries": [{"request": {"url": f"/x/{token}"}}]}, "bad": {object()}}
+
+        assert _propagate_redacted_values(har, {token: "FIELD_abc12345"}) == 0
+        assert har["log"]["entries"][0]["request"]["url"] == f"/x/{token}"
+
+    def test_failed_round_trip_reverts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If the rewritten HAR does not parse, the original is kept."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        def _raise(*args: object, **kwargs: object) -> None:
+            raise json.JSONDecodeError("boom", "", 0)
+
+        monkeypatch.setattr("har_capture.sanitization.har.json.loads", _raise)
+
+        token = "eba954f1f10817e8f36607c4db106999"
+        har = {"log": {"entries": [{"request": {"url": f"/x/{token}"}}]}}
+
+        assert _propagate_redacted_values(har, {token: "FIELD_abc12345"}) == 0
+        assert har["log"]["entries"][0]["request"]["url"] == f"/x/{token}", "HAR was left half-rewritten"
+
+    def test_empty_registry_is_a_no_op(self) -> None:
+        """Nothing redacted means nothing to sweep."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        har = {"log": {"entries": []}}
+        assert _propagate_redacted_values(har, {}) == 0
+
+
+# Propagation search keys: (registry, expected_needles, id)
+PROPAGATION_SEARCH_KEY_CASES = [
+    (c["registry"], c["expected_needles"], c["id"]) for c in _HAR_FIXTURE["propagation_search_key_cases"]
+]
+
+
+class TestPropagationSearchKeys:
+    """Needle expansion: encoding variants included, longest replaced first."""
+
+    @pytest.mark.parametrize(
+        ("registry", "expected_needles", "desc"),
+        PROPAGATION_SEARCH_KEY_CASES,
+        ids=[c[2] for c in PROPAGATION_SEARCH_KEY_CASES],
+    )
+    def test_search_keys(self, registry: dict, expected_needles: list, desc: str) -> None:
+        """Needles cover each eligible value's encodings, ordered longest first."""
+        from har_capture.sanitization.har import _propagation_search_keys
+
+        assert [needle for needle, _ in _propagation_search_keys(registry)] == expected_needles, desc
+
+    def test_encoded_needle_maps_to_the_same_placeholder(self) -> None:
+        """Raw and percent-encoded forms must resolve to one placeholder."""
+        from har_capture.sanitization.har import _propagation_search_keys
+
+        keys = dict(_propagation_search_keys({"abc+def/ghi=jkl12345mnop": "FIELD_bbbbbbbb"}))
+
+        assert set(keys.values()) == {"FIELD_bbbbbbbb"}
+
+
+class TestPropagationOverlappingValues:
+    """A value that is a prefix of another must not be substituted inside it."""
+
+    OVERLAP_SHORT = "eba954f1f10817e8f36607c4db106999"
+    OVERLAP_LONG = "eba954f1f10817e8f36607c4db106999SUFFIX01"
+
+    @pytest.mark.parametrize(
+        "registry_order",
+        [("short_first"), ("long_first")],
+        ids=["short_registered_first", "long_registered_first"],
+    )
+    def test_longest_match_wins_regardless_of_registry_order(self, registry_order: str) -> None:
+        """Output must not depend on which value the sanitizer reached first."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        pairs = [(self.OVERLAP_SHORT, "FIELD_aaaaaaaa"), (self.OVERLAP_LONG, "FIELD_bbbbbbbb")]
+        if registry_order == "long_first":
+            pairs.reverse()
+
+        har = {"log": {"entries": [{"request": {"url": f"/x/{self.OVERLAP_LONG}"}}]}}
+        _propagate_redacted_values(har, dict(pairs))
+
+        assert har["log"]["entries"][0]["request"]["url"] == "/x/FIELD_bbbbbbbb"
+
+    def test_no_corrupted_hybrid_is_produced(self) -> None:
+        """The suffix must never survive glued onto a placeholder."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        har = {"log": {"entries": [{"request": {"url": f"/x/{self.OVERLAP_LONG}"}}]}}
+        _propagate_redacted_values(
+            har, {self.OVERLAP_SHORT: "FIELD_aaaaaaaa", self.OVERLAP_LONG: "FIELD_bbbbbbbb"}
+        )
+
+        assert "SUFFIX01" not in json.dumps(har), "suffix leaked out of a mangled substitution"
+
+    def test_both_overlapping_values_still_redacted_when_both_present(self) -> None:
+        """Each value keeps its own placeholder when both appear separately."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        har = {
+            "log": {
+                "entries": [
+                    {"request": {"url": f"/a/{self.OVERLAP_SHORT}"}},
+                    {"request": {"url": f"/b/{self.OVERLAP_LONG}"}},
+                ]
+            }
+        }
+        _propagate_redacted_values(
+            har, {self.OVERLAP_SHORT: "FIELD_aaaaaaaa", self.OVERLAP_LONG: "FIELD_bbbbbbbb"}
+        )
+
+        urls = [e["request"]["url"] for e in har["log"]["entries"]]
+        assert urls == ["/a/FIELD_aaaaaaaa", "/b/FIELD_bbbbbbbb"]
+
+
+class TestPropagationEncodedValues:
+    """A secret that is percent-encoded on another surface must still be caught."""
+
+    ENCODABLE = "abc+def/ghi=jkl12345mnop"
+
+    def _flow(self, url_token: str) -> dict:
+        return {
+            "log": {
+                "entries": [
+                    {
+                        "request": {"method": "POST", "url": "https://10.0.0.1/login", "headers": []},
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {
+                                "mimeType": "application/json",
+                                "text": json.dumps({"token": self.ENCODABLE}),
+                            },
+                        },
+                    },
+                    {
+                        "request": {"method": "GET", "url": f"https://10.0.0.1/a/{url_token}", "headers": []},
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {"mimeType": "application/json", "text": "{}"},
+                        },
+                    },
+                ]
+            }
+        }
+
+    def test_percent_encoded_path_segment_is_redacted(self) -> None:
+        """The encoded copy of a redacted secret must not survive."""
+        encoded = urllib.parse.quote(self.ENCODABLE, safe="")
+        sanitized, _ = sanitize_har(self._flow(encoded), salt="test")
+
+        assert encoded not in json.dumps(sanitized)
+        assert self.ENCODABLE not in json.dumps(sanitized)
+
+    def test_encoded_copy_gets_the_same_placeholder_as_the_body(self) -> None:
+        """Encoding difference must not break correlation."""
+        encoded = urllib.parse.quote(self.ENCODABLE, safe="")
+        sanitized, _ = sanitize_har(self._flow(encoded), salt="test")
+
+        placeholder = json.loads(sanitized["log"]["entries"][0]["response"]["content"]["text"])["token"]
+        assert sanitized["log"]["entries"][1]["request"]["url"].endswith(f"/{placeholder}")
+
+    def test_raw_and_encoded_copies_both_replaced(self) -> None:
+        """A capture carrying both forms loses both."""
+        from har_capture.sanitization.har import _propagate_redacted_values
+
+        encoded = urllib.parse.quote(self.ENCODABLE, safe="")
+        har = {"log": {"entries": [{"request": {"url": f"/a/{self.ENCODABLE}/b/{encoded}"}}]}}
+        count = _propagate_redacted_values(har, {self.ENCODABLE: "FIELD_bbbbbbbb"})
+
+        assert har["log"]["entries"][0]["request"]["url"] == "/a/FIELD_bbbbbbbb/b/FIELD_bbbbbbbb"
+        assert count == 2

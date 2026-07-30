@@ -331,9 +331,9 @@ Playwright writes entries chronologically, so this holds for har-capture's own c
 entries could hide the signal.
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson--bloat-extension-filtering-and-session-cookie-names), case-insensitively
-and full-match. Cookie names are read from both the parsed `request.cookies` array and the raw `Cookie` header, since
-HAR producers populate one, the other, or both.
+[`capture.json`](PATTERN_SPEC.md#capturejson-bloat-extension-filtering-and-session-cookie-names), case-insensitively and
+full-match. Cookie names are read from both the parsed `request.cookies` array and the raw `Cookie` header, since HAR
+producers populate one, the other, or both.
 
 **This layer warns only.** It never mutates or rejects a capture — HAR files are immutable evidence. A failure inside
 the check is logged and degrades `completeness` to `None`; it never fails the capture.

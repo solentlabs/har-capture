@@ -11,7 +11,7 @@ two-pass model (auto-sanitize + interactive review) and the format-preserving ha
 
 | File                                         | Role                                                                               |
 | -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `src/har_capture/sanitization/har.py`        | HAR-level orchestration (~1350 lines, 27 functions, 8 logical groups)              |
+| `src/har_capture/sanitization/har.py`        | HAR-level orchestration, organized into 9 logical groups                           |
 | `src/har_capture/sanitization/html.py`       | HTML/content engine, multi-pass scanner pipeline                                   |
 | `src/har_capture/sanitization/heuristics.py` | Heuristic engine: entropy analysis, credential prefix, adjacency, domain detectors |
 | `src/har_capture/sanitization/collector.py`  | Redaction/flag collection during sanitization                                      |
@@ -57,7 +57,7 @@ two-pass model (auto-sanitize + interactive review) and the format-preserving ha
 
 ### Logical Groups
 
-The ~1350-line file is organized into 8 groups:
+The file is organized into 9 groups:
 
 1. **HAR Structure Validation** — `validate_har_structure()`, `HarSizeError`, `HarValidationError`
 1. **Pattern Loading** — `_load_sensitive_headers()`, `_load_sensitive_field_patterns()` (module-level caching)
@@ -66,6 +66,7 @@ The ~1350-line file is organized into 8 groups:
 1. **Request Sanitization** — Headers, cookies, POST data (form/JSON), query strings, URL paths
 1. **Response Sanitization** — Headers, cookies, content (MIME-type dispatched)
 1. **Pattern-Based String Sanitization** — 10+ regex patterns for MACs, IPs, emails, SSN, credit cards
+1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
 
@@ -197,6 +198,9 @@ the HTML engine honors the override end-to-end.
 
 - UUIDs, API keys, long tokens, device serial patterns are flagged (not auto-redacted)
 - Path segments preserved for URL readability
+- A segment that exactly matches a value already redacted elsewhere in the capture is replaced by
+  [Pass 1b](#pass-1b-redacted-value-propagation) after all entries are sanitized — no detection rule is involved, and
+  segment count is preserved
 
 ### JSON Body Traversal
 
@@ -539,10 +543,17 @@ CATEGORY_PREFIX_MAP = {
 
 Per-hasher instance cache (`dict[str, str]`) keyed by `PREFIX:value`:
 
-- Ensures same value always maps to same hash within a session
+- Ensures the same value always maps to the same hash within a session **for a given prefix**
 - Grows unbounded (acceptable for typical HAR sizes)
 - Enables correlation preservation: if `AA:BB:CC:DD:EE:FF` appears in 50 entries, it maps to the same
   `02:xx:xx:xx:xx:xx` every time
+
+The prefix is part of the cache key, so a value redacted on two surfaces under different prefixes receives two different
+placeholders — a session token in a response body becomes `FIELD_<a>` while the same token in an `Authorization` header
+becomes `AUTH_<b>`. Correlation therefore holds within a surface, not across surfaces. This is a property of the current
+design, not a guarantee the spec makes: a reader cannot conclude from a sanitized HAR that `FIELD_<a>` and `AUTH_<b>`
+are the same secret. [Pass 1b](#pass-1b-redacted-value-propagation) is unaffected — it reuses whichever placeholder the
+value was first given, so a propagated copy always matches its source.
 
 ### Static Fallbacks (salt=None)
 
@@ -590,6 +601,73 @@ Metadata embedded via `_embed_sanitization_metadata()`:
   }
 }
 ```
+
+### Pass 1b: Redacted-Value Propagation
+
+A value redacted on one surface can appear verbatim on another that carries no field name to match — most commonly a URL
+path segment (`DELETE /rest/v1/user/3/token/<token>`), where the sanitizer has no label to key on. The strict field-name
+rules never see it, so the same secret ends up redacted in the response body and the `Authorization` header but live in
+the path.
+
+After every entry is sanitized, `sanitize_har` sweeps the whole HAR once and replaces any remaining verbatim occurrence
+of an already-redacted value with the placeholder that value was already assigned.
+
+**This is not a detection rule.** Eligibility is established entirely by the strict rules in Pass 1 — the value is
+already known to be a secret. The only question the sweep answers is whether a textual match elsewhere in the file is
+necessarily the *same* secret rather than a coincidence.
+
+**Eligibility** (`_is_propagation_eligible`) — all four must hold:
+
+| Criterion                                     | Excludes                                                        |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| 16+ characters                                | `0`, `1`, `admin` — replacing these globally would wreck a HAR  |
+| Character set `[A-Za-z0-9._~+/=:-]`, no space | Phrases and values carrying quoting or structural characters    |
+| Contains at least one digit                   | `GetDeviceInformation`, `configurationSettings` — identifiers   |
+| Not `is_safe_value()`                         | IPv6, CIDR, timestamps, versions, already-redacted placeholders |
+
+The digit requirement is the operative form of "must not be word-shaped." Method names, config keys, and API identifiers
+are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls
+back to review.
+
+**Failing eligibility is not a leak** — it is the pre-existing behavior. The value stays flagged for interactive review,
+and Pass 2 resolves it if the user confirms. That is what allows the bar to be strict: a false negative costs nothing
+beyond the status quo, while a false positive would rewrite unrelated bytes across the file.
+
+Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
+delimiters are untouched.
+
+**Needle expansion and ordering** (`_propagation_search_keys`). Each eligible value contributes two needles — its
+literal form and its percent-encoded form (`quote(value, safe="")`) — both mapping to the same placeholder. A secret
+that had to be escaped to sit in a URL path is otherwise missed entirely, and that would contradict the rule the
+form-urlencoded branch already follows: an encoding difference must not break correlation.
+
+Needles are applied **longest first**. When one redacted value is a prefix of another (a token and a token-plus-suffix),
+replacing the shorter first would substitute inside the longer one and emit a corrupted hybrid — neither placeholder nor
+original, leaking the remaining suffix. Ordering by descending length makes the result independent of which surface the
+sanitizer reached first.
+
+Matching is **exact and case-sensitive**. A copy of a secret that differs only in case is not replaced; case-folding a
+global find-replace would widen collision risk, which is precisely what the eligibility rules exist to constrain.
+
+```python
+def _is_propagation_eligible(value: str) -> bool:
+    """True if a redacted value is safe to replace globally across the HAR."""
+
+def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
+    """Expand eligible values into (needle, placeholder) pairs, longest needle first."""
+
+def _propagate_redacted_values(har_data: dict, registry: dict[str, str]) -> int:
+    """Replace remaining verbatim occurrences of redacted values. Returns replacement count."""
+```
+
+The registry (`RedactionCollector.redacted_values`) maps original value → assigned placeholder and is populated by
+`_redact_value` on every auto-redaction, so a value keeps the placeholder its first surface gave it. The sweep runs
+before `_embed_sanitization_metadata`, and its replacement count is recorded under the `propagated` category in
+`auto_redacted_counts`.
+
+**Review queue.** A propagated value has no surviving occurrence, so `RedactionCollector.drop_flagged()` withdraws it
+from `report.flagged` — presenting it would ask the user for a decision that cannot change the output. Values that
+failed eligibility, and values that were only ever flagged (never auto-redacted), stay in the queue untouched.
 
 ### URL Credential Location Annotation
 
@@ -727,3 +805,8 @@ Detects common redaction markers to warn users before double-sanitizing.
 1. **Scanner passes require 100% confidence** — Every regex in the HTML scanner pipeline (passes 0–16) auto-redacts
    without user review. A pattern that produces false positives is a bug. Patterns that cannot achieve 100% confidence
    belong in the heuristic engine (flagged for user review), not the scanner pipeline.
+1. **Propagation never widens what counts as a secret** — [Pass 1b](#pass-1b-redacted-value-propagation) only replaces
+   values the strict Pass 1 rules already redacted. It introduces no detection of its own, and a value that fails
+   eligibility keeps the pre-existing behavior (flagged for review). Widening eligibility is a scope change and is
+   governed by
+   [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift-redact-more-is-a-change-against-the-founding-contract).

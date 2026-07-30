@@ -173,6 +173,24 @@
 
   "xml_post_data_cases": [
     {
+      "id": "namespaced_password_element_redacted",
+      "post_data": {
+        "mimeType": "application/xml",
+        "text": "<ns:request xmlns:ns=\"http://example.invalid/ns\"><ns:password>secret123</ns:password><ns:action>login</ns:action></ns:request>"
+      },
+      "must_not_contain": ["secret123"],
+      "must_contain": ["action"]
+    },
+    {
+      "id": "sensitive_attribute_value_redacted",
+      "post_data": {
+        "mimeType": "application/xml",
+        "text": "<request><field password=\"secret123\" label=\"login\"/></request>"
+      },
+      "must_not_contain": ["secret123"],
+      "must_contain": ["label"]
+    },
+    {
       "id": "text_xml_password_redacted",
       "post_data": {
         "mimeType": "text/xml",
@@ -424,6 +442,53 @@
       ],
       "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorpw", "twofactor"]}},
       "expected_values": {"vendorpw": "[REDACTED]", "twofactor": "[REDACTED]", "user": "admin"}
+    }
+  ],
+  "propagation_eligibility_cases": [
+    {"value": "eba954f1f10817e8f36607c4db106999", "eligible": true, "id": "hex_session_token"},
+    {"value": "5f4dcc3b5aa765d61d8327deb882cf99", "eligible": true, "id": "hex_md5"},
+    {"value": "a1b2c3d4e5f60718", "eligible": true, "id": "hex_exactly_16"},
+    {"value": "dXNlcjpwYXNzd29yZDEyMzQ1Ng==", "eligible": true, "id": "base64_with_padding"},
+    {"value": "abc-123_XYZ.tok~en+9/8=", "eligible": true, "id": "full_permitted_charset"},
+    {"value": "0", "eligible": false, "id": "single_digit_too_short"},
+    {"value": "1", "eligible": false, "id": "one_too_short"},
+    {"value": "admin", "eligible": false, "id": "common_word_too_short"},
+    {"value": "a1b2c3d4e5f6071", "eligible": false, "id": "fifteen_chars_below_floor"},
+    {"value": "GetDeviceInformation", "eligible": false, "id": "api_method_name_no_digit"},
+    {"value": "configurationSettings", "eligible": false, "id": "identifier_no_digit"},
+    {"value": "deadbeefcafebabedeadbeef", "eligible": false, "id": "all_letter_hex_no_digit"},
+    {"value": "2001:db8::8df9:ca89/56", "eligible": false, "id": "ipv6_is_safe_value"},
+    {"value": "correct horse battery1", "eligible": false, "id": "phrase_contains_space"},
+    {"value": "token\"with1quote", "eligible": false, "id": "quote_char_not_permitted"},
+    {"value": "value1&other=2xxxxxxx", "eligible": false, "id": "ampersand_not_permitted"},
+    {"value": "", "eligible": false, "id": "empty_string"}
+  ],
+  "propagation_search_key_cases": [
+    {
+      "id": "plain_value_yields_one_needle",
+      "registry": {"eba954f1f10817e8f36607c4db106999": "FIELD_aaaaaaaa"},
+      "expected_needles": ["eba954f1f10817e8f36607c4db106999"]
+    },
+    {
+      "id": "encodable_value_yields_raw_and_encoded",
+      "registry": {"abc+def/ghi=jkl12345mnop": "FIELD_bbbbbbbb"},
+      "expected_needles": ["abc%2Bdef%2Fghi%3Djkl12345mnop", "abc+def/ghi=jkl12345mnop"]
+    },
+    {
+      "id": "longest_needle_comes_first",
+      "registry": {
+        "eba954f1f10817e8f36607c4db106999": "FIELD_aaaaaaaa",
+        "eba954f1f10817e8f36607c4db106999SUFFIX01": "FIELD_bbbbbbbb"
+      },
+      "expected_needles": [
+        "eba954f1f10817e8f36607c4db106999SUFFIX01",
+        "eba954f1f10817e8f36607c4db106999"
+      ]
+    },
+    {
+      "id": "ineligible_values_produce_no_needles",
+      "registry": {"0": "FIELD_cccccccc", "admin": "FIELD_dddddddd"},
+      "expected_needles": []
     }
   ]
 }

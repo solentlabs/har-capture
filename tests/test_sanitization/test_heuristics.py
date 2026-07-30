@@ -282,6 +282,10 @@ class TestIsHighEntropy:
         assert low_entropy >= 0
         assert high_entropy <= 6  # Max entropy for ~100 ASCII chars
 
+    def test_entropy_of_empty_string_is_zero(self) -> None:
+        """An empty string has no randomness and must not divide by zero."""
+        assert calculate_entropy("") == 0.0
+
 
 class TestIsAdjacentToRedacted:
     """Tests for adjacency to redacted values."""
@@ -414,6 +418,20 @@ class TestGetConfidenceForValue:
             is_adjacent=is_adjacent,
         )
         assert result == expected
+
+    def test_unknown_detector_confidence_falls_back_to_medium(self) -> None:
+        """A domain file naming a confidence we don't ship must not raise.
+
+        Detector confidence comes from user-supplied JSON, so an unrecognized
+        string is contributor input, not a bug — degrade instead of crashing.
+        """
+        result = get_confidence_for_value(
+            "test-value",
+            detector_confidence="catastrophic",
+            is_entropy=False,
+            is_adjacent=False,
+        )
+        assert result == ConfidenceLevel.MEDIUM
 
 
 class TestRegexDoSPrevention:
