@@ -35,13 +35,28 @@ class RedactionCollector:
         hasher: The Hasher instance for generating redaction placeholders
         auto_redacted_counts: Counts by category for auto-redacted values
         flagged: List of values flagged for user review
+        redacted_values: Original value -> placeholder, for Pass 1b propagation
         _seen_flagged: Set of values already flagged (for deduplication)
     """
 
     hasher: Hasher
     auto_redacted_counts: dict[str, int] = field(default_factory=dict)
     flagged: list[FlaggedValue] = field(default_factory=list)
+    redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
     _seen_flagged: set[str] = field(default_factory=set, repr=False)
+
+    def record_redacted_value(self, original: str, placeholder: str) -> None:
+        """Remember which placeholder an auto-redacted value was given.
+
+        Feeds the Pass 1b propagation sweep. The first surface to redact a
+        value wins, so the same secret keeps one placeholder everywhere.
+
+        Args:
+            original: The pre-redaction value
+            placeholder: The placeholder that replaced it
+        """
+        if original and original not in self.redacted_values:
+            self.redacted_values[original] = placeholder
 
     def record_auto_redaction(self, category: str) -> None:
         """Record that a value was auto-redacted.
@@ -90,6 +105,23 @@ class RedactionCollector:
                 reason=reason,
             )
         )
+
+    def drop_flagged(self, values: set[str]) -> int:
+        """Remove flagged entries for values that no longer occur in the HAR.
+
+        Used after Pass 1b propagation: a value that was replaced everywhere
+        leaves the user a review decision that cannot change the output.
+
+        Args:
+            values: Original values to withdraw from the review queue
+
+        Returns:
+            Number of flagged entries removed
+        """
+        before = len(self.flagged)
+        self.flagged = [f for f in self.flagged if f.original_value not in values]
+        self._seen_flagged -= values
+        return before - len(self.flagged)
 
     def to_report(self, input_file: str, output_file: str, salt: str) -> SanitizationReport:
         """Create a SanitizationReport from the collected data.

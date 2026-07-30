@@ -259,3 +259,51 @@ and CLAUDE.md points at them rather than restating them.
   in CLAUDE.md is now an anti-pattern flagged explicitly in the AI Shortcut Audit ("Restating instead of pointing").
 - The AI Shortcut Audit section is intended to grow. When a real session surfaces a new shortcut that produced cost, add
   the entry with a route to the doc that would have prevented it. Speculative entries are not added.
+
+## ADR-12: Redaction Scope Is Anti-Drift — "Redact More" Is a Change Against the Founding Contract
+
+**Context:** har-capture's founding contract is to observe and capture everything, scrub PII, and compress so the user
+can submit. Sanitization exists to serve that contract, not to override it — a HAR that survived sanitization must still
+be faithful enough to reconstruct the device's behavior.
+
+Between v0.1 and v0.9 the redactor drifted away from that contract, one locally-defensible change at a time. Two
+instances surfaced together via cable_modem_monitor #163, where a C7000v2 capture could no longer be classified because
+the HAR contained 32× `Authorization: AUTH_<hash>` with no scheme prefix:
+
+1. **Authorization scheme tokens were stripped.** `Basic` / `Bearer` / `Digest` is protocol structure from a closed set
+   of RFC 7235 identifiers — it is not a secret. Removing it did not scrub PII; it destroyed the only signal that let a
+   downstream consumer classify the auth mechanism without a `401 + WWW-Authenticate` exchange.
+1. **Cookie attribute values were clobbered.** The cookie regex `([^=;\s]+)=([^;]*)` matches `Path=/` and `Max-Age=3600`
+   exactly as it matches `session=<secret>`, so protocol metadata was hashed alongside credentials.
+
+Neither was introduced carelessly. Each was a reasonable "redact this too" step viewed on its own. The cost was only
+visible in aggregate, and only from outside the tool — a consumer that could no longer do its job.
+
+**Decision:** Widening redaction scope is a change **against** the founding contract and carries the burden of proof. It
+is not a safety improvement by default.
+
+Three rules follow:
+
+1. **Protocol structure is never PII.** Scheme tokens, cookie attributes, URL path shape and segment count, field names,
+   JSON keys, MIME types, status codes, header names. Redaction replaces *values*; it must not alter the shape a
+   consumer parses. When a value must be redacted in a structural position, the placeholder occupies that position — the
+   structure survives.
+1. **A "redact more" proposal names the concrete leak it closes and the fidelity it costs.** "Safer" is not a rationale.
+   If the fidelity cost cannot be stated, the analysis is incomplete.
+1. **Redaction driven by value shape rather than by label must prove the value cannot be legitimate data.** The bar is
+   *cannot be structure*, not *scores high on entropy*. `GetDeviceInformation` and `configurationSettings` are the
+   canonical counterexamples — both are long, both are opaque to a naive detector, both are URL path segments. They are
+   why `_LONG_TOKEN_PATTERN` requires mixed letters *and* digits at 32+ characters.
+
+**Relationship to invariant 11:** [`SANITIZATION_SPEC.md`](specs/SANITIZATION_SPEC.md#constraints-invariants) invariant
+11 governs *confidence* — what may auto-redact without user review. This ADR governs *scope* — what is eligible to be
+considered PII at all. A change can clear invariant 11 (100% confident the value is what we think it is) and still fail
+this ADR (the thing we are certain about is protocol structure). Both gates apply.
+
+**Consequence:** Some real secrets remain in captures until the user redacts them at review. That is the accepted trade:
+the two-pass model (ADR-6) exists to route exactly these cases to a human, and an over-redacted HAR fails silently in a
+way an under-redacted one does not — the user sees flagged values and decides, but nobody sees fidelity that was
+destroyed before the file left their machine.
+
+This ADR does **not** constrain changes that widen *detection and flagging*. Surfacing more candidates for review costs
+no fidelity; `safe_value_patterns` is the release valve when a shape proves benign.

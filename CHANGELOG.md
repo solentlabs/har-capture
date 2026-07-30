@@ -7,6 +7,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-07-30
+
+### Fixed
+
+- **Secrets in URL path segments no longer survive sanitization.** A token redacted in a response body and in an
+  `Authorization` header could still appear verbatim in a URL path — `DELETE /rest/v1/user/3/token/<token>` — because a
+  path segment carries no field name for the strict rules to match on. Downstream PII validation did not catch it
+  either: an opaque hex string matches no MAC, IP, or serial pattern, so the capture passed a fixture scan while
+  carrying a live-shaped credential.
+
+  After every entry is sanitized, `sanitize_har` now sweeps the whole HAR once and replaces any remaining verbatim
+  occurrence of an already-redacted value with the placeholder that value was already given. No new detection is
+  involved — the value is one the strict rules already redacted, and the sweep only answers whether a textual match
+  elsewhere must be the same secret. To qualify, a value must be 16+ characters, drawn from `[A-Za-z0-9._~+/=:-]` with
+  no whitespace, contain at least one digit, and not be a known-safe shape. The digit requirement keeps identifiers like
+  `GetDeviceInformation` out; the length floor keeps values like `0` or `admin` from being find-replaced across a file.
+
+  A percent-encoded copy of the value is matched too, so a base64-shaped token that had to be escaped to sit in a URL
+  path is caught alongside its literal form and receives the same placeholder. Matching is exact and case-sensitive.
+
+  Substitution is one token for one token, so path segment count and URL shape are preserved. Values that do not qualify
+  keep the existing behavior and stay flagged for interactive review; values that were propagated are dropped from the
+  review queue, since the user's decision could no longer change the output. See
+  [`SANITIZATION_SPEC.md`](docs/specs/SANITIZATION_SPEC.md#pass-1b-redacted-value-propagation).
+
+- **Hex-encoded secrets are no longer classified as safe values.** The built-in IPv6 safe-value pattern (`^[0-9a-f:]+$`)
+  made its colon optional, so it matched *any* all-hex string. Because the safe-value check is the first gate in
+  `analyze_value()`, every session token, MD5, SHA-1 and SHA-256 digest was skipped before reaching the entropy check,
+  the domain detectors, or adjacency analysis — the heuristic layer was silently disabled for hex-shaped secrets
+  wherever it runs (the pipe-delimited scanner, passes 14–15, and the web-storage `setItem` scanner, pass 0b). The
+  pattern now requires at least one colon. Genuine IPv6 in every form — `::1`, `fe80::1`, `2001:db8::`, prefixed and
+  CIDR-suffixed — is unaffected, as are colon-bearing channel lists from domain pattern files.
+
+  Captures containing hex tokens in unlabeled positions will now surface more values for interactive review. That is the
+  intended posture: the heuristic layer flags shape-matching candidates aggressively and `safe_value_patterns` is where
+  reviewed-benign shapes are recorded.
+
 ## [0.11.0] - 2026-07-27
 
 ### Added
@@ -968,6 +1005,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.10.2]: https://github.com/solentlabs/har-capture/compare/v0.10.1...v0.10.2
 [0.10.3]: https://github.com/solentlabs/har-capture/compare/v0.10.2...v0.10.3
 [0.11.0]: https://github.com/solentlabs/har-capture/compare/v0.10.3...v0.11.0
+[0.11.1]: https://github.com/solentlabs/har-capture/compare/v0.11.0...v0.11.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -995,4 +1033,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.11.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.11.1...HEAD

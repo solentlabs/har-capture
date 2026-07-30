@@ -92,7 +92,19 @@
     {"value": "HomeNetwork-5G", "is_safe": false, "id": "ssid_like_not_safe"},
     {"value": "Johns-iPhone", "is_safe": false, "id": "device_name_not_safe"},
     {"value": "secretpass123", "is_safe": false, "id": "password_like_not_safe"},
-    {"value": "MyWifi", "is_safe": false, "id": "short_ssid_not_safe"}
+    {"value": "MyWifi", "is_safe": false, "id": "short_ssid_not_safe"},
+    {"value": "eba954f1f10817e8f36607c4db106999", "is_safe": false, "id": "hex_session_token_not_safe"},
+    {"value": "5f4dcc3b5aa765d61d8327deb882cf99", "is_safe": false, "id": "hex_md5_not_safe"},
+    {"value": "da39a3ee5e6b4b0d3255bfef95601890afd80709", "is_safe": false, "id": "hex_sha1_not_safe"},
+    {
+      "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "is_safe": false,
+      "id": "hex_sha256_not_safe"
+    },
+    {"value": "deadbeefcafebabe", "is_safe": false, "id": "hex_no_digits_not_safe"},
+    {"value": "::1", "is_safe": true, "id": "ipv6_loopback"},
+    {"value": "2001:db8::", "is_safe": true, "id": "ipv6_doc_prefix"},
+    {"value": "fe80::a1b2:c3d4:e5f6:7890", "is_safe": true, "id": "ipv6_link_local_full"}
   ],
   "domain_safe_value_cases": [
     {"value": "2.4g", "id": "band_2.4g"},

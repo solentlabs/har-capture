@@ -82,8 +82,12 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^255\.\d+\.\d+\.\d+$"),
     # CIDR notation (with redacted IPs)
     re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$"),
-    # IPv6 addresses (including documentation prefix 2001:db8::)
-    re.compile(r"^[0-9a-f:]+(?:/\d{1,3})?$", re.IGNORECASE),
+    # IPv6 addresses (including documentation prefix 2001:db8::).
+    # The colon is REQUIRED: without the lookahead this matches any all-hex
+    # string, so every session token, MD5, SHA-1 and SHA-256 digest was
+    # classified safe and returned from is_safe_value() before reaching the
+    # entropy check — silently disabling the heuristic layer for hex secrets.
+    re.compile(r"^(?=[^:]*:)[0-9a-f:]+(?:/\d{1,3})?$", re.IGNORECASE),
     # URLs (http/https) — not PII themselves
     re.compile(r"^https?://\S+$"),
     # Common protocol/interface names

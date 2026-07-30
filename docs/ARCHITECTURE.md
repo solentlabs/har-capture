@@ -230,12 +230,18 @@ graph TD
     end
 
     raw[Raw HAR] --> pass1
-    pass1 --> sanitized[Sanitized HAR]
+    pass1 --> pass1b[Pass 1b: Propagate<br>Replace already-redacted values on unlabeled surfaces]
+    pass1b --> sanitized[Sanitized HAR]
     sanitized --> pass2[Pass 2: Interactive Review<br>Show flagged → user selects → apply redactions]
 ```
 
 **Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content
 (MIME-dispatched to the HTML engine, JSON traversal, or string pattern matching).
+
+**Pass 1b** sweeps the whole HAR once after every entry is done, replacing any remaining verbatim occurrence of an
+already-redacted value with the placeholder that value was assigned. This catches secrets on surfaces that carry no
+field name to match — most commonly a URL path segment. It adds no detection of its own; eligibility is a
+collision-safety test on values Pass 1 already redacted.
 
 **Pass 2** presents flagged values for interactive review (TTY) or writes them to a JSON report (CI/CD). User-selected
 redactions are applied via global find-and-replace using the same session salt.

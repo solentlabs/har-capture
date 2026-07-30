@@ -418,9 +418,12 @@ def _redact_value(
     """
     if collector:
         collector.record_auto_redaction(category.lower())
-    if hasher:
-        return hasher.hash_generic(value, category)
-    return REDACTED
+    placeholder = hasher.hash_generic(value, category) if hasher else REDACTED
+    if collector:
+        # Feeds the Pass 1b propagation sweep in sanitize_har. Recorded for every
+        # redaction; eligibility is decided at sweep time by _is_propagation_eligible.
+        collector.record_redacted_value(value, placeholder)
+    return placeholder
 
 
 def is_sensitive_field(field_name: str) -> bool:
@@ -1583,6 +1586,116 @@ def _detect_client_side_cookies(entries: list[dict[str, Any]]) -> list[str]:
     return [n for n in request_cookie_names if n not in set_cookie_names]
 
 
+# Pass 1b propagation eligibility. See SANITIZATION_SPEC "Pass 1b: Redacted-Value
+# Propagation". These do not decide whether a value is a secret — Pass 1 already
+# did. They decide whether a textual match elsewhere in the file is necessarily
+# the same secret rather than a coincidence.
+_PROPAGATION_MIN_LENGTH = 16
+_PROPAGATION_CHARSET_RE = re.compile(r"^[A-Za-z0-9._~+/=:-]+$")
+_PROPAGATION_DIGIT_RE = re.compile(r"\d")
+
+
+def _is_propagation_eligible(value: str) -> bool:
+    """Check whether a redacted value is safe to replace globally across the HAR.
+
+    Failing this is not a leak — the value keeps the pre-existing behavior and
+    stays flagged for interactive review. That is what lets the bar be strict.
+
+    Args:
+        value: The pre-redaction value
+
+    Returns:
+        True if every textual match of this value must be the same secret
+    """
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    if len(value) < _PROPAGATION_MIN_LENGTH:
+        return False
+    if not _PROPAGATION_CHARSET_RE.match(value):
+        return False
+    # Method names and config keys are alphabetic (GetDeviceInformation); opaque
+    # tokens carry digits. This is the operative form of "must not be word-shaped".
+    if not _PROPAGATION_DIGIT_RE.search(value):
+        return False
+    return not is_safe_value(value)
+
+
+def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
+    """Expand eligible redacted values into the needles to search for.
+
+    Each value contributes its literal form plus its percent-encoded form, so a
+    secret that had to be escaped to sit in a URL path is still matched. Both
+    map to the same placeholder — an encoding difference must not break
+    correlation, which is the same rule the form-urlencoded branch follows.
+
+    Ordered longest first: when one value is a prefix of another (a token and a
+    token-plus-suffix), replacing the shorter one first would substitute inside
+    the longer one and emit a corrupted hybrid.
+
+    Args:
+        registry: Original value -> placeholder, from RedactionCollector
+
+    Returns:
+        (needle, placeholder) pairs, longest needle first
+    """
+    needles: dict[str, str] = {}
+    for original, placeholder in registry.items():
+        if not _is_propagation_eligible(original):
+            continue
+        needles.setdefault(original, placeholder)
+        encoded = urllib.parse.quote(original, safe="")
+        if encoded != original:
+            needles.setdefault(encoded, placeholder)
+    return sorted(needles.items(), key=lambda item: -len(item[0]))
+
+
+def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str]) -> int:
+    """Replace remaining verbatim occurrences of already-redacted values in-place.
+
+    Substitution is one token for one token, so path segment count, query shape,
+    and delimiters are preserved. Matching is exact and case-sensitive.
+
+    Args:
+        har_data: The sanitized HAR data (mutated in place)
+        registry: Original value -> placeholder, from RedactionCollector
+
+    Returns:
+        Number of occurrences replaced
+    """
+    search_keys = _propagation_search_keys(registry)
+    if not search_keys:
+        return 0
+
+    try:
+        content = json.dumps(har_data)
+    except (TypeError, ValueError) as e:
+        _LOGGER.warning("Propagation skipped, HAR is not serializable: %s", e)
+        return 0
+
+    replacements = 0
+    for needle, placeholder in search_keys:
+        # Escape for JSON string context (quotes, backslashes, control chars),
+        # mirroring apply_user_redactions.
+        escaped_needle = json.dumps(needle)[1:-1]
+        occurrences = content.count(escaped_needle)
+        if occurrences:
+            content = content.replace(escaped_needle, json.dumps(placeholder)[1:-1])
+            replacements += occurrences
+
+    if not replacements:
+        return 0
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as e:
+        _LOGGER.warning("Propagation reverted, HAR did not survive round-trip: %s", e)
+        return 0
+
+    har_data.clear()
+    har_data.update(parsed)
+    return replacements
+
+
 def sanitize_har(
     har_data: dict[str, Any],
     *,
@@ -1714,6 +1827,15 @@ def sanitize_har(
         meta = log.setdefault("_har_capture", {})
         meta["_client_side_cookies"] = client_side
         meta["_sanitized_credentials"] = url_credential_locations
+
+    # Pass 1b: replace values already redacted elsewhere that survived verbatim on
+    # surfaces with no field name to match (most commonly a URL path segment).
+    propagated = _propagate_redacted_values(result, collector.redacted_values)
+    if propagated:
+        collector.auto_redacted_counts["propagated"] = propagated
+        # A propagated value has no surviving occurrence left, so asking the user
+        # to review it is a decision with no effect. Drop it from the review queue.
+        collector.drop_flagged({v for v in collector.redacted_values if _is_propagation_eligible(v)})
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)
