@@ -30,7 +30,7 @@ from har_capture.patterns import (
     load_sensitive_patterns,
 )
 from har_capture.sanitization.collector import RedactionCollector
-from har_capture.sanitization.html import is_valid_ip_address, sanitize_html
+from har_capture.sanitization.html import is_valid_ip_address, redact_vendor_serials, sanitize_html
 from har_capture.sanitization.report import ConfidenceLevel
 
 if TYPE_CHECKING:
@@ -393,6 +393,47 @@ def _header_sets_scope(custom_patterns: str | dict[str, Any] | None) -> Iterator
         yield
     finally:
         _HEADER_SETS_CTX.reset(token)
+
+
+# --- Vendor-serial detector per-call resolver ---------------------------------
+#
+# Same resolver/cache shape as the field-pattern and header-set subsystems.
+# Only the high-confidence serial_number detectors are kept — they are the
+# deterministic vendor serial formats that redact_vendor_serials applies to
+# non-HTML text content (the HTML engine compiles its own detector list).
+
+_CUSTOM_SERIAL_DETECTORS_CACHE: OrderedDict[str, list[Any]] = OrderedDict()
+
+
+def _resolve_serial_detectors(
+    custom_patterns: str | dict[str, Any] | None,
+) -> list[Any]:
+    """Resolve the high-confidence serial_number detectors for this call.
+
+    ``custom_patterns=None`` resolves against the built-in sensitive.json,
+    which declares no detectors — vendor serial formats are domain knowledge
+    and arrive via ``--patterns``. Cached per canonical key like the other
+    per-call resolvers.
+    """
+    from har_capture.patterns.loader import compile_detectors, high_confidence_serial_detectors
+
+    if custom_patterns is None:
+        return []
+
+    key = _custom_patterns_cache_key(custom_patterns)
+    if key is not None:
+        cached = _CUSTOM_SERIAL_DETECTORS_CACHE.get(key)
+        if cached is not None:
+            _CUSTOM_SERIAL_DETECTORS_CACHE.move_to_end(key)
+            return cached
+
+    resolved = high_confidence_serial_detectors(compile_detectors(load_sensitive_patterns(custom_patterns)))
+
+    if key is not None:
+        _CUSTOM_SERIAL_DETECTORS_CACHE[key] = resolved
+        while len(_CUSTOM_SERIAL_DETECTORS_CACHE) > _CUSTOM_FIELD_RE_CACHE_MAX:
+            _CUSTOM_SERIAL_DETECTORS_CACHE.popitem(last=False)
+    return resolved
 
 
 # Redaction placeholder - single source of truth
@@ -913,7 +954,10 @@ def _sanitize_string_patterns(
     """
     if not value:
         return value
-    if len(value) > 10000:  # Skip very long strings for performance
+    # Perf guard only — must stay far above real firmware assets, or PII scans
+    # silently skip them. At 10,000 chars this skipped the CM2500's 33 KB
+    # utility.js, leaving MACs/IPs in any large non-HTML text body unscanned.
+    if len(value) > 1_000_000:
         _LOGGER.debug("Skipping pattern sanitization for long string (length=%d)", len(value))
         return value
 
@@ -1308,6 +1352,13 @@ def _sanitize_response_content(
     elif (mime_type.startswith("text/") or not mime_type) and content.get("encoding") != "base64":
         # Fallback: apply pattern-based sanitization to text content
         content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
+        # Vendor-format serials (delimiter-aware, domain detectors) — runs
+        # outside _sanitize_string_patterns so its perf length guard can
+        # never cost serial coverage, however large the text body.
+        if hasher is not None and collector is not None:
+            serial_detectors = _resolve_serial_detectors(custom_patterns)
+            if serial_detectors:
+                content["text"] = redact_vendor_serials(content["text"], serial_detectors, hasher, collector)
 
 
 def _sanitize_response(
@@ -2049,6 +2100,15 @@ def apply_user_redactions(
         raise HarValidationError(
             f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
         ) from e
+
+    # Refresh the embedded metadata's user-decision counts. The metadata was
+    # embedded at the end of Pass 1, before any review decision existed, so
+    # without this a reviewed artifact reports user_redacted: 0 forever
+    # (observed on the CM2500 contributor capture, 2026-08-19).
+    sanitization_meta = parsed.get("log", {}).get("_har_capture", {}).get("sanitization")
+    if isinstance(sanitization_meta, dict):
+        sanitization_meta["user_redacted"] = report.total_user_redacted
+        sanitization_meta["user_skipped"] = report.total_user_skipped
 
     return parsed
 

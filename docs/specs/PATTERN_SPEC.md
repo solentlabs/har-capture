@@ -305,7 +305,7 @@ Data-driven heuristic detectors that the core engine executes.
 | Field             | Type       | Required | Description                                                                        |
 | ----------------- | ---------- | -------- | ---------------------------------------------------------------------------------- |
 | `category`        | string     | Yes      | Detection category (wifi_ssid, device_name, serial_number, credential, suspicious) |
-| `confidence`      | string     | Yes      | Default confidence: "low", "medium", "high"                                        |
+| `confidence`      | string     | Yes      | Default confidence: "low", "medium", "high" — see the deterministic rule below     |
 | `min_length`      | int        | Yes      | Minimum string length to consider                                                  |
 | `max_length`      | int        | Yes      | Maximum string length to consider                                                  |
 | `requires_letter` | bool       | Yes      | Must contain alphabetic character                                                  |
@@ -326,6 +326,15 @@ The detection loop in `heuristics.py`:
 1. If `requires_letter`: reject if no alphabetic characters
 1. Run each regex pattern — first match wins, return `(True, reason)`
 1. If `camelcase=True` and no pattern matched: check `^[A-Z][a-z]+[A-Z][a-zA-Z0-9]*$`
+
+**Deterministic rule for `serial_number` @ `high`:** a `serial_number` detector declared at **high** confidence asserts
+a known vendor serial layout and is treated as deterministic, not heuristic
+([ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware)):
+the sanitizer auto-redacts a fullmatch on a delimiter-bounded candidate token (`redact_vendor_serials`, using
+`VENDOR_SERIAL_TOKEN_RE` / `high_confidence_serial_detectors` / `match_vendor_serial` from `loader.py`), and
+`har-capture validate` errors on an unredacted match. Declaring `"confidence": "high"` on a `serial_number` detector
+therefore carries the scanner pipeline's 100%-confidence bar — a layout that cannot meet it stays at `medium` (flag for
+review). Other categories at `high` keep the ordinary heuristic meaning (review pre-selection).
 
 ### Section: `tagValueList.safe_values`
 
@@ -390,8 +399,8 @@ The built-in network device domain provides:
 - WiFi SSID detector (band suffixes, common prefixes, CamelCase)
 - Device name detector (possessives, router brands, consumer devices)
 - Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — issue #49 C7000v2,
-  CM2500 7S-prefix) at **high** so the review pre-selects them, plus a generic uppercase-alphanumeric backstop at
-  **medium**
+  CM2500 7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate —
+  see the deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
 
 ## Merge Order
@@ -464,6 +473,12 @@ def get_session_cookie_patterns(custom_path: Path | str | None = None) -> list[s
 
 # Compile heuristic detectors from sensitive patterns
 def compile_detectors(sensitive: dict) -> list[CompiledDetector]:
+
+# Filter to deterministic vendor serial detectors (serial_number @ high)
+def high_confidence_serial_detectors(detectors: list[CompiledDetector]) -> list[CompiledDetector]:
+
+# Fullmatch a delimiter-bounded candidate token against vendor serial detectors
+def match_vendor_serial(token: str, detectors: list[CompiledDetector]) -> str | None:
 
 # Compile safe value patterns from sensitive patterns
 def compile_safe_value_patterns(sensitive: dict) -> list[re.Pattern]:

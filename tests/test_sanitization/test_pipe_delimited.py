@@ -22,8 +22,17 @@ from __future__ import annotations
 
 import pytest
 
+from har_capture.patterns.loader import resolve_patterns_arg
 from har_capture.sanitization.heuristics import analyze_value
 from har_capture.sanitization.html import sanitize_html
+from har_capture.sanitization.report import HeuristicMode
+
+_NETWORK_DEVICE_PATTERNS = str(resolve_patterns_arg("network-device"))
+
+# Synthetic Netgear-shaped serial: 13 uppercase alphanumerics, digit-led,
+# 1-2 letters, 2-4 digits. Never a value from a real capture — and it must
+# not end in XXX, which the allowlist treats as a redaction marker.
+FAKE_NETGEAR_SERIAL = "7ZZ0000FAKE00"
 
 # =============================================================================
 # Test Data - Pipe-Delimited Credential Gaps
@@ -188,6 +197,66 @@ class TestPipeDelimitedCredentialGaps:
         assert should_preserve in result, (
             f"{desc}: value '{should_preserve}' should be preserved but was removed. Result: {result}"
         )
+
+
+class TestVendorSerialAutoRedaction:
+    """Vendor-format serials auto-redact as standalone tokens (pass 2e).
+
+    Regression for the CM2500 round-1 leak (2026-08-19): the Netgear serial
+    inside RouterStatus.htm's tagValueList shipped unmasked because nothing
+    deterministic covered a serial with no label — FLAG-mode review was the
+    only barrier, and a skipped review ships the leak. High-confidence
+    serial_number detectors now auto-redact delimiter-bounded token matches
+    in every heuristic mode.
+    """
+
+    TAG_VALUE_LIST = (
+        f"<html><script>var tagValueList = "
+        f"'1.01|V6.01.03|{FAKE_NETGEAR_SERIAL}|1|Denied|0|1';</script></html>"
+    )
+
+    @pytest.mark.parametrize(
+        "mode",
+        [HeuristicMode.DISABLED, HeuristicMode.FLAG, HeuristicMode.REDACT],
+        ids=["disabled", "flag", "redact"],
+    )
+    def test_serial_in_pipe_blob_auto_redacted_every_mode(self, mode: HeuristicMode) -> None:
+        """The serial must not survive Pass 1 in any mode — review optional."""
+        result = sanitize_html(
+            self.TAG_VALUE_LIST,
+            salt="test-salt",
+            custom_patterns=_NETWORK_DEVICE_PATTERNS,
+            heuristics=mode,
+        )
+        assert FAKE_NETGEAR_SERIAL not in result
+        assert "SERIAL_" in result
+
+    def test_serial_in_bare_js_assignment_auto_redacted(self) -> None:
+        """No pipe blob needed — any delimiter-bounded standalone token matches."""
+        html = f"<script>var sn = '{FAKE_NETGEAR_SERIAL}';</script>"
+        result = sanitize_html(html, salt="test-salt", custom_patterns=_NETWORK_DEVICE_PATTERNS)
+        assert FAKE_NETGEAR_SERIAL not in result
+
+    def test_serial_embedded_in_longer_token_preserved(self) -> None:
+        """A serial-shaped substring of a longer token is not a serial."""
+        html = f"<script>var x = 'prefix{FAKE_NETGEAR_SERIAL}suffix';</script>"
+        result = sanitize_html(html, salt="test-salt", custom_patterns=_NETWORK_DEVICE_PATTERNS)
+        assert FAKE_NETGEAR_SERIAL in result
+
+    def test_without_domain_patterns_no_auto_redaction(self) -> None:
+        """Vendor formats are domain knowledge — base patterns leave the token."""
+        result = sanitize_html(self.TAG_VALUE_LIST, salt="test-salt")
+        assert FAKE_NETGEAR_SERIAL in result
+
+    def test_technical_pipe_values_preserved_alongside_serial(self) -> None:
+        """The auto-redaction touches only the serial token, nothing else."""
+        result = sanitize_html(
+            self.TAG_VALUE_LIST,
+            salt="test-salt",
+            custom_patterns=_NETWORK_DEVICE_PATTERNS,
+        )
+        for kept in ("1.01", "V6.01.03", "Denied"):
+            assert kept in result, f"'{kept}' should be preserved"
 
 
 class TestRealWorldPipeDelimited:

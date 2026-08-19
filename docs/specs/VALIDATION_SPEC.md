@@ -4,8 +4,8 @@
 
 This spec describes the post-sanitization validation pipeline that checks HAR files for PII that survived sanitization.
 It covers what `secrets.py` checks, the difference between the `validate` CLI command and the pre-commit hook usage, how
-`_sensitive_fields` and `_depth` parameters work in `check_json_fields`, and the relationship between validation
-patterns and sanitization patterns.
+`_field_tiers` and `_depth` parameters work in `check_json_fields`, and the relationship between validation patterns and
+sanitization patterns.
 
 It also covers **capture-completeness validation** (`completeness.py`), a second, independent axis: `secrets.py` asks
 "did something leak *into* this file?" while `completeness.py` asks "is the evidence that should be here *missing*?"
@@ -29,16 +29,16 @@ Both run over any HAR regardless of origin.
 The validation module and sanitization module use overlapping pattern sources but serve fundamentally different
 purposes:
 
-| Aspect              | Validation (`secrets.py`)                      | Sanitization (`har.py`)                     |
-| ------------------- | ---------------------------------------------- | ------------------------------------------- |
-| **Purpose**         | Detect PII that wasn't redacted                | Remove PII from HAR files                   |
-| **Action**          | Report findings; block commit                  | Replace values with hashes/placeholders     |
-| **Trigger**         | Pre-commit hook or `validate` CLI              | `sanitize` CLI or `get` capture             |
-| **Scope**           | Field names + header names + formats + content | Field values + response content             |
-| **Pattern sources** | sensitive.json + hard-coded regexes            | pii.json + sensitive.json + domain          |
-| **Heuristics**      | None — pattern-based only                      | Full engine (entropy, detectors, adjacency) |
-| **Correlation**     | N/A                                            | Preserves via salted hashing                |
-| **Output**          | `list[Finding]`                                | Sanitized HAR + `SanitizationReport`        |
+| Aspect              | Validation (`secrets.py`)                                                                             | Sanitization (`har.py`)                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| **Purpose**         | Detect PII that wasn't redacted                                                                       | Remove PII from HAR files                   |
+| **Action**          | Report findings; block commit                                                                         | Replace values with hashes/placeholders     |
+| **Trigger**         | Pre-commit hook or `validate` CLI                                                                     | `sanitize` CLI or `get` capture             |
+| **Scope**           | Field names + header names + formats + content                                                        | Field values + response content             |
+| **Pattern sources** | sensitive.json + domain serial detectors + hard-coded regexes                                         | pii.json + sensitive.json + domain          |
+| **Heuristics**      | None — pattern-based only (shared vendor-serial detectors are deterministic patterns, not heuristics) | Full engine (entropy, detectors, adjacency) |
+| **Correlation**     | N/A                                                                                                   | Preserves via salted hashing                |
+| **Output**          | `list[Finding]`                                                                                       | Sanitized HAR + `SanitizationReport`        |
 
 **Interaction between the two:**
 
@@ -62,9 +62,20 @@ class Finding:
 
 Severity levels:
 
-- **error**: High-confidence PII leak — should block commit (sensitive headers, base64 credentials, auto-redact field
-  patterns)
-- **warning**: Lower confidence — informational (MAC addresses in content, serial numbers, public IPs)
+- **error**: High-confidence PII leak — should block commit (sensitive headers, base64 credentials, **auto-redact-tier**
+  field names like password/token/secret, vendor-format serial numbers)
+- **warning**: Lower confidence — informational (MAC addresses in content, label-anchored serial candidates, public IPs,
+  **flag-tier** field names like username/login/domain)
+
+**Field-name severity model.** Field-name findings follow the same two tiers the sanitizer uses
+(`sensitive.json fields`): a name matching `auto_redact_patterns` asserts a credential — an unredacted value is an
+**error**; a name matching `flag_patterns` asserts identity-adjacent content the sanitizer itself only flags for review
+— an unredacted value is a **warning**. A flag-tier field whose value is a factory-default username
+(`KNOWN_DEFAULT_USERNAMES`, currently `admin`) is **suppressed entirely**: the value is fixed per device family and
+carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it (CM2500
+round 1: three `[ERROR]` on `loginName: admin` exited 1 on a compliant capture). Suppression never applies to
+auto-redact-tier names — `admin` in a password field is a real credential leak. The model applies uniformly to form
+params, urlencoded bodies, JSON fields, and XML elements/attributes via `_classify_field_finding`.
 
 ## Entry Point
 
@@ -132,7 +143,9 @@ Checks form field names and JSON body content:
 
 **Form params** (`postData.params`):
 
-1. For each parameter, check `name` against `auto_redact_patterns` and `flag_patterns`
+1. For each parameter, classify `name` via `_classify_field_finding` (see the
+   [field-name severity model](#finding-dataclass)): `auto_redact_patterns` match → **error**, `flag_patterns` match →
+   **warning**, flag-tier match with a factory-default username value → suppressed
 1. If matched, check if `value` is already redacted
 1. Report if value is not redacted
 1. If the name did NOT match but the form is **login-shaped** (any parameter name in the form matches a sensitive
@@ -162,9 +175,10 @@ Checks form field names and JSON body content:
    carries a real credential)
 1. Malformed XML is caught and skipped (no findings, no crash)
 
-Severity: **error**
+Severity: **tiered** — error for auto-redact-tier names, warning for flag-tier names, factory-default usernames in
+flag-tier fields suppressed. The same model applies to every branch above (form params, urlencoded body, JSON, XML).
 
-### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential)`
+### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential, serial_detectors)`
 
 Detects PII patterns in response content text:
 
@@ -185,18 +199,36 @@ Severity: **error**
 - Skips common test patterns (e.g., `AA:BB:CC:DD:EE:FF`)
 - Checks via `is_redacted()` before reporting
 
-**Serial numbers:**
+**Serial numbers (label-anchored, warning):**
 
 - Pattern: `SN|S/N|Serial Number|SerialNum` + value — inline, in HTML table cells, or in sibling elements (tag chains
   tolerate whitespace between tags, per the sibling-element rule in
   [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#scanner-pipeline))
+- The inline label patterns require `(?!ize)` after `serial` (jquery's `serialize:`/`serializeArray:` methods matched as
+  labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
+  noise on the CM2500 round-1 validate run
 - Checks via `is_redacted()` before reporting
+
+**Vendor-format serials (delimiter-aware, error):**
+
+- Applies the **high-confidence** `serial_number` detectors from the loaded patterns (`--patterns`; domain knowledge,
+  e.g. the Netgear 13-char layout) to delimiter-bounded candidate tokens (`VENDOR_SERIAL_TOKEN_RE`) — the same detectors
+  and token extraction the sanitizer's `redact_vendor_serials` pass auto-redacts with, so the two tools agree on what
+  counts as a vendor serial
+  ([ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware))
+- Exists because a serial inside a pipe-delimited blob (`tagValueList`) has no label for the patterns above to anchor on
+  — CM2500 round 1 shipped the real serial unmasked and `validate` blessed it
+- An unredacted fullmatch is an **error**: a vendor-format match is a known serial layout, not a maybe
+- Each distinct token is reported once per content body; `validate_har` compiles the detectors once per file and passes
+  them via `serial_detectors`
 
 **Public IPs:**
 
 - Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost)
 - Excludes redacted placeholders (10.255.x.x, 192.0.2.x)
-- Validates via `is_valid_ip_address()` heuristic
+- Excludes netmasks (`is_netmask()`: contiguous-bit masks like 255.255.252.0), reserved first octets (255.x, 0.x), and
+  version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them put
+  cosmetic noise on every healthy capture (CM2500 round 1: `255.255.255.0` reported as a potential public IP)
 
 **Line numbers:**
 
@@ -204,7 +236,7 @@ Severity: **error**
 
 Severity: **warning**
 
-### `check_json_fields(data, location, findings, path, custom_patterns, _sensitive_fields, _depth)`
+### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth)`
 
 Recursively scans JSON structures for sensitive field names.
 
@@ -217,7 +249,7 @@ def check_json_fields(
     findings: list[Finding],
     path: str = "",
     custom_patterns: str | None = None,
-    _sensitive_fields: list[re.Pattern[str]] | None = None,
+    _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
 ) -> None:
 ```
@@ -234,15 +266,16 @@ def check_json_fields(
 
 #### Internal Parameters
 
-| Parameter           | Type                       | Description                                          |
-| ------------------- | -------------------------- | ---------------------------------------------------- |
-| `_sensitive_fields` | list\[re.Pattern\] \| None | Pre-compiled regex patterns — loaded once, reused    |
-| `_depth`            | int                        | Recursion depth counter — checked against limit (50) |
+| Parameter      | Type                 | Description                                          |
+| -------------- | -------------------- | ---------------------------------------------------- |
+| `_field_tiers` | \_FieldTiers \| None | Pre-compiled tier patterns — loaded once, reused     |
+| `_depth`       | int                  | Recursion depth counter — checked against limit (50) |
 
-**`_sensitive_fields` lifecycle:**
+**`_field_tiers` lifecycle:**
 
-1. On first call (`_sensitive_fields=None`): loaded from `_compile_sensitive_fields(custom_patterns)`
-1. Compilation combines `auto_redact_patterns` + `flag_patterns` from `sensitive.json` (plus custom)
+1. On first call (`_field_tiers=None`): loaded from `_compile_field_tiers(custom_patterns)`
+1. Compilation keeps `auto_redact_patterns` and `flag_patterns` from `sensitive.json` (plus custom) as separate tiers —
+   severity differs by tier (see the field-name severity model)
 1. On recursive calls: passed through explicitly — avoids recompilation per field
 1. Same compiled patterns used for every key in the entire JSON structure
 
@@ -258,27 +291,27 @@ def check_json_fields(
 
 ```python
 def check_json_fields(data, location, findings, path="",
-                      custom_patterns=None, _sensitive_fields=None, _depth=0):
+                      custom_patterns=None, _field_tiers=None, _depth=0):
     if _depth > 50:
         return
 
-    if _sensitive_fields is None:
-        _sensitive_fields = _compile_sensitive_fields(custom_patterns)
+    if _field_tiers is None:
+        _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
         for key, value in data.items():
             current_path = f"{path}.{key}" if path else key
-            # Check key against sensitive patterns
-            for pattern in _sensitive_fields:
-                if pattern.search(key):
-                    if not is_redacted(str(value)):
-                        findings.append(Finding(...))
-                    break
+            # Classify key against the field tiers (error / warning / suppressed)
+            if isinstance(value, str) and value and not is_redacted(value):
+                classified = _classify_field_finding(key, value, _field_tiers)
+                if classified is not None:
+                    severity, pattern = classified
+                    findings.append(Finding(severity=severity, ...))
             # Recurse into nested structures
             if isinstance(value, (dict, list)):
                 check_json_fields(value, location, findings, current_path,
                                   custom_patterns,
-                                  _sensitive_fields=_sensitive_fields,
+                                  _field_tiers=_field_tiers,
                                   _depth=_depth + 1)
 
     elif isinstance(data, list):
@@ -286,7 +319,7 @@ def check_json_fields(data, location, findings, path="",
             if isinstance(item, (dict, list)):
                 check_json_fields(item, location, findings, f"{path}[{i}]",
                                   custom_patterns,
-                                  _sensitive_fields=_sensitive_fields,
+                                  _field_tiers=_field_tiers,
                                   _depth=_depth + 1)
 ```
 
@@ -457,6 +490,8 @@ sensitive.json
 │                                           sanitization (is_sensitive_field)
 ├── fields.flag_patterns     → Used by: validation (check_json_fields, check_post_data)
 │                                        sanitization (is_flaggable_field)
+├── heuristics.detectors     → serial_number @ high confidence: validation (check_content vendor-serial scan)
+│   (domain-merged)                        sanitization (redact_vendor_serials); all others: sanitization only
 └── tagValueList.safe_values → Used by: sanitization only (pipe-delimited scanner)
 ```
 
@@ -468,6 +503,7 @@ These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 | ----------------------- | ------------------------------------------- |
 | MAC regex               | Detect unsanitized MACs in response content |
 | Serial regex            | Detect serial numbers in HTML tables        |
+| Netmask check           | Suppress subnet masks in the public-IP scan |
 | IP regex                | Detect public IPs in response content       |
 | Base64 credential check | Detect `user:pass` in URL query params      |
 
@@ -475,12 +511,12 @@ These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 
 These patterns are used only during sanitization:
 
-| Source                                  | Purpose                                                               |
-| --------------------------------------- | --------------------------------------------------------------------- |
-| `pii.json`                              | Full PII detection patterns with replacement prefixes                 |
-| Domain `heuristics.detectors`           | WiFi SSID, device name detection                                      |
-| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                           |
-| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`) |
+| Source                                  | Purpose                                                                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `pii.json`                              | Full PII detection patterns with replacement prefixes                                                                  |
+| Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above) |
+| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                            |
+| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`)                                                  |
 
 ### Design Intent
 
@@ -500,12 +536,14 @@ Validation is intentionally simpler than sanitization:
    the contract between sanitization and validation.
 1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Exceeding this is logged but does
    not crash or produce findings for deeper content.
-1. **Pattern compilation is done once** — `_sensitive_fields` is compiled on the first call to `check_json_fields` and
-   reused across all recursive invocations and all entries.
+1. **Pattern compilation is done once** — `_field_tiers` is compiled on the first call to `check_json_fields` and reused
+   across all recursive invocations and all entries; `validate_har` compiles the vendor-serial detectors once per file.
 1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`,
    `SameSite`) are not flagged. Only headers with actual session values trigger findings.
-1. **Severity is deterministic** — Headers and POST data are always "error"; content patterns are always "warning".
-   There is no confidence scoring in validation (unlike sanitization's heuristic engine).
+1. **Severity is deterministic** — every finding's severity follows from which pattern matched, never from scoring:
+   headers, auto-redact-tier field names, base64 credentials, and vendor-format serials are "error"; flag-tier field
+   names, MAC/label-serial/IP content patterns are "warning"; factory-default usernames in flag-tier fields are
+   suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
 1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, successful decode,
    and exactly one colon in the decoded string. Random base64-looking strings that don't decode to `user:pass` format

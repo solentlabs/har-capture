@@ -307,3 +307,42 @@ destroyed before the file left their machine.
 
 This ADR does **not** constrain changes that widen *detection and flagging*. Surfacing more candidates for review costs
 no fidelity; `safe_value_patterns` is the release valve when a shape proves benign.
+
+## ADR-13: High-Confidence Vendor Serial Formats Are Deterministic — Auto-Redact and Validate-Error, Delimiter-Aware
+
+**Context:** CM2500 process-validation round 1 (2026-08-19) ran the contributor instructions verbatim with zero manual
+sanitize interventions. The real modem serial shipped unmasked in the sanitized artifact, and `har-capture validate`
+blessed the leak. The Netgear serial lives inside a pipe-delimited blob (`RouterStatus.htm` →
+`var tagValueList = '1.01|V6.01.03|<serial>|…'`) where no label exists for the labeled serial passes to anchor on. The
+heuristic engine *did* detect it (high confidence, pre-selected in the review) — but FLAG mode preserves the raw value
+in the on-disk artifact until the review completes, so a skipped or unfinished review ships the leak, and `validate`'s
+serial patterns all required a label, so the documented "confirms nothing leaked" step confirmed a leak.
+
+**Decision:** A `serial_number` detector declared at **high** confidence in a domain pattern file asserts a known vendor
+serial layout and is treated as deterministic by both tools:
+
+- **Sanitize** auto-redacts a fullmatch on a delimiter-bounded candidate token (`redact_vendor_serials`, HTML engine
+  pass 2e plus the non-HTML text-content path), in every heuristic mode — Pass 1, before any artifact reaches disk.
+- **Validate** reports an unredacted fullmatch on the same token extraction as an **error** (exit 1), from the same
+  detector entries — the two tools cannot disagree because they share one pattern source
+  (`patterns/domains/network_device.json`).
+
+**ADR-12 accounting** (a "redact more" change carries the burden of proof):
+
+- *Concrete leak closed:* the CM2500 round-1 serial — and the whole class of unlabeled vendor serials in delimited
+  firmware blobs, which the two-pass model routes to a human exactly when the human is told no action is needed.
+- *Fidelity cost:* one token replaced by a correlation-preserving `SERIAL_<hash>` placeholder. Segment count, delimiter
+  structure, and cross-entry correlation survive. Serial numbers are squarely the PII the tool exists to scrub — no
+  consumer parses the serial's *value* as structure.
+- *Cannot-be-structure proof:* the Netgear layout (13 uppercase alphanumerics: digit, 1–2 letters, 2–4 digits,
+  alphanumeric tail) is digit-led — identifiers, method names, and protocol keywords are letter-led; pure counters carry
+  no letters; the fullmatch-on-token rule rejects serial-shaped substrings of longer runs (hex, base64, compound
+  identifiers).
+
+**Confidence bar:** declaring `"confidence": "high"` on a `serial_number` detector now *means* deterministic — it is
+invariant 11's 100% bar expressed as data. A layout that cannot meet the bar stays at `medium` (flag for review). The
+generic uppercase-alphanumeric backstop remains `medium` for exactly this reason.
+
+**Consequence:** the review no longer sees vendor-format serials at all (they are redacted before flagging), and a
+contributor who skips the review still ships a serial-clean artifact for every layout the domain file knows. Unknown
+layouts remain where ADR-12 puts them: flagged for the human.
