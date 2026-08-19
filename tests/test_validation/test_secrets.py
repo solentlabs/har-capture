@@ -500,14 +500,17 @@ def test_field_tiers_legacy_format_fallback(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_xml_field_severity_model() -> None:
     """XML element/attribute findings follow the same tier model as form fields."""
-    xml = "<login><username>operator7</username><password>hunter2secret</password><extra loginName='admin'/></login>"
+    xml = (
+        "<login><username>operator7</username><password>hunter2secret</password>"
+        "<loginName>admin</loginName><extra loginName='admin'/></login>"
+    )
     post_data = {"mimeType": "text/xml", "text": xml}
     findings: list[Finding] = []
     check_post_data(post_data, "request", findings)
     by_field = {f.field: f.severity for f in findings}
     assert by_field.get("password") == "error"
     assert by_field.get("username") == "warning"
-    assert "loginName" not in by_field, "default username in XML attribute must be suppressed"
+    assert "loginName" not in by_field, "default username in XML element and attribute must be suppressed"
 
 
 def test_json_field_severity_model() -> None:

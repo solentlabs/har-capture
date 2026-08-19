@@ -3962,6 +3962,16 @@ class TestVendorSerialTextContentRouting:
         result = sanitize_entry(entry, salt="test")
         assert "7ZZ0000FAKE00" in result["response"]["content"]["text"]
 
+    def test_no_collector_skips_serial_scan(self) -> None:
+        """Without a collector/hasher the scan is skipped, not crashed."""
+        from har_capture.patterns.loader import resolve_patterns_arg
+        from har_capture.sanitization.har import _sanitize_response_content
+
+        patterns = str(resolve_patterns_arg("network-device"))
+        content = {"mimeType": "text/javascript", "text": "var x = '7ZZ0000FAKE00';"}
+        _sanitize_response_content(content, collector=None, custom_patterns=patterns)
+        assert "7ZZ0000FAKE00" in content["text"]
+
 
 class TestStringPatternLengthGuard:
     """The perf length guard must sit far above real firmware assets.
@@ -4011,6 +4021,19 @@ class TestSerialDetectorResolverCache:
             _resolve_serial_detectors({"_cache_probe": i})
         assert len(_CUSTOM_SERIAL_DETECTORS_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
         _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+
+    def test_unserializable_patterns_skip_cache(self) -> None:
+        """A dict with no stable cache key resolves fresh, never cached."""
+        from har_capture.sanitization.har import (
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        # Tuple keys defeat json.dumps, so _custom_patterns_cache_key returns None
+        result = _resolve_serial_detectors({("no", "key"): 1})
+        assert isinstance(result, list)
+        assert len(_CUSTOM_SERIAL_DETECTORS_CACHE) == 0
 
 
 class TestApplicationXmlResponseRouting:
