@@ -2793,3 +2793,178 @@ class TestSavePendingDownloads:
         downloads_dir = tmp_path / "capture_downloads"
         assert _save_pending_downloads([], downloads_dir) == []
         assert not downloads_dir.exists()
+
+
+# =============================================================================
+# Codecov patch-gap closure for the 0.12.0 download/strip paths: the event
+# handler bodies, the in-session save trigger, the popup download attach,
+# the pipeline strip write-back, and the unreadable-.har artifacts branch
+# were unexercised (12 uncovered patch lines in PR #61's Codecov report).
+# =============================================================================
+
+
+class TestDownloadCaptureInSession:
+    """The download path inside _run_browser_session, via the mock harness.
+
+    Follows the TestPopupHandler pattern: run the session with Playwright
+    mocked, reach into the recorded ``on(...)`` registrations to fire the
+    handlers mid-session, and assert the save step ran before close.
+    """
+
+    @staticmethod
+    def _extract_handler(mock_obj: MagicMock, event: str) -> Any:
+        for call in mock_obj.on.call_args_list:
+            if call[0][0] == event:
+                return call[0][1]
+        raise AssertionError(f"on({event!r}, ...) never registered; calls: {mock_obj.on.call_args_list}")
+
+    @patch("har_capture.capture.browser.time.sleep")
+    @patch("playwright.sync_api.sync_playwright")
+    def test_download_collected_and_saved_before_context_close(
+        self,
+        mock_sync_pw: MagicMock,
+        mock_sleep: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """A download event fired mid-session lands on disk and in result.downloads."""
+        from har_capture.capture.browser import _run_browser_session
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+
+        fake_download = MagicMock()
+        fake_download.suggested_filename = "eventlog.txt"
+        fake_download.save_as.side_effect = lambda dest: Path(dest).write_bytes(b"log-data")
+
+        # The timed wait is the only point where the session is "live":
+        # fire the registered download handler there, as the browser would.
+        def fire_download(_seconds: float) -> None:
+            handler = self._extract_handler(mock_page, "download")
+            handler(fake_download)
+
+        mock_sleep.side_effect = fire_download
+
+        downloads_dir = tmp_path / "capture_downloads"
+        result = _run_browser_session(
+            target_url="http://127.0.0.1/",
+            temp_path=tmp_path / "raw.har",
+            headless=True,
+            timeout=1,
+            wait_for_data=False,
+            downloads_dir=downloads_dir,
+        )
+
+        assert (downloads_dir / "eventlog.txt").read_bytes() == b"log-data"
+        assert [r["saved_as"] for r in result.downloads] == ["eventlog.txt"]
+        # Ordering is the point of the fix: saved before context.close()
+        # deletes Playwright's artifacts directory.
+        fake_download.save_as.assert_called_once()
+        mock_context.close.assert_called_once()
+
+    @patch("playwright.sync_api.sync_playwright")
+    def test_popup_pages_get_download_listener(
+        self,
+        mock_sync_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Popup pages receive the same download handler as the main page."""
+        from har_capture.capture.browser import _run_browser_session
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+
+        _run_browser_session(
+            target_url="http://127.0.0.1/",
+            temp_path=tmp_path / "raw.har",
+            headless=True,
+            timeout=1,
+            wait_for_data=False,
+            downloads_dir=tmp_path / "capture_downloads",
+        )
+
+        popup_handler = self._extract_handler(mock_context, "page")
+        popup_page = MagicMock()
+        popup_page.url = "http://127.0.0.1/popup"
+        popup_handler(popup_page)
+
+        events = [call[0][0] for call in popup_page.on.call_args_list]
+        assert "download" in events, f"popup missing download listener; got {events}"
+
+    @patch("playwright.sync_api.sync_playwright")
+    def test_no_downloads_dir_registers_no_listener(
+        self,
+        mock_sync_pw: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """downloads_dir=None disables download handling on main and popup pages."""
+        from har_capture.capture.browser import _run_browser_session
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        mock_context = mock_pw.chromium.launch.return_value.new_context.return_value
+        mock_page = mock_context.new_page.return_value
+
+        _run_browser_session(
+            target_url="http://127.0.0.1/",
+            temp_path=tmp_path / "raw.har",
+            headless=True,
+            timeout=1,
+            wait_for_data=False,
+            downloads_dir=None,
+        )
+
+        assert "download" not in [c[0][0] for c in mock_page.on.call_args_list]
+
+        popup_handler = self._extract_handler(mock_context, "page")
+        popup_page = MagicMock()
+        popup_page.url = "http://127.0.0.1/popup"
+        popup_handler(popup_page)
+        assert "download" not in [c[0][0] for c in popup_page.on.call_args_list]
+
+
+class TestPipelineStripsInternalEntries:
+    """The strip write-back branch inside _run_post_capture_pipeline."""
+
+    def test_internal_entries_removed_from_pipeline_outputs(self, tmp_path: Path) -> None:
+        har_data = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "test", "version": "1.0"},
+                "entries": [
+                    {
+                        "request": {"method": "GET", "url": "http://10.0.0.1/"},
+                        "response": {"status": 200, "content": {"text": "ok"}},
+                    },
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": "chrome://fileicon/?path=%2Ftmp%2Fplaywright-artifacts-x%2Fy",
+                        },
+                        "response": {"status": 200, "content": {}},
+                    },
+                ],
+            }
+        }
+        temp_path = tmp_path / "temp_raw.har"
+        temp_path.write_text(json.dumps(har_data))
+        output_path = tmp_path / "output.har"
+
+        result = _run_post_capture_pipeline(
+            temp_path=temp_path,
+            output_path=output_path,
+            sanitized_output=tmp_path / "output.sanitized.har",
+            sanitize=False,
+            compress=False,
+            keep_raw=True,
+            interactive=False,
+            capture_options=CaptureOptions(),
+        )
+
+        saved = json.loads(output_path.read_text())
+        urls = [e["request"]["url"] for e in saved["log"]["entries"]]
+        assert urls == ["http://10.0.0.1/"], "chrome:// entry must not reach any output artifact"
+        assert result.completeness is not None
+        assert result.completeness.total_entries == 1, "completeness counts post-strip entries"
