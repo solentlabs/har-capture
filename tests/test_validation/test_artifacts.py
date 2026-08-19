@@ -98,3 +98,19 @@ class TestStaleCompressedSibling:
         har = tmp_path / "device.sanitized.har"
         har.write_bytes(b"{}")
         assert stale_compressed_sibling(har) is None
+
+    def test_unreadable_har_is_reported(self, tmp_path: Path) -> None:
+        """A pair whose .har cannot be read is a finding, not a silent pass.
+
+        A directory bearing the .har name makes read_bytes() raise
+        IsADirectoryError (an OSError) deterministically on every platform.
+        """
+        (tmp_path / "device.sanitized.har").mkdir()
+        with gzip.open(tmp_path / "device.sanitized.har.gz", "wb") as f:
+            f.write(b"{}")
+
+        message = stale_compressed_sibling(tmp_path / "device.sanitized.har.gz")
+
+        assert message is not None
+        assert "Cannot read" in message
+        assert "device.sanitized.har" in message
