@@ -14,7 +14,7 @@ domain patterns, merge order, and the section schema for each pattern type. It a
 | `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                              |
 | `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                |
 | `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                            |
-| `src/har_capture/patterns/capture.json`                | Bloat file extension filtering, session cookie names          |
+| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names  |
 | `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                           |
 | `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                               |
 | `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()` |
@@ -191,7 +191,7 @@ Check order:
 1. Format-preserving patterns — regex match
 1. Redaction patterns — regex match
 
-### capture.json — Bloat Extension Filtering and Session Cookie Names
+### capture.json — Capture Settings (Bloat Extensions, Session Cookies, Password Fields)
 
 ```json
 {
@@ -203,6 +203,9 @@ Check order:
   },
   "session_cookies": {
     "name_patterns": ["^phpsessid$", "^jsessionid$", "^sess(?:ion)?_?id$", "..."]
+  },
+  "password_fields": {
+    "name_patterns": ["pass(?:word|wd|phrase)?", "pwd", "pws", "psk"]
   }
 }
 ```
@@ -215,9 +218,15 @@ fonts/images/media are filtered unless `--include-fonts/images/media` flags are 
 mid-session. Entries are case-insensitive full-match regexes tested against cookie **names** only — no cookie values are
 read, so this list carries no PII risk.
 
-**Merge semantics:** a custom capture-settings file extends both sections. `bloat_extensions` categories extend
-per-category (unknown categories are added); `session_cookies.name_patterns` extends the built-in list. Neither replaces
-built-ins.
+`password_fields.name_patterns` is used by `get_password_field_patterns()` and read by capture-completeness validation
+to count credential submissions (POSTs carrying a password-named parameter), which drives the
+[`single_credential_post`](VALIDATION_SPEC.md#capture-completeness-validation) warning. Entries are case-insensitive
+substring-match regexes tested against POST parameter **names** only. The list is deliberately narrower than
+`sensitive.json` `auto_redact_patterns` — token/secret fields ride along on every form and would inflate the count.
+
+**Merge semantics:** a custom capture-settings file extends all three sections. `bloat_extensions` categories extend
+per-category (unknown categories are added); `session_cookies.name_patterns` and `password_fields.name_patterns` extend
+the built-in lists. Nothing replaces built-ins.
 
 ## Domain Pattern Files
 
@@ -293,15 +302,15 @@ Examples of domain-specific safe values:
 
 Data-driven heuristic detectors that the core engine executes.
 
-| Field             | Type       | Required | Description                                                         |
-| ----------------- | ---------- | -------- | ------------------------------------------------------------------- |
-| `category`        | string     | Yes      | Detection category (wifi_ssid, device_name, credential, suspicious) |
-| `confidence`      | string     | Yes      | Default confidence: "low", "medium", "high"                         |
-| `min_length`      | int        | Yes      | Minimum string length to consider                                   |
-| `max_length`      | int        | Yes      | Maximum string length to consider                                   |
-| `requires_letter` | bool       | Yes      | Must contain alphabetic character                                   |
-| `patterns`        | object\[\] | Yes      | Array of `{regex, flags, reason}`                                   |
-| `camelcase`       | bool       | No       | Enable CamelCase matching (default: false)                          |
+| Field             | Type       | Required | Description                                                                        |
+| ----------------- | ---------- | -------- | ---------------------------------------------------------------------------------- |
+| `category`        | string     | Yes      | Detection category (wifi_ssid, device_name, serial_number, credential, suspicious) |
+| `confidence`      | string     | Yes      | Default confidence: "low", "medium", "high"                                        |
+| `min_length`      | int        | Yes      | Minimum string length to consider                                                  |
+| `max_length`      | int        | Yes      | Maximum string length to consider                                                  |
+| `requires_letter` | bool       | Yes      | Must contain alphabetic character                                                  |
+| `patterns`        | object\[\] | Yes      | Array of `{regex, flags, reason}`                                                  |
+| `camelcase`       | bool       | No       | Enable CamelCase matching (default: false)                                         |
 
 Detector pattern entry:
 
@@ -380,6 +389,9 @@ The built-in network device domain provides:
 - Safe value patterns for WiFi standards, modulation types, security protocols
 - WiFi SSID detector (band suffixes, common prefixes, CamelCase)
 - Device name detector (possessives, router brands, consumer devices)
+- Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — issue #49 C7000v2,
+  CM2500 7S-prefix) at **high** so the review pre-selects them, plus a generic uppercase-alphanumeric backstop at
+  **medium**
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
 
 ## Merge Order

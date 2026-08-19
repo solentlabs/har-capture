@@ -54,6 +54,12 @@ result = check_connectivity_phase(target, result)
 
 Returns `(reachable, scheme, error)`. Explicit schemes bypass auto-detection — the user has chosen.
 
+**Target paths are dropped — and announced.** `_parse_target()`/`_strip_protocol()` keep only the host; capture always
+starts at the device root. The CLI calls `target_path()` up front and, when the target carried a path
+(`har-capture get https://host/DocsisStatus.htm`), prints a notice that the path is ignored and the user should navigate
+to the page inside the browser. Before the notice, the silent drop cost a wasted CM2500 capture run (2026-08-19): the
+run captured `/` instead of the named page.
+
 #### Protocol auto-detection (`detect_protocol`)
 
 Stdlib-only protocol probe used when the target lacks an explicit scheme. Probes TCP `:80` and `:443`; if `:443` accepts
@@ -221,6 +227,11 @@ value, an `opened_at` timestamp, inferred action (`accept` or `dismiss`), and `r
 the tool's observability stance: surface what the user did, do not auto-accept on their behalf. Headless or timed
 captures keep Playwright's default auto-dismiss behavior to avoid hanging unattended runs.
 
+**`_solentlabs.downloads`** records browser downloads saved during the session — suggested filename, the name saved
+under, and an error message when saving failed. Filenames only: the local `saved_path` is deliberately excluded from the
+HAR so a shared artifact never carries a local filesystem path. See [Download Preservation](#download-preservation) for
+the mechanism.
+
 ### Internal Decomposition
 
 `capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to five extracted
@@ -264,8 +275,18 @@ Testable with: zero mocks (real temp file).
 
 #### `_run_post_capture_pipeline(...) -> CaptureResult`
 
-Assesses capture completeness, runs sanitization, copies raw HAR if needed, cleans up temp file, compresses. The temp
-file is always deleted.
+Strips browser-internal entries, assesses capture completeness, runs sanitization, copies raw HAR if needed, cleans up
+temp file, compresses. The temp file is always deleted.
+
+**Browser-internal entry stripping** (`strip_browser_internal_entries()`) runs first, on the raw temp HAR, so no
+downstream artifact — raw copy included — keeps entries whose request URL is not http(s). Browser-internal traffic
+(`chrome://`, `chrome-extension://`, `devtools://`, `about:`) is never target-device evidence, and some of it leaks
+local machine state: `chrome://fileicon/?path=...` embeds the local filesystem path of every file on the downloads page
+(observed on the 2026-08-19 CM2500 happy-path capture: 11 chrome:// entries with Playwright temp-dir paths). The
+keep-list is a strict http/https allowlist by design — `blob:` and `data:` entries are deliberately stripped too:
+Playwright's recorder captures network-level traffic, so they essentially never appear as entries, and any bytes behind
+them arrived via an http(s) response that is already in the HAR. The standalone `sanitize` command does not drop entries
+— its contract is redaction, not removal — so this pollution is handled where it originates: at capture time.
 
 Testable with: zero Playwright mocks (one mock for `sanitize_har_file` if isolating, or zero mocks with a real fixture).
 
@@ -307,6 +328,7 @@ class CaptureResult:
     error: str | None
     sanitization_report: SanitizationReport | None
     completeness: CaptureCompletenessReport | None  # What the capture contains + gaps
+    downloads: list[dict[str, Any]]                 # Saved browser downloads (NOT sanitized)
 ```
 
 ### `CapturePathInfo` Dataclass
@@ -331,6 +353,9 @@ class BrowserSessionResult:
     web_storage_local: list[dict[str, Any]]  # localStorage entries per origin
     web_storage_session: dict[str, str]      # sessionStorage key/value pairs
     captured_bodies: dict[str, bytes]        # Eagerly captured response bodies
+    dialogs: list[dict[str, Any]]            # Dialog audit trail (headed interactive runs)
+    popups: list[dict[str, Any]]             # Popup/new-page audit trail
+    downloads: list[dict[str, Any]]          # Saved browser downloads (audit records)
     success: bool
     error: str | None
 ```
@@ -519,6 +544,28 @@ Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to bas
 - Handles corrupt HAR files gracefully (returns 0)
 
 Testable with: zero mocks (real temp file).
+
+### Download Preservation
+
+Playwright saves browser downloads into an ephemeral artifacts directory that is deleted when the context closes — the
+2026-08-19 CM2500 session lost the modem's event-log export this way: the HAR recorded the request entry but not the
+content, and the file itself was wiped.
+
+Mechanism, in `_run_browser_session()`:
+
+1. A `page.on("download")` handler (attached to the main page and to every popup page) collects Playwright `Download`
+   objects as they start. The handler makes **no Playwright calls** — blocking RPCs inside sync-API event handlers can
+   deadlock the dispatcher.
+1. After the interactive wait ends and **before** `context.close()`, `_save_pending_downloads()` saves each collected
+   download via `download.save_as()` into `<output-stem>_downloads/` next to the output HAR (created lazily on first
+   download). Filename collisions get a counter (`log.txt`, `log_2.txt`); only the basename of the suggested filename is
+   used so a hostile suggestion cannot escape the directory.
+1. Capture-everything over fail: each download saves independently; a failure is recorded in its audit record, never
+   raised.
+
+Audit records surface in three places: `CaptureResult.downloads` (with local paths, for the CLI), the CLI's
+capture-complete output (with an explicit **NOT sanitized** warning — saved files are raw device output and bypass the
+sanitization pipeline entirely), and `log._solentlabs.downloads` in the HAR (filenames only, no local paths).
 
 ### Timeout vs Interactive Mode
 

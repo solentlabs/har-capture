@@ -358,6 +358,9 @@ def load_capture_settings(custom_path: Path | str | None = None) -> dict[str, An
         custom_session = custom.get("session_cookies", {}).get("name_patterns")
         if custom_session:
             builtin.setdefault("session_cookies", {}).setdefault("name_patterns", []).extend(custom_session)
+        custom_password = custom.get("password_fields", {}).get("name_patterns")
+        if custom_password:
+            builtin.setdefault("password_fields", {}).setdefault("name_patterns", []).extend(custom_password)
 
     _cache_set(cache_key, builtin)
     return builtin
@@ -411,6 +414,20 @@ def get_session_cookie_patterns(custom_path: Path | str | None = None) -> list[s
     """
     settings = load_capture_settings(custom_path)
     patterns: list[str] = settings.get("session_cookies", {}).get("name_patterns", [])
+    return patterns
+
+
+def get_password_field_patterns(custom_path: Path | str | None = None) -> list[str]:
+    """Get POST-parameter name regexes that mark a credential submission.
+
+    Args:
+        custom_path: Optional path to custom capture settings
+
+    Returns:
+        List of case-insensitive substring-match regex strings
+    """
+    settings = load_capture_settings(custom_path)
+    patterns: list[str] = settings.get("password_fields", {}).get("name_patterns", [])
     return patterns
 
 

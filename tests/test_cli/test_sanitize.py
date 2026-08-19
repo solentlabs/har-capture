@@ -513,3 +513,34 @@ class TestCompletenessReporting:
         assert result.exit_code == 0
         assert "POST requests: 2" in result.output
         assert "Recording began mid-session" not in result.output
+
+
+class TestStaleSiblingRefresh:
+    """A sanitize run must refresh an existing .gz sibling it just made stale.
+
+    Every sanitize pass rewrites the .sanitized.har (fresh salt), so a
+    sibling .gz from an earlier --compress run diverges even when the
+    review applies nothing. Without the refresh, the stale sibling — the
+    upload artifact — survives silently (2026-08-19 CM2500 finding).
+    """
+
+    def test_existing_sibling_regenerated_without_compress(self, valid_har: Path) -> None:
+        import gzip
+
+        sanitized = valid_har.parent / "test.sanitized.har"
+        sibling = valid_har.parent / "test.sanitized.har.gz"
+        with gzip.open(sibling, "wb") as f:
+            f.write(b'{"log": {"entries": [], "old": "pre-rewrite content"}}')
+
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
+
+        assert result.exit_code == 0
+        assert "Regenerated compressed file" in result.output
+        with gzip.open(sibling, "rb") as f:
+            assert f.read() == sanitized.read_bytes()
+
+    def test_no_sibling_creates_nothing(self, valid_har: Path) -> None:
+        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
+
+        assert result.exit_code == 0
+        assert not (valid_har.parent / "test.sanitized.har.gz").exists()

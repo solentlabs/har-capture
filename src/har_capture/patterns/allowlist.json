@@ -52,7 +52,10 @@
       "COOKIE_",
       "STORAGE_",
       "CRED_",
-      "SENSITIVE_"
+      "SENSITIVE_",
+      "PHONE_",
+      "SSN_",
+      "PIN_"
     ]
   },
 

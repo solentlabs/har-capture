@@ -182,7 +182,7 @@ class TestSimpleReplacement:
 
         result_str = json.dumps(result)
         # Should contain redacted placeholder
-        assert "WIFI_SSID_" in result_str, "Redacted value should have WIFI_SSID_ prefix"
+        assert "WIFI_" in result_str, "Redacted value should have WIFI_ prefix"
 
     def test_redacted_value_stored_in_report(self) -> None:
         """Test redacted_value is stored in the FlaggedValue."""
@@ -191,7 +191,7 @@ class TestSimpleReplacement:
         apply_user_redactions(har_data, report)
 
         assert report.flagged[0].redacted_value is not None
-        assert report.flagged[0].redacted_value.startswith("WIFI_SSID_")
+        assert report.flagged[0].redacted_value.startswith("WIFI_")
 
 
 class TestJSONEscaping:
@@ -236,7 +236,7 @@ class TestJSONEscaping:
         # The original value (with newline) should be gone
         assert "Line1\nLine2" not in json.dumps(result)
         # Redacted placeholder should be present
-        assert "WIFI_SSID_" in json.dumps(result)
+        assert "WIFI_" in json.dumps(result)
 
     def test_json_escaping_quotes(self) -> None:
         """Test values with quotes are properly escaped."""

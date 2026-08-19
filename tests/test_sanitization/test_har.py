@@ -1533,6 +1533,11 @@ class TestPhoneNumberPatterns:
         ("Version: 1.2.3",          "version_number"),
         ("tok_1234567890",          "token_with_digits"),
         ("abc1234567890xyz",        "digits_inside_word"),
+        # Separator-free digit runs are constants/counters, not phones —
+        # CM2500 firmware md5.js constants were flagged 31x per review.
+        ("var a = 1732584193;",     "md5_js_init_constant"),
+        ("count: 5551234567",       "bare_ten_digits"),
+        ("epoch 17325841934",       "bare_eleven_digits"),
     ]
     # fmt: on
 
@@ -3762,7 +3767,7 @@ class TestApplyUserRedactions:
         )
         # Mock hasher to fail on first call, succeed on second
         with patch("har_capture.sanitization.har.Hasher") as mock_hasher_cls:
-            mock_hash = mock_hasher_cls.create.return_value.hash_generic
+            mock_hash = mock_hasher_cls.create.return_value.hash_sensitive_value
             mock_hash.side_effect = [RuntimeError("hash failed"), "REDACTED_URL"]
             result = apply_user_redactions(har_data, report)
         assert isinstance(result, dict), "Should return valid result despite first item failing"

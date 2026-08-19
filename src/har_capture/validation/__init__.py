@@ -12,9 +12,14 @@ Exports:
 
 from __future__ import annotations
 
+from har_capture.validation.artifacts import (
+    compressed_sibling_pair,
+    stale_compressed_sibling,
+)
 from har_capture.validation.completeness import (
     MID_SESSION_CAPTURE,
     NO_POST_REQUESTS,
+    SINGLE_CREDENTIAL_POST,
     CaptureCompletenessReport,
     CompletenessWarning,
     analyze_capture_completeness,
@@ -39,6 +44,9 @@ from har_capture.validation.secrets import (
 )
 
 __all__ = [
+    # Artifact consistency
+    "compressed_sibling_pair",
+    "stale_compressed_sibling",
     # Capture-completeness validation
     "analyze_capture_completeness",
     "analyze_har_file",
@@ -47,6 +55,7 @@ __all__ = [
     "CompletenessWarning",
     "MID_SESSION_CAPTURE",
     "NO_POST_REQUESTS",
+    "SINGLE_CREDENTIAL_POST",
     # PII leak detection
     "COOKIE_ATTRIBUTES_ONLY",
     "MAC_PATTERN",

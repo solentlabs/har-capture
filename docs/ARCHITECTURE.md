@@ -117,12 +117,13 @@ graph TD
 
     subgraph process[Post-Capture Processing]
         direction TB
-        meta[Inject metadata + pre_capture_cookies] --> complete[Completeness check<br>mid-session? any POSTs?]
+        meta[Inject metadata + pre_capture_cookies] --> strip[Strip browser-internal entries<br>chrome:// etc.]
+        strip --> complete[Completeness check<br>mid-session? any POSTs? refused login?]
         complete --> sanitize[Pass 1: Auto-sanitize PII]
-        sanitize --> review[Pass 2: Interactive review]
-        review --> filter[Filter bloat + deduplicate]
+        sanitize --> filter[Filter bloat + deduplicate]
         filter --> compress[Gzip compress]
         compress --> cleanup[Delete temp files]
+        cleanup --> review[Pass 2: Interactive review<br>rewrites .sanitized.har + regenerates .gz]
     end
 
     process --> done([.sanitized.har.gz])
@@ -179,8 +180,9 @@ before page transitions. Disabled in `--minimal` mode for devices with persisten
 **State capture**: After navigation, cookies (`context.cookies()`), localStorage (`context.storage_state()`), and
 sessionStorage (JS evaluation) are captured and injected into the HAR as `_har_capture` metadata. Context-level browser
 events that matter for downstream analysis are also surfaced under `_solentlabs`: `pre_capture_cookies` for
-clean-session auditing, `popups` when the device opens a new page, and interactive JavaScript `dialogs` when a headed
-user-driven capture resolves a native `alert` / `confirm` / `prompt` in the browser UI.
+clean-session auditing, `popups` when the device opens a new page, interactive JavaScript `dialogs` when a headed
+user-driven capture resolves a native `alert` / `confirm` / `prompt` in the browser UI, and `downloads` (filenames only)
+when the user downloads a file during the session.
 
 **Error recovery**: Missing browser executables and system dependencies are detected by pattern matching, fixed
 automatically (reinstall), and retried once.
@@ -191,17 +193,22 @@ timeout vs interactive mode).
 ### Post-Capture Processing
 
 After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies`,
-`_solentlabs.popups`, `_solentlabs.dialogs`) → completeness check → sanitization (Pass 1) → interactive review (Pass 2)
-→ bloat filtering + deduplication → gzip compression → temp file cleanup.
+`_solentlabs.popups`, `_solentlabs.dialogs`, `_solentlabs.downloads`) → browser-internal entry stripping (`chrome://`
+etc. — never device evidence, and `chrome://fileicon` URLs leak local paths) → completeness check → sanitization (Pass
+1\) → bloat filtering + deduplication → gzip compression → temp file cleanup → interactive review (Pass 2), which
+rewrites the `.sanitized.har` **and regenerates the `.har.gz`** so the upload artifact can never go stale relative to
+the reviewed file. Browser downloads are saved out of Playwright's ephemeral artifacts directory into
+`<output-stem>_downloads/` before the context closes — raw device output, NOT sanitized, and announced as such.
 
 The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See
 [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
 
 **Completeness check**: a HAR that omits the auth exchange still looks structurally complete, so
 [`analyze_capture_completeness()`](specs/VALIDATION_SPEC.md#capture-completeness-validation) reports what the capture
-does and does not contain — warning when a session cookie on the first request shows recording began mid-session, and
-when no POST was captured at all. It runs on the raw HAR (bloat filtering can drop the true first entry) and **only
-warns**: captures are immutable evidence, so nothing is mutated or rejected.
+does and does not contain — warning when a session cookie on the first request shows recording began mid-session, when
+no POST was captured at all, and when exactly one credential submission was captured (no deliberately refused login on
+file). It runs on the raw HAR (bloat filtering can drop the true first entry) and **only warns**: captures are immutable
+evidence, so nothing is mutated or rejected.
 
 ## Sanitization Pipeline
 

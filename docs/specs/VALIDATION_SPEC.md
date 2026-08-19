@@ -17,6 +17,7 @@ Both run over any HAR regardless of origin.
 | ---------------------------------------------- | ------------------------------------------------------------------------------ |
 | `src/har_capture/validation/secrets.py`        | PII leak detection: `validate_har()`, `check_json_fields()`, finding dataclass |
 | `src/har_capture/validation/completeness.py`   | Capture-completeness: mid-session detection, POST coverage, `load_har()`       |
+| `src/har_capture/validation/artifacts.py`      | `.har`/`.har.gz` pair consistency: `stale_compressed_sibling()`                |
 | `src/har_capture/cli/_completeness_display.py` | Shared renderer used by `get`, `sanitize`, and `validate`                      |
 | `src/har_capture/patterns/redaction.py`        | `is_redacted()` — checks if a value has already been sanitized                 |
 | `src/har_capture/patterns/sensitive.json`      | Sensitive header and field patterns used by validation                         |
@@ -313,27 +314,38 @@ class CaptureCompletenessReport:
     unique_urls: int                          # Distinct request URLs
     set_cookie_responses: int                 # Responses carrying Set-Cookie (not proof of a session)
     first_request_session_cookies: list[str]  # Session cookies already on request #1
+    credential_post_counts: dict[str, int]    # Credential submissions per request URL
     warnings: list[CompletenessWarning]       # Gaps found (empty == complete)
 
-    post_count: int   # property — method_counts["POST"]
-    complete: bool    # property — no warnings
+    post_count: int             # property — method_counts["POST"]
+    credential_post_count: int  # property — total credential submissions
+    complete: bool              # property — no warnings
 ```
 
-Two gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
+Three gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
 
-| Code                  | Trigger                                         | Meaning                                                               |
-| --------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
-| `mid_session_capture` | Session cookie present on the **first** request | Browser was already logged in; the auth exchange predates the capture |
-| `no_post_requests`    | Zero `POST` entries                             | No form or auth submission was recorded                               |
+| Code                     | Trigger                                          | Meaning                                                                                                                                                                                          |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mid_session_capture`    | Session cookie present on the **first** request  | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
+| `no_post_requests`       | Zero `POST` entries                              | No form or auth submission was recorded                                                                                                                                                          |
+| `single_credential_post` | Exactly one credential submission in the capture | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
 
-"First request" means `entries[0]` as written in the file — entry order is trusted, not re-sorted by `startedDateTime`.
-Playwright writes entries chronologically, so this holds for har-capture's own captures; a foreign HAR with out-of-order
-entries could hide the signal.
+"First request" is resolved by `startedDateTime` when every entry carries one (index-tiebroken for same-millisecond
+stamps), falling back to file order otherwise — foreign HARs are not guaranteed to be sorted, and the mid-session signal
+depends on genuinely reading the earliest request.
+
+A **credential submission** is a POST whose `postData` carries a parameter with a password-shaped name (parsed `params`
+array, else an urlencoded `text` body; JSON bodies are not inspected). Names are matched against
+`password_fields.name_patterns` in
+[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields) — names
+only, so the check works identically on raw and sanitized HARs. Two or more submissions suppress the warning: the tool
+cannot verify outcomes, so a repeat submission is taken as the deliberate wrong-password attempt the contributor
+instructions call for.
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson-bloat-extension-filtering-and-session-cookie-names), case-insensitively and
-full-match. Cookie names are read from both the parsed `request.cookies` array and the raw `Cookie` header, since HAR
-producers populate one, the other, or both.
+[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields),
+case-insensitively and full-match. Cookie names are read from both the parsed `request.cookies` array and the raw
+`Cookie` header, since HAR producers populate one, the other, or both.
 
 **This layer warns only.** It never mutates or rejects a capture — HAR files are immutable evidence. A failure inside
 the check is logged and degrades `completeness` to `None`; it never fails the capture.
@@ -361,6 +373,25 @@ full auth config was hand-authored downstream from evidence that did not exist �
 retests. The companion defect (same-URL POST dedup discarding the login submission) is fixed in
 [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
 
+## Compressed-Artifact Freshness Check
+
+`stale_compressed_sibling()` (`validation/artifacts.py`) compares a `.har` with its `.har.gz` sibling. Every har-capture
+flow writes the `.gz` as a byte-for-byte gzip of the final `.har`, so any divergence means one member predates the
+other's last edit. The known failure mode is a compressed artifact written before the interactive review scrubbed PII
+from the `.har` — observed on all three reviewed CM2500 captures (2026-08-19) — and the `.gz` is exactly the file
+contributors upload.
+
+- `compressed_sibling_pair(path)` resolves the `(har, gz)` pair from either member; an incomplete pair returns `None`
+- Divergent content (or an unreadable `.gz`) returns a human-readable problem description; a matching pair returns
+  `None`
+- The `validate` CLI runs the check for every listed file, deduplicating so a `--dir` scan that lists both members
+  reports the divergence **once**, and counts a stale pair as an **error** (exit 1) — unlike completeness gaps, a stale
+  `.gz` is a live PII-leak vector, not a coverage note
+
+The interactive review itself regenerates the `.gz` after applying user redactions (see
+[SANITIZATION_SPEC](SANITIZATION_SPEC.md)), so this check is the backstop for artifacts produced outside that flow —
+hand-edited files, older tool versions, interrupted runs.
+
 ## CLI Command vs Pre-Commit Hook
 
 ### `har-capture validate` CLI Command
@@ -371,6 +402,7 @@ har-capture validate capture.har --patterns <domain|custom.json>
 
 - Loads and validates a single HAR file
 - Prints findings to stdout with severity, location, field, value
+- Checks `.har`/`.har.gz` pair freshness (see above)
 - Exit code 0 if no findings, 1 if findings detected
 - Supports custom patterns via `--patterns`
 

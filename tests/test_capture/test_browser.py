@@ -2708,3 +2708,88 @@ class TestApplyDialogResolution:
             assert result is None, f"{case['id']}: expected no match but got {result!r}"
             # No-match → dialogs list must be unchanged.
             assert dialogs == dialogs_before, f"{case['id']}: dialogs mutated despite no match"
+
+
+# =============================================================================
+# Download preservation — 2026-08-19 CM2500 session: the event-log export
+# went to Playwright's ephemeral artifacts dir and was wiped on close.
+# =============================================================================
+
+
+class TestUniqueDownloadName:
+    """Filename selection for saved downloads."""
+
+    # fmt: off
+    NAME_CASES = [
+        ("eventlog.txt",        set(),                          "eventlog.txt",     "simple_name"),
+        ("eventlog.txt",        {"eventlog.txt"},               "eventlog_2.txt",   "collision_appends_counter"),
+        ("eventlog.txt",        {"eventlog.txt", "eventlog_2.txt"}, "eventlog_3.txt", "double_collision"),
+        ("",                    set(),                          "download",         "empty_name_fallback"),
+        ("../../etc/cron.d",    set(),                          "cron.d",           "path_escape_stripped"),
+        ("noext",               {"noext"},                      "noext_2",          "no_extension_counter"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("suggested", "taken", "expected", "desc"),
+        NAME_CASES,
+        ids=[c[3] for c in NAME_CASES],
+    )
+    def test_unique_download_name(self, suggested: str, taken: set[str], expected: str, desc: str) -> None:
+        from har_capture.capture.browser import _unique_download_name
+
+        assert _unique_download_name(suggested, taken) == expected, desc
+
+
+class TestSavePendingDownloads:
+    """Saving collected Download objects out of the artifacts dir."""
+
+    @staticmethod
+    def _fake_download(name: str, content: bytes = b"data", fail: bool = False) -> MagicMock:
+        download = MagicMock()
+        download.suggested_filename = name
+        if fail:
+            download.save_as.side_effect = RuntimeError("context closed")
+        else:
+            download.save_as.side_effect = lambda dest: Path(dest).write_bytes(content)
+        return download
+
+    def test_downloads_saved_with_audit_records(self, tmp_path: Path) -> None:
+        from har_capture.capture.browser import _save_pending_downloads
+
+        downloads_dir = tmp_path / "capture_downloads"
+        pending = [
+            self._fake_download("eventlog.txt", b"log-a"),
+            self._fake_download("eventlog.txt", b"log-b"),
+        ]
+
+        records = _save_pending_downloads(pending, downloads_dir)
+
+        assert (downloads_dir / "eventlog.txt").read_bytes() == b"log-a"
+        assert (downloads_dir / "eventlog_2.txt").read_bytes() == b"log-b"
+        assert [r["saved_as"] for r in records] == ["eventlog.txt", "eventlog_2.txt"]
+        assert all("error" not in r for r in records)
+
+    def test_one_failure_does_not_lose_the_rest(self, tmp_path: Path) -> None:
+        """Capture-everything over fail: a dead download is recorded, not raised."""
+        from har_capture.capture.browser import _save_pending_downloads
+
+        downloads_dir = tmp_path / "capture_downloads"
+        pending = [
+            self._fake_download("gone.bin", fail=True),
+            self._fake_download("kept.txt", b"ok"),
+        ]
+
+        records = _save_pending_downloads(pending, downloads_dir)
+
+        assert records[0]["error"] == "context closed"
+        assert "saved_path" not in records[0]
+        assert (downloads_dir / "kept.txt").read_bytes() == b"ok"
+        assert records[1]["saved_as"] == "kept.txt"
+
+    def test_no_downloads_creates_no_directory(self, tmp_path: Path) -> None:
+        from har_capture.capture.browser import _save_pending_downloads
+
+        downloads_dir = tmp_path / "capture_downloads"
+        assert _save_pending_downloads([], downloads_dir) == []
+        assert not downloads_dir.exists()

@@ -137,6 +137,19 @@ def capture(
     if minimal:
         wait_for_data = False
 
+    # Capture always starts at the device root; a path in the target is
+    # dropped. Say so up front — silently capturing the root instead of
+    # the named page cost a wasted capture run (CM2500, 2026-08-19).
+    from har_capture.capture.connectivity import target_path
+
+    dropped_path = target_path(target)
+    if dropped_path:
+        typer.echo(
+            f"Note: the path '{dropped_path}' in the target is ignored — capture "
+            "always starts at the device root. Navigate to the page inside the "
+            "browser once it opens."
+        )
+
     # Phase 1: Check browser installation
     result = check_browser_phase(browser)
     if result.needs_browser_install:
@@ -273,6 +286,18 @@ def _display_results(result: CaptureWorkflowResult, patterns: list[str] | None =
         orig = result.stats.get("original_entries", 0)
         filt = result.stats.get("filtered_entries", 0)
         typer.echo(f"  Removed {removed} bloat entries ({orig} -> {filt})")
+    if result.downloads:
+        saved = [d for d in result.downloads if d.get("saved_path")]
+        failed = [d for d in result.downloads if d.get("error")]
+        typer.echo()
+        typer.echo(f"  Browser downloads: {len(saved)} file(s) saved")
+        for record in saved:
+            typer.echo(f"    {record['saved_path']}")
+        for record in failed:
+            typer.echo(f"    FAILED: {record.get('suggested_filename') or '(unnamed)'} — {record['error']}")
+        if saved:
+            typer.echo("    WARNING: downloaded files are raw device output — NOT sanitized.")
+            typer.echo("    Review them for serial numbers, MACs, and account data before sharing.")
     typer.echo()
 
     display_completeness(result.completeness)
@@ -342,7 +367,13 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
     if review_completed and report.total_user_redacted > 0:
         from har_capture.cli.interactive import apply_reviewed_redactions
 
-        apply_reviewed_redactions(report, sanitized_path)
+        # compressed_path was written pre-review by the capture pipeline;
+        # apply_reviewed_redactions regenerates it from the reviewed file.
+        apply_reviewed_redactions(
+            report,
+            sanitized_path,
+            compressed_path=result.capture.compressed_path,
+        )
 
     # Display summary
     display_summary(report)

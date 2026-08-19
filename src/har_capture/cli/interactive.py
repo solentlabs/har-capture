@@ -123,15 +123,22 @@ def capture_html_context(html: str, start: int, end: int, window: int = 50) -> s
 def apply_reviewed_redactions(
     report: SanitizationReport,
     output_path: str | Path,
+    compressed_path: str | Path | None = None,
 ) -> None:
     """Apply user redactions from interactive review to sanitized file.
 
     Reads the sanitized HAR, applies redactions, writes atomically
-    via tempfile + rename.
+    via tempfile + rename, then regenerates the compressed sibling so
+    it can never go stale relative to the reviewed file — the ``.gz``
+    is the artifact contributors upload, and a pre-review copy retains
+    exactly the values the review scrubbed.
 
     Args:
         report: Sanitization report with user redaction decisions
         output_path: Path to the sanitized HAR file to update
+        compressed_path: Compressed artifact to regenerate from the
+            reviewed file. ``None`` auto-detects an existing
+            ``<output_path>.gz`` sibling.
     """
     import typer
 
@@ -172,6 +179,43 @@ def apply_reviewed_redactions(
         raise typer.Exit(1) from None
 
     typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
+
+    if compressed_path is None:
+        sibling = Path(str(output_path) + ".gz")
+        compressed_path = sibling if sibling.exists() else None
+    if compressed_path is not None:
+        regenerate_compressed_har(Path(output_path), Path(compressed_path))
+
+
+def regenerate_compressed_har(source: Path, compressed_path: Path) -> None:
+    """Rewrite ``compressed_path`` as a gzip of ``source``.
+
+    A failure here is treated as fatal: a stale compressed artifact
+    silently carries the PII the review just scrubbed.
+    """
+    import gzip
+
+    import typer
+
+    try:
+        with (
+            open(source, "rb") as f_in,
+            gzip.open(compressed_path, "wb", compresslevel=9) as f_out,
+        ):
+            f_out.write(f_in.read())
+    except OSError as e:
+        typer.echo(
+            f"Error: Failed to regenerate compressed file {compressed_path}: {e}",
+            err=True,
+        )
+        typer.echo(
+            f"  {compressed_path} is now STALE — do not share it. "
+            f"Re-create it from {source} before uploading.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    typer.echo(f"  Regenerated compressed file: {compressed_path}")
 
 
 # =============================================================================

@@ -95,6 +95,8 @@ class CaptureResult:
         stats: Capture statistics
         sanitization_report: Report from sanitization (for interactive review)
         completeness: What the capture contains and any gaps found in it
+        downloads: Browser downloads saved during the session (raw device
+            output — NOT sanitized)
     """
 
     success: bool = False
@@ -105,6 +107,7 @@ class CaptureResult:
     stats: dict[str, Any] = field(default_factory=dict)
     sanitization_report: Any | None = None  # SanitizationReport when available
     completeness: Any | None = None  # CaptureCompletenessReport when available
+    downloads: list[dict[str, Any]] = field(default_factory=list)
 
 
 # =============================================================================
@@ -210,6 +213,11 @@ class CaptureWorkflowResult:
     def sanitized_path(self) -> Path | None:
         """Path to sanitized HAR file."""
         return self.capture.sanitized_path if self.capture else None
+
+    @property
+    def downloads(self) -> list[dict[str, Any]]:
+        """Browser downloads saved during the session (NOT sanitized)."""
+        return self.capture.downloads if self.capture else []
 
     @property
     def stats(self) -> dict[str, Any]:
@@ -447,6 +455,7 @@ def run_capture_phase(
         stats=capture_result.stats or {},
         sanitization_report=capture_result.sanitization_report,
         completeness=capture_result.completeness,
+        downloads=capture_result.downloads,
     )
 
     if capture_result.success:

@@ -7,6 +7,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-19
+
+### Fixed
+
+- **The interactive review now regenerates the `.har.gz` it would otherwise leave stale.** The review rewrites the
+  `.sanitized.har`, but the compressed copy — written by the capture pipeline before the review ran — kept every value
+  the review scrubbed, in exactly the artifact contributors upload. Reproduced on all three reviewed CM2500 captures
+  (2026-08-19): the `.gz` retained the real modem serial and an IPv6 the review had masked. After applying user
+  redactions, the review re-gzips the reviewed file (the capture flow passes its compressed path explicitly; the
+  standalone `sanitize` flow auto-detects an existing `<output>.gz` sibling). A regeneration failure aborts loudly and
+  names the stale file. `har-capture validate` backstops the pair: a `.har` whose `.har.gz` sibling diverges in content
+  is reported as an **error** — a stale compressed artifact is a live PII-leak vector, not a coverage note.
+
+- **The review no longer re-flags the sanitizer's own replacement values.** Joined lists of placeholder addresses
+  (`192.0.2.182, 192.0.2.51`), IPv6 placeholders with `%zone` suffixes, and multi-word placeholder prefixes
+  (`SERIAL_NUMBER_…`, `CREDENTIAL_…` from earlier versions) cleared the entropy bar and landed back in the review queue,
+  putting already-redacted evidence one misclick from double-hashing. All three shapes are now recognized as safe
+  values.
+
+- **DOCSIS status strings `Ready` / `Not Ready` are no longer flagged as credentials.** `Not Ready` has high enough
+  character-class entropy to trip the heuristic; masking a channel-status string corrupts parser fixtures. Both are now
+  in the built-in safe-value list and the pipe-delimited safe values.
+
+- **Separator-free digit runs are no longer flagged as phone numbers.** The phone pattern matched any bare 10-digit run,
+  which flagged the MD5 init constants in device firmware JavaScript (`var a = 1732584193`) 31 times per review on the
+  CM2500 captures. A phone match now requires a separator, parentheses, or a leading `+`.
+
+- **User-selected redactions now carry recognized placeholder prefixes.** Pass 2 built its placeholder prefix from the
+  raw category name (`CREDENTIAL_`, `SERIAL_NUMBER_`), bypassing the category→prefix map — so an IPv6 flagged by entropy
+  landed as `CREDENTIAL_…` and the allowlist did not recognize some user-redacted placeholders as redacted. User
+  redactions now route through the same mapping as automatic ones (`CRED_`, `SERIAL_`, `WIFI_`, …), and the allowlist
+  covers every emitted prefix.
+
+### Added
+
+- **Known Netgear serial formats are detected at high confidence and pre-selected in review.** The 13-character Netgear
+  layout (leading digit, one or two letters, digits, alphanumeric tail — covers the issue-#49 C7000v2 format and the
+  CM2500 `7S`-prefix format) now has its own high-confidence detector, so the review pre-checks it instead of leaving it
+  an unselected medium-confidence row the operator must notice by hand. The generic uppercase-alphanumeric backstop
+  stays at medium.
+
+- **Browser-internal entries are stripped from captures.** `chrome://`, `chrome-extension://`, `devtools://`, and other
+  non-http(s) entries are never target-device evidence, and `chrome://fileicon/?path=…` URLs embed local filesystem
+  paths (11 such entries polluted a CM2500 capture, leaking Playwright temp-dir paths). They are removed from the raw
+  HAR before sanitization, so no downstream artifact keeps them.
+
+- **Browser downloads are saved instead of lost.** Playwright stores downloads in an ephemeral artifacts directory wiped
+  when the browser closes — a modem event-log export downloaded during a capture was simply gone. Downloads are now
+  saved to `<output-stem>_downloads/` next to the HAR before the context closes, announced in the capture summary with
+  an explicit warning that they are raw device output and NOT sanitized, and recorded (filenames only) under
+  `log._solentlabs.downloads`.
+
+- **Captures with a login but no refused login now warn.** A new `single_credential_post` completeness warning fires
+  when exactly one credential submission (a POST carrying a password-named parameter) is in the file: a deliberately
+  refused login is auth evidence that cannot be reconstructed later — on the CM2500, every login outcome is a 302 told
+  apart by its `Location` alone. Two or more submissions (the wrong-then-right pattern the capture instructions ask for)
+  suppress the warning.
+
+- **A path in the capture target is announced instead of silently dropped.** `har-capture get https://host/page.htm` has
+  always captured the device root; the path was discarded with no signal, which cost a wasted capture run. The CLI now
+  prints a notice that the path is ignored and the page should be visited inside the browser.
+
 ## [0.11.1] - 2026-07-30
 
 ### Fixed
@@ -1006,6 +1068,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.10.3]: https://github.com/solentlabs/har-capture/compare/v0.10.2...v0.10.3
 [0.11.0]: https://github.com/solentlabs/har-capture/compare/v0.10.3...v0.11.0
 [0.11.1]: https://github.com/solentlabs/har-capture/compare/v0.11.0...v0.11.1
+[0.12.0]: https://github.com/solentlabs/har-capture/compare/v0.11.1...v0.12.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1033,4 +1096,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.11.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.0...HEAD

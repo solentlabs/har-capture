@@ -28,7 +28,7 @@ from har_capture.sanitization.heuristics import analyze_value
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_pii_regressions.json").read_text())
 
 HEURISTIC_REGRESSION_CASES = [
-    (c["value"], c["should_flag"], c["expected_category"], c["id"])
+    (c["value"], c["should_flag"], c["expected_category"], c.get("expected_confidence"), c["id"])
     for c in _FIXTURES["heuristic_regression_cases"]
 ]
 
@@ -46,18 +46,19 @@ def network_detectors() -> list[CompiledDetector]:
 
 
 @pytest.mark.parametrize(
-    ("value", "should_flag", "expected_category", "desc"),
+    ("value", "should_flag", "expected_category", "expected_confidence", "desc"),
     HEURISTIC_REGRESSION_CASES,
-    ids=[c[3] for c in HEURISTIC_REGRESSION_CASES],
+    ids=[c[4] for c in HEURISTIC_REGRESSION_CASES],
 )
 def test_heuristic_engine_flags_reported_leaks(
     value: str,
     should_flag: bool,
     expected_category: str,
+    expected_confidence: str | None,
     desc: str,
     network_detectors: list[CompiledDetector],
 ) -> None:
-    flagged, _confidence, category, reason = analyze_value(value, compiled_detectors=network_detectors)
+    flagged, confidence, category, reason = analyze_value(value, compiled_detectors=network_detectors)
     assert flagged is should_flag, (
         f"{desc}: '{value}' should {'be' if should_flag else 'not be'} flagged "
         f"(got flagged={flagged}, category={category!r}, reason={reason!r})"
@@ -65,6 +66,14 @@ def test_heuristic_engine_flags_reported_leaks(
     if should_flag:
         assert category == expected_category, (
             f"{desc}: '{value}' expected category {expected_category!r}, got {category!r} (reason={reason!r})"
+        )
+    if expected_confidence is not None:
+        # Confidence drives review pre-selection: HIGH is pre-checked in
+        # the checkbox UI, MEDIUM is not (except credentials). A serial
+        # that drops from high to medium silently reintroduces the
+        # CM2500 select-it-by-hand gap.
+        assert confidence.value == expected_confidence, (
+            f"{desc}: '{value}' expected confidence {expected_confidence!r}, got {confidence.value!r}"
         )
 
 

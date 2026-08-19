@@ -686,17 +686,34 @@
   "har_missing_body": {
     "log": {
       "version": "1.2",
-      "creator": { "name": "test", "version": "1.0" },
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
       "entries": [
         {
-          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": []
+          },
           "response": {
             "status": 200,
             "headers": [
-              { "name": "Content-Length", "value": "611" },
-              { "name": "Content-type", "value": "text/html" }
+              {
+                "name": "Content-Length",
+                "value": "611"
+              },
+              {
+                "name": "Content-type",
+                "value": "text/html"
+              }
             ],
-            "content": { "size": -1, "mimeType": "text/html", "compression": 0 },
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
             "bodySize": 611,
             "_transferSize": 994
           }
@@ -707,14 +724,25 @@
   "har_body_present": {
     "log": {
       "version": "1.2",
-      "creator": { "name": "test", "version": "1.0" },
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
       "entries": [
         {
-          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": []
+          },
           "response": {
             "status": 200,
             "headers": [],
-            "content": { "text": "<html>original</html>", "size": 21, "mimeType": "text/html" },
+            "content": {
+              "text": "<html>original</html>",
+              "size": 21,
+              "mimeType": "text/html"
+            },
             "bodySize": 21
           }
         }
@@ -724,14 +752,24 @@
   "har_missing_body_no_size": {
     "log": {
       "version": "1.2",
-      "creator": { "name": "test", "version": "1.0" },
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
       "entries": [
         {
-          "request": { "method": "GET", "url": "http://192.168.100.1/empty", "headers": [] },
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/empty",
+            "headers": []
+          },
           "response": {
             "status": 204,
             "headers": [],
-            "content": { "size": 0, "mimeType": "text/html" },
+            "content": {
+              "size": 0,
+              "mimeType": "text/html"
+            },
             "bodySize": 0
           }
         }
@@ -741,35 +779,157 @@
   "har_mixed_bodies": {
     "log": {
       "version": "1.2",
-      "creator": { "name": "test", "version": "1.0" },
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
       "entries": [
         {
-          "request": { "method": "GET", "url": "http://192.168.100.1/", "headers": [] },
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": []
+          },
           "response": {
             "status": 200,
             "headers": [],
-            "content": { "size": -1, "mimeType": "text/html" },
+            "content": {
+              "size": -1,
+              "mimeType": "text/html"
+            },
             "bodySize": 611,
             "_transferSize": 994
           }
         },
         {
-          "request": { "method": "POST", "url": "http://192.168.100.1/login", "headers": [] },
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": []
+          },
           "response": {
             "status": 200,
             "headers": [],
-            "content": { "text": "<html>dashboard</html>", "size": 21, "mimeType": "text/html" },
+            "content": {
+              "text": "<html>dashboard</html>",
+              "size": 21,
+              "mimeType": "text/html"
+            },
             "bodySize": 21
           }
         },
         {
-          "request": { "method": "GET", "url": "http://192.168.100.1/api/status", "headers": [] },
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/api/status",
+            "headers": []
+          },
           "response": {
             "status": 200,
             "headers": [],
-            "content": { "size": -1, "mimeType": "application/json" },
+            "content": {
+              "size": -1,
+              "mimeType": "application/json"
+            },
             "bodySize": 42,
             "_transferSize": 42
+          }
+        }
+      ]
+    }
+  },
+  "har_with_internal_entries": {
+    "log": {
+      "version": "1.2",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/DocsisStatus.htm"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "chrome://downloads/"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "chrome://fileicon/?path=%2Ftmp%2Fplaywright-artifacts-abc%2Fdeadbeef&scale=1x"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "chrome://resources/js/cr.js"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "chrome-extension://abcdef/script.js"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "devtools://devtools/bundled/root.js"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "about:blank"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "HTTP://192.168.100.1/RouterStatus.htm"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/Login?id=1"
+          },
+          "response": {
+            "status": 200,
+            "content": {}
           }
         }
       ]
