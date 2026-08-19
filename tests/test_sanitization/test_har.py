@@ -3983,6 +3983,36 @@ class TestStringPatternLengthGuard:
         assert "3C:E4:B0:11:22:33" in result
 
 
+class TestSerialDetectorResolverCache:
+    """The per-call serial-detector resolver caches like its sibling resolvers."""
+
+    def test_cache_hit_returns_same_object(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        patterns = {"_cache_probe": "hit"}
+        first = _resolve_serial_detectors(patterns)
+        second = _resolve_serial_detectors(patterns)
+        assert first is second
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+
+    def test_cache_evicts_oldest_at_capacity(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_FIELD_RE_CACHE_MAX,
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        for i in range(_CUSTOM_FIELD_RE_CACHE_MAX + 3):
+            _resolve_serial_detectors({"_cache_probe": i})
+        assert len(_CUSTOM_SERIAL_DETECTORS_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+
+
 class TestApplicationXmlResponseRouting:
     """Tests that application/xml responses are routed through the HTML engine."""
 
