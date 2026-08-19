@@ -231,7 +231,10 @@ MIME-type based routing (after the decode-first check):
 
 - `text/html`, `text/xml`, `application/xml` → `sanitize_html()` from html.py
 - `application/json`, `text/json` → `_sanitize_json_recursive()`
-- Other `text/*` → `_sanitize_string_patterns()`
+- Other `text/*` → `_sanitize_string_patterns()` (perf length guard: strings over 1 MB are skipped — the guard sat at
+  10,000 chars until 2026-08-19, silently exempting the CM2500's 33 KB `utility.js` from MAC/IP/email scans), then
+  `redact_vendor_serials()` (delimiter-aware vendor serials — applied outside the length guard so serial coverage never
+  depends on body size)
 - Binary content → skipped
 
 ### String Pattern Sanitization
@@ -278,6 +281,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`     |
 | 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`     |
 | 2d   | WPS / pairing / default PINs  | Known PIN label + 8-digit value (issue #47)         | `hasher.hash_value(val, "PIN")`        |
+| 2e   | Vendor-format serials         | High-confidence serial_number detectors, per token  | `hasher.hash_value(val, "SERIAL")`     |
 | 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value     | `hasher.hash_value(val, "ACCOUNT")`    |
 | 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)             | `hasher.hash_ip(ip, is_private=True)`  |
 | 5    | Public IPs                    | Non-private, non-reserved                           | `hasher.hash_ip(ip, is_private=False)` |
@@ -299,6 +303,20 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
 `Baud`, `ization`). Bare `serial` is excluded — too ambiguous for auto-redact.
+
+**Pass 2e — delimiter-aware vendor serials** (`redact_vendor_serials`): applies the **high-confidence** `serial_number`
+detectors from the loaded domain patterns (known vendor serial layouts, e.g. the Netgear 13-char format) to
+delimiter-bounded candidate tokens (`VENDOR_SERIAL_TOKEN_RE` in `patterns/loader.py`) anywhere in the content. A
+fullmatch auto-redacts as `SERIAL_<hash>` — in **every** heuristic mode, since this is what covers a serial with no
+label at all: the CM2500 round-1 leak was the serial inside `RouterStatus.htm`'s `tagValueList` blob, where FLAG-mode
+review was the only barrier and a skipped review shipped the raw value. The token extraction is the boundary guard: a
+serial-shaped substring of a longer identifier, hex run, or base64 blob is never a candidate. The same helper runs for
+non-HTML text content in `_sanitize_response_content` (Netgear also serves pipe-delimited blobs from `.js` files),
+deliberately **outside** `_sanitize_string_patterns`' perf length guard, so serial coverage never depends on body size.
+`har-capture validate` applies the same detectors to the same token extraction and errors on an unredacted match — see
+[VALIDATION_SPEC](VALIDATION_SPEC.md#check_contentcontent-location-findings-custom_patterns--has_sanitized_url_credential-serial_detectors)
+and
+[ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware).
 
 **Sibling-element rule (passes 2, 2b, 2d):** The tag chain between a label and its value — `(?:<[^>]*>\s*)*` — permits
 whitespace between tags, so label/value pairs rendered in sibling elements match (e.g. Technicolor .jst on the XB6/XB7/
@@ -787,6 +805,9 @@ Entry point: `apply_user_redactions(report)`
    - JSON-escape both original and redacted values
    - Global find-and-replace in serialized HAR text
 1. Parse HAR back from JSON
+1. Refresh the embedded metadata's `user_redacted` / `user_skipped` counts — the metadata was embedded at the end of
+   Pass 1, before any review decision existed, so a reviewed artifact would otherwise report `user_redacted: 0` forever
+   (observed on the CM2500 contributor capture, 2026-08-19)
 1. Return modified data
 
 **Compressed-artifact regeneration:** the CLI wrapper (`apply_reviewed_redactions`, `cli/interactive.py`) rewrites the

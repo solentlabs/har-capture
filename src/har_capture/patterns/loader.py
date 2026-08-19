@@ -627,6 +627,51 @@ def compile_detectors(
     return detectors
 
 
+# Candidate tokens for vendor-format serial matching. A serial embedded in a
+# larger identifier, hex run, or base64 blob must not match, so the token run
+# includes the characters those carriers are made of (\w covers letters,
+# digits, and underscore; the rest are base64/identifier punctuation) — the
+# vendor patterns then reject any token that carries them. Delimiters that
+# bound serials in the wild (pipe, comma, semicolon, quotes, whitespace,
+# colons) all fall outside the class, so a serial inside a delimited blob is
+# extracted as its own token.
+VENDOR_SERIAL_TOKEN_RE: re.Pattern[str] = re.compile(r"[\w.+/=-]+")
+
+
+def high_confidence_serial_detectors(
+    detectors: list[CompiledDetector],
+) -> list[CompiledDetector]:
+    """Filter to the detectors treated as deterministic vendor serial formats.
+
+    A ``serial_number`` detector declared at **high** confidence asserts a
+    known vendor serial layout (e.g., the Netgear 13-char format). These are
+    the patterns both the sanitizer (auto-redact) and ``validate`` (error on
+    an unredacted match) apply to delimiter-bounded candidate tokens.
+    """
+    return [d for d in detectors if d.category == "serial_number" and d.confidence == "high"]
+
+
+def match_vendor_serial(
+    token: str,
+    detectors: list[CompiledDetector],
+) -> str | None:
+    """Return the match reason if ``token`` is a vendor-format serial.
+
+    ``detectors`` must already be filtered via
+    ``high_confidence_serial_detectors``. Returns ``None`` when no detector
+    matches. The token must satisfy a detector's length bounds and fullmatch
+    one of its patterns — partial matches never count, so a serial-shaped
+    substring inside a longer token is rejected.
+    """
+    for det in detectors:
+        if not det.min_length <= len(token) <= det.max_length:
+            continue
+        for pattern, reason in det.patterns:
+            if pattern.fullmatch(token):
+                return reason or "vendor serial format"
+    return None
+
+
 def merge_pattern_files(paths: list[Path]) -> dict[str, Any]:
     """Load and merge multiple pattern files into a single dict.
 

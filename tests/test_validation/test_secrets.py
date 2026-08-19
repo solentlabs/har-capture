@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from har_capture.patterns.loader import resolve_patterns_arg
 from har_capture.validation.secrets import (
     Finding,
     check_content,
@@ -18,6 +19,7 @@ from har_capture.validation.secrets import (
     check_json_fields,
     check_post_data,
     is_cookie_attributes_only,
+    is_netmask,
     is_private_ip,
     is_redacted,
     truncate,
@@ -67,6 +69,22 @@ CHECK_JSON_FIELDS_CASES = [
 CHECK_CONTENT_CASES = [
     (c["content"], c["expect_ip"], c["expect_mac"], c["id"]) for c in _DATA["check_content_cases"]
 ]
+
+NETMASK_CASES = [(c["ip"], c["expected"], c["id"]) for c in _DATA["netmask_cases"]]
+
+SERIAL_LABEL_FP_CASES = [
+    (c["content"], c["expect_serial_warning"], c["id"]) for c in _DATA["serial_label_fp_cases"]
+]
+
+VENDOR_SERIAL_CASES = [(c["content"], c["expected_errors"], c["id"]) for c in _DATA["vendor_serial_cases"]]
+
+FORM_FIELD_SEVERITY_CASES = [
+    (c["name"], c["value"], c["expected_severity"], c["id"]) for c in _DATA["form_field_severity_cases"]
+]
+
+# Vendor-serial detectors are domain knowledge — resolve the built-in
+# network-device domain the way the CLI's --patterns option does.
+_NETWORK_DEVICE_PATTERNS = str(resolve_patterns_arg("network-device"))
 
 # YWRtaW46cGFzcw==  = base64("admin:pass")
 # aGVsbG8gd29ybGQ= = base64("hello world") — no colon, not a credential
@@ -382,6 +400,126 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
 
     assert has_ip == expect_ip, f"IP detection failed for {desc}"
     assert has_mac == expect_mac, f"MAC detection failed for {desc}"
+
+
+@pytest.mark.parametrize(
+    ("ip", "expected", "desc"),
+    NETMASK_CASES,
+    ids=[c[2] for c in NETMASK_CASES],
+)
+def test_is_netmask(ip: str, expected: bool, desc: str) -> None:
+    """Test is_netmask() classifies contiguous-bit masks vs host addresses."""
+    assert is_netmask(ip) == expected, f"Failed for {desc}"
+
+
+@pytest.mark.parametrize(
+    ("content", "expect_serial_warning", "desc"),
+    SERIAL_LABEL_FP_CASES,
+    ids=[c[2] for c in SERIAL_LABEL_FP_CASES],
+)
+def test_check_content_serial_label_false_positives(
+    content: str, expect_serial_warning: bool, desc: str
+) -> None:
+    """Labeled serial detection ignores jquery serialize methods and digitless values.
+
+    Regression for CM2500 round-1 validate noise: jquery's ``serialize:``/
+    ``serializeArray:`` methods were reported as potential serial numbers.
+    """
+    findings: list[Finding] = []
+    check_content(content, "response.body", findings)
+    serial_findings = [f for f in findings if f.reason == "Potential serial number"]
+    assert bool(serial_findings) == expect_serial_warning, f"Failed for {desc}: {findings}"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_errors", "desc"),
+    VENDOR_SERIAL_CASES,
+    ids=[c[2] for c in VENDOR_SERIAL_CASES],
+)
+def test_check_content_vendor_serials(content: str, expected_errors: int, desc: str) -> None:
+    """Delimiter-aware vendor-serial detection with network-device detectors.
+
+    Regression for the CM2500 round-1 leak: a Netgear serial inside a
+    pipe-delimited tagValueList blob has no label for SERIAL_PATTERNS to
+    anchor on, and validate blessed the leak. A vendor-format token match
+    is an error — the same detectors the sanitizer auto-redacts with.
+    """
+    findings: list[Finding] = []
+    check_content(content, "response.body", findings, _NETWORK_DEVICE_PATTERNS)
+    vendor = [f for f in findings if f.reason.startswith("Vendor-format serial")]
+    assert len(vendor) == expected_errors, f"Failed for {desc}: {findings}"
+    assert all(f.severity == "error" for f in vendor), f"{desc}: vendor serials must be errors"
+
+
+def test_check_content_vendor_serials_need_domain_patterns() -> None:
+    """Without domain patterns there are no vendor detectors — no findings."""
+    findings: list[Finding] = []
+    check_content("var tagValueList = '1.01|7ZZ0000FAKE00|1';", "response.body", findings)
+    assert not [f for f in findings if f.reason.startswith("Vendor-format serial")]
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "expected_severity", "desc"),
+    FORM_FIELD_SEVERITY_CASES,
+    ids=[c[3] for c in FORM_FIELD_SEVERITY_CASES],
+)
+def test_form_field_severity_model(name: str, value: str, expected_severity: str | None, desc: str) -> None:
+    """Field-name findings are tiered by pattern tier.
+
+    Credential names error, identity names warn, and factory-default
+    usernames are suppressed (CM2500: loginName=admin exited 1 on every
+    healthy capture, training contributors to ignore the gate).
+    """
+    post_data = {
+        "mimeType": "application/x-www-form-urlencoded",
+        "params": [{"name": name, "value": value}],
+    }
+    findings: list[Finding] = []
+    check_post_data(post_data, "request", findings)
+    field_findings = [f for f in findings if f.field == name]
+    if expected_severity is None:
+        assert not field_findings, f"{desc}: expected no finding, got {field_findings}"
+    else:
+        assert len(field_findings) == 1, f"{desc}: expected one finding, got {findings}"
+        assert field_findings[0].severity == expected_severity, f"{desc}"
+
+
+def test_field_tiers_legacy_format_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A legacy patterns file (single `patterns` list) keeps error treatment."""
+    from har_capture.validation import secrets as secrets_mod
+
+    monkeypatch.setattr(
+        secrets_mod,
+        "load_sensitive_patterns",
+        lambda _cp=None: {"fields": {"patterns": ["password"]}},
+    )
+    tiers = secrets_mod._compile_field_tiers()
+    assert len(tiers.auto_redact) == 1
+    assert not tiers.flag
+
+
+def test_xml_field_severity_model() -> None:
+    """XML element/attribute findings follow the same tier model as form fields."""
+    xml = (
+        "<login><username>operator7</username><password>hunter2secret</password>"
+        "<loginName>admin</loginName><extra loginName='admin'/></login>"
+    )
+    post_data = {"mimeType": "text/xml", "text": xml}
+    findings: list[Finding] = []
+    check_post_data(post_data, "request", findings)
+    by_field = {f.field: f.severity for f in findings}
+    assert by_field.get("password") == "error"
+    assert by_field.get("username") == "warning"
+    assert "loginName" not in by_field, "default username in XML element and attribute must be suppressed"
+
+
+def test_json_field_severity_model() -> None:
+    """JSON field findings follow the same tier model."""
+    findings: list[Finding] = []
+    check_json_fields({"username": "operator7", "password": "hunter2secret"}, "body", findings)
+    by_field = {f.field: f.severity for f in findings}
+    assert by_field.get("password") == "error"
+    assert by_field.get("username") == "warning"
 
 
 @pytest.mark.parametrize(

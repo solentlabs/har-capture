@@ -147,6 +147,53 @@ def _sanitize_pipe_value(
     return value
 
 
+def redact_vendor_serials(
+    content: str,
+    compiled_detectors: list[Any],
+    hasher: Hasher,
+    collector: RedactionCollector,
+) -> str:
+    """Auto-redact vendor-format serials appearing as standalone tokens.
+
+    Applies the high-confidence ``serial_number`` detectors (known vendor
+    serial layouts, e.g. Netgear's 13-char format) to delimiter-bounded
+    candidate tokens anywhere in ``content``. This is what catches a serial
+    inside a pipe-delimited blob (tagValueList) or a bare JS assignment,
+    where no label exists for the labeled serial passes to anchor on.
+
+    ``har-capture validate`` applies the same detectors to the same token
+    extraction (``validation/secrets.py``) — the two tools must agree on
+    what counts as a vendor serial.
+
+    Args:
+        content: Text to scan (HTML, JS, or other text content)
+        compiled_detectors: Full detector list; filtered internally
+        hasher: Hasher for correlation-preserving redaction
+        collector: Collector recording each redaction
+
+    Returns:
+        Content with vendor-format serial tokens replaced by SERIAL_ hashes
+    """
+    from har_capture.patterns.loader import (
+        VENDOR_SERIAL_TOKEN_RE,
+        high_confidence_serial_detectors,
+        match_vendor_serial,
+    )
+
+    serial_detectors = high_confidence_serial_detectors(compiled_detectors)
+    if not serial_detectors:
+        return content
+
+    def replace_serial_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if match_vendor_serial(token, serial_detectors) is None:
+            return token
+        collector.record_auto_redaction("serial_number")
+        return hasher.hash_generic(token, "SERIAL")
+
+    return VENDOR_SERIAL_TOKEN_RE.sub(replace_serial_token, content)
+
+
 def is_valid_ip_address(value: str) -> bool:
     """Check if dotted-decimal string is a valid IPv4 address (not a version string).
 
@@ -497,6 +544,17 @@ def _sanitize_html_impl(
         html,
         flags=re.IGNORECASE,
     )
+
+    # 2e. Vendor-format serials as standalone tokens — delimiter-aware.
+    # Netgear firmware ships the serial inside pipe-delimited blobs
+    # (RouterStatus.htm tagValueList) where no label exists for passes 2-2c
+    # to anchor on, and FLAG-mode review is the only thing between the raw
+    # serial and the shared artifact (CM2500 round-1 leak, 2026-08-19). A
+    # high-confidence serial_number detector asserts a vendor layout tight
+    # enough for the scanner pipeline's 100%-confidence bar, so those
+    # formats auto-redact here. Token extraction bounds the match at
+    # delimiters; a serial-shaped substring of a longer token never fires.
+    html = redact_vendor_serials(html, compiled_detectors, hasher, collector)
 
     # 3. Account/Subscriber IDs
     def replace_account(match: re.Match[str]) -> str:

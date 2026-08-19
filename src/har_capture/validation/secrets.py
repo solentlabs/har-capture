@@ -6,8 +6,10 @@ Scans HAR files for:
 - MAC addresses (non-anonymized)
 - Serial numbers
 - Real IP addresses (non-private)
+- Vendor-format serial numbers in delimited content (shared detectors with
+  the sanitizer, so the two tools agree on what counts as a serial)
 
-This module has ZERO external dependencies (stdlib only).
+This module has ZERO third-party dependencies (stdlib + har_capture only).
 """
 
 from __future__ import annotations
@@ -22,6 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from har_capture.patterns import load_sensitive_patterns
+from har_capture.patterns.loader import (
+    VENDOR_SERIAL_TOKEN_RE,
+    compile_detectors,
+    high_confidence_serial_detectors,
+    match_vendor_serial,
+)
 from har_capture.patterns.redaction import (
     is_base64_credential,
     is_base64_decodable_text,
@@ -30,6 +38,7 @@ from har_capture.patterns.redaction import (
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
+from har_capture.sanitization.html import is_valid_ip_address
 from har_capture.validation.completeness import load_har
 
 # Cookie attribute-only values (not actual session data)
@@ -46,9 +55,13 @@ MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
 # Serial number patterns (manufacturer-specific)
 # Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
 # label and value sit in sibling elements (Technicolor .jst span pairs) are caught.
+# The label-anchored patterns require: `(?!ize)` after `serial` so jquery's
+# `serialize:`/`serializeArray:` methods don't match, and a digit in the value
+# so prose/code words after the label (`serialize: function`) don't match —
+# vendor serials always carry digits.
 SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"serial[^:]*:\s*(?:<[^>]*>\s*)*[A-Z0-9]{8,}", re.IGNORECASE),
-    re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(r"serial(?!ize)[^:]*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
     # Serial numbers in HTML table cells (label in one td, value in next td)
     re.compile(
         r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
@@ -58,6 +71,14 @@ SERIAL_PATTERNS: list[re.Pattern[str]] = [
 
 # Public IP pattern (not private ranges)
 IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+
+# Factory-default usernames shipped fixed on device families. These carry no
+# identifying content — flagging them turns the validate gate red on every
+# healthy capture of that family (CM2500: three [ERROR] on `loginName: admin`),
+# training contributors to ignore the gate. Suppression applies ONLY to
+# flag-tier (identity) field matches; a default string in a password-named
+# field is still a real credential leak and stays an error.
+KNOWN_DEFAULT_USERNAMES: frozenset[str] = frozenset({"admin"})
 
 
 def _load_sensitive_headers(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
@@ -99,6 +120,22 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
     return patterns
 
 
+def _compile_serial_detectors(custom_patterns: str | dict[str, Any] | None = None) -> list[Any]:
+    """Compile the high-confidence serial_number detectors for validation.
+
+    These are the deterministic vendor serial formats (domain knowledge,
+    loaded via ``--patterns``) that the sanitizer auto-redacts and validate
+    reports as errors when found unredacted.
+
+    Args:
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        Filtered CompiledDetector list (empty without domain patterns)
+    """
+    return high_confidence_serial_detectors(compile_detectors(load_sensitive_patterns(custom_patterns)))
+
+
 def _compile_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[re.Pattern[str]]:
     """Compile sensitive field patterns for efficient matching.
 
@@ -109,6 +146,48 @@ def _compile_sensitive_fields(custom_patterns: str | dict[str, Any] | None = Non
         List of compiled regex patterns (case-insensitive)
     """
     return [re.compile(p, re.IGNORECASE) for p in _load_sensitive_fields(custom_patterns)]
+
+
+@dataclass(frozen=True)
+class _FieldTiers:
+    """Compiled field-name patterns split by tier — severity differs by tier.
+
+    ``auto_redact`` names (password, token, secret, ...) assert a credential
+    with certainty: an unredacted value is an **error**. ``flag`` names
+    (username, login, domain, ...) assert identity-adjacent content the
+    sanitizer itself only flags for review: an unredacted value is a
+    **warning**, and a factory-default username is suppressed entirely
+    (see ``KNOWN_DEFAULT_USERNAMES``).
+    """
+
+    auto_redact: tuple[re.Pattern[str], ...]
+    flag: tuple[re.Pattern[str], ...]
+
+    def all_patterns(self) -> tuple[re.Pattern[str], ...]:
+        return self.auto_redact + self.flag
+
+
+def _compile_field_tiers(custom_patterns: str | dict[str, Any] | None = None) -> _FieldTiers:
+    """Compile the auto-redact and flag field-name tiers separately.
+
+    Args:
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        _FieldTiers with case-insensitive compiled patterns per tier
+    """
+    sensitive = load_sensitive_patterns(custom_patterns)
+    fields = sensitive.get("fields", {})
+    auto: list[str] = fields.get("auto_redact_patterns", [])
+    flag: list[str] = fields.get("flag_patterns", [])
+    # Fallback for legacy format — legacy files predate the tier split, so
+    # their patterns keep the stricter (error) treatment.
+    if not auto and not flag:
+        auto = fields.get("patterns", [])
+    return _FieldTiers(
+        auto_redact=tuple(re.compile(p, re.IGNORECASE) for p in auto),
+        flag=tuple(re.compile(p, re.IGNORECASE) for p in flag),
+    )
 
 
 @dataclass
@@ -197,6 +276,35 @@ def is_private_ip(ip: str) -> bool:
         return True
     # Also allow 0.0.0.0 (redacted)
     return all(o == 0 for o in octets)
+
+
+def is_netmask(ip: str) -> bool:
+    """Check if a dotted-quad value is a subnet mask, not a host address.
+
+    Netmasks (255.255.255.0, 255.255.252.0, ...) appear throughout router
+    status pages and carry no PII, but they pass the public-IP shape check.
+    A valid netmask is a contiguous run of 1-bits followed by 0-bits.
+
+    Args:
+        ip: Dotted-quad string
+
+    Returns:
+        True if the value is a valid netmask (including 0.0.0.0 and
+        255.255.255.255)
+    """
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if not all(0 <= o <= 255 for o in octets):
+        return False
+    value = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
+    # 1...10...0 form: the complement must be a contiguous low-bit run
+    inverted = value ^ 0xFFFFFFFF
+    return (inverted & (inverted + 1)) == 0
 
 
 def truncate(value: str, max_len: int = 40) -> str:
@@ -305,46 +413,75 @@ def check_headers(
                 break
 
 
+def _classify_field_finding(
+    name: str,
+    value: str,
+    tiers: _FieldTiers,
+) -> tuple[str, re.Pattern[str]] | None:
+    """Classify a field name/value against the two field tiers.
+
+    Returns ``(severity, matched_pattern)``, or ``None`` when no finding
+    should be reported. Auto-redact-tier names are errors; flag-tier names
+    are warnings; a flag-tier name whose value is a factory-default username
+    is suppressed (see ``KNOWN_DEFAULT_USERNAMES``).
+    """
+    matched = next((p for p in tiers.auto_redact if p.search(name)), None)
+    if matched:
+        return ("error", matched)
+    matched = next((p for p in tiers.flag if p.search(name)), None)
+    if matched:
+        if value.strip().lower() in KNOWN_DEFAULT_USERNAMES:
+            return None
+        return ("warning", matched)
+    return None
+
+
 def _check_form_params(
     pairs: list[tuple[str, str]],
     location: str,
     findings: list[Finding],
-    sensitive_fields: list[re.Pattern[str]],
+    field_tiers: _FieldTiers,
     custom_patterns: str | dict[str, Any] | None = None,
 ) -> None:
     """Check form name/value pairs for sensitive fields and encoded credentials.
 
-    Sensitive-named fields with unredacted values are errors. In a
-    login-shaped form (any field name matches a sensitive pattern), a
-    base64-decodable value in an unrecognized field is a warning — the
-    backstop for vendor credential fields the patterns don't know yet
-    (the Sercomm/Hitron ``pws`` class, cable_modem_monitor issue #92).
+    Credential-named fields (auto-redact tier) with unredacted values are
+    errors; identity-named fields (flag tier) are warnings, with
+    factory-default usernames suppressed. In a login-shaped form (any field
+    name matches a sensitive pattern), a base64-decodable value in an
+    unrecognized field is a warning — the backstop for vendor credential
+    fields the patterns don't know yet (the Sercomm/Hitron ``pws`` class,
+    cable_modem_monitor issue #92).
 
     Args:
         pairs: Form (name, value) pairs
         location: Location string for findings
         findings: List to append findings to
-        sensitive_fields: Pre-compiled sensitive field patterns
+        field_tiers: Pre-compiled field patterns split by tier
         custom_patterns: Optional path to custom patterns file
     """
-    login_shaped = any(any(p.search(name) for p in sensitive_fields) for name, _ in pairs)
+    all_patterns = field_tiers.all_patterns()
+    login_shaped = any(any(p.search(name) for p in all_patterns) for name, _ in pairs)
 
     for name, value in pairs:
         if not value or is_redacted(value, custom_patterns):
             continue
 
-        matched = next((p for p in sensitive_fields if p.search(name)), None)
-        if matched:
+        classified = _classify_field_finding(name, value, field_tiers)
+        if classified is not None:
+            severity, matched = classified
             findings.append(
                 Finding(
-                    severity="error",
+                    severity=severity,
                     location=location,
                     field=name,
                     value=truncate(value),
                     reason=f"Sensitive form field matching '{matched.pattern}'",
                 )
             )
-        elif login_shaped and is_base64_decodable_text(value):
+        elif (
+            not any(p.search(name) for p in all_patterns) and login_shaped and is_base64_decodable_text(value)
+        ):
             findings.append(
                 Finding(
                     severity="warning",
@@ -373,12 +510,12 @@ def check_post_data(
     if not post_data:
         return
 
-    sensitive_fields = _compile_sensitive_fields(custom_patterns)
+    field_tiers = _compile_field_tiers(custom_patterns)
 
     # Check params (form data)
     params = post_data.get("params", [])
     pairs = [(param.get("name", ""), param.get("value", "")) for param in params]
-    _check_form_params(pairs, location, findings, sensitive_fields, custom_patterns)
+    _check_form_params(pairs, location, findings, field_tiers, custom_patterns)
 
     # Check text (raw body — form-urlencoded, JSON, or XML)
     text = post_data.get("text", "")
@@ -394,7 +531,7 @@ def check_post_data(
                 if "=" in segment:
                     name, _, val = segment.partition("=")
                     text_pairs.append((urllib.parse.unquote_plus(name), urllib.parse.unquote_plus(val)))
-            _check_form_params(text_pairs, location + " (body)", findings, sensitive_fields, custom_patterns)
+            _check_form_params(text_pairs, location + " (body)", findings, field_tiers, custom_patterns)
             return
         try:
             json_data = json.loads(text)
@@ -422,7 +559,7 @@ def _check_xml_fields(
     """
     import xml.etree.ElementTree as ET
 
-    sensitive_fields = _compile_sensitive_fields(custom_patterns)
+    field_tiers = _compile_field_tiers(custom_patterns)
 
     try:
         root = ET.fromstring(text)  # noqa: S314
@@ -437,35 +574,35 @@ def _check_xml_fields(
 
         value = (elem.text or "").strip()
         if value and not is_redacted(value, custom_patterns):
-            for pattern in sensitive_fields:
-                if pattern.search(tag):
-                    findings.append(
-                        Finding(
-                            severity="error",
-                            location=location,
-                            field=tag,
-                            value=truncate(value),
-                            reason=f"Sensitive XML element matching '{pattern.pattern}'",
-                        )
+            classified = _classify_field_finding(tag, value, field_tiers)
+            if classified is not None:
+                severity, pattern = classified
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        location=location,
+                        field=tag,
+                        value=truncate(value),
+                        reason=f"Sensitive XML element matching '{pattern.pattern}'",
                     )
-                    break
+                )
 
         # Check attributes (e.g., <password value="secret"/>)
         for attr_name, attr_value in elem.attrib.items():
             if not attr_value or is_redacted(attr_value, custom_patterns):
                 continue
-            for pattern in sensitive_fields:
-                if pattern.search(attr_name):
-                    findings.append(
-                        Finding(
-                            severity="error",
-                            location=location,
-                            field=attr_name,
-                            value=truncate(attr_value),
-                            reason=f"Sensitive XML attribute matching '{pattern.pattern}'",
-                        )
+            classified = _classify_field_finding(attr_name, attr_value, field_tiers)
+            if classified is not None:
+                severity, pattern = classified
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        location=location,
+                        field=attr_name,
+                        value=truncate(attr_value),
+                        reason=f"Sensitive XML attribute matching '{pattern.pattern}'",
                     )
-                    break
+                )
 
 
 def check_json_fields(
@@ -474,7 +611,7 @@ def check_json_fields(
     findings: list[Finding],
     path: str = "",
     custom_patterns: str | dict[str, Any] | None = None,
-    _sensitive_fields: list[re.Pattern[str]] | None = None,
+    _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
 ) -> None:
     """Recursively check JSON for sensitive fields.
@@ -485,14 +622,14 @@ def check_json_fields(
         findings: List to append findings to
         path: Current path in the JSON structure
         custom_patterns: Optional path to custom patterns file
-        _sensitive_fields: Pre-compiled sensitive field patterns. Internal use only.
+        _field_tiers: Pre-compiled field patterns split by tier. Internal use only.
         _depth: Current recursion depth. Internal use only.
     """
     if _depth > 50:
         return
 
-    if _sensitive_fields is None:
-        _sensitive_fields = _compile_sensitive_fields(custom_patterns)
+    if _field_tiers is None:
+        _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
         for key, value in data.items():
@@ -500,18 +637,18 @@ def check_json_fields(
 
             # Skip empty or redacted values
             if isinstance(value, str) and value and not is_redacted(value, custom_patterns):
-                for pattern in _sensitive_fields:
-                    if pattern.search(key):
-                        findings.append(
-                            Finding(
-                                severity="error",
-                                location=location,
-                                field=current_path,
-                                value=truncate(value),
-                                reason=f"Sensitive JSON field matching '{pattern.pattern}'",
-                            )
+                classified = _classify_field_finding(key, value, _field_tiers)
+                if classified is not None:
+                    severity, pattern = classified
+                    findings.append(
+                        Finding(
+                            severity=severity,
+                            location=location,
+                            field=current_path,
+                            value=truncate(value),
+                            reason=f"Sensitive JSON field matching '{pattern.pattern}'",
                         )
-                        break
+                    )
 
             # Recurse
             if isinstance(value, dict | list):
@@ -521,7 +658,7 @@ def check_json_fields(
                     findings,
                     current_path,
                     custom_patterns,
-                    _sensitive_fields=_sensitive_fields,
+                    _field_tiers=_field_tiers,
                     _depth=_depth + 1,
                 )
 
@@ -534,7 +671,7 @@ def check_json_fields(
                     findings,
                     f"{path}[{i}]",
                     custom_patterns,
-                    _sensitive_fields=_sensitive_fields,
+                    _field_tiers=_field_tiers,
                     _depth=_depth + 1,
                 )
 
@@ -546,6 +683,7 @@ def check_content(
     custom_patterns: str | dict[str, Any] | None = None,
     *,
     has_sanitized_url_credential: bool = False,
+    serial_detectors: list[Any] | None = None,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -560,6 +698,10 @@ def check_content(
             those entries' response bodies were already evaluated by the
             sanitizer's server-token preservation heuristic, so re-flagging
             them here would be a false positive.
+        serial_detectors: High-confidence serial_number detectors (from
+            ``high_confidence_serial_detectors``), applied delimiter-aware to
+            candidate tokens. ``None`` compiles them from ``custom_patterns``;
+            ``validate_har`` pre-compiles once per file.
     """
     if not content or is_redacted(content, custom_patterns):
         return
@@ -620,10 +762,49 @@ def check_content(
                     )
                 )
 
-    # Check for public IPs
+    # Vendor-format serials as standalone tokens — delimiter-aware. Mirrors
+    # the sanitizer's redact_vendor_serials pass: the same high-confidence
+    # serial_number detectors applied to the same token extraction, so what
+    # the sanitizer auto-redacts, validate errors on when found unredacted.
+    # (CM2500 round 1: the serial inside RouterStatus.htm's tagValueList had
+    # no label for SERIAL_PATTERNS to anchor on, and validate blessed the
+    # leak.) Severity is error: a vendor-format match is a known serial
+    # layout, not a maybe.
+    if serial_detectors is None:
+        serial_detectors = _compile_serial_detectors(custom_patterns)
+    if serial_detectors:
+        seen_serials: set[str] = set()
+        for token_match in VENDOR_SERIAL_TOKEN_RE.finditer(content):
+            token = token_match.group(0)
+            if token in seen_serials:
+                continue
+            reason = match_vendor_serial(token, serial_detectors)
+            if reason is not None and not is_redacted(token, custom_patterns):
+                seen_serials.add(token)
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field="content",
+                        value=truncate(token),
+                        reason=f"Vendor-format serial number ({reason})",
+                    )
+                )
+
+    # Check for public IPs. Netmasks, reserved first octets (255.x broadcast
+    # masks, 0.x), and version-string shapes (per is_valid_ip_address) match
+    # the dotted-quad pattern but are not host addresses — the sanitizer
+    # preserves all of them, so flagging them here puts cosmetic noise on
+    # every healthy capture.
     for match in IP_PATTERN.finditer(content):
         ip = match.group(1)
-        if not is_private_ip(ip) and not is_redacted(ip, custom_patterns):
+        if (
+            not is_private_ip(ip)
+            and not ip.startswith(("255.", "0."))
+            and not is_netmask(ip)
+            and is_valid_ip_address(ip)
+            and not is_redacted(ip, custom_patterns)
+        ):
             findings.append(
                 Finding(
                     severity="warning",
@@ -655,6 +836,9 @@ def validate_har(
     """
     har_path = Path(har_path)
     findings: list[Finding] = []
+
+    # Compiled once per file — check_content applies them per entry.
+    serial_detectors = _compile_serial_detectors(custom_patterns)
 
     har_data = load_har(har_path)
 
@@ -708,6 +892,7 @@ def validate_har(
             findings,
             custom_patterns,
             has_sanitized_url_credential=(i in url_cred_entry_indices),
+            serial_detectors=serial_detectors,
         )
 
     return findings

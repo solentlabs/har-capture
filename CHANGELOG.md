@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-19
+
+### Fixed
+
+- **Vendor-format serials now auto-redact — no review required, in every heuristic mode.** CM2500 process-validation
+  round 1 (2026-08-19) ran the contributor instructions verbatim with zero manual interventions: the real modem serial
+  shipped unmasked inside `RouterStatus.htm`'s pipe-delimited `tagValueList` blob. The heuristic engine *had* flagged it
+  at high confidence, but FLAG mode preserves the raw value in the on-disk artifact until the review completes — a
+  skipped review ships the leak. High-confidence `serial_number` detectors (known vendor layouts, e.g. Netgear's 13-char
+  format) are now deterministic: a fullmatch on a delimiter-bounded token is auto-redacted in Pass 1, in HTML, XML, and
+  plain-text content alike — including large firmware JS files the string-pattern length guard skips (`utility.js`
+  carries a `tagValueList` on the CM2500). See ADR-13.
+
+- **`har-capture validate` now catches unlabeled serials — the round-1 leak passed its own confirmation gate.** Every
+  serial pattern in validate required a label (`Serial Number:`, `SN:`, table cells); a bare serial inside a delimited
+  blob was invisible, so the documented "confirms nothing leaked" step blessed the leak. Validate now applies the same
+  high-confidence vendor detectors to the same delimiter-bounded token extraction the sanitizer uses, and reports an
+  unredacted match as an **error** (exit 1) — the two tools can no longer disagree on what counts as a serial.
+
+- **`validate` no longer exits 1 on every healthy capture over `loginName: admin`.** Field-name findings are now tiered
+  like the sanitizer's own patterns: credential names (password, token, secret, ...) stay errors; identity names
+  (username, login, domain, ...) are warnings; and factory-default usernames (`admin`) in identity fields are suppressed
+  entirely — a fixed default is not PII, and a gate that is red on every compliant capture trains contributors to ignore
+  it. `admin` in a *password*-named field is still an error.
+
+- **`validate` cosmetic noise removed.** jquery's `serialize:`/`serializeArray:` methods are no longer reported as
+  potential serial numbers (label patterns now exclude `serialize` and require a digit in the value), and subnet masks
+  (`255.255.255.0`), reserved first octets (255.x, 0.x), and version-string shapes (`1.12.4.5`) are no longer reported
+  as potential public IPs — the sanitizer deliberately preserves all of these.
+
+- **MAC/IP/email scans no longer skip large text bodies.** The string-pattern perf guard skipped any string over 10,000
+  chars, silently exempting real firmware assets (the CM2500's 33 KB `utility.js`) from pattern scanning. The guard now
+  sits at 1 MB — far above any real device asset while still bounding regex cost on pathological bodies.
+
+- **Reviewed artifacts no longer report `user_redacted: 0`.** The embedded sanitization metadata is written at the end
+  of Pass 1, before any review decision exists; applying user redactions now refreshes the `user_redacted` /
+  `user_skipped` counts so the artifact describes itself truthfully (observed on the CM2500 contributor capture).
+
 ## [0.12.0] - 2026-08-19
 
 ### Fixed
@@ -1069,6 +1107,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.11.0]: https://github.com/solentlabs/har-capture/compare/v0.10.3...v0.11.0
 [0.11.1]: https://github.com/solentlabs/har-capture/compare/v0.11.0...v0.11.1
 [0.12.0]: https://github.com/solentlabs/har-capture/compare/v0.11.1...v0.12.0
+[0.12.1]: https://github.com/solentlabs/har-capture/compare/v0.12.0...v0.12.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1096,4 +1135,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.1...HEAD

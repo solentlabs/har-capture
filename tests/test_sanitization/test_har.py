@@ -3780,6 +3780,48 @@ class TestApplyUserRedactions:
         with pytest.raises(HarValidationError):
             apply_user_redactions("not_a_dict", report)  # type: ignore[arg-type]
 
+    def test_embedded_metadata_user_counts_refreshed(self) -> None:
+        """Pass 2 refreshes the user-decision counts embedded at Pass 1 time.
+
+        The metadata is written before any review decision exists, so a
+        reviewed artifact otherwise reports user_redacted: 0 forever
+        (observed on the CM2500 contributor capture, 2026-08-19).
+        """
+        har_data = {
+            "log": {
+                "_har_capture": {"sanitization": {"user_redacted": 0, "user_skipped": 0}},
+                "entries": [{"request": {"url": "http://test/"}, "response": {"note": "SECRETVAL123"}}],
+            }
+        }
+        report = SanitizationReport(
+            input_file="",
+            output_file="",
+            salt="test",
+            flagged=[
+                FlaggedValue(
+                    original_value="SECRETVAL123",
+                    category="serial_number",
+                    confidence="HIGH",
+                    context="ctx",
+                    reason="test",
+                    status=RedactionStatus.USER_REDACTED,
+                ),
+                FlaggedValue(
+                    original_value="other_value",
+                    category="wifi_ssid",
+                    confidence="LOW",
+                    context="ctx",
+                    reason="test",
+                    status=RedactionStatus.USER_SKIPPED,
+                ),
+            ],
+        )
+        result = apply_user_redactions(har_data, report)
+        meta = result["log"]["_har_capture"]["sanitization"]
+        assert meta["user_redacted"] == 1
+        assert meta["user_skipped"] == 1
+        assert "SECRETVAL123" not in json.dumps(result)
+
     def test_missing_log_raises(self) -> None:
         """Test apply_user_redactions raises when 'log' key missing."""
         report = SanitizationReport(input_file="", output_file="", salt="test")
@@ -3873,6 +3915,125 @@ class TestXmlPostDataSanitization:
             assert forbidden not in text, f"'{forbidden}' should be redacted in {desc}"
         for required in must_contain:
             assert required in text, f"'{required}' should be preserved in {desc}"
+
+
+class TestVendorSerialTextContentRouting:
+    """Vendor-format serials auto-redact in non-HTML text content.
+
+    Netgear pipe-delimited blobs also appear in JS files served as
+    text/javascript (utility.js on the CM2500), which route through the
+    string-pattern fallback, not the HTML engine. The vendor-serial scan
+    runs there too — and outside the string-pattern perf length guard,
+    so serial coverage never depends on body size.
+    """
+
+    def _entry(self, text: str) -> dict:
+        return {
+            "request": {"method": "GET", "url": "http://modem/utility.js", "headers": []},
+            "response": {
+                "status": 200,
+                "headers": [],
+                "content": {"mimeType": "text/javascript", "text": text},
+            },
+        }
+
+    def test_serial_in_js_pipe_blob_redacted(self) -> None:
+        from har_capture.patterns.loader import resolve_patterns_arg
+
+        patterns = str(resolve_patterns_arg("network-device"))
+        entry = self._entry("var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0|retail';")
+        result = sanitize_entry(entry, salt="test", custom_patterns=patterns)
+        content_text = result["response"]["content"]["text"]
+        assert "7ZZ0000FAKE00" not in content_text
+        assert "SERIAL_" in content_text
+
+    def test_serial_redacted_even_in_large_js_file(self) -> None:
+        """The scan is not subject to the string-pattern length guard."""
+        from har_capture.patterns.loader import resolve_patterns_arg
+
+        patterns = str(resolve_patterns_arg("network-device"))
+        big_js = "// filler\n" * 2000 + "var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';"
+        entry = self._entry(big_js)
+        result = sanitize_entry(entry, salt="test", custom_patterns=patterns)
+        assert "7ZZ0000FAKE00" not in result["response"]["content"]["text"]
+
+    def test_no_domain_patterns_leaves_token(self) -> None:
+        entry = self._entry("var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';")
+        result = sanitize_entry(entry, salt="test")
+        assert "7ZZ0000FAKE00" in result["response"]["content"]["text"]
+
+    def test_no_collector_skips_serial_scan(self) -> None:
+        """Without a collector/hasher the scan is skipped, not crashed."""
+        from har_capture.patterns.loader import resolve_patterns_arg
+        from har_capture.sanitization.har import _sanitize_response_content
+
+        patterns = str(resolve_patterns_arg("network-device"))
+        content = {"mimeType": "text/javascript", "text": "var x = '7ZZ0000FAKE00';"}
+        _sanitize_response_content(content, collector=None, custom_patterns=patterns)
+        assert "7ZZ0000FAKE00" in content["text"]
+
+
+class TestStringPatternLengthGuard:
+    """The perf length guard must sit far above real firmware assets.
+
+    At 10,000 chars it silently exempted the CM2500's 33 KB utility.js
+    from MAC/IP/email scans; it now guards at 1 MB.
+    """
+
+    def test_macs_redacted_in_firmware_sized_text(self) -> None:
+        """A ~30 KB body — skipped by the old guard — is scanned."""
+        text = "// filler\n" * 3000 + "device 3C:E4:B0:11:22:33 online"
+        result = _sanitize_string_patterns(text)
+        assert "3C:E4:B0:11:22:33" not in result
+
+    def test_over_one_megabyte_still_skipped(self) -> None:
+        """The guard still exists — bodies over 1 MB pass through unscanned."""
+        text = "x" * 1_000_001 + " 3C:E4:B0:11:22:33"
+        result = _sanitize_string_patterns(text)
+        assert "3C:E4:B0:11:22:33" in result
+
+
+class TestSerialDetectorResolverCache:
+    """The per-call serial-detector resolver caches like its sibling resolvers."""
+
+    def test_cache_hit_returns_same_object(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        patterns = {"_cache_probe": "hit"}
+        first = _resolve_serial_detectors(patterns)
+        second = _resolve_serial_detectors(patterns)
+        assert first is second
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+
+    def test_cache_evicts_oldest_at_capacity(self) -> None:
+        from har_capture.sanitization.har import (
+            _CUSTOM_FIELD_RE_CACHE_MAX,
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        for i in range(_CUSTOM_FIELD_RE_CACHE_MAX + 3):
+            _resolve_serial_detectors({"_cache_probe": i})
+        assert len(_CUSTOM_SERIAL_DETECTORS_CACHE) == _CUSTOM_FIELD_RE_CACHE_MAX
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+
+    def test_unserializable_patterns_skip_cache(self) -> None:
+        """A dict with no stable cache key resolves fresh, never cached."""
+        from har_capture.sanitization.har import (
+            _CUSTOM_SERIAL_DETECTORS_CACHE,
+            _resolve_serial_detectors,
+        )
+
+        _CUSTOM_SERIAL_DETECTORS_CACHE.clear()
+        # Tuple keys defeat json.dumps, so _custom_patterns_cache_key returns None
+        result = _resolve_serial_detectors({("no", "key"): 1})
+        assert isinstance(result, list)
+        assert len(_CUSTOM_SERIAL_DETECTORS_CACHE) == 0
 
 
 class TestApplicationXmlResponseRouting:
