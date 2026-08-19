@@ -270,3 +270,46 @@ class TestCompletenessReporting:
         assert "Capture coverage:" in direct.output
         assert "Capture coverage:" not in scanned.output
         assert "WARNING:" in scanned.output
+
+
+class TestValidateStaleCompressedArtifact:
+    """The stale-gz gate: validate must fail a .har whose .gz sibling diverges."""
+
+    @staticmethod
+    def _gz_of(path: Path, content: bytes) -> Path:
+        import gzip
+
+        gz = path.with_name(path.name + ".gz")
+        with gzip.open(gz, "wb") as f:
+            f.write(content)
+        return gz
+
+    def test_stale_gz_is_an_error(self, clean_har: Path) -> None:
+        """Divergent pair -> exit 1 with the stale-artifact message."""
+        self._gz_of(clean_har, b'{"log": {"entries": [], "old": "pre-review content"}}')
+
+        result = runner.invoke(app, ["validate", str(clean_har), "--patterns", "base"])
+
+        assert result.exit_code == 1
+        assert "stale" in result.output
+
+    def test_fresh_gz_is_clean(self, clean_har: Path) -> None:
+        self._gz_of(clean_har, clean_har.read_bytes())
+
+        result = runner.invoke(app, ["validate", str(clean_har), "--patterns", "base"])
+
+        assert result.exit_code == 0
+        assert "stale" not in result.output
+
+    def test_pair_checked_once_in_directory_scan(self, tmp_path: Path) -> None:
+        """A --dir scan lists both members; the divergence is one error, not two."""
+        har_dir = tmp_path / "hars"
+        har_dir.mkdir()
+        har = _write_fixture_har(har_dir, "clean_har", "device.sanitized.har")
+        self._gz_of(har, b'{"log": {"entries": [], "old": true}}')
+
+        result = runner.invoke(app, ["validate", "--dir", str(har_dir), "--patterns", "base"])
+
+        assert result.exit_code == 1
+        assert result.output.count("stale") == 1
+        assert "1 errors" in result.output

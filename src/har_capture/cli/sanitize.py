@@ -192,6 +192,7 @@ def sanitize(
         )
 
         # Interactive review mode (requires TTY)
+        review_refreshed_sibling = False
         if interactive_terminal and sanitization_report.flagged:
             from har_capture.cli.interactive import run_interactive_review
 
@@ -205,7 +206,9 @@ def sanitize(
             if review_completed and sanitization_report.total_user_redacted > 0:
                 from har_capture.cli.interactive import apply_reviewed_redactions
 
+                # Auto-detects and regenerates an existing .gz sibling.
                 apply_reviewed_redactions(sanitization_report, result_path)
+                review_refreshed_sibling = True
 
             # Display summary
             from har_capture.cli.interactive import display_summary
@@ -227,6 +230,19 @@ def sanitize(
             with open(report, "w", encoding="utf-8") as f:
                 json.dump(sanitization_report.to_dict(), f, indent=2)
             typer.echo(f"  Report: {report}")
+
+        # The sanitize pass rewrites result_path even with zero redactions
+        # (fresh salt each run), so a compressed sibling from an earlier
+        # --compress run is stale the moment we get here. --compress
+        # rewrites it below and the review path just refreshed it; every
+        # other path refreshes it now so the .har/.har.gz pair never
+        # diverges.
+        if not compress and not review_refreshed_sibling:
+            sibling = Path(str(result_path) + ".gz")
+            if sibling.exists():
+                from har_capture.cli.interactive import regenerate_compressed_har
+
+                regenerate_compressed_har(Path(result_path), sibling)
 
         if compress:
             result_path_obj = Path(result_path)

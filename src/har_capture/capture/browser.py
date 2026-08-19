@@ -279,6 +279,11 @@ class CaptureResult:
         error: Error message if capture failed
         sanitization_report: Report from sanitization (for interactive review)
         completeness: What the capture contains and any gaps found in it
+        downloads: Browser downloads saved during the session. Each record
+            carries the suggested filename, the name it was saved under,
+            the local path it was saved to, and an error message when
+            saving failed. Saved files are raw device output — NOT
+            sanitized.
     """
 
     har_path: Path | None = None
@@ -287,6 +292,7 @@ class CaptureResult:
     stats: dict[str, Any] | None = None
     sanitization_report: Any | None = None  # SanitizationReport when available
     completeness: CaptureCompletenessReport | None = None
+    downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
 
@@ -361,6 +367,13 @@ class BrowserSessionResult:
             this list exists so consumers can tell *that* a popup happened
             even if its traffic is otherwise indistinguishable from the
             main page's. Capture-everything: silent popups poison analysis.
+        downloads: Files the user downloaded during the session, saved out
+            of Playwright's ephemeral artifacts directory before context
+            close deletes it (the CM2500 event-log export was lost this
+            way). Each record carries the suggested filename, the name it
+            was saved under, the local path, and an error message when
+            saving failed. Saved files are raw device output — NOT
+            sanitized.
         success: True if the session completed without error
         error: Error message if session failed
     """
@@ -372,6 +385,7 @@ class BrowserSessionResult:
     captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
     dialogs: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
 
@@ -396,6 +410,39 @@ def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -
         }
     )
     har["log"]["_har_capture"] = metadata
+
+
+def strip_browser_internal_entries(har: dict[str, Any]) -> int:
+    """Drop entries whose request URL is not http(s) from a HAR, in place.
+
+    Browser-internal traffic (``chrome://``, ``chrome-extension://``,
+    ``devtools://``, ``about:`` ...) is never target-device evidence, and
+    some of it leaks local machine state — ``chrome://fileicon/?path=...``
+    embeds the local filesystem path of every file on the downloads page
+    (observed on the 2026-08-19 CM2500 captures: 11 chrome:// entries,
+    including Playwright temp-dir paths).
+
+    Args:
+        har: Parsed HAR data (modified in place)
+
+    Returns:
+        Number of entries removed
+    """
+    entries = har.get("log", {}).get("entries")
+    if not isinstance(entries, list):
+        return 0
+
+    def _keep_entry(entry: Any) -> bool:
+        if not isinstance(entry, dict):
+            return True  # malformed entries are not ours to judge — keep
+        url = str(entry.get("request", {}).get("url", ""))
+        return url.lower().startswith(("http://", "https://"))
+
+    kept = [e for e in entries if _keep_entry(e)]
+    removed = len(entries) - len(kept)
+    if removed:
+        har["log"]["entries"] = kept
+    return removed
 
 
 def filter_and_compress_har(
@@ -552,12 +599,14 @@ def _run_browser_session(
     timeout: int | None = None,
     wait_for_data: bool = True,
     page_load_strategy: str = "networkidle",
+    downloads_dir: Path | None = None,
 ) -> BrowserSessionResult:
     """Launch Playwright browser and capture HAR.
 
     Handles: browser launch, context configuration, navigation with
     networkidle/domcontentloaded fallback, wait-for-data, cookie/storage
-    capture, timeout vs interactive mode, browser cleanup.
+    capture, download preservation, timeout vs interactive mode, browser
+    cleanup.
 
     Args:
         target_url: Full URL to navigate to
@@ -568,6 +617,8 @@ def _run_browser_session(
         timeout: Seconds to wait (None = interactive, wait for user close)
         wait_for_data: Enable async data fetch tracking
         page_load_strategy: Playwright wait_until value for page.goto()
+        downloads_dir: Directory to save browser downloads into (created
+            lazily on first download). ``None`` disables download saving.
 
     Returns:
         BrowserSessionResult with captured browser state
@@ -707,6 +758,20 @@ def _run_browser_session(
 
         page.on("response", _on_response)
 
+        # Collect Download objects as they start; saving happens after the
+        # interactive wait, in one place, before context.close() deletes
+        # Playwright's ephemeral artifacts directory. The handler itself
+        # makes no Playwright calls — blocking RPCs inside sync-API event
+        # handlers can deadlock the dispatcher.
+        pending_downloads: list[Any] = []
+
+        def _on_download(download: Any) -> None:
+            pending_downloads.append(download)
+            _LOGGER.info("Download started (will be saved when the browser closes)")
+
+        if downloads_dir is not None:
+            page.on("download", _on_download)
+
         # Subscribe to popup / new-page events at the context level. Without
         # this, popups opened by the device (e.g., S33 reboot confirmation,
         # router config wizards) don't get their response bodies eagerly
@@ -719,6 +784,8 @@ def _run_browser_session(
         def _on_new_page(popup_page: Any) -> None:
             try:
                 popup_page.on("response", _on_response)
+                if downloads_dir is not None:
+                    popup_page.on("download", _on_download)
                 result.popups.append(
                     {
                         "url": popup_page.url,  # may be "about:blank" if not yet navigated
@@ -788,6 +855,11 @@ def _run_browser_session(
             except Exception as e:
                 _LOGGER.warning("Error waiting for page close: %s", e)
 
+        # Save downloads BEFORE context.close() — closing the context
+        # deletes Playwright's artifacts directory and the files with it.
+        if pending_downloads and downloads_dir is not None:
+            result.downloads = _save_pending_downloads(pending_downloads, downloads_dir)
+
         try:
             context.close()
         except Exception as e:
@@ -799,6 +871,62 @@ def _run_browser_session(
             _LOGGER.warning("Failed to close browser instance: %s", e)
 
     return result
+
+
+def _unique_download_name(suggested: str, taken: set[str]) -> str:
+    """Pick a collision-free filename for a download.
+
+    Uses only the basename of the suggestion (a hostile suggested
+    filename must not escape the downloads directory) and appends a
+    counter when the name is already taken: ``log.txt``, ``log_2.txt``.
+    """
+    base = Path(suggested or "download").name or "download"
+    if base not in taken:
+        return base
+    stem, suffix = Path(base).stem, Path(base).suffix
+    counter = 2
+    while f"{stem}_{counter}{suffix}" in taken:
+        counter += 1
+    return f"{stem}_{counter}{suffix}"
+
+
+def _save_pending_downloads(
+    pending: list[Any],
+    downloads_dir: Path,
+) -> list[dict[str, Any]]:
+    """Persist browser downloads out of Playwright's artifacts directory.
+
+    Capture-everything over fail: each download is saved independently
+    and a failure is recorded, never raised — losing one file must not
+    lose the capture.
+
+    Args:
+        pending: Playwright Download objects collected during the session
+        downloads_dir: Directory to save into (created on first use)
+
+    Returns:
+        One audit record per download: suggested filename, saved name and
+        path on success, error message on failure.
+    """
+    records: list[dict[str, Any]] = []
+    taken: set[str] = set()
+    for download in pending:
+        record: dict[str, Any] = {}
+        try:
+            record["suggested_filename"] = str(getattr(download, "suggested_filename", "") or "")
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+            name = _unique_download_name(record["suggested_filename"], taken)
+            dest = downloads_dir / name
+            download.save_as(dest)
+            taken.add(name)
+            record["saved_as"] = name
+            record["saved_path"] = str(dest)
+            _LOGGER.info("Saved download: %s", dest)
+        except Exception as e:
+            record["error"] = str(e)
+            _LOGGER.warning("Failed to save download %r: %s", record.get("suggested_filename"), e)
+        records.append(record)
+    return records
 
 
 def _patch_missing_bodies(
@@ -924,6 +1052,11 @@ def _inject_har_metadata(
             "pre_capture_cookies": session.pre_capture_cookies,
             "popups": session.popups,
             "dialogs": session.dialogs,
+            # Filenames only — the local saved_path must not leak into an
+            # artifact that gets shared.
+            "downloads": [
+                {k: v for k, v in record.items() if k != "saved_path"} for record in session.downloads
+            ],
         }
         with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(raw_har, f)
@@ -960,10 +1093,19 @@ def _run_post_capture_pipeline(
     """
     result = CaptureResult(har_path=None)
 
-    # Runs on the raw HAR: bloat filtering can drop the true first entry.
+    # Strip browser-internal entries (chrome:// etc.) before anything else
+    # touches the HAR: they are never device evidence and can leak local
+    # paths, so no downstream artifact — raw copy included — keeps them.
     try:
         with open(temp_path, encoding="utf-8") as f:
-            result.completeness = analyze_capture_completeness(json.load(f))
+            raw_har = json.load(f)
+        removed_internal = strip_browser_internal_entries(raw_har)
+        if removed_internal:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(raw_har, f)
+            _LOGGER.info("Removed %d browser-internal entries (chrome:// etc.)", removed_internal)
+        # Runs on the raw HAR: bloat filtering can drop the true first entry.
+        result.completeness = analyze_capture_completeness(raw_har)
     except Exception as e:
         _LOGGER.warning("Capture-completeness check failed: %s", e)
 
@@ -1143,6 +1285,7 @@ def capture_device_har(
             timeout=timeout,
             wait_for_data=wait_for_data,
             page_load_strategy=page_load_strategy,
+            downloads_dir=paths.output_path.parent / f"{paths.output_path.stem}_downloads",
         )
 
     def _cleanup_temp() -> None:
@@ -1213,7 +1356,7 @@ def capture_device_har(
     _inject_har_metadata(paths.temp_path, paths.target_url, probes, session)
 
     # 5. Post-capture pipeline
-    return _run_post_capture_pipeline(
+    result = _run_post_capture_pipeline(
         temp_path=paths.temp_path,
         output_path=paths.output_path,
         sanitized_output=paths.sanitized_output,
@@ -1224,3 +1367,5 @@ def capture_device_har(
         capture_options=capture_options,
         custom_patterns=custom_patterns,
     )
+    result.downloads = session.downloads
+    return result

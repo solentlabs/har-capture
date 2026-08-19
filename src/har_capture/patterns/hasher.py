@@ -257,12 +257,19 @@ class Hasher:
             >>> hasher.hash_sensitive_value("password123", "credential")
             '***CRED***'
         """
-        # Map heuristic categories to prefixes
+        # Map heuristic categories to prefixes. Every prefix emitted here
+        # must be listed in allowlist.json hash_prefixes so downstream
+        # tools recognize the placeholder as already redacted.
         prefix_map = {
             "wifi_ssid": "WIFI",
             "credential": "CRED",
             "device_name": "DEVICE",
             "suspicious": "SENSITIVE",
+            "serial_number": "SERIAL",
+            "account": "ACCOUNT",
+            "field": "FIELD",
+            "phone": "PHONE",
+            "ssn": "SSN",
         }
         prefix = prefix_map.get(category, "SENSITIVE")
         return self.hash_value(value, prefix)

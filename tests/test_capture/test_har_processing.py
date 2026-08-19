@@ -14,6 +14,7 @@ from har_capture.capture.browser import (
     _add_capture_metadata,
     _patch_missing_bodies,
     filter_and_compress_har,
+    strip_browser_internal_entries,
 )
 
 # =============================================================================
@@ -131,6 +132,50 @@ class TestAddCaptureMetadata:
         _add_capture_metadata(har)
 
         assert har["log"]["_har_capture"]["version"] == __version__
+
+
+class TestStripBrowserInternalEntries:
+    """Tests for strip_browser_internal_entries.
+
+    Reproduces the 2026-08-19 CM2500 finding: 11 chrome:// entries in the
+    happy-path capture, including chrome://fileicon URLs embedding local
+    Playwright temp-dir paths.
+    """
+
+    def test_non_http_entries_removed_http_kept(self) -> None:
+        har = copy.deepcopy(FIXTURES["har_with_internal_entries"])
+        removed = strip_browser_internal_entries(har)
+
+        assert removed == 6
+        urls = [e["request"]["url"] for e in har["log"]["entries"]]
+        assert all(u.lower().startswith(("http://", "https://")) for u in urls)
+        # Scheme matching is case-insensitive; the POST survives too.
+        assert "HTTP://192.168.100.1/RouterStatus.htm" in urls
+        assert any("goform/Login" in u for u in urls)
+        # The local-path leak is gone.
+        assert "playwright-artifacts" not in json.dumps(har)
+
+    def test_clean_har_untouched(self) -> None:
+        har = copy.deepcopy(FIXTURES["basic_har"])
+        before = copy.deepcopy(har)
+
+        assert strip_browser_internal_entries(har) == 0
+        assert har == before
+
+    @pytest.mark.parametrize(
+        "har",
+        [{}, {"log": {}}, {"log": {"entries": "not-a-list"}}],
+        ids=["empty_dict", "no_entries", "entries_not_list"],
+    )
+    def test_malformed_har_returns_zero(self, har: dict) -> None:
+        assert strip_browser_internal_entries(har) == 0
+
+    def test_malformed_entry_is_kept(self) -> None:
+        """Non-dict entries are not ours to judge — capture-everything."""
+        har = {"log": {"entries": ["weird", {"request": {"url": "chrome://x"}}]}}
+        removed = strip_browser_internal_entries(har)
+        assert removed == 1
+        assert har["log"]["entries"] == ["weird"]
 
 
 class TestFilterAndCompressHar:

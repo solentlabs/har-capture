@@ -898,3 +898,36 @@ class TestProtocolDetectionResult:
         assert result.protocol is None
         assert result.working_url is None
         assert result.error is None
+
+
+class TestTargetPath:
+    """target_path — the user-facing "your path was ignored" signal.
+
+    _strip_protocol silently drops the path; the CLI uses target_path to
+    warn instead of capturing the wrong page (a bare-root capture cost a
+    wasted CM2500 run on 2026-08-19).
+    """
+
+    # fmt: off
+    PATH_CASES = [
+        ("https://192.168.100.1/DocsisStatus.htm", "/DocsisStatus.htm",  "https_with_path"),
+        ("http://host/page.htm",                   "/page.htm",          "http_with_path"),
+        ("192.168.100.1/DocsisStatus.htm",         "/DocsisStatus.htm",  "bare_host_with_path"),
+        ("https://host/a/b?q=1",                   "/a/b?q=1",           "nested_path_with_query"),
+        ("https://192.168.100.1",                  "",                   "no_path"),
+        ("https://192.168.100.1/",                 "",                   "bare_trailing_slash"),
+        ("192.168.100.1",                          "",                   "bare_ip"),
+        ("192.168.100.1:8080",                     "",                   "host_with_port"),
+        ("https://[::1]:8443/page",                "/page",              "ipv6_with_path"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("target", "expected", "desc"),
+        PATH_CASES,
+        ids=[c[2] for c in PATH_CASES],
+    )
+    def test_target_path(self, target: str, expected: str, desc: str) -> None:
+        from har_capture.capture.connectivity import target_path
+
+        assert target_path(target) == expected, desc

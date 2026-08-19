@@ -68,6 +68,8 @@
       "in progress",
       "synchronized",
       "not synchronized",
+      "ready",
+      "not ready",
       "done"
     ]
   }

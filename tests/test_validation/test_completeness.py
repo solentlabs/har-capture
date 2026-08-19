@@ -3,6 +3,7 @@
 Test Coverage:
     - Mid-session detection (Cookie header, cookies array, case-insensitive names)
     - Zero-POST detection
+    - Single-credential-POST detection (missing refused login)
     - Session vs. benign cookie-name matching against the built-in pattern list
     - Coverage summary counts (methods, unique URLs, Set-Cookie responses)
     - Malformed/empty HAR tolerance
@@ -23,10 +24,11 @@ from typing import Any
 
 import pytest
 
-from har_capture.patterns import clear_pattern_cache, get_session_cookie_patterns
+from har_capture.patterns import clear_pattern_cache, get_password_field_patterns, get_session_cookie_patterns
 from har_capture.validation.completeness import (
     MID_SESSION_CAPTURE,
     NO_POST_REQUESTS,
+    SINGLE_CREDENTIAL_POST,
     analyze_capture_completeness,
 )
 
@@ -56,6 +58,11 @@ WARNING_CASES = [
     ("no_post_requests",          [NO_POST_REQUESTS],                        "gets_only"),
     ("benign_first_request_cookie", [],                                      "non_session_cookie_ignored"),
     ("empty_har",                 [NO_POST_REQUESTS],                        "empty_capture"),
+    ("single_credential_post",    [SINGLE_CREDENTIAL_POST],                  "one_login_no_refused_attempt"),
+    ("two_credential_posts",      [],                                        "refused_plus_real_login"),
+    ("post_without_password_field", [],                                      "action_post_is_not_a_login"),
+    ("credential_post_urlencoded_text", [SINGLE_CREDENTIAL_POST],            "urlencoded_text_body_counted"),
+    ("credential_post_json_body_not_counted", [],                            "json_body_with_equals_not_counted"),
 ]
 # fmt: on
 
@@ -299,6 +306,28 @@ class TestSessionCookiePatternLoading:
             )
 
             assert report.first_request_session_cookies == ["PHPSESSID"]
+        finally:
+            clear_pattern_cache()
+
+
+class TestPasswordFieldPatternLoading:
+    """Password-field pattern loading from capture.json."""
+
+    def test_builtin_patterns_loaded(self) -> None:
+        """Test the built-in password-field patterns are non-empty."""
+        assert get_password_field_patterns()
+
+    def test_custom_patterns_extend_builtins(self, tmp_path: Path) -> None:
+        """Test a custom file adds device field names without dropping built-ins."""
+        clear_pattern_cache()
+        custom = tmp_path / "custom_capture.json"
+        custom.write_text(json.dumps({"password_fields": {"name_patterns": ["geheimnis"]}}))
+
+        try:
+            patterns = get_password_field_patterns(custom)
+
+            assert "geheimnis" in patterns
+            assert "pwd" in patterns
         finally:
             clear_pattern_cache()
 

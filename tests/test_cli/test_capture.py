@@ -130,6 +130,62 @@ def test_display_results(
         assert s in captured.out, f"{desc}: expected '{s}' in output"
 
 
+def test_display_results_lists_downloads_with_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Saved downloads are listed with paths, failures named, and the NOT-sanitized warning shown."""
+    from har_capture.capture.workflow import CaptureResult, CaptureWorkflowResult
+    from har_capture.cli.capture import _display_results
+
+    result = CaptureWorkflowResult(
+        capture=CaptureResult(
+            success=True,
+            har_path=Path("output/capture.har"),
+            downloads=[
+                {
+                    "suggested_filename": "eventlog.txt",
+                    "saved_as": "eventlog.txt",
+                    "saved_path": "output/capture_downloads/eventlog.txt",
+                },
+                {"suggested_filename": "gone.bin", "error": "context closed"},
+                {"error": "no name"},
+            ],
+        )
+    )
+
+    _display_results(result)
+
+    out = capsys.readouterr().out
+    assert "Browser downloads: 1 file(s) saved" in out
+    assert "output/capture_downloads/eventlog.txt" in out
+    assert "FAILED: gone.bin — context closed" in out
+    assert "(unnamed)" in out, "failed record without a suggested filename gets the fallback label"
+    assert "NOT sanitized" in out
+
+
+def test_display_results_all_downloads_failed_skips_warning(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With nothing saved there is no file to warn about — only the failure line."""
+    from har_capture.capture.workflow import CaptureResult, CaptureWorkflowResult
+    from har_capture.cli.capture import _display_results
+
+    result = CaptureWorkflowResult(
+        capture=CaptureResult(
+            success=True,
+            har_path=Path("output/capture.har"),
+            downloads=[{"suggested_filename": "gone.bin", "error": "context closed"}],
+        )
+    )
+
+    _display_results(result)
+
+    out = capsys.readouterr().out
+    assert "Browser downloads: 0 file(s) saved" in out
+    assert "FAILED: gone.bin — context closed" in out
+    assert "NOT sanitized" not in out
+
+
 def test_display_results_suggestions_include_patterns(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -308,7 +364,7 @@ class TestRunInteractiveReview:
         monkeypatch.setattr(
             interactive_mod,
             "apply_reviewed_redactions",
-            lambda r, p: apply_calls.append((r, p)),
+            lambda r, p, compressed_path=None: apply_calls.append((r, p, compressed_path)),
         )
         monkeypatch.setattr(
             interactive_mod,
@@ -781,3 +837,42 @@ class TestCaptureCommand:
         # "No suspicious values found" message.
         assert result.exit_code == 0
         assert "No suspicious values found" in result.output
+
+
+class TestDroppedPathWarning:
+    """The path-in-target notice — capture starts at the root regardless."""
+
+    @staticmethod
+    def _mock_minimal_capture(monkeypatch: pytest.MonkeyPatch, workflow_module: Any) -> None:
+        monkeypatch.setattr(workflow_module, "check_browser_phase", lambda b: _make_browser_result())
+        monkeypatch.setattr(
+            workflow_module,
+            "run_capture_phase",
+            lambda **kwargs: _make_capture_result(success=True),
+        )
+
+    def test_path_in_target_is_announced(self, monkeypatch: pytest.MonkeyPatch, workflow_module: Any) -> None:
+        from typer.testing import CliRunner
+
+        from har_capture.cli.main import app
+
+        self._mock_minimal_capture(monkeypatch, workflow_module)
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["get", "http://10.0.0.1/DocsisStatus.htm", "--minimal", "--patterns", "base"],
+        )
+        assert result.exit_code == 0
+        assert "'/DocsisStatus.htm'" in result.output
+        assert "ignored" in result.output
+
+    def test_bare_target_has_no_notice(self, monkeypatch: pytest.MonkeyPatch, workflow_module: Any) -> None:
+        from typer.testing import CliRunner
+
+        from har_capture.cli.main import app
+
+        self._mock_minimal_capture(monkeypatch, workflow_module)
+        runner = CliRunner()
+        result = runner.invoke(app, ["get", "10.0.0.1", "--minimal", "--patterns", "base"])
+        assert result.exit_code == 0
+        assert "ignored" not in result.output

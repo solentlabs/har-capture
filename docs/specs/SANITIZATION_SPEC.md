@@ -238,15 +238,19 @@ MIME-type based routing (after the decode-first check):
 
 `_sanitize_string_patterns()` applies 10+ regex patterns:
 
-| Pattern       | Detection                               | Redaction                              |
-| ------------- | --------------------------------------- | -------------------------------------- |
-| MAC addresses | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}` | `hasher.hash_mac()`                    |
-| Private IPs   | 10.x, 172.16-31.x, 192.168.x            | `hasher.hash_ip(ip, is_private=True)`  |
-| Public IPs    | All other valid IPs                     | `hasher.hash_ip(ip, is_private=False)` |
-| Emails        | RFC 5321 simplified                     | `hasher.hash_email()`                  |
-| SSN           | `\d{3}-\d{2}-\d{4}`                     | Flagged, not auto-redacted             |
-| Credit cards  | Visa/MC/Amex with Luhn check            | `hasher.hash_value()`                  |
-| Phone numbers | Various formats                         | Flagged, not auto-redacted             |
+| Pattern       | Detection                                                | Redaction                              |
+| ------------- | -------------------------------------------------------- | -------------------------------------- |
+| MAC addresses | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`                  | `hasher.hash_mac()`                    |
+| Private IPs   | 10.x, 172.16-31.x, 192.168.x                             | `hasher.hash_ip(ip, is_private=True)`  |
+| Public IPs    | All other valid IPs                                      | `hasher.hash_ip(ip, is_private=False)` |
+| Emails        | RFC 5321 simplified                                      | `hasher.hash_email()`                  |
+| SSN           | `\d{3}-\d{2}-\d{4}`                                      | Flagged, not auto-redacted             |
+| Credit cards  | Visa/MC/Amex with Luhn check                             | `hasher.hash_value()`                  |
+| Phone numbers | US/CA formats **with a separator, parens, or leading +** | Flagged, not auto-redacted             |
+
+**Phone numbers require formatting**: a bare 10–11 digit run never matches — separator-free runs are constants,
+counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
+`1732584193` = 0x67452301, were flagged 31× per review before this rule).
 
 **IP address heuristic** (`is_valid_ip_address()`):
 
@@ -480,12 +484,15 @@ Known patterns (MACs, IPs, emails) are **always** auto-redacted regardless of he
 
 Categories:
 
-- **Status**: Good, Bad, OK, Error, Connected, Disconnected, Active, Inactive, Online, Offline
+- **Status**: Good, Bad, OK, Error, Connected, Disconnected, Active, Inactive, Online, Offline, Ready, Not Ready
 - **Technical**: Numeric (123, 0, 11), dB values (-70dBm, 50dB), interface names (eth0, wlan0, br0)
 - **Versions**: 1.0, 2.3.4, v1.2.3
 - **Time/Date**: HH:MM, ISO 8601, ctime, RFC 2822, uptime durations
 - **Network/Config**: DHCP Client, QAM256, ATDMA, 802.11ac, WPA2, subnet masks
-- **Placeholders**: UUIDs, IPv6 link-local, already-redacted values
+- **Placeholders**: UUIDs, IPv6 (with optional %zone-id), already-redacted values — including multi-word prefixes
+  (`SERIAL_NUMBER_...` from pre-fix artifacts) and comma/space-separated **lists** of placeholder addresses
+  (`192.0.2.182, 192.0.2.51`), which otherwise clear the entropy bar and get the sanitizer's own replacement values
+  re-flagged for review (reproduced on the CM2500 captures)
 
 ### ReDoS Prevention
 
@@ -535,9 +542,17 @@ CATEGORY_PREFIX_MAP = {
     "credential": "CRED",
     "device_name": "DEVICE",
     "suspicious": "SENSITIVE",
+    "serial_number": "SERIAL",
+    "account": "ACCOUNT",
+    "field": "FIELD",
+    "phone": "PHONE",
+    "ssn": "SSN",
 }
 # Unknown categories → "SENSITIVE"
 ```
+
+Every prefix emitted here must be listed in `allowlist.json` `hash_prefixes` so downstream tools recognize the
+placeholder as already redacted. Pass 2 user redactions route through this same map.
 
 ### Internal Caching
 
@@ -765,11 +780,21 @@ Entry point: `apply_user_redactions(report)`
 1. User reviews flagged items and sets status: `USER_REDACTED` or `USER_SKIPPED`
 1. For each `USER_REDACTED` item:
    - Recreate hasher with original salt from report
-   - Hash value: `hasher.hash_generic(original_value, CATEGORY)`
+   - Hash value: `hasher.hash_sensitive_value(original_value, category)` — the same
+     [category→prefix map](#category-to-prefix-mapping) as Pass 1, so user redactions carry recognized placeholder
+     prefixes (`CRED_`, `SERIAL_`, ...). Building the prefix from the raw category name produced placeholders like
+     `CREDENTIAL_`/`SERIAL_NUMBER_` that the allowlist and safe-value patterns did not all recognize as redacted.
    - JSON-escape both original and redacted values
    - Global find-and-replace in serialized HAR text
 1. Parse HAR back from JSON
 1. Return modified data
+
+**Compressed-artifact regeneration:** the CLI wrapper (`apply_reviewed_redactions`, `cli/interactive.py`) rewrites the
+`.sanitized.har` atomically and then **regenerates the `.har.gz`** — the one passed by the capture flow, or an
+auto-detected `<output>.gz` sibling. Without this, a `.gz` compressed before the review keeps every value the review
+scrubbed, in exactly the artifact contributors upload (observed on all three reviewed CM2500 captures, 2026-08-19). A
+regeneration failure is fatal and names the stale file; `har-capture validate` backstops the pair with a
+[freshness check](VALIDATION_SPEC.md#compressed-artifact-freshness-check).
 
 ### Pre-Sanitization Detection
 

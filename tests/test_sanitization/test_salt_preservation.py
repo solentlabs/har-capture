@@ -142,10 +142,11 @@ class TestPass2UsesSameSalt:
         # Pass 2: Apply user decisions
         result = apply_user_redactions({"log": {"content": f"data: {value}"}}, report)
 
-        # Verify hash format matches the category
+        # Verify the placeholder matches a direct hash with the same salt —
+        # apply_user_redactions routes through the category→prefix map.
         assert flagged.redacted_value is not None
-        expected_prefix = category.upper() + "_"
-        assert flagged.redacted_value.startswith(expected_prefix)
+        expected = Hasher.create(salt).hash_sensitive_value(value, category)
+        assert flagged.redacted_value == expected
 
         # Verify the value is actually replaced in result
         assert value not in json.dumps(result)
@@ -159,7 +160,7 @@ class TestPass2UsesSameSalt:
 
         # Create hasher directly
         hasher = Hasher.create(salt)
-        expected_hash = hasher.hash_generic(value, category.upper())
+        expected_hash = hasher.hash_sensitive_value(value, category)
 
         # Create report and apply redactions
         flagged = FlaggedValue(

@@ -59,14 +59,15 @@ inline, the reviewer expects them refactored into a parametrize block before mer
 
 The gates that block a merge. Every one of these is enforced in CI and re-runnable locally.
 
-| Gate          | Command                                                                 | Threshold                                                             |
-| ------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| Tests         | `.venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"` | 0 failures                                                            |
-| Coverage      | included in pytest run via `pyproject.toml`                             | `fail_under = 90`                                                     |
-| Lint + format | `ruff check` and `ruff format --check`                                  | 0 violations                                                          |
-| Type check    | `mypy src/`                                                             | 0 errors                                                              |
-| Pre-commit    | `.venv/bin/python3 -m pre_commit run --all-files`                       | all hooks pass                                                        |
-| Codecov patch | reported by `codecov.yml`                                               | 80% informational (CLI entrypoints have low patch coverage by design) |
+| Gate          | Command                                                                     | Threshold                                                             |
+| ------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Tests         | `.venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"`     | 0 failures                                                            |
+| Coverage      | included in pytest run via `pyproject.toml`                                 | `fail_under = 90`                                                     |
+| Lint + format | `ruff check` and `ruff format --check`                                      | 0 violations                                                          |
+| Type check    | `mypy src/`                                                                 | 0 errors                                                              |
+| Module floors | `.venv/bin/python3 scripts/check_coverage_floors.py` (after the pytest run) | every module listed in `FLOORS` meets its floor                       |
+| Pre-commit    | `.venv/bin/python3 -m pre_commit run --all-files`                           | all hooks pass                                                        |
+| Codecov patch | reported by `codecov.yml`                                                   | 80% informational (CLI entrypoints have low patch coverage by design) |
 
 **Don't game coverage.** If a module is hard to test, restructure it. Codecov's patch target is informational because
 CLI entrypoints are thin wrappers and a 100% patch target would push contributors to write hollow tests. Coverage drops

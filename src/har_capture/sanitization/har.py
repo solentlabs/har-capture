@@ -856,11 +856,20 @@ _CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
 _CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
 _CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
 _PHONE_PATTERN = re.compile(
+    # At least one separator (or parens / leading +) is required. A bare
+    # 10-11 digit run is far more often a constant, counter, or frequency
+    # than a phone number — the CM2500 captures flagged the MD5 init
+    # constants in the device's md5.js (e.g. 1732584193 = 0x67452301) as
+    # phone numbers 31 times per review.
     r"(?<!\w)"  # Not preceded by a word character (prevents matching inside tokens like tok_123...)
     r"(?:"
-    r"\+?1[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # US/CA: +1 (555) 123-4567
+    r"\+1[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # +1 (555) 123-4567
     r"|"
-    r"\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # (555) 123-4567 or 555-123-4567
+    r"1[-.\s]\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"  # 1-555-123-4567
+    r"|"
+    r"\(\d{3}\)[-.\s]?\d{3}[-.\s]?\d{4}"  # (555) 123-4567
+    r"|"
+    r"\d{3}[-.\s]\d{3}[-.\s]\d{4}"  # 555-123-4567
     r")"
     r"(?!\w)"  # Not followed by a word character (prevents matching inside tokens)
 )
@@ -2011,8 +2020,13 @@ def apply_user_redactions(
     # Apply each redaction
     for item in redactions_to_apply:
         try:
-            # Generate redacted value
-            redacted = hasher.hash_generic(item.original_value, item.category.upper())
+            # Generate redacted value via the category→prefix map, so
+            # user redactions carry the same placeholder prefixes as
+            # auto-redactions (CRED_, WIFI_, SERIAL_, ...). Building the
+            # prefix from the raw category name produced placeholders
+            # like CREDENTIAL_/SERIAL_NUMBER_ that the allowlist and
+            # safe-value patterns did not all recognize as redacted.
+            redacted = hasher.hash_sensitive_value(item.original_value, item.category)
             item.redacted_value = redacted
 
             # IMPORTANT: Escape values for JSON string context

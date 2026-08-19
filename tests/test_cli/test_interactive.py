@@ -566,6 +566,115 @@ class TestApplyReviewedRedactions:
         monkeypatch.setattr(Path, "replace", original_replace)
 
 
+class TestCompressedRegeneration:
+    """Regression tests for the stale-gz PII bug (2026-08-19 CM2500 session).
+
+    The interactive review rewrites the .sanitized.har; a .har.gz written
+    before the review then still carries every value the review scrubbed —
+    in exactly the artifact contributors upload. apply_reviewed_redactions
+    must leave the pair byte-identical.
+    """
+
+    @staticmethod
+    def _make_pair(tmp_path, har_data):  # type: ignore[no-untyped-def]
+        """Write a sanitized .har plus a STALE .gz of its pre-review content."""
+        import gzip
+        import json
+
+        har_file = tmp_path / "device.sanitized.har"
+        har_file.write_text(json.dumps(har_data))
+        gz_file = tmp_path / "device.sanitized.har.gz"
+        with gzip.open(gz_file, "wb") as f:
+            f.write(har_file.read_bytes())
+        return har_file, gz_file
+
+    @staticmethod
+    def _redacting_report(make_report, make_flagged, value):  # type: ignore[no-untyped-def]
+        from har_capture.sanitization.report import RedactionStatus
+
+        flagged = make_flagged([(value, "serial_number", "high")])
+        flagged[0].status = RedactionStatus.USER_REDACTED
+        report = make_report(flagged=flagged)
+        return report
+
+    def test_explicit_compressed_path_regenerated(  # type: ignore[no-untyped-def]
+        self, tmp_path, make_report, make_flagged, capsys
+    ):
+        """The capture-flow path: gz handed in explicitly is rewritten to match."""
+        import gzip
+
+        from har_capture.cli.interactive import apply_reviewed_redactions
+
+        har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
+        har_file, gz_file = self._make_pair(tmp_path, har_data)
+        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
+
+        apply_reviewed_redactions(report, har_file, compressed_path=gz_file)
+
+        with gzip.open(gz_file, "rb") as f:
+            gz_content = f.read()
+        assert gz_content == har_file.read_bytes(), "gz must match the reviewed .har byte-for-byte"
+        assert b"7S0245KL9BAAA" not in gz_content, "scrubbed serial must not survive in the gz"
+        assert "Regenerated compressed file" in capsys.readouterr().out
+
+    def test_sibling_gz_autodetected(  # type: ignore[no-untyped-def]
+        self, tmp_path, make_report, make_flagged
+    ):
+        """Without an explicit path, an existing <output>.gz sibling is regenerated."""
+        import gzip
+
+        from har_capture.cli.interactive import apply_reviewed_redactions
+
+        har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
+        har_file, gz_file = self._make_pair(tmp_path, har_data)
+        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
+
+        apply_reviewed_redactions(report, har_file)
+
+        with gzip.open(gz_file, "rb") as f:
+            assert f.read() == har_file.read_bytes()
+
+    def test_no_gz_sibling_creates_nothing(  # type: ignore[no-untyped-def]
+        self, tmp_path, make_report, make_flagged
+    ):
+        """No compressed artifact exists -> none is invented."""
+        import json
+
+        from har_capture.cli.interactive import apply_reviewed_redactions
+
+        har_file = tmp_path / "device.sanitized.har"
+        har_file.write_text(json.dumps({"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}))
+        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
+
+        apply_reviewed_redactions(report, har_file)
+
+        assert not (tmp_path / "device.sanitized.har.gz").exists()
+
+    def test_regeneration_failure_is_fatal_and_loud(  # type: ignore[no-untyped-def]
+        self, tmp_path, make_report, make_flagged, monkeypatch, capsys
+    ):
+        """A gz write failure exits non-zero and names the stale file."""
+        import typer
+
+        from har_capture.cli.interactive import apply_reviewed_redactions
+
+        har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
+        har_file, gz_file = self._make_pair(tmp_path, har_data)
+        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
+
+        def fail_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise OSError("disk full")
+
+        monkeypatch.setattr("gzip.open", fail_open)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            apply_reviewed_redactions(report, har_file, compressed_path=gz_file)
+        assert excinfo.value.exit_code == 1
+        err = capsys.readouterr().err
+        assert "STALE" in err
+        assert str(gz_file) in err
+
+
 # Path is needed by apply_reviewed_redactions tests above.
 from pathlib import Path  # noqa: E402
 

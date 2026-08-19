@@ -158,7 +158,9 @@ class TestFullSanitizationFlow:
         # Verify user-selected redactions applied
         final_content = final["log"]["entries"][0]["response"]["content"]["text"]
         assert "ACME-12345" not in final_content, "User-redacted value should be gone"
-        assert "ACCOUNT_ID_" in final_content, "Should have hash placeholder"
+        # "account_id" is not a mapped heuristic category, so the value gets
+        # the generic SENSITIVE_ prefix (see Hasher.hash_sensitive_value).
+        assert "SENSITIVE_" in final_content, "Should have hash placeholder"
 
     def test_skipped_values_not_redacted(self) -> None:
         """Test: user-skipped values remain in output."""

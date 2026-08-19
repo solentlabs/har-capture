@@ -20,7 +20,7 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(
         r"^(Good|Bad|OK|Error|Locked|Unlocked|Operational|Disabled|Enabled|Active|Inactive|"
         r"Online|Offline|Up|Down|Connected|Disconnected|Configured|Allowed|Denied|Blocked|"
-        r"In Progress|Not Synchronized|Synchronized|Not Locked|Unknown)$",
+        r"In Progress|Not Synchronized|Synchronized|Not Locked|Unknown|Ready|Not Ready)$",
         re.IGNORECASE,
     ),
     # Channel/frequency numbers
@@ -69,25 +69,40 @@ SAFE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^\d+(\.\d+)?%$"),
     # Signal strength indicators
     re.compile(r"^(Excellent|Good|Fair|Poor|Weak|Strong)$", re.IGNORECASE),
-    # Already redacted placeholders
+    # Already redacted placeholders. The prefix allows underscores
+    # (SERIAL_NUMBER_..., CREDENTIAL_...) — apply_user_redactions built
+    # placeholders from raw category names before the prefix map was
+    # applied there, and those artifacts stay in circulation.
     re.compile(r"^\*\*\*[A-Z]+\*\*\*$"),
-    re.compile(r"^[A-Z]+_[a-f0-9]{8}$"),
+    re.compile(r"^[A-Z]+(?:_[A-Z]+)*_[a-f0-9]{8}$"),
     re.compile(r"^XX:XX:XX:XX:XX:XX$"),
     re.compile(r"^0\.0\.0\.0$"),
     re.compile(r"^10\.255\.\d+\.\d+$"),
     re.compile(r"^192\.0\.2\.\d+$"),
     # Already-redacted IPs with port suffix
     re.compile(r"^(?:0\.0\.0\.0|10\.255\.\d+\.\d+|192\.0\.2\.\d+):\d+$"),
+    # Lists of already-redacted addresses (comma/semicolon/space separated).
+    # A joined pair like "192.0.2.182, 192.0.2.51" clears the entropy bar
+    # (mixed char types, length > 8) even though every element is a
+    # placeholder the sanitizer itself wrote — reproduced on the CM2500
+    # captures, where the review re-flagged its own replacement values.
+    re.compile(
+        r"^(?:(?:0\.0\.0\.0|10\.255\.\d{1,3}\.\d{1,3}|192\.0\.2\.\d{1,3}|2001:db8:[0-9a-f:]+|::)"
+        r"(?:\s*[,;]\s*|\s+))+"
+        r"(?:0\.0\.0\.0|10\.255\.\d{1,3}\.\d{1,3}|192\.0\.2\.\d{1,3}|2001:db8:[0-9a-f:]+|::)$",
+        re.IGNORECASE,
+    ),
     # Subnet masks
     re.compile(r"^255\.\d+\.\d+\.\d+$"),
     # CIDR notation (with redacted IPs)
     re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$"),
-    # IPv6 addresses (including documentation prefix 2001:db8::).
+    # IPv6 addresses (including documentation prefix 2001:db8::), with
+    # optional %zone-id and /prefix-length suffixes.
     # The colon is REQUIRED: without the lookahead this matches any all-hex
     # string, so every session token, MD5, SHA-1 and SHA-256 digest was
     # classified safe and returned from is_safe_value() before reaching the
     # entropy check — silently disabling the heuristic layer for hex secrets.
-    re.compile(r"^(?=[^:]*:)[0-9a-f:]+(?:/\d{1,3})?$", re.IGNORECASE),
+    re.compile(r"^(?=[^:]*:)[0-9a-f:]+(?:%\w+)?(?:/\d{1,3})?$", re.IGNORECASE),
     # URLs (http/https) — not PII themselves
     re.compile(r"^https?://\S+$"),
     # Common protocol/interface names
@@ -289,6 +304,7 @@ def is_adjacent_to_redacted(
         "TOKEN_",
         "SERIAL_",
         "FIELD_",
+        "CRED_",
         "CREDENTIAL_",
         "AUTH_",
         "COOKIE_",

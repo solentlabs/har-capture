@@ -54,7 +54,12 @@ def validate(
         har-capture validate --dir ./captures --recursive --patterns base
         har-capture validate device.har --strict --patterns network-device
     """
-    from har_capture.validation import analyze_har_file, validate_har
+    from har_capture.validation import (
+        analyze_har_file,
+        compressed_sibling_pair,
+        stale_compressed_sibling,
+        validate_har,
+    )
 
     custom_patterns = require_patterns(patterns)
 
@@ -95,7 +100,23 @@ def validate(
     # context and must render the same whether it matches one file or fifty.
     show_summary = directory is None
 
+    # Each .har/.har.gz pair is checked for divergence once, whichever
+    # member (or both, in a --dir scan) appears in the file list. A stale
+    # compressed copy is an error: it is the upload artifact and can carry
+    # values that were scrubbed from the .har after compression.
+    checked_pairs: set[tuple[Path, Path]] = set()
+
     for file_path in har_files:
+        pair = compressed_sibling_pair(file_path)
+        if pair is not None and pair not in checked_pairs:
+            checked_pairs.add(pair)
+            stale_message = stale_compressed_sibling(file_path)
+            if stale_message:
+                typer.echo(f"\n{file_path}:")
+                typer.echo("  [ERROR] [compressed artifact]")
+                typer.echo(f"     {stale_message}")
+                total_errors += 1
+
         findings = validate_har(file_path, custom_patterns=custom_patterns)
 
         if findings:

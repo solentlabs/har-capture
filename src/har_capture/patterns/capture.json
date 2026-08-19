@@ -24,5 +24,14 @@
       "^session_?token$",
       "^auth_?token$"
     ]
+  },
+  "password_fields": {
+    "_comment": "POST-parameter name substrings (case-insensitive regexes) that mark a request as a credential submission. Used by capture-completeness validation to count login attempts; deliberately narrower than sensitive.json auto_redact_patterns (token/secret fields ride along on every form and would inflate the count).",
+    "name_patterns": [
+      "pass(?:word|wd|phrase)?",
+      "pwd",
+      "pws",
+      "psk"
+    ]
   }
 }

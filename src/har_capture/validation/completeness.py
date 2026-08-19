@@ -23,10 +23,15 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
 
-from har_capture.patterns import compile_pattern, get_session_cookie_patterns
+from har_capture.patterns import (
+    compile_pattern,
+    get_password_field_patterns,
+    get_session_cookie_patterns,
+)
 
 MID_SESSION_CAPTURE = "mid_session_capture"
 NO_POST_REQUESTS = "no_post_requests"
+SINGLE_CREDENTIAL_POST = "single_credential_post"
 
 
 @dataclass(frozen=True)
@@ -58,6 +63,11 @@ class CaptureCompletenessReport:
         first_request_session_cookies: Session-cookie names on the first
             request: the mid-session signal. "First" is by
             ``startedDateTime`` when every entry has one, else file order.
+        credential_post_counts: Number of credential submissions (POSTs
+            carrying a password-named parameter) per request URL. Exactly
+            one submission in the whole capture means no refused login was
+            recorded — auth-failure evidence is as valuable as the success
+            and cannot be reconstructed later.
         warnings: Gaps found; empty when the capture looks complete
     """
 
@@ -66,7 +76,13 @@ class CaptureCompletenessReport:
     unique_urls: int = 0
     set_cookie_responses: int = 0
     first_request_session_cookies: list[str] = field(default_factory=list)
+    credential_post_counts: dict[str, int] = field(default_factory=dict)
     warnings: list[CompletenessWarning] = field(default_factory=list)
+
+    @property
+    def credential_post_count(self) -> int:
+        """Total credential submissions across all URLs."""
+        return sum(self.credential_post_counts.values())
 
     @property
     def post_count(self) -> int:
@@ -119,6 +135,57 @@ def _request_cookie_names(request: dict[str, Any]) -> list[str]:
             _add(name)
 
     return names
+
+
+def _compile_password_field_patterns(
+    custom_patterns_path: Path | str | None = None,
+) -> list[re.Pattern[str]]:
+    """Compile the password-parameter name patterns, skipping invalid regexes."""
+    compiled = (
+        compile_pattern({"regex": pattern, "flags": ["IGNORECASE"]})
+        for pattern in get_password_field_patterns(custom_patterns_path)
+    )
+    return [pattern for pattern in compiled if pattern is not None]
+
+
+def _post_param_names(request: dict[str, Any]) -> list[str]:
+    """Collect POST parameter names from a request's postData.
+
+    Reads the parsed ``params`` array when present, else parses an
+    urlencoded ``text`` body. JSON bodies are not inspected — the devices
+    this warning serves submit login forms urlencoded, and a false
+    negative here only suppresses a nudge, never evidence.
+    """
+    post_data = request.get("postData")
+    if not isinstance(post_data, dict):
+        return []
+
+    params = post_data.get("params")
+    if isinstance(params, list) and params:
+        return [str(p.get("name", "")) for p in params if isinstance(p, dict)]
+
+    text = post_data.get("text")
+    if isinstance(text, str) and text and "=" in text:
+        # A JSON body containing "=" (inside a value) would otherwise be
+        # fed to parse_qsl and yield garbage names — some containing the
+        # very keywords we match on, making the count input-dependent.
+        if text.lstrip().startswith(("{", "[")):
+            return []
+        from urllib.parse import parse_qsl
+
+        return [name for name, _ in parse_qsl(text, keep_blank_values=True)]
+    return []
+
+
+def _is_credential_post(request: dict[str, Any], patterns: list[re.Pattern[str]]) -> bool:
+    """True if the request is a POST carrying a password-named parameter.
+
+    Reads parameter *names* only, so it works identically on raw and
+    sanitized HARs (sanitization redacts values, never names).
+    """
+    if str(request.get("method") or "").upper() != "POST":
+        return False
+    return any(pattern.search(name) for name in _post_param_names(request) for pattern in patterns)
 
 
 def _has_set_cookie(response: dict[str, Any]) -> bool:
@@ -177,6 +244,8 @@ def analyze_capture_completeness(
 
     report = CaptureCompletenessReport(total_entries=len(entries))
 
+    password_patterns = _compile_password_field_patterns(custom_patterns_path)
+
     urls: set[str] = set()
     for entry in entries:
         if not isinstance(entry, dict):
@@ -191,6 +260,8 @@ def analyze_capture_completeness(
         url = str(request.get("url") or "")
         if url:
             urls.add(url)
+        if _is_credential_post(request, password_patterns):
+            report.credential_post_counts[url] = report.credential_post_counts.get(url, 0) + 1
     report.unique_urls = len(urls)
 
     first_entry = _first_entry(entries)
@@ -216,6 +287,24 @@ def analyze_capture_completeness(
                 remedy=(
                     "Log out of the device (or clear the browser's cookies for it), "
                     "then re-record and perform the login inside the capture."
+                ),
+            )
+        )
+
+    if report.credential_post_count == 1:
+        login_url = next(iter(report.credential_post_counts))
+        report.warnings.append(
+            CompletenessWarning(
+                code=SINGLE_CREDENTIAL_POST,
+                message=(
+                    f"Only one credential submission was captured ({login_url}). "
+                    "A deliberately refused login (wrong password) is NOT in this "
+                    "file, so how the device rejects bad credentials cannot be "
+                    "told apart from success later."
+                ),
+                remedy=(
+                    "Re-record and submit a wrong password once before logging in "
+                    "normally — both attempts in the same capture."
                 ),
             )
         )

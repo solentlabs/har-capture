@@ -88,6 +88,24 @@ def _parse_target(target: str) -> tuple[str, str | None]:
     return host, scheme
 
 
+def target_path(target: str) -> str:
+    """Return the path portion of a capture target, or ``""`` if none.
+
+    Capture always starts at the device root — ``_strip_protocol`` drops
+    any path from the target. This helper exists so the CLI can *tell*
+    the user that happened instead of silently capturing the wrong page
+    (a target of ``https://host/DocsisStatus.htm`` cost a wasted CM2500
+    capture run on 2026-08-19). A bare trailing slash is not a path.
+    """
+    lower = target.lower()
+    for prefix in ("http://", "https://"):
+        if lower.startswith(prefix):
+            target = target[len(prefix) :]
+            break
+    _, _, path = target.partition("/")
+    return f"/{path}" if path else ""
+
+
 # ---------------------------------------------------------------------------
 # Protocol detection — adapted from cable_modem_monitor_core/connectivity.py
 # ---------------------------------------------------------------------------

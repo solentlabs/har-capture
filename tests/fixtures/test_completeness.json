@@ -573,5 +573,241 @@
         }
       ]
     }
+  },
+  "single_credential_post": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/goform/Login?id=1",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginName",
+                  "value": "admin"
+                },
+                {
+                  "name": "loginPassword",
+                  "value": "PASS_00d759e2"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/DocsisStatus.htm",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "two_credential_posts": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/goform/Login?id=1",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginName",
+                  "value": "admin"
+                },
+                {
+                  "name": "loginPassword",
+                  "value": "PASS_00d759e2"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/goform/Login?id=2",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginName",
+                  "value": "admin"
+                },
+                {
+                  "name": "loginPassword",
+                  "value": "PASS_00d759e2"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/DocsisStatus.htm",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "post_without_password_field": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/goform/RouterStatus?id=3",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "buttonSelect",
+                  "value": "2"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "credential_post_urlencoded_text": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/goform/Login?id=4",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "text": "loginName=admin&loginPassword=PASS_00d759e2"
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "credential_post_json_body_not_counted": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/api/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "text": "{\"password\": \"a=b\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
   }
 }
