@@ -639,6 +639,16 @@ def _sanitize_html_impl(
         flags=re.IGNORECASE,
     )
 
+    # Idempotency boundary: passes that emit a `PREFIX_<hash>` placeholder skip
+    # values `is_redacted()` already recognizes, so re-sanitizing is a no-op and
+    # a placeholder can never be re-hashed into a compounding
+    # `SERIAL_<hash>_<hash>` chain. The format-preserving passes below (MAC, IPs,
+    # IPv6, email) deliberately do NOT take that guard: their placeholders are
+    # valid-looking values in reserved ranges, indistinguishable from real ones.
+    # `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and
+    # `10.255.62.183` a legitimate private address — skipping them to buy
+    # cosmetic stability would leak real values. They stay non-idempotent by
+    # design; ADR-12 puts the burden of proof on redacting less, not more.
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
         collector.record_auto_redaction("mac_address")
@@ -653,6 +663,8 @@ def _sanitize_html_impl(
     # The separator + tag run is captured and re-emitted verbatim so redaction
     # replaces only the value and preserves the surrounding markup.
     def replace_serial(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("serial_number")
         label = match.group(1)
         sep = match.group(2)
@@ -660,7 +672,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
 
     html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,
@@ -669,6 +681,8 @@ def _sanitize_html_impl(
     # 2b. Serial numbers in HTML table cells (label in one <td>, value in next <td>)
     # Handles: <td>...<strong>Serial Number</strong>...</td>\s*<td>VALUE</td>
     def replace_serial_table(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("serial_number")
         prefix = match.group(1)
         serial = match.group(2)
@@ -676,7 +690,7 @@ def _sanitize_html_impl(
         return f"{prefix}{hashed}"
 
     html = re.sub(
-        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
+        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
         replace_serial_table,
         html,
         flags=re.IGNORECASE,
@@ -690,6 +704,8 @@ def _sanitize_html_impl(
     # Tag chain and separator handling mirror pass 2: whitespace-tolerant
     # sibling-element matching, with the separator + tag run preserved.
     def replace_wps_pin(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("wps_pin")
         label = match.group(1)
         sep = match.group(2)
@@ -708,6 +724,8 @@ def _sanitize_html_impl(
     # Matches: names ending with "serial" (e.g., deviceSerial, modem_serial)
     # Does NOT match: serial+Port, serial+Protocol, serial+Baud, serialization, serialized
     def replace_js_serial(match: re.Match[str]) -> str:
+        if is_redacted(match.group(4), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("serial_number")
         label = match.group(1)
         sep = match.group(2)
@@ -822,6 +840,8 @@ def _sanitize_html_impl(
 
     # 7. Passwords/Passphrases in HTML forms or text
     def replace_password(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("password")
         label = match.group(1)
         return f"{label}={hasher.hash_generic(match.group(2), 'PASS')}"
@@ -835,6 +855,8 @@ def _sanitize_html_impl(
 
     # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>)
     def replace_ssid_text(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("wifi")
         label = match.group(1)
         sep = match.group(2)
@@ -849,6 +871,8 @@ def _sanitize_html_impl(
 
     # 7b. JavaScript object password fields (password_24g: 'value', guest_password: 'value')  # pragma: allowlist secret
     def replace_js_password(match: re.Match[str]) -> str:
+        if is_redacted(match.group(4), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("password")
         label = match.group(1)
         sep = match.group(2)
@@ -881,6 +905,8 @@ def _sanitize_html_impl(
 
     # 8. Password input fields
     def replace_password_input(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("password")
         prefix = match.group(1)
         suffix = match.group(3)
@@ -896,6 +922,8 @@ def _sanitize_html_impl(
     # 8b. SSID input fields (input following SSID label)
     # Matches: <label>...SSID...</label><input value="...">
     def replace_ssid_input(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("wifi")
         prefix = match.group(1)
         value_start = match.group(2)
@@ -911,6 +939,8 @@ def _sanitize_html_impl(
 
     # 9. Session tokens/cookies (long alphanumeric strings)
     def replace_token(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("token")
         label = match.group(1)
         return f"{label}={hasher.hash_generic(match.group(2), 'TOKEN')}"
@@ -924,6 +954,8 @@ def _sanitize_html_impl(
 
     # 10. CSRF tokens in meta tags
     def replace_csrf(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("csrf")
         prefix = match.group(1)
         suffix = match.group(3)
@@ -950,6 +982,8 @@ def _sanitize_html_impl(
 
     # 12. Config file paths (may contain ISP/customer identifiers)
     def replace_config(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("config")
         label = match.group(1)
         return f"{label}: {hasher.hash_generic(match.group(2), 'CONFIG')}"
@@ -963,6 +997,8 @@ def _sanitize_html_impl(
 
     # 13. Motorola JavaScript password variables
     def replace_motorola_pw(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("password")
         prefix = match.group(1)
         suffix = match.group(3)
@@ -1023,6 +1059,8 @@ def _sanitize_html_impl(
 
     # 16. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
     def replace_js_ssid(match: re.Match[str]) -> str:
+        if is_redacted(match.group(4), custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("wifi")
         label = match.group(1)
         sep = match.group(2)

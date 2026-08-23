@@ -457,6 +457,85 @@ class TestDeviceLabelCheckForPii:
         assert matched[0]["line"] == 4
 
 
+class TestIdempotencyBoundary:
+    """Re-sanitizing must not re-hash a placeholder — except where it must.
+
+    Passes emitting a ``PREFIX_<hash>`` placeholder skip values already
+    recognized as redacted, so a sweep over already-sanitized fixtures is a
+    no-op and a serial can never compound into ``SERIAL_<hash>_<hash>``.
+
+    The format-preserving passes deliberately do **not** take that guard. Their
+    placeholders are valid-looking values in reserved ranges and cannot be told
+    apart from real ones: ``02:aa:bb:cc:dd:ee`` is a legitimate
+    locally-administered MAC, ``10.255.62.183`` a legitimate private address.
+    Skipping them to buy cosmetic stability would leak real values.
+    """
+
+    PREFIX_HASH_CASES = [
+        ("<span>Serial Number:</span><span>4106844207105213</span>", "serial_sibling"),
+        ("<td><strong>Serial Number</strong></td><td>4106844207105213</td>", "serial_table"),
+        ("var o={serialNumber:'4106844207105213'};", "js_serial"),
+        ("<span>WPS PIN:</span><span>18345592</span>", "wps_pin"),
+        ("<p>Account ID: 998877665</p>", "account_id"),
+        ("<p>password=hunter2xyz</p>", "password_inline"),
+        ("<p>SSID: MyNet-5G</p>", "ssid_inline"),
+        ("var o={password_24g:'hunter2xyz'};", "js_password"),
+        ("<span>Default Password:</span><span>orange4213table</span>", "structural_password"),
+        ('<input type="password" value="hunter2xyz">', "password_input"),
+        ('<label>SSID</label><input value="MyNet">', "ssid_input"),
+        ("var o={ssid_24g:'MyNet'};", "js_ssid"),
+    ]
+
+    @pytest.mark.parametrize(("html", "desc"), PREFIX_HASH_CASES, ids=[c[1] for c in PREFIX_HASH_CASES])
+    def test_prefix_hash_passes_are_idempotent(self, html: str, desc: str) -> None:
+        """Test re-sanitizing is a byte-level no-op under independent random salts.
+
+        The default ``salt="auto"`` mints a fresh salt per call, so this also
+        proves the guard skips the value rather than re-hashing it to the same
+        string by luck.
+        """
+        once = sanitize_html(html)
+        twice = sanitize_html(once)
+        thrice = sanitize_html(twice)
+        assert once == twice == thrice, f"{desc}: re-sanitizing should be a no-op"
+
+    def test_serial_placeholder_does_not_compound(self) -> None:
+        """Test a serial placeholder is never re-hashed into a chain.
+
+        Pass 2's value class excluded ``_``, so it matched only the ``SERIAL``
+        prefix of its own output and prepended a fresh hash on every run —
+        ``SERIAL_9f8e3528_9f8e3528_60ec920f``, growing without bound.
+        """
+        html = "<span>Serial Number:</span><span>4106844207105213</span>"
+        for _ in range(4):
+            html = sanitize_html(html, salt="fixed-salt")
+        assert html.count("SERIAL_") == 1, f"placeholder compounded: {html}"
+
+    FORMAT_PRESERVING_CASES = [
+        ("<p>02:aa:bb:cc:dd:ee</p>", "02:aa:bb:cc:dd:ee", "locally_administered_mac"),
+        ("<p>10.255.62.183</p>", "10.255.62.183", "private_ip_in_placeholder_range"),
+        ("<p>2001:db8::1</p>", "2001:db8::1", "ipv6_documentation_range"),
+        ("<p>192.0.2.5</p>", "192.0.2.5", "public_ip_test_net"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("html", "value", "desc"),
+        FORMAT_PRESERVING_CASES,
+        ids=[c[2] for c in FORMAT_PRESERVING_CASES],
+    )
+    def test_format_preserving_passes_still_redact_real_values(
+        self, html: str, value: str, desc: str
+    ) -> None:
+        """Test values inside placeholder ranges are still redacted, not skipped.
+
+        These are real addresses a real capture can contain. Guarding them on
+        ``is_redacted()`` for idempotency's sake would pass them through
+        unredacted — a leak traded for cosmetic stability.
+        """
+        result = sanitize_html(html, salt="fixed-salt")
+        assert value not in result, f"{desc}: must still be redacted"
+
+
 # =============================================================================
 # Web Storage setItem() Scanning (Gap 1 fix)
 # =============================================================================

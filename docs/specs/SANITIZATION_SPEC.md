@@ -386,6 +386,25 @@ flags ~25% of all label/value pairs on the Technicolor captures (`System Uptime`
 `Model`), which would shred diagnostic data in `REDACT` and flood the review UI in `FLAG`. Widening
 `safe_value_patterns` far enough to make that path safe is separate work.
 
+### Idempotency Boundary
+
+Passes that emit a `PREFIX_<hash>` placeholder (serial, WPS PIN, account, password, SSID, token, CSRF, config, vendor JS
+vars, and the structural pass 7c) skip values `is_redacted()` already recognizes. Re-sanitizing an already-sanitized
+capture is therefore a byte-level no-op, even under the default random salt, and a placeholder can never be re-hashed.
+Pass 2 additionally admits `_` into its value class: without it the pass matched only the `SERIAL` prefix of its own
+output and prepended a fresh hash on every run, growing `SERIAL_<hash>_<hash>_<hash>...` without bound.
+
+The **format-preserving** passes (MAC, private IP, public IP, IPv6, email) deliberately do *not* take that guard and
+remain non-idempotent. Their placeholders are valid-looking values inside reserved ranges, so the guard cannot tell a
+placeholder from a real value: `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and `10.255.62.183` a
+legitimate private address, and both would pass through unredacted. Under ADR-12 the burden of proof falls on redacting
+less — cosmetic stability is not worth a leak. Two existing tests (`ipv6_compressed`,
+`test_full_flow_with_user_redactions`) pin this and fail if the guard is ever extended to these passes.
+
+Salt regeneration is a separate matter and is not a defect: `salt="auto"` mints a fresh salt per invocation and the salt
+is deliberately never persisted. Idempotency here comes from *skipping* already-redacted values, not from reproducing
+the same hash.
+
 ### Web Storage Scanner (Pass 0b)
 
 Detects `localStorage.setItem()` and `sessionStorage.setItem()` in inline scripts:

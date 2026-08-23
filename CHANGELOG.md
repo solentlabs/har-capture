@@ -41,9 +41,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **Re-sanitizing a capture no longer rewrites its existing placeholders.** The new structural rules match on markup
-  position rather than value shape, so a placeholder sitting in a value element matches as readily as a credential.
-  Values already recognized as redacted are now left untouched, keeping a fixture sweep idempotent for these passes.
+- **Re-sanitizing a capture no longer rewrites or compounds its placeholders.** Every pass that emits a `PREFIX_<hash>`
+  placeholder now skips values already recognized as redacted, so running `sanitize` over an already-sanitized capture
+  is a byte-level no-op — even under the default random salt. Previously each run re-hashed every placeholder, and
+  serials *grew*: pass 2's value pattern excluded `_`, so it matched only the `SERIAL` prefix of its own output and
+  prepended a fresh hash each time (`SERIAL_9f8e3528_9f8e3528_60ec920f`), without bound. This makes fixture sweeps over
+  sanitized captures produce no spurious diff.
+
+  The format-preserving passes (MAC, IPv4, IPv6, email) deliberately keep their previous behavior and stay
+  non-idempotent. Their placeholders are valid-looking values in reserved ranges and cannot be distinguished from real
+  ones — `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and `10.255.62.183` a legitimate private address.
+  Skipping those to buy cosmetic stability would pass real values through unredacted.
 
 ## [0.12.1] - 2026-08-19
 
