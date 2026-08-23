@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from har_capture.patterns.loader import resolve_patterns_arg
+from har_capture.patterns.redaction import is_fully_redacted
 from har_capture.validation.secrets import (
     Finding,
     check_content,
@@ -698,6 +699,205 @@ class TestCheckContentSerialInTable:
         check_content(html, "Entry 0 (content)", findings)
         serial_findings = [f for f in findings if "serial" in f.reason.lower()]
         assert len(serial_findings) >= 1, "Should flag serial number in sibling spans"
+
+
+class TestDeviceLabelCredentials:
+    """Labeled default credentials in the Technicolor Device Label block.
+
+    ``validate`` is documented as the step that "confirms nothing leaked", so
+    a plaintext default Wi-Fi password must be an error, not a warning and not
+    silence. Before this check the gate returned 0 errors on a capture holding
+    all four sticker values (issue #194).
+
+    All markup below is synthetic; the values are fabricated.
+    """
+
+    DEVICE_LABEL_BLOCK = (
+        '<div class="form-row "><span class="readonlyLabel">Default Network Name (SSID):</span>'
+        '<span class="value">WIFI-AAAA</span></div>\n'
+        '<div class="form-row odd"><span class="readonlyLabel">Default Password:</span>'
+        '<span class="value">orange4213table</span></div>'
+    )
+
+    def test_default_password_is_an_error(self) -> None:
+        """Test an unredacted labeled default password fails the gate."""
+        findings: list[Finding] = []
+        check_content(self.DEVICE_LABEL_BLOCK, "Entry 0 (content)", findings)
+        password_findings = [f for f in findings if "password" in f.reason.lower()]
+        assert len(password_findings) == 1, "Should flag the labeled default password"
+        assert password_findings[0].severity == "error", "A plaintext credential is an error"
+        assert password_findings[0].value == "orange4213table"
+
+    def test_default_ssid_is_a_warning(self) -> None:
+        """Test an unredacted labeled default SSID is reported as a warning."""
+        findings: list[Finding] = []
+        check_content(self.DEVICE_LABEL_BLOCK, "Entry 0 (content)", findings)
+        ssid_findings = [f for f in findings if "ssid" in f.reason.lower()]
+        assert len(ssid_findings) == 1, "Should flag the labeled default SSID"
+        assert ssid_findings[0].severity == "warning", "An SSID identifies but does not authenticate"
+
+    @pytest.mark.parametrize(
+        ("html", "expected_reason", "desc"),
+        [
+            (
+                '<h2><span id="priwifinet">Private Wi-Fi Network- </span>'
+                '<span class="connection_text">WIFI-AAAA</span></h2>',
+                "labeled field",
+                "hyphen_separated_heading",
+            ),
+            (
+                '<td headers="private-Name"><font class="wifi_ntwrk">WIFI-AAAA</font></td>',
+                "ssid-named element",
+                "attribute_anchored_cell",
+            ),
+            (
+                '<select id="mac_ssid"><option value="17">WIFI-AAAA</option></select>',
+                "ssid-named dropdown",
+                "select_option",
+            ),
+        ],
+    )
+    def test_unlabeled_ssid_surfaces_flagged(self, html: str, expected_reason: str, desc: str) -> None:
+        """Test SSIDs rendered without an adjacent label are still flagged."""
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        matched = [f for f in findings if expected_reason in f.reason.lower()]
+        assert len(matched) >= 1, f"{desc}: should flag the network name"
+        assert matched[0].value == "WIFI-AAAA"
+
+    def test_redacted_value_skipped_without_masking_a_later_leak(self) -> None:
+        """Test a redacted value is skipped while a later unredacted one still flags.
+
+        Guards the skip path itself: an early ``is_redacted`` hit must advance
+        the scan rather than abandon it.
+        """
+        html = (
+            '<td><font class="wifi_ntwrk">***REDACTED***</font></td>'
+            '<td><font class="wifi_ntwrk">WIFI-AAAA</font></td>'
+            '<select id="mac_ssid">'
+            '<option value="1">***REDACTED***</option>'
+            '<option value="2">WIFI-BBBB</option>'
+            "</select>"
+        )
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        flagged = {f.value for f in findings if "ssid" in f.reason.lower()}
+        assert flagged == {"WIFI-AAAA", "WIFI-BBBB"}, f"unexpected findings: {flagged}"
+
+    @pytest.mark.parametrize(
+        ("html", "desc"),
+        [
+            (
+                '<td><font class="wifi_ntwrk">***REDACTED***</font></td>',
+                "already_redacted_ssid_attributed_element",
+            ),
+            (
+                '<select id="mac_ssid"><option value="17">***REDACTED***</option></select>',
+                "already_redacted_select_option",
+            ),
+        ],
+    )
+    def test_redacted_values_alone_produce_no_findings(self, html: str, desc: str) -> None:
+        """Test content holding only redacted values yields nothing."""
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        assert [f for f in findings if "ssid" in f.reason.lower()] == [], desc
+
+    @pytest.mark.parametrize(
+        ("html", "desc"),
+        [
+            (
+                '$.i18n("<strong>Password:</strong> Password registered with the service provider")',
+                "i18n_help_text_password",
+            ),
+            (
+                '$.i18n("<strong>Network Name (SSID):</strong> Identifies your home network")',
+                "i18n_help_text_ssid",
+            ),
+            ('<th id="SourceSSIDIndex">Source SSID Index</th>', "table_column_heading"),
+            (
+                '<span class="readonlyLabel">Default Password:</span><span class="value">[REDACTED]</span>',
+                "already_redacted_placeholder",
+            ),
+        ],
+    )
+    def test_prose_headings_and_placeholders_not_flagged(self, html: str, desc: str) -> None:
+        """Test the checks stay silent on help text, headings, and redacted values."""
+        findings: list[Finding] = []
+        check_content(html, "Entry 0 (content)", findings)
+        noisy = [f for f in findings if "password" in f.reason.lower() or "ssid" in f.reason.lower()]
+        assert noisy == [], f"{desc}: should not be flagged, got {[f.reason for f in noisy]}"
+
+
+class TestContentCheckNotSkippedByStrayPlaceholder:
+    """A placeholder somewhere in a body must not skip the whole content check.
+
+    ``check_content`` guarded its early return with ``is_redacted``, a
+    single-value predicate that matches its allowlist families with
+    ``re.search``. A run of six or more zeros (``0{6,}``) or a literal ``XXX`` /
+    ``REDACTED`` anywhere in a body made the whole page look already-redacted —
+    209 of 750 committed fleet entries were skipped that way, including an XB10
+    page holding a plaintext default Wi-Fi password (issue #194).
+    """
+
+    LEAK_MARKUP = (
+        '<span class="readonlyLabel">Default Password:</span><span class="value">orange4213table</span>'
+    )
+
+    @pytest.mark.parametrize(
+        ("prefix", "desc"),
+        [
+            ("<p>CM MAC: 000000000000</p>", "zero_run_separatorless_mac"),
+            ("<p>Uptime counter: 0000000</p>", "zero_run_counter"),
+            ("<style>body{color:#000000}</style>", "zero_run_in_css_color"),
+            ("<p>Serial: XXX</p>", "xxx_placeholder"),
+            ("<p>Status: REDACTED</p>", "redacted_literal"),
+        ],
+    )
+    def test_stray_placeholder_does_not_suppress_a_real_leak(self, prefix: str, desc: str) -> None:
+        """Test a body mixing a placeholder token and a real credential still flags.
+
+        Each prefix is verified to actually trip the old ``is_redacted`` guard,
+        so the test would fail against the previous implementation rather than
+        passing for unrelated reasons.
+        """
+        body = prefix + self.LEAK_MARKUP
+        assert is_redacted(body), f"{desc}: precondition — this must trip the OLD guard"
+
+        findings: list[Finding] = []
+        check_content(body, "Entry 0 (content)", findings)
+        errors = [f for f in findings if f.severity == "error"]
+        assert errors, f"{desc}: the placeholder must not suppress the credential check"
+        assert any(f.value == "orange4213table" for f in errors), desc
+
+    def test_body_that_is_only_a_placeholder_is_still_skipped(self) -> None:
+        """Test the original intent is preserved: a wholly-redacted body is skipped."""
+        findings: list[Finding] = []
+        check_content("[REDACTED]", "Entry 0 (content)", findings)
+        assert findings == []
+
+    @pytest.mark.parametrize(
+        ("content", "expected", "desc"),
+        [
+            ("[REDACTED]", True, "static_placeholder"),
+            ("  PASS_a1b2c3d4  ", True, "hash_prefix_with_surrounding_space"),
+            ("***SERIAL***", True, "star_wrapped_placeholder"),
+            ("000000000000", True, "bare_zero_run"),
+            ("XX:XX:XX:XX:XX:XX", True, "format_preserving_mac"),
+            ("user_x@redacted.invalid", True, "format_preserving_email"),
+            ("<p>hunter2</p>", False, "markup"),
+            ("body{color:#000000}", False, "minified_css_with_zero_run"),
+            ('{"cls":"xxx","password":"hunter2"}', False, "minified_json_with_xxx"),
+            ('PASS_a1b2c3d4{"password":"x"}', False, "placeholder_prefixing_a_document"),
+            ("000000 and a real value", False, "placeholder_plus_prose"),
+            ("", False, "empty"),
+        ],
+    )
+    def test_is_fully_redacted_requires_the_whole_string(
+        self, content: str, expected: bool, desc: str
+    ) -> None:
+        """Test the whole-string predicate rejects mere containment."""
+        assert is_fully_redacted(content) is expected, desc
 
 
 class TestValidateHarBase64Content:

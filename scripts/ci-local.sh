@@ -109,9 +109,16 @@ else
 fi
 
 # ─── Step 4: integration (optional; requires chromium) ──────────────────────
+#
+# ``--cov-append`` mirrors CI's ``coverage`` job, which runs the unit suite with
+# ``--cov`` and then the integration suite with ``--cov-append`` so the gate
+# sees *combined* coverage. Without it, pytest's default ``addopts`` starts a
+# fresh coverage run over 26 tests and ``fail_under = 90`` rejects it at ~29% —
+# ``--integration`` could never pass, no matter the state of the tree.
 if [ "$INTEGRATION" = true ]; then
     echo -e "\n${YELLOW}[4/4] integration tests${NC}"
-    if "$PYTHON" -m pytest --tb=short -q -m "integration"; then
+    if "$PYTHON" -m pytest --tb=short -q -m "integration" \
+        --cov=har_capture --cov-append --cov-report=term-missing; then
         echo -e "${GREEN}✓ integration${NC}"
     else
         echo -e "${RED}✗ integration${NC}"

@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from har_capture.patterns.redaction import is_allowlisted, is_redacted
+from har_capture.patterns.redaction import is_allowlisted, is_fully_redacted, is_redacted
 
 # Load test data from fixture
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_redaction.json").read_text())
@@ -391,3 +391,32 @@ class TestErrorHandling:
             assert is_redacted("[REDACTED]", custom_patterns=custom_path)
         finally:
             Path(custom_path).unlink(missing_ok=True)
+
+
+class TestIsFullyRedactedInvalidPatterns:
+    """A malformed allowlist regex must be skipped, not crash the scan.
+
+    ``is_fully_redacted`` compiles every allowlist family at call time; a bad
+    pattern in a user-supplied ``--patterns`` file would otherwise abort the
+    whole-body guard and take ``check_content`` down with it.
+    """
+
+    # Passed flat: load_allowlist() merges a dict straight onto the builtin
+    # allowlist. Nesting it under an "allowlist" key silently contributes
+    # nothing and the test would pass without reaching either handler.
+    BAD_ALLOWLIST = {
+        "format_preserving_patterns": {"bad": {"pattern": "[unterminated"}},
+        "redaction_patterns": {"values": ["(also-unterminated"]},
+    }
+
+    def test_invalid_patterns_are_skipped_not_raised(self) -> None:
+        """Test malformed regexes in both families are skipped gracefully."""
+        assert is_fully_redacted("SomeValue", self.BAD_ALLOWLIST) is False
+
+    def test_valid_patterns_still_match_alongside_invalid_ones(self) -> None:
+        """Test a good pattern still matches when a bad one precedes it."""
+        allowlist = {
+            "format_preserving_patterns": {"bad": {"pattern": "[unterminated"}},
+            "redaction_patterns": {"values": ["(bad"]},
+        }
+        assert is_fully_redacted("[REDACTED]", allowlist) is True

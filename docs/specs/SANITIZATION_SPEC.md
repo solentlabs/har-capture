@@ -272,33 +272,34 @@ numbers.
 The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2b,
 7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
-| Pass | Scanner                       | Pattern                                             | Redaction                              |
-| ---- | ----------------------------- | --------------------------------------------------- | -------------------------------------- |
-| 0    | Custom patterns               | Domain-specific PII regex                           | Per-pattern prefix                     |
-| 0b   | Web storage                   | `localStorage.setItem('KEY', 'VALUE')`              | Auto-redact if key is sensitive        |
-| 1    | MAC addresses                 | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`             | `hasher.hash_mac()`                    |
-| 2    | Serial numbers (inline)       | `\bSN\b\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`     |
-| 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`     |
-| 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`     |
-| 2d   | WPS / pairing / default PINs  | Known PIN label + 8-digit value (issue #47)         | `hasher.hash_value(val, "PIN")`        |
-| 2e   | Vendor-format serials         | High-confidence serial_number detectors, per token  | `hasher.hash_value(val, "SERIAL")`     |
-| 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value     | `hasher.hash_value(val, "ACCOUNT")`    |
-| 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)             | `hasher.hash_ip(ip, is_private=True)`  |
-| 5    | Public IPs                    | Non-private, non-reserved                           | `hasher.hash_ip(ip, is_private=False)` |
-| 6    | IPv6 addresses                | Full + compressed, validated via `ipaddress`        | `hasher.hash_ipv6()`                   |
-| 7    | Passwords/passphrases         | `password=value`, `passphrase=value`                | `hasher.hash_value(val, "PASS")`       |
-| 7a   | SSID text labels              | SSID labels in HTML text nodes                      | `hasher.hash_value(val, "WIFI")`       |
-| 7b   | JS password objects           | JavaScript object password fields                   | `hasher.hash_value(val, "PASS")`       |
-| 8    | Password inputs               | `<input type="password" value="...">`               | `hasher.hash_value(val, "PASS")`       |
-| 8b   | SSID inputs                   | SSID-related input fields                           | `hasher.hash_value(val, "WIFI")`       |
-| 9    | Session tokens                | 20+ char alphanumeric with label prefix             | `hasher.hash_value(val, "TOKEN")`      |
-| 10   | CSRF tokens                   | CSRF tokens in meta tags                            | `hasher.hash_value(val, "CSRF")`       |
-| 11   | Email addresses               | `user+tag@sub.domain.co.uk`                         | `hasher.hash_email()`                  |
-| 12   | Config paths                  | `.cfg` file references                              | `hasher.hash_value(val, "CONFIG")`     |
-| 13   | Vendor JS vars                | Motorola `var CurrentPw_24g = '...'`                | `hasher.hash_value(val, "PASS")`       |
-| 14   | Pipe-delimited (tagValueList) | `var name = "val1\|val2\|val3"`                     | Per-value heuristic analysis           |
-| 15   | Pipe-delimited (other)        | Other pipe-delimited variables                      | Per-value heuristic analysis           |
-| 16   | SSID fields in JS             | `ssid_24g: 'value'`, `guest_ssid: 'value'`          | `hasher.hash_value(val, "WIFI")`       |
+| Pass | Scanner                       | Pattern                                             | Redaction                               |
+| ---- | ----------------------------- | --------------------------------------------------- | --------------------------------------- |
+| 0    | Custom patterns               | Domain-specific PII regex                           | Per-pattern prefix                      |
+| 0b   | Web storage                   | `localStorage.setItem('KEY', 'VALUE')`              | Auto-redact if key is sensitive         |
+| 1    | MAC addresses                 | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`             | `hasher.hash_mac()`                     |
+| 2    | Serial numbers (inline)       | `\bSN\b\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`      |
+| 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`      |
+| 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`      |
+| 2d   | WPS / pairing / default PINs  | Known PIN label + 8-digit value (issue #47)         | `hasher.hash_value(val, "PIN")`         |
+| 2e   | Vendor-format serials         | High-confidence serial_number detectors, per token  | `hasher.hash_value(val, "SERIAL")`      |
+| 3    | Account/subscriber IDs        | `Account\|Subscriber\|Customer\|Device` + value     | `hasher.hash_value(val, "ACCOUNT")`     |
+| 4    | Private IPs                   | RFC 1918 ranges (preserves gateway IPs)             | `hasher.hash_ip(ip, is_private=True)`   |
+| 5    | Public IPs                    | Non-private, non-reserved                           | `hasher.hash_ip(ip, is_private=False)`  |
+| 6    | IPv6 addresses                | Full + compressed, validated via `ipaddress`        | `hasher.hash_ipv6()`                    |
+| 7    | Passwords/passphrases         | `password=value`, `passphrase=value`                | `hasher.hash_value(val, "PASS")`        |
+| 7a   | SSID text labels              | SSID labels in HTML text nodes                      | `hasher.hash_value(val, "WIFI")`        |
+| 7b   | JS password objects           | JavaScript object password fields                   | `hasher.hash_value(val, "PASS")`        |
+| 7c   | Structural label/value        | Value alone in its own element; SSID-named elements | `hasher.hash_value(val, "PASS"/"WIFI")` |
+| 8    | Password inputs               | `<input type="password" value="...">`               | `hasher.hash_value(val, "PASS")`        |
+| 8b   | SSID inputs                   | SSID-related input fields                           | `hasher.hash_value(val, "WIFI")`        |
+| 9    | Session tokens                | 20+ char alphanumeric with label prefix             | `hasher.hash_value(val, "TOKEN")`       |
+| 10   | CSRF tokens                   | CSRF tokens in meta tags                            | `hasher.hash_value(val, "CSRF")`        |
+| 11   | Email addresses               | `user+tag@sub.domain.co.uk`                         | `hasher.hash_email()`                   |
+| 12   | Config paths                  | `.cfg` file references                              | `hasher.hash_value(val, "CONFIG")`      |
+| 13   | Vendor JS vars                | Motorola `var CurrentPw_24g = '...'`                | `hasher.hash_value(val, "PASS")`        |
+| 14   | Pipe-delimited (tagValueList) | `var name = "val1\|val2\|val3"`                     | Per-value heuristic analysis            |
+| 15   | Pipe-delimited (other)        | Other pipe-delimited variables                      | Per-value heuristic analysis            |
+| 16   | SSID fields in JS             | `ssid_24g: 'value'`, `guest_ssid: 'value'`          | `hasher.hash_value(val, "WIFI")`        |
 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
@@ -318,13 +319,91 @@ deliberately **outside** `_sanitize_string_patterns`' perf length guard, so seri
 and
 [ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware).
 
+### Sibling-Element and Structural Label/Value Rules
+
 **Sibling-element rule (passes 2, 2b, 2d):** The tag chain between a label and its value — `(?:<[^>]*>\s*)*` — permits
 whitespace between tags, so label/value pairs rendered in sibling elements match (e.g. Technicolor .jst on the XB6/XB7/
-XB8 family renders `<span class="readonlyLabel">Serial Number:</span>` with the value in a following sibling
+XB8/XB10 family renders `<span class="readonlyLabel">Serial Number:</span>` with the value in a following sibling
 `<span class="value">`). In passes 2 and 2d the separator-plus-tag run is captured and re-emitted verbatim, so redaction
 replaces only the value and preserves the intermediate markup — sanitized fixtures keep their DOM structure. The same
 whitespace-tolerant chain is used by the `serial_number` / `wps_pin` patterns in `pii.json` (`check_for_pii`) and the
 `SERIAL_PATTERNS` detectors in `validation/secrets.py`.
+
+**Structural label/value rule (pass 7c).** A bare tag chain is too loose for credential labels: its `\s*` also runs
+through ordinary prose, so gateway help text like
+`$.i18n("<strong>Password:</strong> Enter the Password you registered")` matches the word "Enter". Credential and SSID
+labels therefore use a *structural* rule instead of a lexical one — the value must occupy its **own element**:
+
+```text
+LABEL:  </tag>  <tag>  VALUE  </tag>
+        ^^^^^^  ^^^^^         ^^^^^
+        closes  opens         value is the element's entire text content
+```
+
+Help-text prose shares a text node with its `<strong>` label; a sticker value sits alone in `<span class="value">`.
+Requiring label-close then value-open then text then element-close is what separates them. Measured across the committed
+fleet captures this matches the four Device Label blocks and nothing else, where looser variants also matched minified
+jQuery and i18n prose.
+
+Pass 7c applies four patterns, all defined once in `sanitization/html.py` and **imported** by `validation/secrets.py`
+and `check_for_pii` so the three detection paths cannot diverge:
+
+| Pattern                   | Shape                                                               | Prefix |
+| ------------------------- | ------------------------------------------------------------------- | ------ |
+| `SIBLING_PASSWORD_RE`     | `password`/`passphrase`/`psk`/`wpa key` label, value in own element | `PASS` |
+| `SIBLING_SSID_RE`         | `ssid`/`network name`/`wi-fi network` label, `:` or `-` separator   | `WIFI` |
+| `SSID_ATTRIBUTE_RE`       | Element whose `class`/`id` names it an SSID holder                  | `WIFI` |
+| `iter_ssid_option_values` | `<option>` text inside an SSID-named `<select>`                     | `WIFI` |
+
+The value must also be a **single whitespace-free token**. The element rule alone still matched ordinary gateway markup
+that the fleet captures happen not to contain — `<dt>Password:</dt><dd>Not set</dd>` and
+`<div class="hint">Must be at least 8 characters</div>` were both redacted. Every real sticker value is one token; every
+prose and status false positive is not. The accepted cost is that an SSID containing a space is not matched.
+
+Guards, all applied by `is_structural_value_sensitive()` so the sanitizer, `validate`, and `check_for_pii` agree:
+
+- Bare `key` is dropped from the password vocabulary — a false-positive magnet across element boundaries (`metaKey`)
+- `<th>` is excluded from `SSID_ATTRIBUTE_RE`: a column heading is not a value ("Source SSID Index")
+- An attribute whose SSID token carries a helper suffix (`ssid_help`, `ssid-label`, `ssidTitle`, `ssid_desc`) names copy
+  *about* an SSID, not one — matching `ssid` as a bare substring redacted "Choose a name for your network"
+- Text ending in a separator is excluded — that is a label (`<span id="priwifinet">Private Wi-Fi Network- </span>`)
+- `<option value="">` is a chooser placeholder (`-- Select --`), never a network
+- Bare integers in an option list are row indices, mirroring the universal `^\d+$` entry in `SAFE_PATTERNS`
+- Known-safe status words (`Enabled`, `Disabled`, `N/A`) are rejected via `is_safe_value()`
+- Values passing `is_redacted()` are left untouched. These rules match on markup structure rather than value shape, so a
+  placeholder in the value element matches as readily as a credential; without the guard, re-sanitizing a fixture would
+  rewrite `[REDACTED]` to `PASS_<hash>` and churn captures that were already safe
+
+**Mime-type symmetry.** `validate` checks every response body, but `sanitize_html` runs only for HTML/XML. The pass is
+therefore exposed as `redact_structural_credentials()` and applied to non-HTML text bodies too, so validate can never
+report an error that no sanitize run could clear.
+
+**Why the heuristic engine does not cover this.** The engine classifies both leaked values correctly when handed them
+(`wifi_ssid` for a default SSID, `credential` for a three-word passphrase), but HTML label/value text is never routed to
+`analyze_value` — in `html.py` heuristics reach only `_sanitize_pipe_value` and the Web Storage scanner. That is why the
+leak was identical in all three heuristic modes. Routing span text through the engine was measured and rejected: it
+flags ~25% of all label/value pairs on the Technicolor captures (`System Uptime`, `DHCP Lease Time`, `BOOT Version`,
+`Model`), which would shred diagnostic data in `REDACT` and flood the review UI in `FLAG`. Widening
+`safe_value_patterns` far enough to make that path safe is separate work.
+
+### Idempotency Boundary
+
+Passes that emit a `PREFIX_<hash>` placeholder (serial, WPS PIN, account, password, SSID, token, CSRF, config, vendor JS
+vars, and the structural pass 7c) skip values `is_redacted()` already recognizes. Re-sanitizing an already-sanitized
+capture is therefore a byte-level no-op, even under the default random salt, and a placeholder can never be re-hashed.
+Pass 2 additionally admits `_` into its value class: without it the pass matched only the `SERIAL` prefix of its own
+output and prepended a fresh hash on every run, growing `SERIAL_<hash>_<hash>_<hash>...` without bound.
+
+The **format-preserving** passes (MAC, private IP, public IP, IPv6, email) deliberately do *not* take that guard and
+remain non-idempotent. Their placeholders are valid-looking values inside reserved ranges, so the guard cannot tell a
+placeholder from a real value: `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and `10.255.62.183` a
+legitimate private address, and both would pass through unredacted. Under ADR-12 the burden of proof falls on redacting
+less — cosmetic stability is not worth a leak. Two existing tests (`ipv6_compressed`,
+`test_full_flow_with_user_redactions`) pin this and fail if the guard is ever extended to these passes.
+
+Salt regeneration is a separate matter and is not a defect: `salt="auto"` mints a fresh salt per invocation and the salt
+is deliberately never persisted. Idempotency here comes from *skipping* already-redacted values, not from reproducing
+the same hash.
 
 ### Web Storage Scanner (Pass 0b)
 

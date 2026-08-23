@@ -30,7 +30,12 @@ from har_capture.patterns import (
     load_sensitive_patterns,
 )
 from har_capture.sanitization.collector import RedactionCollector
-from har_capture.sanitization.html import is_valid_ip_address, redact_vendor_serials, sanitize_html
+from har_capture.sanitization.html import (
+    is_valid_ip_address,
+    redact_structural_credentials,
+    redact_vendor_serials,
+    sanitize_html,
+)
 from har_capture.sanitization.report import ConfidenceLevel
 
 if TYPE_CHECKING:
@@ -1343,7 +1348,17 @@ def _sanitize_response_content(
             custom_patterns=custom_patterns,
             heuristics=heuristics,
         )
-    elif "application/json" in mime_type:
+        return
+
+    # Structurally-located credentials (HTML engine pass 7c) for every other
+    # text-bearing body. `validate` checks *all* response bodies, so a device
+    # label block embedded in a `.js` or `application/javascript` body would
+    # otherwise be reported as an error that no sanitize run could clear —
+    # sanitize and validate must agree on what they can each see (ADR-14).
+    if hasher is not None and collector is not None and content.get("encoding") != "base64":
+        content["text"] = redact_structural_credentials(content["text"], hasher, collector, custom_patterns)
+
+    if "application/json" in mime_type:
         try:
             data = json.loads(content["text"])
             content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))

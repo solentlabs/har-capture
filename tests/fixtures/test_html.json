@@ -160,6 +160,34 @@
     {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"}
   ],
 
+  "device_label_block_cases": [
+    {"html": "<font class=\"wifi_ntwrk\">A</font>", "redacted_values": ["A"], "preserved_markup": "class=\"wifi_ntwrk\"", "id": "ssid_attribute_single_character"},
+    {"html": "<div class=\"module forms dev_label\"><h2>Device Label Information</h2>\n<div class=\"form-row \"><span class=\"readonlyLabel\">Default Network Name (SSID):</span><span class=\"value\">WIFI-AAAA</span></div>\n<div class=\"form-row odd\"><span class=\"readonlyLabel\">Default Password:</span><span class=\"value\">orange4213table</span></div>\n<div class=\"form-row \"><span class=\"readonlyLabel\">WPS PIN:</span><span class=\"value\">18345592</span></div>\n<div class=\"form-row odd \"><span class=\"readonlyLabel\" id=\"sernum\">Serial Number:</span><span class=\"value\">4106844207105213</span></div></div>", "redacted_values": ["WIFI-AAAA", "orange4213table", "18345592", "4106844207105213"], "preserved_markup": "<span class=\"readonlyLabel\">Default Password:</span>", "id": "technicolor_device_label_block_all_four"},
+    {"html": "<div class=\"form-row odd\">\n\t<span class=\"readonlyLabel\">Default Password:</span>\n\t<span class=\"value\">\n\torange4213table</span>\n</div>", "redacted_values": ["orange4213table"], "preserved_markup": "<span class=\"value\">", "id": "sibling_span_default_password_whitespace"},
+    {"html": "<span class=\"readonlyLabel\">Default Network Name (SSID):</span><span class=\"value\">WIFI-AAAA</span>", "redacted_values": ["WIFI-AAAA"], "preserved_markup": "<span class=\"value\">", "id": "sibling_span_default_ssid_parenthetical_label"},
+    {"html": "<h2><div class=\"ssid-style\"><span id=\"priwifinet\">Private Wi-Fi Network- </span>\n<span class=\"connection_text\">WIFI-AAAA</span></div></h2>", "redacted_values": ["WIFI-AAAA"], "preserved_markup": "<span class=\"connection_text\">", "id": "sibling_span_ssid_hyphen_separator"},
+    {"html": "<td headers=\"private-Name\"><b><font color=\"black\" class=\"wifi_ntwrk\">WIFI-AAAA</font></b></td>", "redacted_values": ["WIFI-AAAA"], "preserved_markup": "class=\"wifi_ntwrk\"", "id": "ssid_attribute_anchored_table_cell"},
+    {"html": "<select name=\"mac_ssid\" id=\"mac_ssid\"><option value=\"1\">1</option><option value=\"17\">WIFI-AAAA</option></select>", "redacted_values": ["WIFI-AAAA"], "preserved_markup": "<option value=\"17\">", "id": "ssid_select_option"}
+  ],
+
+  "device_label_preserve_cases": [
+    {"html": "<label for=\"pw\">Password:</label>\n<div class=\"hint\">Must be at least 8 characters</div>", "preserved": "Must be at least 8 characters", "id": "password_hint_text_multiword"},
+    {"html": "<dt>Password:</dt>\n<dd>Not set</dd>", "preserved": "Not set", "id": "password_status_not_set"},
+    {"html": "<td>SSID:</td><td>Enabled</td>", "preserved": "Enabled", "id": "ssid_status_enabled"},
+    {"html": "<div class=\"ssid_help\">Choose a name for your network</div>", "preserved": "Choose a name for your network", "id": "ssid_help_class_prose"},
+    {"html": "<div class=\"ssid-label\">Network</div>", "preserved": "Network", "id": "ssid_label_class_single_word"},
+    {"html": "<div class=\"ssidTitle\">Wireless</div>", "preserved": "Wireless", "id": "ssid_title_class"},
+    {"html": "<select id=\"ssid_select\"><option value=\"\">-- Select --</option></select>", "preserved": "-- Select --", "id": "ssid_select_empty_value_placeholder"},
+    {"html": "<select id=\"ssid_select\"><option value=\"0\">Disabled</option></select>", "preserved": "Disabled", "id": "ssid_select_status_option"},
+    {"html": "<select id=\"wl_ssid_idx\" class=\"ssidsel\"><option>2.4 GHz</option><option>5 GHz</option></select>", "preserved": "2.4 GHz", "id": "ssid_select_band_option"},
+    {"html": "$(\"#dyndnstip4\").html($.i18n(\"<strong>Password:</strong> Password registered with the service provider\"))", "preserved": "Password registered with the service provider", "id": "i18n_help_text_password_prose"},
+    {"html": "$(\"#wireedttip1\").html($.i18n(\"<strong>Network Name (SSID):</strong> Identifies your home network from other nearby networks\"))", "preserved": "Identifies your home network", "id": "i18n_help_text_ssid_prose"},
+    {"html": "<th id=\"SourceSSIDIndex\" width=\"20%\">Source SSID Index</th><th id=\"DestSSIDIndex\" width=\"30%\">Destination SSID Index</th>", "preserved": "Source SSID Index", "id": "ssid_table_column_headings"},
+    {"html": "<span id=\"priwifinet\">Private Wi-Fi Network- </span>", "preserved": "Private Wi-Fi Network-", "id": "ssid_label_element_itself"},
+    {"html": "<select id=\"mac_ssid\"><option value=\"1\">17</option></select>", "preserved": "17", "id": "ssid_select_bare_index_option"},
+    {"html": "<span class=\"readonlyLabel\">Default Password:</span><span class=\"value\">[REDACTED]</span>", "preserved": "[REDACTED]", "id": "already_redacted_placeholder_untouched"}
+  ],
+
   "expected_patterns": [
     "mac_address",
     "email",
