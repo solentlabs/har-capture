@@ -1167,7 +1167,10 @@ def check_for_pii(
     ):
         for match in sibling_pattern.finditer(content):
             value = match.group(2)
-            if not is_structural_value_sensitive(value, custom_patterns) or is_allowlisted(value, allowlist):
+            # No separate allowlist check: is_structural_value_sensitive()
+            # already runs is_redacted(), and both resolve to the same
+            # _check_patterns() over the same loaded allowlist.
+            if not is_structural_value_sensitive(value, custom_patterns):
                 continue
             findings.append(
                 {
@@ -1179,8 +1182,6 @@ def check_for_pii(
             )
 
     for option_value, option_offset in iter_ssid_option_values(content, custom_patterns):
-        if is_allowlisted(option_value, allowlist):
-            continue
         findings.append(
             {
                 "pattern": "ssid_select_option",

@@ -32,6 +32,7 @@ import pytest
 from har_capture.patterns import load_allowlist, load_pii_patterns
 from har_capture.sanitization.html import (
     check_for_pii,
+    is_structural_value_sensitive,
     sanitize_html,
 )
 from har_capture.sanitization.report import HeuristicMode
@@ -499,6 +500,64 @@ class TestIdempotencyBoundary:
         thrice = sanitize_html(twice)
         assert once == twice == thrice, f"{desc}: re-sanitizing should be a no-op"
 
+    # Each case carries both a redacted and a live form of the SAME markup. The
+    # live form proves the pass's pattern really reaches that value; without it
+    # a test asserting "output == input" passes trivially whenever the pattern
+    # simply never matched.
+    GUARD_SKIP_CASES = [
+        (
+            "<span>Serial Number:</span><span>SERIAL_a1b2c3d4</span>",
+            "<span>Serial Number:</span><span>4106844207105213</span>",
+            "serial_label",
+        ),
+        (
+            "<span>WPS PIN:</span><span>00000000</span>",
+            "<span>WPS PIN:</span><span>18345592</span>",
+            "wps_pin",
+        ),
+        (
+            "<p>token=XXXXXXXXXXXXXXXXXXXXXX</p>",
+            "<p>token=a9f3k2m7q1w8e4r6t5y0u3</p>",
+            "session_token",
+        ),
+        (
+            '<meta name="csrf-token" content="CSRF_a1b2c3d4">',
+            '<meta name="csrf-token" content="k2m7q1w8e4r6">',
+            "csrf_token",
+        ),
+        (
+            "<p>Config File Name: CONFIG_a1b2c3d4.cfg</p>",
+            "<p>Config File Name: cust00219abc.cfg</p>",
+            "config_path",
+        ),
+        (
+            "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>",
+            "<script>var CurrentPw = 'hunter2xyz';</script>",
+            "motorola_password",
+        ),
+    ]
+
+    @pytest.mark.parametrize(
+        ("redacted_html", "live_html", "desc"),
+        GUARD_SKIP_CASES,
+        ids=[c[2] for c in GUARD_SKIP_CASES],
+    )
+    def test_already_redacted_values_are_left_untouched(
+        self, redacted_html: str, live_html: str, desc: str
+    ) -> None:
+        """Test each prefix-hash pass skips a value that is already a placeholder.
+
+        Exercises the guard's *skip* branch specifically — the path that keeps a
+        sweep from re-hashing, and the one a passing suite can silently leave
+        uncovered.
+        """
+        assert sanitize_html(live_html, salt="test") != live_html, (
+            f"{desc}: precondition — the pass must actually match this markup"
+        )
+        assert sanitize_html(redacted_html, salt="test") == redacted_html, (
+            f"{desc}: an already-redacted value must be left untouched"
+        )
+
     def test_serial_placeholder_does_not_compound(self) -> None:
         """Test a serial placeholder is never re-hashed into a chain.
 
@@ -510,6 +569,33 @@ class TestIdempotencyBoundary:
         for _ in range(4):
             html = sanitize_html(html, salt="fixed-salt")
         assert html.count("SERIAL_") == 1, f"placeholder compounded: {html}"
+
+    STRUCTURAL_VALUE_CASES = [
+        ("Private Wi-Fi Network-", False, "label_trailing_hyphen"),
+        ("Serial Number:", False, "label_trailing_colon"),
+        ("", False, "empty_value"),
+        ("17", False, "bare_index"),
+        ("Enabled", False, "safe_status_word"),
+        ("PASS_a1b2c3d4", False, "already_redacted"),
+        ("orange4213table", True, "real_credential"),
+        ("XFSETUP-9210", True, "real_ssid"),
+        ("A", True, "single_character_ssid"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("value", "expected", "desc"),
+        STRUCTURAL_VALUE_CASES,
+        ids=[c[2] for c in STRUCTURAL_VALUE_CASES],
+    )
+    def test_structural_value_predicate(self, value: str, expected: bool, desc: str) -> None:
+        """Test the shared predicate directly, including branches no markup reaches.
+
+        A label whose text ends in a separator is rejected here, but the
+        patterns' no-whitespace value rule means real label markup like
+        ``Private Wi-Fi Network- `` never reaches the predicate — so the branch
+        needs a direct test to be exercised at all.
+        """
+        assert is_structural_value_sensitive(value) is expected, desc
 
     FORMAT_PRESERVING_CASES = [
         ("<p>02:aa:bb:cc:dd:ee</p>", "02:aa:bb:cc:dd:ee", "locally_administered_mac"),
