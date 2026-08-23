@@ -90,6 +90,83 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
     return _check_patterns(value, allowlist)
 
 
+# A redaction placeholder is one opaque token: alphanumerics plus the punctuation
+# the placeholder formats actually use (`PASS_a1b2c3d4`, `XX:XX:XX:XX:XX:XX`,
+# `user_x@redacted.invalid`, `***SERIAL***`, `[REDACTED]`, `2001:db8::1`).
+# Structural punctuation — braces, quotes, semicolons, equals — means the string
+# is a document, not a placeholder.
+_PLACEHOLDER_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-.:@\[\]*/]+")
+
+
+def is_fully_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
+    """Check if a string is *entirely* a redaction placeholder.
+
+    :func:`is_redacted` answers "does this value look redacted", and the
+    allowlist families backing it are matched with :func:`re.search` — correct
+    for a single field value, wrong for a whole document. A minified CSS body
+    carrying ``#000000``, a JSON body with ``"ver":"0.000000"``, or any body
+    containing the literal ``XXX`` would otherwise report as fully redacted and
+    skip every check the caller meant to run.
+
+    This predicate requires the whole string to be one placeholder token: no
+    whitespace, no markup, no structural punctuation, and a match that accounts
+    for the entire token rather than appearing somewhere inside it.
+
+    Args:
+        value: String to check
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        True if the whole string is a redaction placeholder
+
+    Examples:
+        >>> is_fully_redacted("[REDACTED]")
+        True
+        >>> is_fully_redacted("body{color:#000000}")
+        False
+        >>> is_fully_redacted("<p>hunter2</p>")
+        False
+    """
+    stripped = value.strip()
+    if not stripped or "<" in stripped or not _PLACEHOLDER_TOKEN_RE.fullmatch(stripped):
+        return False
+
+    allowlist = load_allowlist(custom_patterns)
+
+    if stripped in allowlist.get("static_placeholders", {}).get("values", []):
+        return True
+
+    # A hash prefix must account for the whole token, not just start it —
+    # `PASS_a1b2c3d4somethingelse` is not a placeholder.
+    for prefix in allowlist.get("hash_prefixes", {}).get("values", []):
+        if re.fullmatch(re.escape(prefix) + r"\w+", stripped):
+            return True
+
+    # Format-preserving patterns describe single-value formats and are
+    # deliberately one-sided (an IPv6 documentation *prefix*, an email
+    # *suffix*), so neither end can be anchored here. The token-class guard
+    # above is what stops a document from reaching this point.
+    format_patterns = allowlist.get("format_preserving_patterns", {})
+    for pattern_def in format_patterns.values():
+        if isinstance(pattern_def, dict) and "pattern" in pattern_def:
+            try:
+                if re.search(pattern_def["pattern"], stripped, re.IGNORECASE):
+                    return True
+            except re.error:
+                _LOGGER.warning("Skipping invalid format-preserving regex pattern")
+
+    # These are the unanchored ones (`XXX+`, `0{6,}`, `REDACTED`) — they must
+    # consume the entire token here, not merely appear within it.
+    for pattern in allowlist.get("redaction_patterns", {}).get("values", []):
+        try:
+            if re.fullmatch(pattern, stripped, re.IGNORECASE):
+                return True
+        except re.error:  # noqa: PERF203 - must check each pattern individually
+            _LOGGER.warning("Skipping invalid regex pattern in allowlist")
+
+    return False
+
+
 def is_allowlisted(value: str, allowlist: dict[str, Any] | None = None) -> bool:
     """Check if a value is in the allowlist.
 

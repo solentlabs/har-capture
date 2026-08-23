@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 from har_capture.patterns import (
@@ -31,6 +32,7 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
+from har_capture.patterns.redaction import is_redacted
 
 if TYPE_CHECKING:
     from typing import Any
@@ -52,6 +54,181 @@ _ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
 
 # MAC address pattern for pipe-delimited values (exact match)
 _PIPE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
+
+
+# Sibling-element label/value pairs where the value occupies its OWN element.
+# Technicolor .jst (XB6/XB7/XB8/XB10 family) renders the "Device Label
+# Information" sticker block on network_setup.jst as:
+#
+#     <span class="readonlyLabel">Default Password:</span>
+#     <span class="value">orange4213table</span>
+#
+# Passes 2/2b/2d reach their values with a bare tag chain `(?:<[^>]*>\s*)*`,
+# but a bare chain is too loose for credential labels: its `\s*` also runs
+# through ordinary prose, so gateway help text such as
+#
+#     $.i18n("<strong>Password:</strong> Enter the Password you registered")
+#
+# matches the word "Enter". The discriminator is structural, not lexical —
+# help-text prose shares a text node with its label element, while a sticker
+# value opens its own element and is that element's entire text content.
+#
+# The value may not contain whitespace. Every sticker value across the
+# committed fleet is a single token, while every hint, status, and prose
+# false positive is not:
+#
+#     <label>Password:</label><div class="hint">Must be at least 8 characters</div>
+#     <dt>Password:</dt><dd>Not set</dd>
+#
+# Requiring the element's entire text to be one whitespace-free token rejects
+# those without needing to know what the words mean. The cost is a genuine
+# limitation: an SSID containing a space is not matched by these rules. That is
+# the deliberate side of the ADR-12 trade — a space-containing element text
+# cannot be told apart from prose structurally, and over-redacting gateway UI
+# copy is the worse failure.
+#
+# The optional `\([^)]{0,24}\)` group carries the parenthetical qualifier
+# Technicolor puts between label and colon ("Default Network Name (SSID):").
+#
+# Exported (not underscore-private) because `validation/secrets.py` imports
+# these: the sanitizer and the validator must not diverge on what counts as a
+# labeled default credential. See ADR-14.
+def _sibling_label_value_pattern(labels: str, separators: str = ":") -> re.Pattern[str]:
+    """Build a pattern matching `<tag>LABEL:</tag><tag>VALUE</tag>` pairs.
+
+    Args:
+        labels: Regex alternation of label texts (already escaped/grouped).
+        separators: Accepted label/value separator characters. Each is escaped
+            individually — interpolating them raw would let a future addition
+            silently form a range (``":-="`` becoming ``[:-=]``, which matches
+            ``;`` and ``<``).
+
+    Returns:
+        Compiled pattern with group 1 = label through the value element's
+        opening tag (re-emitted verbatim so markup is preserved) and group 2 =
+        the value itself.
+    """
+    separator_class = "[" + "".join(re.escape(c) for c in separators) + "]"
+    return re.compile(
+        r"((?:" + labels + r")\s*(?:\([^)]{0,24}\))?\s*" + separator_class + r"\s*"
+        r"</[a-zA-Z][^>]*>\s*"  # label element closes
+        r"<[a-zA-Z][^>]*>\s*)"  # value element opens
+        r"([^<>\s]+)"  # value: the element's entire text, one token
+        r"(?=\s*</)",  # value element closes
+        re.IGNORECASE,
+    )
+
+
+# Label vocabulary mirrors pass 7 minus bare `key`, which is a false-positive
+# magnet once the match may cross element boundaries (`metaKey`, `monkey`).
+SIBLING_PASSWORD_RE = _sibling_label_value_pattern(r"password|passphrase|psk|wpa[0-9]*\s*key")
+
+# SSID vocabulary extends pass 7a with the connection-status heading form,
+# which separates label from value with a hyphen rather than a colon:
+#     <span id="priwifinet">Private Wi-Fi Network- </span>
+#     <span class="connection_text">Andrew</span>
+# That heading renders the *live* SSID, not the sticker default — the xb6
+# capture carries a household member's given name there.
+SIBLING_SSID_RE = _sibling_label_value_pattern(r"ssid|network\s*name|wi-?fi\s*network", separators=":-")
+
+# Attribute-anchored SSID values: the element naming itself an SSID holder via
+# class/id carries the network name as its text, with no adjacent label at all.
+#     <td headers="private-Name"><b><font class="wifi_ntwrk">XFSETUP-9210</font></b></td>
+#
+# The attribute must name a *value* holder. Classes like `ssid_help`,
+# `ssid-label`, `ssidTitle`, and `ssid_desc` decorate copy about the SSID rather
+# than holding one, and matching `ssid` as a bare substring redacted their text
+# ("Choose a name for your network"). Helper suffixes are therefore excluded,
+# and `<th>` stays excluded because a column heading is not a value
+# ("Source SSID Index").
+_SSID_ATTRIBUTE_HELPER_SUFFIX = r"(?:help|label|desc|descr|description|title|tip|hint|note|msg|message|text|error|caption|legend|head|header)"
+SSID_ATTRIBUTE_RE = re.compile(
+    r"(<(?!th[\s>])[a-zA-Z][\w-]*[^>]*\b(?:class|id)\s*=\s*[\"'][^\"']*"
+    r"(?:ssid|wifi_ntwrk|wifi[-_]?network|priwifinet|wireless[-_]?name)"
+    r"(?![-_]?" + _SSID_ATTRIBUTE_HELPER_SUFFIX + r")"
+    r"[^\"']*[\"'][^>]*>\s*)"
+    r"([^<>\s]+)"  # value: the element's entire text, one token
+    r"(?=\s*</)",
+    re.IGNORECASE,
+)
+
+# SSID values listed as the options of an SSID-named <select>. The network name
+# has no label and no attribute of its own here — only the enclosing control
+# identifies it:
+#     <select name="mac_ssid" id="mac_ssid"><option value="17">XFSETUP-9210</option></select>
+SSID_SELECT_RE = re.compile(
+    r"<select\b[^>]*\b(?:name|id|class)\s*=\s*[\"'][^\"']*ssid[^\"']*[\"'][^>]*>.*?</select>",
+    re.IGNORECASE | re.DOTALL,
+)
+# Group 1 is the opening tag, group 2 the option text. An option whose `value`
+# attribute is empty is a chooser placeholder ("-- Select --"), never a network.
+SSID_OPTION_RE = re.compile(
+    r"(<option\b(?![^>]*\bvalue\s*=\s*[\"']\s*[\"'])[^>]*>\s*)([^<>\s]+)(?=\s*</option>)",
+    re.IGNORECASE,
+)
+
+
+def is_structural_value_sensitive(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
+    r"""Check whether a structurally-located element value should be redacted.
+
+    The patterns above locate a value by markup position; this decides whether
+    the located text is actually a credential or network name. Shared by the
+    sanitizer, ``validate``, and ``check_for_pii`` so a value one of them
+    redacts is never reported as a leak by another.
+
+    Rejects, in order: labels (text ending in a separator, as in
+    ``<span id="priwifinet">Private Wi-Fi Network-</span>``), values already
+    redacted, bare integers (row indices — mirroring the universal ``^\\d+$``
+    entry in ``SAFE_PATTERNS``), and known-safe status words (``Enabled``,
+    ``Disabled``, ``N/A``) that appear in the same element position as a value.
+
+    Args:
+        value: The element's text content
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        True if the value should be treated as sensitive
+    """
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    if not value or value.endswith((":", "-")):
+        return False
+    if _OPTION_INDEX_RE.match(value):
+        return False
+    if is_redacted(value, custom_patterns):
+        return False
+    return not is_safe_value(value)
+
+
+# Bare integers are row indices, not network names. This mirrors the universal
+# `^\d+$` entry in heuristics.SAFE_PATTERNS.
+_OPTION_INDEX_RE = re.compile(r"^\d+$")
+
+
+def iter_ssid_option_values(
+    content: str, custom_patterns: str | dict[str, Any] | None = None
+) -> Iterator[tuple[str, int]]:
+    """Yield ``(value, offset)`` for sensitive options inside SSID-named selects.
+
+    Shared by the sanitizer, ``validate``, and ``check_for_pii`` so all three
+    agree on which option values are network names.
+
+    Args:
+        content: HTML content to scan.
+        custom_patterns: Optional path to custom patterns file.
+
+    Yields:
+        The option's text and its offset **within ``content``**. The offset is
+        rebased onto the document — ``SSID_OPTION_RE`` runs against the matched
+        ``<select>`` substring, so its own offsets are relative to that element
+        and would report the wrong line number.
+    """
+    for select_match in SSID_SELECT_RE.finditer(content):
+        base = select_match.start()
+        for option_match in SSID_OPTION_RE.finditer(select_match.group(0)):
+            value = option_match.group(2)
+            if is_structural_value_sensitive(value, custom_patterns):
+                yield value, base + option_match.start(2)
 
 
 def _sanitize_pipe_value(
@@ -686,6 +863,22 @@ def _sanitize_html_impl(
         flags=re.IGNORECASE,
     )
 
+    # 7c. Sibling-element sticker labels (Device Label Information block).
+    # The value lives in its own element rather than inline after the label, so
+    # the inline passes above cannot reach it: their value class stops at `<`.
+    # Runs after passes 7/7a/7b so an already-redacted inline match is not
+    # re-processed; it is otherwise independent of them. The label run and the
+    # value element's opening tag are re-emitted verbatim (mirroring passes 2
+    # and 2d), so redaction replaces only the value and sanitized fixtures keep
+    # their DOM structure.
+    #
+    # A default Wi-Fi password printed on the device sticker is a live
+    # credential, not device metadata: XB7/XB10 captures reached a public issue
+    # with it in plain text (issue #194). The default SSID is redacted
+    # alongside it — the pair together identifies the household's network, and
+    # the SSID is what makes the password usable.
+    html = redact_structural_credentials(html, hasher, collector, custom_patterns)
+
     # 8. Password input fields
     def replace_password_input(match: re.Match[str]) -> str:
         collector.record_auto_redaction("password")
@@ -847,6 +1040,55 @@ def _sanitize_html_impl(
     return html
 
 
+def redact_structural_credentials(
+    content: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> str:
+    """Redact structurally-located credentials and network names (pass 7c).
+
+    All four patterns share a shape: group 1 is the markup run up to the value
+    (re-emitted verbatim so the DOM survives), group 2 is the value. Whether the
+    located text is actually sensitive is decided by
+    :func:`is_structural_value_sensitive`, the same predicate ``validate`` and
+    :func:`check_for_pii` use.
+
+    Exposed separately from :func:`sanitize_html` because ``validate`` checks
+    **every** response body while ``sanitize_html`` runs only for HTML/XML
+    mime types. A body carrying this markup under any other mime type would
+    otherwise be flagged as an error that no sanitize run could clear.
+
+    Args:
+        content: Text to scan (HTML, or any body that may embed it)
+        hasher: Hasher for placeholder generation
+        collector: Redaction collector for counts
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        Content with structurally-located credentials replaced
+    """
+
+    def make_replacer(prefix: str, category: str) -> Any:
+        def replace(match: re.Match[str]) -> str:
+            value = match.group(2)
+            if not is_structural_value_sensitive(value, custom_patterns):
+                return match.group(0)
+            collector.record_auto_redaction(category)
+            return f"{match.group(1)}{hasher.hash_generic(value, prefix)}"
+
+        return replace
+
+    content = SIBLING_PASSWORD_RE.sub(make_replacer("PASS", "password"), content)
+    content = SIBLING_SSID_RE.sub(make_replacer("WIFI", "wifi"), content)
+    content = SSID_ATTRIBUTE_RE.sub(make_replacer("WIFI", "wifi"), content)
+
+    def replace_select(match: re.Match[str]) -> str:
+        return SSID_OPTION_RE.sub(make_replacer("WIFI", "wifi"), match.group(0))
+
+    return SSID_SELECT_RE.sub(replace_select, content)
+
+
 def check_for_pii(
     content: str,
     filename: str = "",
@@ -873,6 +1115,42 @@ def check_for_pii(
     pii = load_pii_patterns(custom_patterns)
     allowlist = load_allowlist(custom_patterns)
     findings: list[dict[str, Any]] = []
+
+    # Labeled default credentials in sibling-element label/value pairs. These
+    # live as compiled patterns rather than pii.json entries because the pass-0
+    # generic replacer substitutes the whole match, which would flatten the
+    # label markup this pattern deliberately preserves. Sharing the compiled
+    # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
+    # and this CI fixture gate — from drifting apart (issue #194).
+    for sibling_pattern, sibling_name in (
+        (SIBLING_PASSWORD_RE, "default_password_label"),
+        (SIBLING_SSID_RE, "default_ssid_label"),
+        (SSID_ATTRIBUTE_RE, "ssid_attribute"),
+    ):
+        for match in sibling_pattern.finditer(content):
+            value = match.group(2)
+            if not is_structural_value_sensitive(value, custom_patterns) or is_allowlisted(value, allowlist):
+                continue
+            findings.append(
+                {
+                    "pattern": sibling_name,
+                    "match": value,
+                    "line": content.count("\n", 0, match.start(2)) + 1,
+                    "filename": filename,
+                }
+            )
+
+    for option_value, option_offset in iter_ssid_option_values(content, custom_patterns):
+        if is_allowlisted(option_value, allowlist):
+            continue
+        findings.append(
+            {
+                "pattern": "ssid_select_option",
+                "match": option_value,
+                "line": content.count("\n", 0, option_offset) + 1,
+                "filename": filename,
+            }
+        )
 
     for pattern_name, pattern_def in pii.get("patterns", {}).items():
         if not isinstance(pattern_def, dict) or "regex" not in pattern_def:

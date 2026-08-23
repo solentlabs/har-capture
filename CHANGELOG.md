@@ -7,6 +7,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Default Wi-Fi passwords and SSIDs on the device-label block no longer survive sanitization.** Technicolor gateways
+  (XB6/XB7/XB8/XB10) render a "Device Label Information" block on `network_setup.jst` carrying four sticker values in
+  plain text. The serial and WPS PIN were redacted; the default Wi-Fi password and the default SSID survived in
+  **every** heuristic mode, and `har-capture validate` returned 0 errors on a file containing all four — so the step
+  documented as "confirms nothing leaked" blessed a plaintext Wi-Fi credential. A contributor's real Wi-Fi password
+  reached a public GitHub issue this way (cable_modem_monitor#194).
+
+  The cause was neither label vocabulary nor value shape: passes 2/2b/2d carry a tag chain that hops
+  `</span><span class="value">`, and the password/SSID passes never received it — their value patterns stop dead at `<`.
+  New pass 7c matches these by **structural position** instead: the value must occupy its own element. That is what
+  separates a sticker value from gateway help text, which shares a text node with its label. Measured across the
+  committed fleet captures the rule matches the real credential blocks and nothing else. Also covered: SSIDs rendered
+  with no adjacent label at all — in an SSID-named element (`<font class="wifi_ntwrk">`) or as the options of an
+  SSID-named `<select>`. See ADR-14.
+
+- **`har-capture validate` now errors on a labeled plaintext password.** Validation had no label-anchored credential
+  check at all — its password detection was field-name-based (form params, JSON, XML), which HTML text never reaches.
+  The 0.12.1 reconciliation covered vendor serial *tokens* specifically and left this layer divergent. `validate`, the
+  sanitizer, and `check_for_pii` now **import one set of compiled patterns**, so the three cannot drift apart again. A
+  labeled password is an **error** (exit 1); a Wi-Fi network name is a warning.
+
+- **A stray placeholder no longer suppresses an entire response body's content checks.** `check_content` guarded its
+  early return with `is_redacted()`, a single-*value* predicate that matches its allowlist families with `re.search`. A
+  run of six or more zeros (`0{6,}` — a separator-less zero MAC, a zeroed counter, a `#000000` in minified CSS) or a
+  literal `XXX` / `REDACTED` anywhere in a body made the whole page look already-redacted, skipping every content check
+  for that entry — 209 of 750 committed fleet entries were being skipped this way, including a page carrying a plaintext
+  default Wi-Fi password that `validate` therefore reported as clean. The guard now uses `is_fully_redacted()`, which
+  requires the whole string to be one placeholder token: no whitespace, no markup, no structural punctuation, and a
+  match accounting for the entire token rather than merely appearing inside it.
+
+### Fixed
+
+- **Re-sanitizing a capture no longer rewrites its existing placeholders.** The new structural rules match on markup
+  position rather than value shape, so a placeholder sitting in a value element matches as readily as a credential.
+  Values already recognized as redacted are now left untouched, keeping a fixture sweep idempotent for these passes.
+
 ## [0.12.1] - 2026-08-19
 
 ### Fixed

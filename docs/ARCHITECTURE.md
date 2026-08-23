@@ -272,6 +272,14 @@ customization.
 confidence. When a domain-specific pattern cannot guarantee zero false positives, it belongs in `heuristics.detectors`,
 not `pii.patterns`.
 
+A third home exists for rules that key on **markup structure** rather than value shape — the structural label/value
+patterns behind HTML pass 7c. These live as compiled patterns in `sanitization/html.py` rather than in `pii.json` for
+two reasons: the Pass 0 generic replacer substitutes the whole match, which would flatten the label markup these rules
+deliberately preserve; and `validate` and `check_for_pii` **import** them, which is what keeps the three detection paths
+from diverging. They meet the same 100%-confidence bar as `pii.patterns` — measured, not asserted, against every
+committed fleet capture. See
+[ADR-14](ARCHITECTURE_DECISIONS.md#adr-14-structural-position-not-value-shape-identifies-a-labeled-credential).
+
 **Two extension points, one policy.** The file-based `--patterns` flow above is the *static* extension point: merge
 happens once at load time and the merged set is cached. A *dynamic* extension point also exists for library callers that
 only know their pattern list at runtime — `sanitize_post_data(..., custom_patterns=...)` and

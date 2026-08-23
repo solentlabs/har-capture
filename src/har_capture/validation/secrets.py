@@ -34,11 +34,19 @@ from har_capture.patterns.redaction import (
     is_base64_credential,
     is_base64_decodable_text,
     is_cookie_attribute_metadata,
+    is_fully_redacted,
 )
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
-from har_capture.sanitization.html import is_valid_ip_address
+from har_capture.sanitization.html import (
+    SIBLING_PASSWORD_RE,
+    SIBLING_SSID_RE,
+    SSID_ATTRIBUTE_RE,
+    is_structural_value_sensitive,
+    is_valid_ip_address,
+    iter_ssid_option_values,
+)
 from har_capture.validation.completeness import load_har
 
 # Cookie attribute-only values (not actual session data)
@@ -703,7 +711,15 @@ def check_content(
             candidate tokens. ``None`` compiles them from ``custom_patterns``;
             ``validate_har`` pre-compiles once per file.
     """
-    if not content or is_redacted(content, custom_patterns):
+    # `content` is a whole response body, so the whole-string form is required.
+    # `is_redacted` matches its allowlist families with `re.search` — right for
+    # a single field value, wrong for a document. A run of six or more zeros
+    # (`0{6,}` — a separator-less zero MAC, a zeroed counter, a `#000000` in
+    # minified CSS) or a literal `XXX` / `REDACTED` anywhere in the body was
+    # enough to skip every content check for that entry. 209 of 750 committed
+    # fleet entries were being skipped this way, including an XB10 page
+    # carrying a plaintext default Wi-Fi password (issue #194).
+    if not content or is_fully_redacted(content, custom_patterns):
         return
 
     stripped = content.strip()
@@ -761,6 +777,49 @@ def check_content(
                         reason="Potential serial number",
                     )
                 )
+
+    # Labeled default credentials in sibling-element label/value pairs
+    # (Technicolor "Device Label Information" sticker block). The SAME compiled
+    # patterns the sanitizer's pass 7c uses are imported here, so the two
+    # cannot drift apart on what counts as a labeled default credential — the
+    # 0.12.1 serial reconciliation fixed that for vendor serial tokens only,
+    # leaving this layer divergent (validate had no label-anchored credential
+    # check at all).
+    #
+    # Severity for the password is error, matching ADR-13's rule for
+    # deterministic matches: the label states outright that the value is a
+    # password, so an unredacted match is a known credential leak, not a maybe.
+    # This is the gate that blessed a contributor's real Wi-Fi password on its
+    # way to a public issue (issue #194). The SSID is a warning — it identifies
+    # the network rather than authenticating to it.
+    for sibling_pattern, sibling_severity, sibling_reason in (
+        (SIBLING_PASSWORD_RE, "error", "Plaintext password in a labeled field"),
+        (SIBLING_SSID_RE, "warning", "Wi-Fi network name (SSID) in a labeled field"),
+        (SSID_ATTRIBUTE_RE, "warning", "Wi-Fi network name (SSID) in an SSID-named element"),
+    ):
+        for match in sibling_pattern.finditer(content):
+            value = match.group(2)
+            if is_structural_value_sensitive(value, custom_patterns):
+                findings.append(
+                    Finding(
+                        severity=sibling_severity,
+                        location=location,
+                        field="content",
+                        value=truncate(value),
+                        reason=sibling_reason,
+                    )
+                )
+
+    for option_value, _offset in iter_ssid_option_values(content, custom_patterns):
+        findings.append(
+            Finding(
+                severity="warning",
+                location=location,
+                field="content",
+                value=truncate(option_value),
+                reason="Wi-Fi network name (SSID) in an SSID-named dropdown",
+            )
+        )
 
     # Vendor-format serials as standalone tokens — delimiter-aware. Mirrors
     # the sanitizer's redact_vendor_serials pass: the same high-confidence

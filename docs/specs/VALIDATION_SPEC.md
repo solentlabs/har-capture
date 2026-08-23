@@ -180,7 +180,15 @@ flag-tier fields suppressed. The same model applies to every branch above (form 
 
 ### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential, serial_detectors)`
 
-Detects PII patterns in response content text:
+Detects PII patterns in response content text.
+
+**Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
+single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
+zeros (`0{6,}` — a separator-less zero MAC, a zeroed counter, a `#000000` in minified CSS) or a literal `XXX` /
+`REDACTED` anywhere in the body made the entire page look already-redacted and skipped every check below. That
+suppressed 209 of 750 committed fleet entries, including an XB10 page holding a plaintext default Wi-Fi password.
+`is_fully_redacted()` requires the whole string to be one opaque placeholder token: no whitespace, no markup, no
+structural punctuation, and a match accounting for the entire token rather than appearing inside it.
 
 **Bare base64 credentials:**
 
@@ -208,6 +216,19 @@ Severity: **error**
   labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
   noise on the CM2500 round-1 validate run
 - Checks via `is_redacted()` before reporting
+
+**Labeled credentials and network names (structural, error / warning):**
+
+- Imports the compiled patterns from `sanitization/html.py` (`SIBLING_PASSWORD_RE`, `SIBLING_SSID_RE`,
+  `SSID_ATTRIBUTE_RE`, `iter_ssid_option_values`) rather than restating them, so the sanitizer's pass 7c, `validate`,
+  and `check_for_pii` cannot drift apart on what counts as a labeled credential — the 0.12.1 reconciliation covered
+  vendor serial *tokens* only and left this layer divergent
+- A **password** in a labeled field is an **error**: the label states outright that the value is a credential, so an
+  unredacted match is a known leak, not a maybe (the ADR-13 determinism rule)
+- A **Wi-Fi network name** is a **warning**: an SSID identifies a network rather than authenticating to it
+- Values passing `is_redacted()` are skipped, so re-validating a sanitized capture stays quiet
+- See the structural label/value rule in
+  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)
 
 **Vendor-format serials (delimiter-aware, error):**
 

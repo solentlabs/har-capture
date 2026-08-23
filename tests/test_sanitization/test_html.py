@@ -34,6 +34,7 @@ from har_capture.sanitization.html import (
     check_for_pii,
     sanitize_html,
 )
+from har_capture.sanitization.report import HeuristicMode
 
 # =============================================================================
 # Load Test Data From Fixture
@@ -70,6 +71,15 @@ SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE[
 SERIAL_SIBLING_SPAN_CASES = [
     (c["html"], c["redacted_value"], c["preserved_markup"], c["id"])
     for c in _FIXTURE["serial_sibling_span_cases"]
+]
+
+DEVICE_LABEL_BLOCK_CASES = [
+    (c["html"], c["redacted_values"], c["preserved_markup"], c["id"])
+    for c in _FIXTURE["device_label_block_cases"]
+]
+
+DEVICE_LABEL_PRESERVE_CASES = [
+    (c["html"], c["preserved"], c["id"]) for c in _FIXTURE["device_label_preserve_cases"]
 ]
 
 SETITEM_CASES = [
@@ -272,6 +282,182 @@ class TestSerialNumberSiblingSpans:
 
 
 # =============================================================================
+# Device Label Information Block (issue #194)
+# =============================================================================
+
+
+class TestDeviceLabelBlock:
+    """Sticker values rendered with the value in its own element.
+
+    Technicolor .jst (XB6/XB7/XB8/XB10) renders a "Device Label Information"
+    block whose four sticker values sit in a sibling ``<span class="value">``.
+    The serial and WPS PIN were reachable via the pass 2/2d tag chain, but the
+    default Wi-Fi password and SSID were not, and survived every heuristic mode
+    — a contributor's real Wi-Fi password reached a public issue that way.
+
+    All markup below is synthetic; the values are fabricated.
+    """
+
+    @pytest.mark.parametrize(
+        ("html", "redacted_values", "preserved_markup", "desc"),
+        DEVICE_LABEL_BLOCK_CASES,
+        ids=[c[3] for c in DEVICE_LABEL_BLOCK_CASES],
+    )
+    def test_sticker_values_redacted_markup_preserved(
+        self, html: str, redacted_values: list[str], preserved_markup: str, desc: str
+    ) -> None:
+        """Test sticker values are redacted without collapsing the surrounding markup."""
+        result = sanitize_html(html, salt="test")
+        for value in redacted_values:
+            assert value not in result, f"{desc}: {value!r} should be redacted"
+        assert preserved_markup in result, f"{desc}: intermediate markup should be preserved"
+
+    @pytest.mark.parametrize(
+        ("html", "redacted_values", "preserved_markup", "desc"),
+        DEVICE_LABEL_BLOCK_CASES,
+        ids=[c[3] for c in DEVICE_LABEL_BLOCK_CASES],
+    )
+    def test_redaction_holds_in_every_heuristic_mode(
+        self, html: str, redacted_values: list[str], preserved_markup: str, desc: str
+    ) -> None:
+        """Test redaction does not depend on the heuristic mode.
+
+        The original defect was invisible to the heuristic setting: HTML label/
+        value text is never routed through the heuristic engine, so all three
+        modes leaked identically.
+        """
+        for mode in HeuristicMode:
+            result = sanitize_html(html, salt="test", heuristics=mode)
+            for value in redacted_values:
+                assert value not in result, f"{desc}: {value!r} should be redacted in {mode}"
+
+    @pytest.mark.parametrize(
+        ("html", "preserved", "desc"),
+        DEVICE_LABEL_PRESERVE_CASES,
+        ids=[c[2] for c in DEVICE_LABEL_PRESERVE_CASES],
+    )
+    def test_prose_and_headings_preserved(self, html: str, preserved: str, desc: str) -> None:
+        """Test the structural rules do not fire on help text, headings, or placeholders."""
+        result = sanitize_html(html, salt="test")
+        assert preserved in result, f"{desc}: {preserved!r} should be preserved"
+
+    @pytest.mark.parametrize(
+        ("html", "redacted_values", "preserved_markup", "desc"),
+        DEVICE_LABEL_BLOCK_CASES,
+        ids=[c[3] for c in DEVICE_LABEL_BLOCK_CASES],
+    )
+    def test_sanitization_is_idempotent(
+        self, html: str, redacted_values: list[str], preserved_markup: str, desc: str
+    ) -> None:
+        """Test re-sanitizing already-sanitized markup is a no-op.
+
+        These rules match on markup structure rather than value shape, so a
+        placeholder in the value element matches as readily as a credential.
+        Without the already-redacted guard a fixture sweep would rewrite every
+        placeholder on each run.
+        """
+        once = sanitize_html(html, salt="test")
+        twice = sanitize_html(once, salt="test")
+        assert once == twice, f"{desc}: re-sanitizing should be a no-op"
+
+
+class TestDeviceLabelCheckForPii:
+    """The CI fixture gate must see the Device Label block too.
+
+    ``check_for_pii`` is the third detection path (alongside the sanitizer and
+    ``validate``); before this it returned zero findings on a block holding a
+    plaintext default Wi-Fi password.
+    """
+
+    @pytest.mark.parametrize(
+        ("html", "expected_pattern", "expected_match", "desc"),
+        [
+            (
+                '<span class="readonlyLabel">Default Password:</span>'
+                '<span class="value">orange4213table</span>',
+                "default_password_label",
+                "orange4213table",
+                "sibling_span_password",
+            ),
+            (
+                '<span class="readonlyLabel">Default Network Name (SSID):</span>'
+                '<span class="value">WIFI-AAAA</span>',
+                "default_ssid_label",
+                "WIFI-AAAA",
+                "sibling_span_ssid",
+            ),
+            (
+                '<td><font class="wifi_ntwrk">WIFI-AAAA</font></td>',
+                "ssid_attribute",
+                "WIFI-AAAA",
+                "ssid_attributed_element",
+            ),
+            (
+                '<select id="mac_ssid"><option value="17">WIFI-AAAA</option></select>',
+                "ssid_select_option",
+                "WIFI-AAAA",
+                "ssid_select_option",
+            ),
+        ],
+    )
+    def test_device_label_values_detected(
+        self, html: str, expected_pattern: str, expected_match: str, desc: str
+    ) -> None:
+        """Test check_for_pii reports each structurally-identified value."""
+        findings = check_for_pii(html, "fixture.html")
+        matched = [f for f in findings if f["pattern"] == expected_pattern]
+        assert len(matched) == 1, f"{desc}: expected one {expected_pattern} finding"
+        assert matched[0]["match"] == expected_match
+        assert matched[0]["filename"] == "fixture.html"
+
+    def test_bare_index_option_not_reported(self) -> None:
+        """Test numeric option values are treated as row indices, not network names."""
+        html = '<select id="mac_ssid"><option value="1">17</option></select>'
+        findings = check_for_pii(html, "fixture.html")
+        assert [f for f in findings if f["pattern"] == "ssid_select_option"] == []
+
+    def test_redacted_values_not_reported(self) -> None:
+        """Test allowlisted placeholders are not re-reported as leaks."""
+        html = '<span class="readonlyLabel">Default Password:</span><span class="value">***REDACTED***</span>'
+        findings = check_for_pii(html, "fixture.html")
+        assert [f for f in findings if f["pattern"] == "default_password_label"] == []
+
+    def test_redacted_select_option_not_reported(self) -> None:
+        """Test an already-redacted option value is not re-reported as a leak."""
+        html = '<select id="mac_ssid"><option value="17">***REDACTED***</option></select>'
+        findings = check_for_pii(html, "fixture.html")
+        assert [f for f in findings if f["pattern"] == "ssid_select_option"] == []
+
+    def test_select_option_line_number_is_document_relative(self) -> None:
+        """Test option line numbers are rebased onto the document.
+
+        ``SSID_OPTION_RE`` runs against the matched ``<select>`` substring, so
+        its own offsets are relative to that element; without rebasing, a value
+        on line 103 was reported as line 6.
+        """
+        content = (
+            "\n" * 100 + '<div>\n<select id="mac_ssid">\n<option value="17">WIFI-AAAA</option>\n</select>'
+        )
+        findings = check_for_pii(content, "fixture.html")
+        matched = [f for f in findings if f["pattern"] == "ssid_select_option"]
+        assert len(matched) == 1
+        expected = content[: content.index("WIFI-AAAA")].count("\n") + 1
+        assert matched[0]["line"] == expected
+
+    def test_reported_line_number_points_at_the_value(self) -> None:
+        """Test the reported line is the value's line, not the block's first line."""
+        html = (
+            "<div>\n<div>\n"
+            '<span class="readonlyLabel">Default Password:</span>\n'
+            '<span class="value">orange4213table</span>\n</div>\n</div>'
+        )
+        findings = check_for_pii(html, "fixture.html")
+        matched = [f for f in findings if f["pattern"] == "default_password_label"]
+        assert len(matched) == 1
+        assert matched[0]["line"] == 4
+
+
+# =============================================================================
 # Web Storage setItem() Scanning (Gap 1 fix)
 # =============================================================================
 
@@ -316,8 +502,6 @@ class TestSetItemScanning:
 
     def test_setitem_heuristic_redact_mode(self) -> None:
         """Test Tier C: heuristic REDACT mode auto-redacts high-entropy values."""
-        from har_capture.sanitization.report import HeuristicMode
-
         # High-entropy value with mixed character types that should trigger credential heuristic
         html = 'localStorage.setItem("config_data", "xK9mP2qR7sT4wZ")'
         result = sanitize_html(html, salt="test", heuristics=HeuristicMode.REDACT)
@@ -330,7 +514,6 @@ class TestSetItemScanning:
         """Test Tier C: heuristic FLAG mode preserves value but records flag."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.report import HeuristicMode
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)

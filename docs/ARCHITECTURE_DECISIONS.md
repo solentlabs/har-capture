@@ -346,3 +346,75 @@ generic uppercase-alphanumeric backstop remains `medium` for exactly this reason
 **Consequence:** the review no longer sees vendor-format serials at all (they are redacted before flagging), and a
 contributor who skips the review still ships a serial-clean artifact for every layout the domain file knows. Unknown
 layouts remain where ADR-12 puts them: flagged for the human.
+
+## ADR-14: Structural Position, Not Value Shape, Identifies a Labeled Credential
+
+**Date:** 2026-08-23 · **Status:** Accepted · **Issue:** cable_modem_monitor#194
+
+**Context.** Technicolor gateways (XB6/XB7/XB8/XB10) render a "Device Label Information" block on `network_setup.jst`
+carrying four sticker values in plain text. The serial and WPS PIN were redacted; the default Wi-Fi password and SSID
+survived every heuristic mode, and `validate` returned 0 errors on a file containing all four. A contributor's real
+Wi-Fi password reached a public GitHub issue that way.
+
+The cause was neither label vocabulary nor value shape. Passes 2/2b/2d carry a tag chain `(?:<[^>]*>\s*)*` that hops
+`</span><span class="value">`; the password and SSID passes never received it, and their value character classes stop
+dead at `<`. Two committed fleet fixtures (XB7, XB10) still carry real default passwords for the same reason.
+
+**Decision.** Credential and network-name labels are matched by **structural position**, not by value shape and not by a
+bare tag chain.
+
+1. **The value must occupy its own element, as a single whitespace-free token.** Label element closes, value element
+   opens, the value is that element's entire text content and contains no whitespace. The element rule distinguishes a
+   sticker value from help-text prose: `$.i18n("<strong>Password:</strong> Enter the Password you registered")` shares a
+   text node with its label, while `<span class="value">` does not. The single-token rule is what the fleet measurement
+   could not supply — 40 captures prove the rule fires where it should, not that it stays silent on shapes those
+   captures happen not to contain. `<dt>Password:</dt><dd>Not set</dd>` and
+   `<div class="hint">Must be at least 8 characters</div>` are ordinary gateway markup, and the element rule alone
+   redacted both. Every real sticker value across the fleet is one token; every prose and status false positive is not.
+
+   This carries a cost, deliberately accepted: **an SSID containing a space is not matched by these rules.** A
+   space-bearing element text cannot be told apart from prose structurally, and under ADR-12 the burden of proof falls
+   on redacting rather than on preserving — destroying gateway UI copy is the worse failure.
+
+1. **Where no label exists, the naming element is the anchor.** An SSID rendered in `<font class="wifi_ntwrk">` or as
+   the options of `<select id="mac_ssid">` has no adjacent label at all. The element that names itself an SSID holder
+   supplies the anchor instead.
+
+1. **One pattern source, three consumers.** The patterns are defined once in `sanitization/html.py` and imported by
+   `validation/secrets.py` and `check_for_pii`. ADR-13 reconciled sanitize and validate for vendor serial *tokens*
+   specifically; that left the label/value layer structurally divergent, and `validate` had no label-anchored credential
+   check at all. Importing rather than restating is what prevents the next divergence.
+
+1. **A labeled password is an error; a network name is a warning.** The label states outright that the value is a
+   credential, so an unredacted match is deterministic in ADR-13's sense. An SSID identifies a network rather than
+   authenticating to it.
+
+**Rejected: routing HTML label/value text through the heuristic engine.** The engine already classifies both leaked
+values correctly, and doing so would close the class rather than a vocabulary list. But measured on the Technicolor
+captures it flags ~25% of *all* label/value pairs — `System Uptime`, `DHCP Lease Time`, `BOOT Version`, `Model`. In
+`REDACT` that destroys the diagnostic data the tool exists to preserve; in `FLAG` it floods the review UI. The path
+needs substantially wider `safe_value_patterns` before it can be trusted, which is separate work.
+
+**ADR-12 accounting** (a "redact more" change carries the burden of proof):
+
+- *Concrete leak closed:* a plaintext default Wi-Fi password on a public issue, plus the default and live SSIDs that
+  make it usable. Two committed fleet fixtures carry real values today.
+- *Fidelity cost:* four values per affected page, replaced by correlation-preserving `PASS_<hash>` / `WIFI_<hash>`
+  placeholders. Markup and whitespace are re-emitted verbatim, so sanitized fixtures keep their DOM structure and parser
+  tests still exercise the same selectors.
+- *Cannot-be-structure proof:* the rule fires only where a credential label or an SSID-naming attribute already declares
+  the value's meaning, and only on a single-token value that is not a known-safe status word. Measured precision across
+  the committed fleet is exact — the rules touch only the credentials and network names, and nothing else.
+
+**Symmetry requirement.** `validate` checks every response body, while `sanitize_html` runs only for HTML/XML mime
+types. The structural pass is therefore exposed as `redact_structural_credentials()` and applied to non-HTML text bodies
+too — otherwise a device-label block embedded in a `.js` body would be reported as an error that no sanitize run could
+clear. A check that can fail with no remediation path is worse than no check.
+
+**Consequence.** A capture of any Technicolor gateway in the family is sticker-clean without review, and `validate`
+fails (exit 1) rather than blessing a plaintext credential. Every guard exists against a reproduced false positive and
+is load-bearing — dropping one reintroduces it: no bare `key` (`metaKey` in minified jQuery); no `<th>` ("Source SSID
+Index"); no trailing-separator text (`<span id="priwifinet">Private Wi-Fi Network- </span>`); no whitespace in the value
+(hint and status text); no known-safe status word (`Enabled`, `Disabled`, `N/A`); no bare integers (row indices); no
+`<option value="">` (chooser placeholders like `-- Select --`); no attribute whose SSID token carries a helper suffix
+(`ssid_help`, `ssid-label`, `ssidTitle`); and no already-redacted value (re-sanitizing must not churn placeholders).
