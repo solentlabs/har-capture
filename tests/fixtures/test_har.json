@@ -118,6 +118,19 @@
     {"header_name": "Origin",              "header_value": "https://example.com",        "expected_contains": "https://example.com",     "id": "origin"},
     {"header_name": "Referer",             "header_value": "https://example.com/page",   "expected_contains": "https://example.com/page","id": "referer"}
   ],
+  "_comment_set_cookie_attribute_cases": "RFC 6265 sec. 4.1.1: only the first segment of a Set-Cookie value is cookie data; the reserved attributes after it scope the cookie and must survive. Expected values assume no hasher (plain [REDACTED] placeholder).",
+  "set_cookie_attribute_cases": [
+    {"header_name": "Set-Cookie", "header_value": "csrfp_token=1a2b3c4d5e6f7890; Path=/isp; httponly",                          "expected": "csrfp_token=[REDACTED]; Path=/isp; httponly",                          "id": "xb8_path_and_lowercase_httponly"},
+    {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; Path=/; Domain=example.com; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Max-Age=3600; SameSite=Lax; Secure; HttpOnly", "expected": "sid=[REDACTED]; Path=/; Domain=example.com; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Max-Age=3600; SameSite=Lax; Secure; HttpOnly", "id": "all_reserved_attributes"},
+    {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; PATH=/admin; DOMAIN=.example.com; MAX-AGE=0",                    "expected": "sid=[REDACTED]; PATH=/admin; DOMAIN=.example.com; MAX-AGE=0",           "id": "attribute_names_case_insensitive"},
+    {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t;Path=/;HttpOnly",                                                 "expected": "sid=[REDACTED];Path=/;HttpOnly",                                       "id": "spacing_preserved"},
+    {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; tracking=9f8e7d6c; Path=/",                                      "expected": "sid=[REDACTED]; tracking=[REDACTED]; Path=/",                          "id": "unreserved_trailing_pair_still_redacted"},
+    {"header_name": "Set-Cookie", "header_value": "Partitioned_id=abc123; Path=/; Partitioned; Priority=High",                  "expected": "Partitioned_id=[REDACTED]; Path=/; Partitioned; Priority=High",        "id": "attribute_prefix_in_cookie_name_not_confused"},
+    {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; Path=/; VendorFlag",                                             "expected": "sid=[REDACTED]; Path=/; VendorFlag",                                   "id": "unknown_valueless_flag_preserved"},
+    {"header_name": "Set-Cookie", "header_value": "opaquevaluewithnoequals",                                                    "expected": "[REDACTED]",                                                           "id": "no_cookie_pair_redacts_whole_value"},
+    {"header_name": "Cookie",     "header_value": "path=/notanattribute; sid=s3cr3t",                                           "expected": "path=[REDACTED]; sid=[REDACTED]",                                      "id": "request_cookie_named_path_still_redacted"},
+    {"header_name": "Cookie",     "header_value": "sid=s3cr3t; csrf=deadbeef",                                                  "expected": "sid=[REDACTED]; csrf=[REDACTED]",                                      "id": "request_cookie_all_pairs_redacted"}
+  ],
   "over_matching_cases": [
     {"field_name": "keyboard",      "expected": false, "id": "keyboard_not_matched"},
     {"field_name": "bypass",        "expected": false, "id": "bypass_not_matched"},

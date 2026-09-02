@@ -120,8 +120,27 @@ Headers are classified into four tiers from `sensitive.json`:
    through to full redaction so a non-standard leading token can't escape. Preserving the scheme lets downstream
    consumers classify the auth mechanism from a single authenticated request without needing a `401 + WWW-Authenticate`
    exchange.
-1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. Cookie
-   metadata (`HttpOnly`, `Secure`, `SameSite`, `Path`, `Domain`, `Expires`) detected and preserved.
+1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. The two
+   header names have different grammars (RFC 6265 sec. 4.1.1 vs sec. 4.2.1) and are handled separately:
+   - **Request `Cookie`**: a list of cookie pairs. Every `name=value` segment is cookie data, so every value is redacted
+     — including a cookie whose name happens to be a reserved attribute word (`path=…` in a request header is a cookie,
+     not an attribute).
+   - **Response `Set-Cookie` / `Set-Cookie2`**: one cookie pair followed by `;`-separated attributes. Only the **first**
+     segment's value is redacted. Reserved attributes (`Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, valueless
+     `Secure` / `HttpOnly`, plus the `Partitioned` / `Priority` extensions — matched case-insensitively per sec. 5.2)
+     survive **verbatim**, spacing included: they scope the cookie, they are not secrets, and a redacted `Path` makes
+     downstream tooling read the cookie's scope wrong. Preserving them reveals nothing new — a cookie's `Domain` is a
+     suffix of the request host and its `Path` a prefix of the request path, both of which the HAR already carries
+     unredacted in the URL and `Host` header; the remaining attributes are dates, flags and enum tokens. An *unreserved*
+     `k=v` segment in the attribute position is still redacted — an unknown key there gets no free pass; a valueless
+     token (a flag, reserved or not) has no value half to redact and is preserved. A value with no leading cookie pair
+     does not have the shape this parse assumes and is redacted whole.
+   - A whole value that is serialized attribute metadata (`HttpOnly: true, Secure: true`) is redacted before either
+     branch — it is a malformed serialization, not a cookie. This check runs first, so it also swallows the degenerate
+     case of a cookie whose *name* is itself a reserved word (`Secure=abc; Path=/` redacts whole, attributes included).
+     That is over-redaction, never a leak, and the input does not occur in real device traffic; the alternative — trust
+     the first segment unconditionally per RFC 6265 sec. 5.2 — would make `Path=/foo; HttpOnly` emit a redacted `Path`,
+     which is the bug this section exists to prevent. Losing attributes on a degenerate header is the better trade.
 1. **All other headers**: Passed through unmodified.
 
 ### Field Sensitivity Classification
@@ -921,8 +940,11 @@ Detects common redaction markers to warn users before double-sanitizing.
    administered MACs) cannot appear in real traffic, so hash outputs never collide with genuine values.
 1. **Known patterns always apply** — MACs, IPs, and emails are auto-redacted regardless of heuristic mode. Heuristic
    mode only affects opaque/suspicious values.
-1. **Cookie metadata is preserved** — Cookie attributes (HttpOnly, Secure, SameSite, Path, Domain, Expires) are detected
-   and not redacted. Only cookie values are redacted.
+1. **Cookie metadata is preserved** — In a `Set-Cookie` value, the reserved attributes (`HttpOnly`, `Secure`,
+   `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`, `Partitioned`, `Priority`) survive verbatim; only the cookie
+   pair's value is redacted. The reserved-word list is `COOKIE_ATTRIBUTE_NAMES` in
+   `src/har_capture/patterns/redaction.py` — one source of truth for both the attribute-name check and the
+   serialized-metadata regex.
 1. **Credit card detection requires Luhn** — A 16-digit number is only redacted as a credit card if it passes Luhn
    checksum validation.
 1. **Global find-replace in Pass 2** — User-selected redactions are applied via string replacement on the serialized
@@ -935,3 +957,7 @@ Detects common redaction markers to warn users before double-sanitizing.
    eligibility keeps the pre-existing behavior (flagged for review). Widening eligibility is a scope change and is
    governed by
    [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift-redact-more-is-a-change-against-the-founding-contract).
+1. **Output is LF-only on every platform** — Every writer that emits a HAR or report pins `newline="\n"` rather than
+   letting Python's text mode substitute `os.linesep`. Captures are committed downstream as immutable evidence in repos
+   that enforce LF; a CRLF artifact gets rewritten by their hooks, and the same capture would otherwise be
+   byte-different depending on which platform ran the tool.

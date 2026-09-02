@@ -332,6 +332,42 @@ class TestCookieAttributeMetadataDetection:
         assert is_cookie_attribute_metadata(value) == expected, desc
 
 
+class TestCookieAttributeNameDetection:
+    """Tests for is_cookie_attribute_name helper.
+
+    Names the reserved words of the Set-Cookie attribute position
+    (RFC 6265 sec. 4.1.1). Matching is case-insensitive per sec. 5.2.
+    """
+
+    @pytest.mark.parametrize(
+        ("name", "expected", "desc"),
+        [
+            ("Path", True, "path"),
+            ("path", True, "path_lowercase"),
+            ("PATH", True, "path_uppercase"),
+            (" Path", True, "leading_whitespace_ignored"),
+            ("Domain", True, "domain"),
+            ("Expires", True, "expires"),
+            ("Max-Age", True, "max_age"),
+            ("SameSite", True, "samesite"),
+            ("Secure", True, "secure_valueless"),
+            ("HttpOnly", True, "httponly_valueless"),
+            ("Partitioned", True, "partitioned"),
+            ("Priority", True, "priority"),
+            ("csrfp_token", False, "cookie_name"),
+            ("Path_token", False, "attribute_prefix_is_not_an_attribute"),
+            ("", False, "empty_string"),
+            ("   ", False, "whitespace_only"),
+        ],
+        ids=lambda x: x if isinstance(x, str) and "_" in x else "",
+    )
+    def test_cookie_attribute_name(self, name: str, expected: bool, desc: str) -> None:
+        """Test is_cookie_attribute_name with reserved and non-reserved keys."""
+        from har_capture.patterns.redaction import is_cookie_attribute_name
+
+        assert is_cookie_attribute_name(name) == expected, desc
+
+
 class TestIsBase64DecodableText:
     """Tests for the is_base64_decodable_text heuristic helper."""
 

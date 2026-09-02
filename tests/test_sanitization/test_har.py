@@ -93,6 +93,12 @@ HEADER_REDACTION_CASES = [
     for c in _HAR_FIXTURE["header_redaction_cases"]
 ]
 
+# Set-Cookie attribute preservation: (header_name, header_value, expected, id)
+SET_COOKIE_ATTRIBUTE_CASES = [
+    (c["header_name"], c["header_value"], c["expected"], c["id"])
+    for c in _HAR_FIXTURE["set_cookie_attribute_cases"]
+]
+
 # ┌─────────────────────────┬─────────────────────────────┬─────────────────────┐
 # │ header_name             │ header_value                │ description         │
 # ├─────────────────────────┼─────────────────────────────┼─────────────────────┤
@@ -154,6 +160,43 @@ class TestHeaderSanitization:
         else:
             secret = value.rsplit(" ", maxsplit=1)[-1] if " " in value else value
         assert secret not in result, f"{desc}: secret '{secret}' should be removed"
+
+    @pytest.mark.parametrize(
+        ("name", "value", "expected", "desc"),
+        SET_COOKIE_ATTRIBUTE_CASES,
+        ids=[c[3] for c in SET_COOKIE_ATTRIBUTE_CASES],
+    )
+    def test_set_cookie_attributes_preserved(self, name: str, value: str, expected: str, desc: str) -> None:
+        """Reserved Set-Cookie attributes survive; only cookie data is redacted.
+
+        RFC 6265 sec. 4.1.1 — ``Path``/``Domain``/``Expires``/... scope the
+        cookie and are not secrets. Redacting them — as the cookie pass used
+        to — destroyed scoping information downstream tooling reads.
+        """
+        assert sanitize_header_value(name, value) == expected, desc
+
+    def test_set_cookie_attributes_not_hashed(self) -> None:
+        """With a hasher, exactly one COOKIE_ placeholder appears: the value."""
+        hasher = Hasher(salt="test-salt")
+        result = sanitize_header_value(
+            "Set-Cookie",
+            "csrfp_token=1a2b3c4d5e6f7890; Path=/isp; httponly",
+            hasher,
+        )
+
+        assert result.count("COOKIE_") == 1, "only the cookie value may be hashed"
+        assert result.startswith("csrfp_token=COOKIE_")
+        assert result.endswith("; Path=/isp; httponly")
+
+    def test_set_cookie_value_not_recoverable_from_attributes(self) -> None:
+        """Preserving attributes must not preserve the cookie value itself."""
+        result = sanitize_header_value(
+            "Set-Cookie",
+            "sid=supersecretvalue; Path=/; Domain=example.com",
+            Hasher(salt="test-salt"),
+        )
+
+        assert "supersecretvalue" not in result
 
 
 class TestSchemeRedactBranch:
@@ -3732,6 +3775,67 @@ class TestSanitizeHarFileEdgeCases:
         output_path, _ = sanitize_har_file(input_file)
         assert output_path.endswith(".sanitized.har")
         assert "capture.json.sanitized.har" in output_path
+
+
+class TestOutputLineEndings:
+    r"""The sanitized HAR is written LF-only on every platform.
+
+    Downstream repos commit sanitized captures as immutable evidence and
+    enforce LF; a CRLF artifact gets rewritten by their pre-commit hooks,
+    which mutates the evidence. The writer therefore pins ``newline="\n"``
+    instead of letting text mode pick ``os.linesep``.
+
+    CI runs ubuntu-only, where an unpinned write already emits LF — so the
+    ``windows_text_mode`` case is the load-bearing guard here. The plain
+    byte assertion is a cheap smoke check that holds on whatever platform
+    the suite happens to run on.
+    """
+
+    HAR = {
+        "log": {
+            "version": "1.2",
+            "entries": [
+                {
+                    "request": {
+                        "method": "GET",
+                        "url": "http://192.168.100.1/",
+                        "headers": [{"name": "Cookie", "value": "sid=abc123"}],
+                        "cookies": [],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [{"name": "Set-Cookie", "value": "sid=abc123; Path=/"}],
+                        "content": {"text": "<html>line one\nline two</html>", "mimeType": "text/html"},
+                    },
+                }
+            ],
+        }
+    }
+
+    def _run(self, tmp_path: Path) -> bytes:
+        input_file = tmp_path / "capture.har"
+        input_file.write_text(json.dumps(self.HAR), newline="\n")
+        output_path, _ = sanitize_har_file(input_file)
+        return Path(output_path).read_bytes()
+
+    def test_output_has_no_carriage_returns(self, tmp_path: Path) -> None:
+        """Sanitized output contains no CR bytes."""
+        assert b"\r" not in self._run(tmp_path)
+
+    def test_output_has_no_carriage_returns_under_windows_text_mode(
+        self, tmp_path: Path, windows_text_mode: None
+    ) -> None:
+        """Even where text mode would translate to CRLF, output stays LF."""
+        output_bytes = self._run(tmp_path)
+
+        assert b"\r" not in output_bytes, "writer must pin newline='\\n'"
+        assert b"\n" in output_bytes, "pretty-printed HAR still contains newlines"
+
+    def test_output_still_parses_as_har(self, tmp_path: Path) -> None:
+        """Pinning the newline does not disturb the JSON payload."""
+        parsed = json.loads(self._run(tmp_path).decode("utf-8"))
+
+        assert parsed["log"]["entries"][0]["request"]["url"] == "http://192.168.100.1/"
 
 
 class TestApplyUserRedactions:

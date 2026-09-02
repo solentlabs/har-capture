@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import tempfile
 from pathlib import Path
@@ -58,3 +59,32 @@ def sample_har_entry():
         return entry
 
     return _create_entry
+
+
+@pytest.fixture
+def windows_text_mode(monkeypatch):
+    r"""Make text-mode writes translate ``\n`` to ``\r\n``, as Windows does.
+
+    Python's text mode writes ``os.linesep`` when ``newline`` is left unset,
+    so a writer that does not pin ``newline="\n"`` emits CRLF on Windows and
+    LF everywhere else — the same capture, byte-different per platform.
+    Downstream repos commit sanitized HARs as immutable evidence and enforce
+    LF, so this fixture reproduces the Windows behavior on any platform and
+    lets the line-ending tests fail on Linux CI when a pin is dropped.
+
+    Only writes are affected, and only those that did not pin ``newline``.
+
+    Scope limit: this patches ``builtins.open``, and ``pathlib`` holds its own
+    reference to the same function via ``io.open``, so ``Path.write_text`` is
+    **not** covered — a writer switched to it would default to
+    ``newline=None`` (CRLF on Windows) and still pass these tests. Keep the
+    HAR/report writers on bare ``open()``, or extend this fixture with them.
+    """
+    real_open = builtins.open
+
+    def translating_open(file, mode="r", *args, **kwargs):
+        if "b" not in mode and any(c in mode for c in "wax+") and "newline" not in kwargs:
+            kwargs["newline"] = "\r\n"
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", translating_open)

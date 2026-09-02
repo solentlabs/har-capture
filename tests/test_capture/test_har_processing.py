@@ -496,3 +496,42 @@ class TestPatchMissingBodies:
         result = _patch_missing_bodies(har_file, {"GET|http://x/|200": b"body"})
 
         assert result == 0
+
+
+class TestCaptureWriterLineEndings:
+    r"""Every capture-side HAR rewrite is LF-only on every platform.
+
+    The .har handed to the operator is evidence: downstream repos commit it
+    and enforce LF, so a CRLF artifact gets rewritten by their hooks. Each
+    writer in the post-capture pipeline pins ``newline="\n"`` rather than
+    letting text mode pick ``os.linesep``. The ``windows_text_mode`` fixture
+    makes an unpinned write emit CRLF on any platform, so a dropped pin fails
+    here on Linux CI too.
+
+    Only the pretty-printed writers are asserted on. ``_patch_missing_bodies``
+    and ``_inject_har_metadata`` dump compact JSON — no newline ever reaches
+    the stream, so no assertion on their bytes can fail. They pin the newline
+    anyway, for the day one of them grows an ``indent=``.
+    """
+
+    def test_filter_and_compress_writes_lf(self, basic_har: Path, windows_text_mode: None) -> None:
+        """filter_and_compress_har rewrites the HAR with LF endings."""
+        filter_and_compress_har(basic_har)
+
+        assert b"\r" not in basic_har.read_bytes()
+
+    def test_compressed_copy_is_lf(self, tmp_path: Path, windows_text_mode: None) -> None:
+        """The .har.gz sibling carries the same LF bytes as the .har."""
+        har_file = _write_har(tmp_path, "basic_har", "test.har")
+
+        compressed_path, _stats = filter_and_compress_har(har_file)
+
+        assert b"\r" not in har_file.read_bytes()
+        with gzip.open(compressed_path, "rb") as f:
+            assert b"\r" not in f.read()
+
+    def test_filtered_har_still_parses(self, basic_har: Path, windows_text_mode: None) -> None:
+        """Pinning the newline does not disturb the JSON payload."""
+        filter_and_compress_har(basic_har)
+
+        assert json.loads(basic_har.read_text())["log"]["entries"]

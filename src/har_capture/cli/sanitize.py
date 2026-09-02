@@ -227,7 +227,7 @@ def sanitize(
 
         # Write report if requested
         if report:
-            with open(report, "w", encoding="utf-8") as f:
+            with open(report, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(sanitization_report.to_dict(), f, indent=2)
             typer.echo(f"  Report: {report}")
 

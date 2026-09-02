@@ -191,11 +191,30 @@ def is_allowlisted(value: str, allowlist: dict[str, Any] | None = None) -> bool:
 # Base64 charset pattern for quick pre-filtering
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
 
+# Reserved Set-Cookie attribute names (RFC 6265 sec. 4.1.1, plus the deployed
+# Partitioned/Priority extensions). In the attribute position of a Set-Cookie
+# header these words scope the cookie — they are not cookie data, and their
+# values (a path, a domain, a date) carry no secret. Matching is
+# case-insensitive per RFC 6265 sec. 5.2.
+COOKIE_ATTRIBUTE_NAMES = (
+    "HttpOnly",
+    "Secure",
+    "SameSite",
+    "Path",
+    "Domain",
+    "Max-Age",
+    "Expires",
+    "Partitioned",
+    "Priority",
+)
+_COOKIE_ATTRIBUTE_NAMES_LOWER = frozenset(name.lower() for name in COOKIE_ATTRIBUTE_NAMES)
+_COOKIE_ATTR_ALTERNATION = "|".join(COOKIE_ATTRIBUTE_NAMES)
+
 # Cookie attribute metadata pattern (e.g., "HttpOnly: true, Secure: true")
 _COOKIE_ATTR_METADATA_RE = re.compile(
-    r"^(HttpOnly|Secure|SameSite|Path|Domain|Max-Age|Expires)"
+    rf"^({_COOKIE_ATTR_ALTERNATION})"
     r"(\s*[:=]\s*\S+)?"
-    r"(\s*[,;]\s*(HttpOnly|Secure|SameSite|Path|Domain|Max-Age|Expires)(\s*[:=]\s*\S+)?)*\s*$",
+    rf"(\s*[,;]\s*({_COOKIE_ATTR_ALTERNATION})(\s*[:=]\s*\S+)?)*\s*$",
     re.IGNORECASE,
 )
 
@@ -309,3 +328,29 @@ def is_cookie_attribute_metadata(value: str) -> bool:
     if not value or not value.strip():
         return False
     return bool(_COOKIE_ATTR_METADATA_RE.match(value))
+
+
+def is_cookie_attribute_name(name: str) -> bool:
+    """Check if a Set-Cookie segment key is a reserved attribute name.
+
+    A Set-Cookie header is one ``name=value`` cookie pair followed by
+    ``;``-separated attributes (RFC 6265 sec. 4.1.1). Only the pair is cookie
+    data; a segment keyed by one of these reserved names describes the
+    cookie's scope and must survive sanitization intact.
+
+    Args:
+        name: The key half of one ``;``-separated Set-Cookie segment
+            (surrounding whitespace is ignored)
+
+    Returns:
+        True if the key is a reserved cookie attribute name
+
+    Examples:
+        >>> is_cookie_attribute_name(" Path")
+        True
+        >>> is_cookie_attribute_name("httponly")
+        True
+        >>> is_cookie_attribute_name("csrfp_token")
+        False
+    """
+    return name.strip().lower() in _COOKIE_ATTRIBUTE_NAMES_LOWER
