@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Set-Cookie` attributes are no longer redacted as if they were secrets.** The cookie pass split the header value on
+  `;` and treated every `k=v` segment as a cookie, so a Technicolor XB8 capture came out as
+  `csrfp_token=COOKIE_c77dc3dc; Path=COOKIE_cea17bb1; httponly` — the cookie's scope replaced by a hash. Nothing leaked,
+  but information did: a redacted `Path` hides real scoping behavior, and downstream tooling that reasons about cookie
+  scope from a capture reads it wrong. RFC 6265 sec. 4.1.1 gives `Set-Cookie` one cookie pair followed by attributes, so
+  only the first segment's value is redacted now; `Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, `Secure`,
+  `HttpOnly`, `Partitioned` and `Priority` survive verbatim, matched case-insensitively per sec. 5.2. An unreserved
+  `k=v` in the attribute position is still redacted. The request `Cookie` header is unchanged — every segment there is
+  cookie data, including one named `path`.
+
+- **Output is written with LF line endings on every platform.** The HAR and report writers opened their files in text
+  mode without pinning `newline`, so Python substituted `os.linesep` and a capture taken on Windows came out CRLF
+  throughout (11,614 of them in one 2.5 MB `.har`) while the same capture on Linux came out LF. The JSON parses either
+  way, but repos that commit sanitized captures as immutable evidence and enforce LF had their pre-commit hooks rewrite
+  the file — mutating the evidence. Every writer now pins `newline="\n"`.
+
 ## [0.12.2] - 2026-08-23
 
 ### Security

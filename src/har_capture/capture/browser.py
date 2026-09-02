@@ -506,8 +506,9 @@ def filter_and_compress_har(
     har["log"]["entries"] = filtered_entries
     filtered_count = len(filtered_entries)
 
-    # Write filtered HAR (pretty-printed for readability)
-    with open(har_path, "w", encoding="utf-8") as f:
+    # Write filtered HAR (pretty-printed for readability). newline="\n" keeps
+    # the artifact byte-identical across platforms — see sanitize_har_file.
+    with open(har_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(har, f, indent=2)
 
     filtered_size = har_path.stat().st_size
@@ -1002,7 +1003,7 @@ def _patch_missing_bodies(
     if patched:
         _LOGGER.info("Patched %d HAR entries with eagerly captured response bodies", patched)
         try:
-            with open(temp_path, "w", encoding="utf-8") as f:
+            with open(temp_path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(har, f)
         except Exception as e:
             _LOGGER.warning("Failed to write patched HAR: %s", e)
@@ -1058,7 +1059,7 @@ def _inject_har_metadata(
                 {k: v for k, v in record.items() if k != "saved_path"} for record in session.downloads
             ],
         }
-        with open(temp_path, "w", encoding="utf-8") as f:
+        with open(temp_path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(raw_har, f)
     except Exception as e:
         _LOGGER.warning("Failed to inject metadata into HAR: %s", e)
@@ -1101,7 +1102,7 @@ def _run_post_capture_pipeline(
             raw_har = json.load(f)
         removed_internal = strip_browser_internal_entries(raw_har)
         if removed_internal:
-            with open(temp_path, "w", encoding="utf-8") as f:
+            with open(temp_path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(raw_har, f)
             _LOGGER.info("Removed %d browser-internal entries (chrome:// etc.)", removed_internal)
         # Runs on the raw HAR: bloat filtering can drop the true first entry.

@@ -441,6 +441,21 @@ class TestSanitizeReportOption:
         # Report is valid JSON.
         json.loads(report_path.read_text())
 
+    def test_report_written_with_lf_endings(
+        self, valid_har: Path, tmp_path: Path, windows_text_mode: None
+    ) -> None:
+        """The report is LF-only even where text mode would write CRLF.
+
+        Same reason as the sanitized HAR: it lands in repos that enforce LF.
+        """
+        report_path = tmp_path / "report.json"
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--report", str(report_path), "--patterns", "base"]
+        )
+
+        assert result.exit_code == 0
+        assert b"\r" not in report_path.read_bytes()
+
     def test_report_auto_path_in_non_interactive_mode(self, valid_har: Path) -> None:
         """Non-TTY without --report -> auto-named .review.json beside input."""
         result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])

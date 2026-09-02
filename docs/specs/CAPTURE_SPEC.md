@@ -692,7 +692,8 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
    `POST`/`PUT`/`PATCH` the key is `(method, url, sha256(body))`, so same-URL submissions with different bodies all
    survive — a device that logs in via two POSTs to one endpoint (salt request, then derived-key submission) keeps both.
    Identical retries still dedup.
-1. **Write filtered HAR**: Pretty-printed JSON
+1. **Write filtered HAR**: Pretty-printed JSON, LF line endings (`newline="\n"` — see
+   [Sanitization Spec](SANITIZATION_SPEC.md#constraints--invariants) for why every writer pins it)
 1. **Gzip compress**: Compression level 9, output to `.har.gz`
 1. **Return stats**: Entry counts, sizes before/after
 
