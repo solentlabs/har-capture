@@ -9,8 +9,9 @@ Provides commands for:
 
 from __future__ import annotations
 
+from typing import Any
+
 try:
-    import click
     import typer
     from typer.core import TyperGroup
 except ImportError as e:
@@ -29,14 +30,14 @@ class _DefaultGetGroup(TyperGroup):
     ``har-capture get http://192.168.1.1``.
     """
 
-    def resolve_command(
-        self, ctx: click.Context, args: list[str]
-    ) -> tuple[str | None, click.Command | None, list[str]]:
-        try:
-            return super().resolve_command(ctx, args)
-        except click.UsageError:
+    # Decided from the arguments, not by catching the "no such command"
+    # error: typer 0.26 began vendoring its own click, so that exception is a
+    # different class depending on the installed typer, and the Context and
+    # Command types in this signature differ the same way — hence Any.
+    def resolve_command(self, ctx: Any, args: list[str]) -> tuple[str | None, Any, list[str]]:
+        if args and not args[0].startswith("-") and self.get_command(ctx, args[0]) is None:
             args.insert(0, "get")
-            return super().resolve_command(ctx, args)
+        return super().resolve_command(ctx, args)
 
 
 app = typer.Typer(

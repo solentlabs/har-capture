@@ -36,9 +36,11 @@ Thank you for your interest in contributing to har-capture!
 
    This installs:
 
-   - **pre-commit**: Runs ruff lint/format on staged files
+   - **pre-commit**: Runs ruff, mypy and the file checks on staged files
    - **commit-msg**: Validates commit message format
-   - **pre-push**: Runs full test suite before push
+   - **pre-push**: Runs `scripts/ci-local.sh --matrix` — what CI's `test` jobs run, on every Python version in CI's
+     matrix and at the lowest allowed dependencies. It needs [uv](https://docs.astral.sh/uv/) to provision the
+     interpreters, and takes a few minutes (longer on the first push of the day, when it rebuilds its venvs).
 
 ## Code Quality Standards
 
@@ -136,8 +138,8 @@ test(validation): add PII detection tests
 1. **Run all checks locally**:
 
    ```bash
-   # One command to run everything CI runs:
-   ./scripts/ci-local.sh
+   # One command to run everything CI's test jobs run (needs uv):
+   ./scripts/ci-local.sh --matrix
 
    # Or run each check separately:
    pre-commit run --all-files

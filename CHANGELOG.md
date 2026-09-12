@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-09-12
+
+### Fixed
+
+- **`har-capture <target>` works again with current typer.** The default-command shorthand —
+  `har-capture 192.168.100.1 --patterns network-device`, the form cable_modem_monitor's contributor instructions give —
+  failed with "No such command" on any install that pulled typer 0.26.0 (2026-05-26) or later. typer began shipping its
+  own copy of click, so the "unknown command" error the shorthand relied on catching became a different class. The
+  shorthand now decides from the arguments instead, and is tested on typer 0.15.4 through 0.27.
+  `har-capture get <target>` was unaffected.
+
+- **The `cli` and `full` extras require typer 0.15.4 or later** (was 0.12), and no longer list click, which har-capture
+  does not import. typer 0.15.4 is the first release that caps click below 8.2; older typer accepts any click, and a
+  resolver that installs a current click with it gets a CLI that crashes before it starts
+  (`TypeError: Secondary flag is not valid for non-boolean flag`). typer 0.12.3 and earlier fail even with click 8.0.
+  The old floor promised an install it could not deliver.
+
 ## [0.12.5] - 2026-09-12
 
 ### Security
@@ -1236,6 +1253,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.3]: https://github.com/solentlabs/har-capture/compare/v0.12.2...v0.12.3
 [0.12.4]: https://github.com/solentlabs/har-capture/compare/v0.12.3...v0.12.4
 [0.12.5]: https://github.com/solentlabs/har-capture/compare/v0.12.4...v0.12.5
+[0.12.6]: https://github.com/solentlabs/har-capture/compare/v0.12.5...v0.12.6
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1263,4 +1281,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.5...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.6...HEAD

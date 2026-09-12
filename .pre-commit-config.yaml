@@ -36,10 +36,10 @@ repos:
   # Ruff - Linting & Formatting
   # ==========================================================================
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.0
+    rev: v0.15.4
     hooks:
       # Run the linter
-      - id: ruff
+      - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
       # Run the formatter
       - id: ruff-format
@@ -48,13 +48,17 @@ repos:
   # Type checking
   # ==========================================================================
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+    rev: v1.19.1
     hooks:
       - id: mypy
+        # Exactly the `cli` and `capture` extras, so the hook type-checks
+        # against what CI installs (tests/test_tooling.py enforces this).
+        # Strictness comes from [tool.mypy] in pyproject.toml, as in CI.
         additional_dependencies:
-          - typer>=0.12
+          - typer>=0.15.4
+          - InquirerPy>=0.3.0
+          - rich>=13.0.0
           - playwright>=1.40
-        args: [--strict, --ignore-missing-imports]
         pass_filenames: false
         entry: mypy src/
 
@@ -92,7 +96,7 @@ repos:
 
       - id: ci-local
         name: ci-local
-        entry: ./scripts/ci-local.sh
+        entry: ./scripts/ci-local.sh --matrix
         language: script
         pass_filenames: false
         always_run: true

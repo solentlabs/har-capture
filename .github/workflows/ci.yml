@@ -31,11 +31,59 @@ jobs:
       - name: Lint with ruff
         run: ruff check .
 
+      - name: Check formatting with ruff
+        run: ruff format --check .
+
+      - name: Type check with mypy
+        run: mypy src/
+
       - name: Run unit tests
         run: pytest -m "not integration" --cov=har_capture --cov-report=term-missing
 
       - name: Enforce per-module coverage floors
         run: python scripts/check_coverage_floors.py
+
+  # Every direct dependency at the lowest version pyproject.toml allows, on
+  # the oldest supported Python — the corner a declared floor has to hold.
+  test-lowest-deps:
+    name: test (lowest dependencies)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install the lowest allowed dependencies
+        run: ./scripts/install-ci-deps.sh python lowest
+
+      - name: Run unit tests
+        run: pytest -m "not integration" --cov=har_capture --cov-report=term-missing
+
+  # The remaining pre-commit hooks (markdown, whitespace, JSON/TOML/YAML,
+  # secrets). ruff and mypy run in ``test`` above at the pinned versions;
+  # commit-message and pre-push hooks don't apply to a checkout.
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: python -m pip install --quiet "pre-commit>=3.7"
+
+      - name: Run pre-commit hooks
+        env:
+          SKIP: no-commit-to-branch,ruff-check,ruff-format,mypy
+        run: pre-commit run --all-files --show-diff-on-failure
 
   # Full test suite with Playwright - uploads combined coverage
   coverage:

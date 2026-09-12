@@ -63,7 +63,7 @@ jobs:
           echo "Found ${TOTAL_CHECKS} check runs"
 
           # Check if ALL CI-related check runs passed
-          CI_RUNS=$(echo "${CHECK_RUNS}" | jq '[.[] | select(.name != null and (.name == "CI" or (.name | startswith("test"))))]')
+          CI_RUNS=$(echo "${CHECK_RUNS}" | jq '[.[] | select(.name != null and (.name == "CI" or .name == "lint" or .name == "coverage" or (.name | startswith("test"))))]')
           CI_COUNT=$(echo "${CI_RUNS}" | jq 'length')
 
           if [ "${CI_COUNT}" -eq 0 ]; then

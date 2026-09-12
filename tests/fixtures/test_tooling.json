@@ -1,0 +1,9 @@
+{
+  "pinned_tools": {
+    "_comment": "Each tool CI installs from pyproject.toml's dev extra must run at the same version in its pre-commit hook, or the two disagree about the same tree.",
+    "cases": [
+      {"id": "ruff", "package": "ruff", "hook_repo": "https://github.com/astral-sh/ruff-pre-commit"},
+      {"id": "mypy", "package": "mypy", "hook_repo": "https://github.com/pre-commit/mirrors-mypy"}
+    ]
+  }
+}
