@@ -503,5 +503,69 @@
       "registry": {"0": "FIELD_cccccccc", "admin": "FIELD_dddddddd"},
       "expected_needles": []
     }
-  ]
+  ],
+  "url_token_login_cases": {
+    "_comment": "URL-token login: the client appends <prefix>_<base64(user:pass)> as a bare query segment. queryString is what Playwright records: URLSearchParams splits at the first '=' and decodes '+' to a space and %3D to '='. The credential forms must not survive anywhere in the sanitized HAR, the prefix must, and validate must find nothing left to report.",
+    "cases": [
+      {
+        "id": "padded",
+        "segment": "login_YWRtaW46ZXhhbXBsZS1wdw==",
+        "query_string": [{"name": "login_YWRtaW46ZXhhbXBsZS1wdw", "value": "="}],
+        "credential_forms": ["YWRtaW46ZXhhbXBsZS1wdw"]
+      },
+      {
+        "id": "percent_encoded_padding",
+        "segment": "login_YWRtaW46ZXhhbXBsZS1wdw%3D%3D",
+        "query_string": [{"name": "login_YWRtaW46ZXhhbXBsZS1wdw==", "value": ""}],
+        "credential_forms": ["YWRtaW46ZXhhbXBsZS1wdw"]
+      },
+      {
+        "id": "plus_and_slash",
+        "segment": "login_YWRtaW46ZmFrZX5+cHc/",
+        "query_string": [{"name": "login_YWRtaW46ZmFrZX5 cHc/", "value": ""}],
+        "credential_forms": ["YWRtaW46ZmFrZX5+cHc/", "YWRtaW46ZmFrZX5 cHc/"]
+      },
+      {
+        "id": "plus_with_padding",
+        "segment": "login_YWRtaW46YWRtaW4+cGFzcw==",
+        "query_string": [{"name": "login_YWRtaW46YWRtaW4 cGFzcw", "value": "="}],
+        "credential_forms": ["YWRtaW46YWRtaW4+cGFzcw", "YWRtaW46YWRtaW4 cGFzcw"]
+      },
+      {
+        "id": "stripped_padding",
+        "segment": "login_YWRtaW46ZXhhbXBsZS1wdw",
+        "query_string": [{"name": "login_YWRtaW46ZXhhbXBsZS1wdw", "value": ""}],
+        "credential_forms": ["YWRtaW46ZXhhbXBsZS1wdw"]
+      },
+      {
+        "id": "short_credential",
+        "segment": "login_YWRtaW46cHc=",
+        "query_string": [{"name": "login_YWRtaW46cHc", "value": ""}],
+        "credential_forms": ["YWRtaW46cHc"]
+      },
+      {
+        "id": "raw_plus_percent_padding",
+        "segment": "login_YWRtaW46YWRtaW4+cGFzcw%3D%3D",
+        "query_string": [{"name": "login_YWRtaW46YWRtaW4 cGFzcw==", "value": ""}],
+        "credential_forms": ["YWRtaW46YWRtaW4+cGFzcw", "YWRtaW46YWRtaW4 cGFzcw"]
+      },
+      {
+        "id": "percent_plus_raw_padding",
+        "segment": "login_YWRtaW46YWRtaW4%2BcGFzcw==",
+        "query_string": [{"name": "login_YWRtaW46YWRtaW4+cGFzcw", "value": "="}],
+        "credential_forms": ["YWRtaW46YWRtaW4+cGFzcw", "YWRtaW46YWRtaW4%2BcGFzcw"]
+      }
+    ]
+  },
+  "url_valued_header_cases": {
+    "_comment": "A request URL's query is repeated in the next request's Referer, and a redirect's Location can carry one. Each header value must come out without the leaked forms, and validate must report the raw file and pass the sanitized one.",
+    "cases": [
+      {"id": "referer_short_login_credential", "header": "Referer",  "url": "https://192.168.100.1/status.html?login_YWRtaW46cHc=",       "leaked_forms": ["YWRtaW46cHc"]},
+      {"id": "referer_stripped_padding",       "header": "Referer",  "url": "https://192.168.100.1/status.html?login_YWRtaW46ZXhhbXBsZS1wdw", "leaked_forms": ["YWRtaW46ZXhhbXBsZS1wdw"]},
+      {"id": "referer_password_param",         "header": "Referer",  "url": "https://192.168.100.1/login.cgi?user=bob&password=hunter22",  "leaked_forms": ["hunter22"]},
+      {"id": "location_keyed_credential",      "header": "Location", "url": "https://192.168.100.1/home.html?token=YWRtaW46cHc=",          "leaked_forms": ["YWRtaW46cHc"]},
+      {"id": "redirect_url_password_param",    "header": "redirectURL", "url": "/home.html?password=hunter22",                            "leaked_forms": ["hunter22"]},
+      {"id": "redirect_url_login_credential",  "header": "redirectURL", "url": "https://192.168.100.1/s.html?login_YWRtaW46cHc=",      "leaked_forms": ["YWRtaW46cHc"]}
+    ]
+  }
 }

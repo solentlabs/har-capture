@@ -8,16 +8,16 @@ domain patterns, merge order, and the section schema for each pattern type. It a
 
 ## Key Files
 
-| File                                                   | Role                                                          |
-| ------------------------------------------------------ | ------------------------------------------------------------- |
-| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns             |
-| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                              |
-| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                |
-| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                            |
-| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names  |
-| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                           |
-| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                               |
-| `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()` |
+| File                                                   | Role                                                                                     |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns                                        |
+| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                                                         |
+| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                                           |
+| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                                                       |
+| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names                             |
+| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                                                      |
+| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                                                          |
+| `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()`, `find_query_credential()` |
 
 ## File Format
 
@@ -573,11 +573,24 @@ Check order:
 
 ### `is_base64_credential(value) -> bool`
 
-Detects base64-encoded `user:pass` patterns in URL query parameters:
+Detects a base64-encoded `user:pass` value:
 
 1. Pre-filter: valid base64 characters, plausible length
-1. Decode: `base64.b64decode()` with validation
-1. Check: decoded string contains exactly one colon separating non-empty parts
+1. Decode: `base64.b64decode()` with validation, strictly to UTF-8
+1. Check: the decoded string has a colon with at least one character on each side (split at the first colon, so a
+   password may contain colons)
+
+### `find_query_credential(segment) -> QueryCredential | None`
+
+Locates a `base64(user:pass)` credential in one raw URL query segment — bare (`?<b64>`), marker-prefixed
+(`?login_<b64>`), or keyed (`?t=<b64>`) — undoing URL transport encoding first. Returns the verbatim `prefix` to keep,
+the `credential`, and whether it was `keyed`. Stripped padding is restored only above a length floor (11 characters) and
+for printable decoded text that is not a URL or JSON payload; a segment shaped like a hash placeholder (`AUTH_d2c6b8e4`)
+is never read as a credential. The single definition of a URL credential for the sanitizer, the validator and the
+credential annotation; see [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
+
+Companions: `query_param_segment(param)` rejoins a HAR `queryString` entry into the segment it was parsed from, and
+`URL_VALUED_HEADERS` names the headers whose value is a URL (`referer`, `location`, `content-location`).
 
 ### `is_cookie_attribute_metadata(value) -> bool`
 

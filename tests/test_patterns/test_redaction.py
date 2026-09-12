@@ -34,7 +34,13 @@ from pathlib import Path
 
 import pytest
 
-from har_capture.patterns.redaction import is_allowlisted, is_fully_redacted, is_redacted
+from har_capture.patterns.redaction import (
+    QueryCredential,
+    find_query_credential,
+    is_allowlisted,
+    is_fully_redacted,
+    is_redacted,
+)
 
 # Load test data from fixture
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_redaction.json").read_text())
@@ -42,6 +48,20 @@ _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_redact
 REDACTED_VALUES = _FIXTURES["redacted_values"]
 NON_REDACTED_VALUES = _FIXTURES["non_redacted_values"]
 CASE_INSENSITIVE_PAIRS = [tuple(group) for group in _FIXTURES["case_insensitive_pairs"]]
+QUERY_CREDENTIAL_CASES = _FIXTURES["query_credential_cases"]["cases"]
+
+
+class TestFindQueryCredential:
+    """find_query_credential locates base64(user:pass) in one raw query segment."""
+
+    @pytest.mark.parametrize("case", QUERY_CREDENTIAL_CASES, ids=[c["id"] for c in QUERY_CREDENTIAL_CASES])
+    def test_find_query_credential(self, case: dict) -> None:
+        expected = (
+            None
+            if case["credential"] is None
+            else QueryCredential(prefix=case["prefix"], credential=case["credential"], keyed=case["keyed"])
+        )
+        assert find_query_credential(case["segment"]) == expected
 
 
 class TestIsRedacted:
