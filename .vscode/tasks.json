@@ -1,0 +1,142 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🌐 HAR Capture: Get",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/har-capture",
+      "args": [
+        "get",
+        "${input:deviceIp}",
+        "--patterns",
+        "${input:patterns}"
+      ],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🧪 Run Tests",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "⚡ Run Tests (no coverage)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pytest --no-cov -q",
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "✨ Lint",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff check .",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🎨 Format",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff format .",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🎨 Format Check",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/ruff format --check .",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔍 Type Check (mypy)",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/mypy src/",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "📦 Build Package",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python -m build",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🔍 Full CI Validation",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/pre-commit run --all-files && ${workspaceFolder}/scripts/ci-local.sh --matrix",
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "detail": "Everything CI runs: the pre-commit hooks (CI's lint job), then the test jobs on every CI Python version and at the lowest allowed dependencies (needs bash and uv)"
+    },
+    {
+      "label": "⚙️ Setup Environment",
+      "type": "shell",
+      "command": "python3 -m venv --clear .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -e '.[dev,full]' && .venv/bin/pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push && .venv/bin/playwright install chromium",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": [],
+      "detail": "Rebuild the venv from scratch, reinstall the git hooks against it, and install Chromium for capture (safe to rerun, e.g. after the repo moves)"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "deviceIp",
+      "type": "promptString",
+      "description": "Device IP or hostname",
+      "default": "192.168.0.1"
+    },
+    {
+      "id": "patterns",
+      "type": "promptString",
+      "description": "Pattern set(s) for --patterns (e.g. network-device, base, or a JSON path)",
+      "default": "network-device"
+    }
+  ]
+}

@@ -60,6 +60,8 @@ dev = [
     "trustme>=1.1",
     # Pre-commit
     "pre-commit>=3.7",
+    # Packaging — the tool .github/workflows/publish.yml builds releases with
+    "build>=1.0",
     # Security
     "pip-audit>=2.7",
 ]
