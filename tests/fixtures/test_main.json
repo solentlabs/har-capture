@@ -1,0 +1,15 @@
+{
+  "cli_dispatch_cases": {
+    "_comment": "Which command handles argv. A first argument that is not a command name means 'get' (the documented `har-capture <target>` shorthand). --help makes each command print its own usage line without running; --version prints the version.",
+    "cases": [
+      {"id": "bare_ip_defaults_to_get",  "argv": ["192.168.100.1", "--help"],    "output_contains": "Usage: har-capture get"},
+      {"id": "url_defaults_to_get",      "argv": ["http://192.0.2.1", "--help"], "output_contains": "Usage: har-capture get"},
+      {"id": "explicit_get",             "argv": ["get", "--help"],              "output_contains": "Usage: har-capture get"},
+      {"id": "sanitize_command",         "argv": ["sanitize", "--help"],         "output_contains": "Usage: har-capture sanitize"},
+      {"id": "validate_command",         "argv": ["validate", "--help"],         "output_contains": "Usage: har-capture validate"},
+      {"id": "patterns_command",         "argv": ["patterns", "--help"],         "output_contains": "Usage: har-capture patterns"},
+      {"id": "version_option_first",     "argv": ["--version"],                  "output_contains": "har-capture"},
+      {"id": "group_help",               "argv": ["--help"],                     "output_contains": "Usage: har-capture [OPTIONS] COMMAND"}
+    ]
+  }
+}

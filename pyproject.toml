@@ -35,15 +35,13 @@ dependencies = []
 [project.optional-dependencies]
 capture = ["playwright>=1.40"]
 cli = [
-    "typer>=0.12",
-    "click>=8.0",
+    "typer>=0.15.4",
     "InquirerPy>=0.3.0",
     "rich>=13.0.0",
 ]
 full = [
     "playwright>=1.40",
-    "typer>=0.12",
-    "click>=8.0",
+    "typer>=0.15.4",
     "InquirerPy>=0.3.0",
     "rich>=13.0.0",
 ]
@@ -53,13 +51,10 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-xdist>=3.5",      # Parallel test execution
     "hypothesis>=6.100",       # Property-based testing
-    # Type checking
-    "mypy>=1.10",
-    # Linting & formatting
-    # Pinned, not floored: CI runs bare `ruff check .`, so an unpinned floor let
-    # a new ruff release turn CI red with no code change (0.16.0 stabilized
-    # PLR0917, which flags 11 pre-existing wide-signature APIs). Bump
-    # deliberately, with the rule review that implies — never implicitly.
+    # Pinned, not floored, and equal to the hook revs in .pre-commit-config.yaml
+    # — see docs/CODE_REVIEW.md, "One version per tool". Bump deliberately,
+    # with the rule review that implies.
+    "mypy==1.19.1",
     "ruff==0.15.4",
     # TLS testing
     "trustme>=1.1",

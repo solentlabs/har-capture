@@ -52,7 +52,8 @@ regardless of what else is in the PR).
    └─ No CI (only main + PRs trigger CI)
 
 2. Create PR targeting main
-   └─ ci.yml triggers: tests on Python 3.10-3.13, coverage + integration tests
+   └─ ci.yml triggers: lint, format, mypy and tests on Python 3.10-3.13, tests at the lowest allowed dependencies, the
+      pre-commit hooks, coverage + integration tests
    └─ PR must pass before merge
 
 3. Merge PR to main (developer only)

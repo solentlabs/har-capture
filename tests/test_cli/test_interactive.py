@@ -886,7 +886,7 @@ class TestRunQuickActionPromptHappy:
 
         monkeypatch.setattr(
             "InquirerPy.inquirer.select",
-            lambda **kwargs: (choices_seen.append(kwargs["choices"]) or FakePrompt()),
+            lambda **kwargs: choices_seen.append(kwargs["choices"]) or FakePrompt(),
         )
         run_quick_action_prompt(flagged)
         # The "Redact HIGH confidence only" choice should appear.
@@ -912,7 +912,7 @@ class TestRunQuickActionPromptHappy:
 
         monkeypatch.setattr(
             "InquirerPy.inquirer.select",
-            lambda **kwargs: (choices_seen.append(kwargs["choices"]) or FakePrompt()),
+            lambda **kwargs: choices_seen.append(kwargs["choices"]) or FakePrompt(),
         )
         run_quick_action_prompt(flagged)
         labels = [c.get("name", "") for c in choices_seen[0]]

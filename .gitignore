@@ -100,13 +100,12 @@ Thumbs.db
 *.har
 *.har.gz
 captures/
-.secrets.baseline
 RAW_DATA/
 
 # Ruff
 .ruff_cache/
 
-.venv-ci/
+.venv-ci*/
 
 # Claude Code session data (scheduled tasks, memory, tool transcripts)
 .claude/

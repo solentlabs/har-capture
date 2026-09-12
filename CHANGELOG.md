@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`har-capture <target>` works again with current typer.** The default-command shorthand —
+  `har-capture 192.168.100.1 --patterns network-device`, the form cable_modem_monitor's contributor instructions give —
+  failed with "No such command" on any install that pulled typer 0.26.0 (2026-05-26) or later. typer began shipping its
+  own copy of click, so the "unknown command" error the shorthand relied on catching became a different class. The
+  shorthand now decides from the arguments instead, and is tested on typer 0.15.4 through 0.27.
+  `har-capture get <target>` was unaffected.
+
+- **The `cli` and `full` extras require typer 0.15.4 or later** (was 0.12), and no longer list click, which har-capture
+  does not import. typer 0.15.4 is the first release that caps click below 8.2; older typer accepts any click, and a
+  resolver that installs a current click with it gets a CLI that crashes before it starts
+  (`TypeError: Secondary flag is not valid for non-boolean flag`). typer 0.12.3 and earlier fail even with click 8.0.
+  The old floor promised an install it could not deliver.
+
 ## [0.12.5] - 2026-09-12
 
 ### Security
