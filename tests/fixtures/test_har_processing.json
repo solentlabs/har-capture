@@ -120,166 +120,506 @@
       ]
     }
   },
-  "har_with_duplicates": {
-    "log": {
-      "version": "1.2",
-      "creator": {
-        "name": "test",
-        "version": "1.0"
+  "repeated_requests": {
+    "_comment": "Repeated requests with the same method, URL and body. Every entry must survive filter_and_compress_har, in recorder order: a repeat can differ from the first in outcome or content, and neither is ours to discard.",
+    "get_failed_then_success": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": -1,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
       },
-      "entries": [
-        {
-          "request": {
-            "method": "GET",
-            "url": "http://example.com/api",
-            "headers": []
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
-          }
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
         },
-        {
-          "request": {
-            "method": "GET",
-            "url": "http://example.com/api",
-            "headers": []
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
-          }
-        },
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://example.com/api",
-            "headers": []
-          },
-          "response": {
-            "status": 201,
-            "headers": [],
-            "content": {}
-          }
-        },
-        {
-          "request": {
-            "method": "GET",
-            "url": "http://example.com/api",
-            "headers": []
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
           }
         }
-      ]
-    }
-  },
-  "post_different_bodies": {
-    "log": {
-      "version": "1.2",
-      "creator": {
-        "name": "test",
-        "version": "1.0"
-      },
-      "entries": [
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://192.168.1.1/api/data",
-            "headers": [],
-            "postData": {
-              "mimeType": "text/plain",
-              "text": "action=1"
-            }
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
-          }
+      }
+    ],
+    "get_success_then_failed": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
         },
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://192.168.1.1/api/data",
-            "headers": [],
-            "postData": {
-              "mimeType": "text/plain",
-              "text": "action=2"
-            }
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
-          }
-        },
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://192.168.1.1/api/data",
-            "headers": [],
-            "postData": {
-              "mimeType": "text/plain",
-              "text": "action=3"
-            }
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
           }
         }
-      ]
-    }
-  },
-  "post_identical_bodies": {
-    "log": {
-      "version": "1.2",
-      "creator": {
-        "name": "test",
-        "version": "1.0"
       },
-      "entries": [
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://192.168.1.1/api/data",
-            "headers": [],
-            "postData": {
-              "mimeType": "text/plain",
-              "text": "action=1"
-            }
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
-          }
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": -1,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
         },
-        {
-          "request": {
-            "method": "POST",
-            "url": "http://192.168.1.1/api/data",
-            "headers": [],
-            "postData": {
-              "mimeType": "text/plain",
-              "text": "action=1"
-            }
-          },
-          "response": {
-            "status": 200,
-            "headers": [],
-            "content": {}
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      }
+    ],
+    "get_success_then_success": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
           }
         }
-      ]
-    }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      }
+    ],
+    "get_failed_then_failed": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": -1,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": -1,
+        "request": {
+          "method": "GET",
+          "url": "https://192.168.100.1/cmswinfo.php?ct_AUTH_41deaca2",
+          "headers": []
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      }
+    ],
+    "get_401_then_200": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.100.1/DocsisStatus.htm",
+          "headers": []
+        },
+        "response": {
+          "status": 401,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>401 Unauthorized</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.100.1/DocsisStatus.htm",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>downstream channels</html>"
+          }
+        }
+      }
+    ],
+    "get_login_page_then_data_page": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.100.1/DocsisStatus.htm",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html><form action='/goform/Login'></form></html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.100.1/DocsisStatus.htm",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>downstream channels</html>"
+          }
+        }
+      }
+    ],
+    "post_failed_then_success": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": -1,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      }
+    ],
+    "post_success_then_failed": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": -1,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      }
+    ],
+    "post_success_then_success": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      }
+    ],
+    "post_failed_then_failed": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": -1,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": -1,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": -1,
+          "headers": [],
+          "content": {},
+          "_failureText": "net::ERR_ABORTED"
+        }
+      }
+    ],
+    "post_different_bodies": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=2"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:16.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=3"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      }
+    ],
+    "same_url_get_and_post": [
+      {
+        "startedDateTime": "2026-09-11T21:52:14.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.1.1/api/data",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:15.000Z",
+        "time": 10,
+        "request": {
+          "method": "POST",
+          "url": "http://192.168.1.1/api/data",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "action=1"
+          }
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      },
+      {
+        "startedDateTime": "2026-09-11T21:52:16.000Z",
+        "time": 10,
+        "request": {
+          "method": "GET",
+          "url": "http://192.168.1.1/api/data",
+          "headers": []
+        },
+        "response": {
+          "status": 200,
+          "headers": [],
+          "content": {
+            "mimeType": "text/html",
+            "text": "<html>ok</html>"
+          }
+        }
+      }
+    ]
   },
   "large_har": {
     "_comment": "20 unique GET entries with large response bodies for compression testing",

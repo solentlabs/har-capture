@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-09-12
+
+### Fixed
+
+- **Repeated requests are no longer dropped from the capture.** Before compressing, the capture removed every request
+  whose method and URL (plus body, for `POST`/`PUT`/`PATCH`) matched an earlier one, keeping the first unconditionally.
+  The response never entered into it, so the half of a repeat that mattered could be the half thrown away: a failed
+  `net::ERR_ABORTED` load kept while its successful retry was discarded (the shape of cable_modem_monitor#213), or a
+  status page visited before login — the unauthenticated answer device integrations ask contributors to record — kept
+  while the same URL's real data page, visited after login, was discarded. Every request now survives, in the order the
+  browser made it; only file-type bloat filtering (fonts, images, media, sourcemaps) removes entries. Captures of pages
+  that are fetched repeatedly get larger. See ADR-15.
+
 ## [0.12.3] - 2026-09-02
 
 ### Fixed
@@ -1178,6 +1191,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.1]: https://github.com/solentlabs/har-capture/compare/v0.12.0...v0.12.1
 [0.12.2]: https://github.com/solentlabs/har-capture/compare/v0.12.1...v0.12.2
 [0.12.3]: https://github.com/solentlabs/har-capture/compare/v0.12.2...v0.12.3
+[0.12.4]: https://github.com/solentlabs/har-capture/compare/v0.12.3...v0.12.4
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1205,4 +1219,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.3...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.4...HEAD

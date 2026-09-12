@@ -310,7 +310,7 @@ ______________________________________________________________________
 
 **Variations**:
 
-- User clicks through many pages → all captured and deduplicated during compression
+- User clicks through many pages → all captured; revisits and retries are kept, not collapsed
 - Large capture (images, fonts) → bloat filtering removes non-essential content
 - Flagged values review → user can skip review with Ctrl+C (values preserved as-is)
 

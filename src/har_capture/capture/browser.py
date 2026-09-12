@@ -10,7 +10,6 @@ import base64
 import contextlib
 import dataclasses
 import gzip
-import hashlib
 import json
 import logging
 import os
@@ -472,34 +471,18 @@ def filter_and_compress_har(
     original_count = len(har["log"]["entries"])
     original_size = har_path.stat().st_size
 
-    # Filter entries
-    seen_requests: set[tuple[str, ...]] = set()
+    # Filter entries by file type only. Repeated requests are never collapsed:
+    # a repeat can differ from the first in outcome or content, and that
+    # difference is the evidence (ADR-15).
     filtered_entries = []
 
     for entry in har["log"]["entries"]:
-        request = entry.get("request", {})
-        method = request.get("method", "GET")
-        url = request.get("url", "")
+        url = entry.get("request", {}).get("url", "")
 
         # Skip bloat file types
         url_lower = url.lower().split("?")[0]  # Remove query params for extension check
         if any(url_lower.endswith(ext) for ext in bloat_extensions):
             continue
-
-        # Skip duplicates (keep first occurrence of each unique request)
-        # For POST/PUT/PATCH, include a body hash so requests to the same URL
-        # with different bodies are preserved (e.g., devices that use a single
-        # POST endpoint differentiated only by body parameters).
-        # Identical retries still dedup correctly.
-        if method in {"POST", "PUT", "PATCH"}:
-            body_text = request.get("postData", {}).get("text", "")
-            body_hash = hashlib.sha256(body_text.encode()).hexdigest()
-            request_key: tuple[str, ...] = (method, url, body_hash)
-        else:
-            request_key = (method, url)
-        if request_key in seen_requests:
-            continue
-        seen_requests.add(request_key)
 
         filtered_entries.append(entry)
 

@@ -120,7 +120,7 @@ graph TD
         meta[Inject metadata + pre_capture_cookies] --> strip[Strip browser-internal entries<br>chrome:// etc.]
         strip --> complete[Completeness check<br>mid-session? any POSTs? refused login?]
         complete --> sanitize[Pass 1: Auto-sanitize PII]
-        sanitize --> filter[Filter bloat + deduplicate]
+        sanitize --> filter[Filter bloat file types]
         filter --> compress[Gzip compress]
         compress --> cleanup[Delete temp files]
         cleanup --> review[Pass 2: Interactive review<br>rewrites .sanitized.har + regenerates .gz]
@@ -195,10 +195,10 @@ timeout vs interactive mode).
 After the browser closes: metadata injection (probes, cookies, storage, tool version, `_solentlabs.pre_capture_cookies`,
 `_solentlabs.popups`, `_solentlabs.dialogs`, `_solentlabs.downloads`) → browser-internal entry stripping (`chrome://`
 etc. — never device evidence, and `chrome://fileicon` URLs leak local paths) → completeness check → sanitization (Pass
-1\) → bloat filtering + deduplication → gzip compression → temp file cleanup → interactive review (Pass 2), which
-rewrites the `.sanitized.har` **and regenerates the `.har.gz`** so the upload artifact can never go stale relative to
-the reviewed file. Browser downloads are saved out of Playwright's ephemeral artifacts directory into
-`<output-stem>_downloads/` before the context closes — raw device output, NOT sanitized, and announced as such.
+1\) → bloat filtering (file type only; repeated requests are kept) → gzip compression → temp file cleanup → interactive
+review (Pass 2), which rewrites the `.sanitized.har` **and regenerates the `.har.gz`** so the upload artifact can never
+go stale relative to the reviewed file. Browser downloads are saved out of Playwright's ephemeral artifacts directory
+into `<output-stem>_downloads/` before the context closes — raw device output, NOT sanitized, and announced as such.
 
 The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See
 [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
