@@ -31,6 +31,7 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
+    MAC_RE,
     URL_VALUED_HEADERS,
     find_query_credential,
     is_base64_credential,
@@ -39,6 +40,7 @@ from har_capture.patterns.redaction import (
     is_cookie_attribute_metadata,
     is_fully_redacted,
     query_param_segment,
+    url_query,
 )
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
@@ -61,8 +63,9 @@ COOKIE_ATTRIBUTES_ONLY: list[str] = [
     r"^$",
 ]
 
-# MAC address pattern (not anonymized)
-MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
+# The shared MAC definition, under validation's public name — the sanitizer
+# redacts exactly what this reports.
+MAC_PATTERN = MAC_RE
 
 # Serial number patterns (manufacturer-specific)
 # Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
@@ -410,14 +413,14 @@ def check_url(
         field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
         seen: Findings already reported for the same request, to skip repeats
     """
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.query:
+    query = url_query(url)
+    if not query:
         return
     tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
     reported = seen if seen is not None else set()
     # Raw segments, not parse_qsl: it treats '=' as a key/value separator and
     # would strip base64 padding.
-    for segment in parsed.query.split("&"):
+    for segment in query.split("&"):
         key, sep, raw_value = segment.partition("=")
         name = urllib.parse.unquote_plus(key)
         value = urllib.parse.unquote_plus(raw_value) if sep else ""

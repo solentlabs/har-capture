@@ -8,7 +8,8 @@ har-capture sanitizes the following categories of personally identifiable inform
 
 ### MAC Addresses
 
-**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX`
+**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX` in text; bare `XXXXXXXXXXXX` and dotted `XXXX.XXXX.XXXX` under a
+MAC-named key
 
 **Examples:**
 
@@ -19,8 +20,8 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 
 **Format-preserving hash:**
 
-- Uses locally administered bit (`02:` prefix)
-- Maintains valid MAC format
+- Uses locally administered bit (`02` first octet)
+- Keeps the input's layout (separator and grouping)
 - Preserves correlation across requests
 
 ### IP Addresses (Private)

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
+    MAC_RE,
     URL_VALUED_HEADERS,
     Hasher,
     QueryCredential,
@@ -32,6 +33,7 @@ from har_capture.patterns import (
     is_blank_query_value,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
+    iter_url_credentials,
     load_sensitive_patterns,
     query_param_segment,
 )
@@ -974,7 +976,6 @@ _LONG_TOKEN_PATTERN = re.compile(r"^(?=[a-zA-Z]*\d)(?=\d*[a-zA-Z])[a-zA-Z0-9]{32
 _DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
 
 # Regex patterns for value-based sanitization
-_MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
 _PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
 # Public IPs: any non-private, non-localhost, non-reserved first octet
 _PUBLIC_IP_PATTERN = re.compile(
@@ -1061,7 +1062,7 @@ def _sanitize_string_patterns(
             collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0)) if hasher else "***MAC***"
 
-    value = _MAC_PATTERN.sub(replace_mac, value)
+    value = MAC_RE.sub(replace_mac, value)
 
     # Private IPs (keep common gateway IPs)
     preserved_ips = {"192.168.0.1", "192.168.1.1", "10.0.0.1", "192.168.100.1"}
@@ -1663,31 +1664,6 @@ def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
     return None
 
 
-def _request_query_segments(request: dict[str, Any]) -> Iterator[str]:
-    """Yield a request's query segments: the URL string's first, then ``queryString``'s."""
-    url = request.get("url", "")
-    if isinstance(url, str) and url:
-        yield from urllib.parse.urlparse(url).query.split("&")
-    params = request.get("queryString")
-    if isinstance(params, list):
-        for param in params:
-            if isinstance(param, dict):
-                yield query_param_segment(param)
-
-
-def _extract_url_credential(request: dict[str, Any]) -> str | None:
-    """Return the base64 credential carried in a request's URL query, or None.
-
-    The response-body guard compares against it to tell an echoed credential
-    from a server-issued session token.
-    """
-    for segment in _request_query_segments(request):
-        found = find_query_credential(segment)
-        if found:
-            return found.credential
-    return None
-
-
 def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
     """Map entry index to the URL credential its request carries.
 
@@ -1699,9 +1675,9 @@ def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
     credentials: dict[int, str] = {}
     for i, entry in enumerate(entries):
         request = entry.get("request") if isinstance(entry, dict) else None
-        credential = _extract_url_credential(request) if isinstance(request, dict) else None
-        if credential is not None:
-            credentials[i] = credential
+        found = next(iter_url_credentials(request), None) if isinstance(request, dict) else None
+        if found is not None:
+            credentials[i] = found.credential
     return credentials
 
 
@@ -2240,7 +2216,8 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
         r"DEVICE_[a-f0-9]{8}",  # Hashed device names
         r"PRIV_IP_[a-f0-9]{8}",  # Hashed private IPs (old format)
         r"\*\*\*[A-Z]+\*\*\*",  # Static placeholders
-        r"02:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}",  # Hashed MACs
+        r"\b02([:-])[a-f0-9]{2}(?:\1[a-f0-9]{2}){4}\b",  # Hashed MACs, separated layouts
+        r"\b02[a-f0-9]{2}\.[a-f0-9]{4}\.[a-f0-9]{4}\b",  # Hashed MACs, dotted layout
         r"10\.255\.\d+\.\d+",  # Hashed private IPs
         r"192\.0\.2\.\d+",  # Hashed public IPs (TEST-NET-1)
         r"user_[a-f0-9]{8}@redacted\.invalid",  # Hashed emails

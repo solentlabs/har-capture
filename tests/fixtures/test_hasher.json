@@ -1,0 +1,23 @@
+{
+  "_comment": "Hasher fixtures: hash_mac layout preservation and correlation across layouts.",
+  "hash_mac_format_cases": {
+    "_comment": "hash_mac keeps the input's layout: separator and grouping survive, the first octet becomes the locally administered 02, hex is lowercase. A value in no MAC layout gets the colon form.",
+    "cases": [
+      {"id": "colon_upper",      "input": "3C:7A:8A:12:34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "colon_lower",      "input": "3c:7a:8a:12:34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "hyphen",           "input": "3C-7A-8A-12-34-56", "output_re": "^02(-[0-9a-f]{2}){5}$"},
+      {"id": "bare_upper",       "input": "3C7A8A123456",      "output_re": "^02[0-9a-f]{10}$"},
+      {"id": "bare_lower",       "input": "3c7a8a123456",      "output_re": "^02[0-9a-f]{10}$"},
+      {"id": "dotted",           "input": "3c7a.8a12.3456",    "output_re": "^02[0-9a-f]{2}\\.[0-9a-f]{4}\\.[0-9a-f]{4}$"},
+      {"id": "mixed_separators", "input": "3C:7A-8A:12-34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "not_a_mac_layout", "input": "N/A",               "output_re": "^02(:[0-9a-f]{2}){5}$"}
+    ]
+  },
+  "hash_mac_normalization_cases": {
+    "_comment": "Every layout of one MAC hashes to the same digits, so correlation survives a device writing the same MAC two ways. Separators and case are not part of the identity.",
+    "cases": [
+      {"id": "one_mac_every_layout", "inputs": ["3C:7A:8A:12:34:56", "3c:7a:8a:12:34:56", "3C-7A-8A-12-34-56", "3C7A8A123456", "3c7a.8a12.3456"]},
+      {"id": "mixed_separators",     "inputs": ["3C:7A-8A:12-34:56", "3C:7A:8A:12:34:56"]}
+    ]
+  }
+}

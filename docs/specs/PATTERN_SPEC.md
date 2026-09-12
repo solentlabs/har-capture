@@ -8,16 +8,16 @@ domain patterns, merge order, and the section schema for each pattern type. It a
 
 ## Key Files
 
-| File                                                   | Role                                                                                     |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns                                        |
-| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                                                         |
-| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                                           |
-| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                                                       |
-| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names                             |
-| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                                                      |
-| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                                                          |
-| `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()`, `find_query_credential()` |
+| File                                                   | Role                                                                                                                                     |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns                                                                                        |
+| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                                                                                                         |
+| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                                                                                           |
+| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                                                                                                       |
+| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names                                                                             |
+| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                                                                                                      |
+| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                                                                                                          |
+| `src/har_capture/patterns/redaction.py`                | `is_redacted()` and the detection primitives shared by sanitize and validate (see [Redaction Checking](#redaction-checking-redactionpy)) |
 
 ## File Format
 
@@ -66,7 +66,7 @@ Underscore-prefixed keys are skipped during the merge process.
 
 | Name          | Prefix              | What It Matches                                     |
 | ------------- | ------------------- | --------------------------------------------------- |
-| mac_address   | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF`            |
+| mac_address   | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`) |
 | serial_number | SERIAL              | SN, S/N, Serial Number labels + values              |
 | account_id    | ACCOUNT             | Account, Subscriber, Customer, Device ID labels     |
 | private_ip    | (format-preserving) | 10.x, 172.16-31.x, 192.168.x                        |
@@ -146,8 +146,8 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
   },
   "format_preserving_patterns": {
     "mac": {
-      "pattern": "^02:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$",
-      "description": "Locally administered MAC (02:xx:xx:xx:xx:xx)"
+      "pattern": "^02(?:([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}|[0-9a-f]{10}|[0-9a-f]{2}\\.[0-9a-f]{4}\\.[0-9a-f]{4})$",
+      "description": "Locally administered MAC in any layout hash_mac emits"
     },
     "private_ip": {
       "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
@@ -594,6 +594,35 @@ credential annotation; see [Sanitization Spec — URL Sanitization](SANITIZATION
 Companions: `query_param_segment(param)` rejoins a HAR `queryString` entry into the segment it was parsed from, and
 `URL_VALUED_HEADERS` names the headers whose value is a URL (`referer`, `location`, `content-location`).
 
+### `MAC_RE` and `is_mac_value(value) -> bool`
+
+`MAC_RE` is the one definition of a MAC address in text — six hex pairs joined by `:` or `-`, bounded by non-hex
+characters — for the sanitizer, `validate`, and (through `pii.json`'s `mac_address` regex, which must equal
+`MAC_RE.pattern`) `check_for_pii`. `is_mac_value()` recognizes a whole value in any MAC layout: separated, bare 12-hex,
+or dotted `3c7a.8a12.3456`. See [Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses).
+
+### `classify_identity_field(key, value) -> str | None`
+
+Classifies a field whose key names a device identity and whose value has that identity's shape: `"serial_number"`,
+`"mac_address"`, or `None`. The key is read as its words, lowercased and joined with `_` (`StatusSoftwareSerialNum` →
+`status_software_serial_num`), and the identity must be its final word(s) (`SERIAL_KEY_RE`, `MAC_KEY_RE`): a serial
+(`serial`, `serial_number`, `serial_num`, `serial_no`, or exactly `sn`) or a MAC (`mac`, `mac_address`, `hwaddr`, ...),
+optionally numbered (`macaddress_5`). `serialNumberLabel`, `MacAddressFilterEnabled`, `hmac_algorithm` and
+`ofdmachannel` are not identity keys. A serial value is one whitespace-free token of five or more characters carrying a
+digit; a MAC value passes `is_mac_value()`. Shape only — whether the value is already a placeholder is the caller's
+decision.
+
+### `decode_transport_body(content) -> str | None`
+
+The text a HAR body carries. A body without `encoding` is already text; a `base64` body is decoded with the mime type's
+declared charset, else strictly as UTF-8. Bytes that do not decode, or text holding NUL, are binary and return `None`.
+
+### `url_query(url)` and `iter_url_credentials(request)`
+
+`url_query()` returns a URL's raw query — the text between the first `?` and the next `#` — without `urlparse`, which
+raises on URLs it cannot parse. `iter_url_credentials()` yields every `find_query_credential()` hit in a HAR request:
+URL string segments first, then the `queryString` array's.
+
 ### `is_cookie_attribute_metadata(value) -> bool`
 
 Distinguishes cookie attributes from cookie values:
@@ -617,7 +646,9 @@ Used to avoid flagging cookie headers that only contain metadata.
    `network_device` resolve to the same file.
 1. **Cache is session-scoped** — Pattern files are not re-read after initial load within a session. File changes require
    a new session or explicit `clear_pattern_cache()`.
-1. **Allowlist patterns must not match real PII** — Format-preserving hash ranges (TEST-NET, documentation prefixes,
-   locally administered MACs) are chosen specifically because they cannot appear in legitimate traffic.
+1. **Allowlist patterns name placeholder formats** — Format-preserving hash ranges are chosen from reserved space:
+   TEST-NET and documentation IP ranges cannot appear in legitimate traffic. Locally administered MACs (`02…`) can, so
+   the MAC pattern also matches a real locally administered MAC; the sanitizer never uses it to skip a MAC (see
+   [Sanitization Spec — Idempotency Boundary](SANITIZATION_SPEC.md#idempotency-boundary)).
 1. **Pattern precedence** — Custom patterns (from domain files) have higher precedence than core patterns for the same
    key in a dict. For lists, custom patterns are appended (run after core patterns).

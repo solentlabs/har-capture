@@ -34,13 +34,18 @@ from pathlib import Path
 
 import pytest
 
+from har_capture.patterns.loader import load_pii_patterns
 from har_capture.patterns.redaction import (
+    MAC_RE,
     QueryCredential,
+    classify_identity_field,
+    decode_transport_body,
     find_query_credential,
     is_allowlisted,
     is_base64_credential,
     is_fully_redacted,
     is_redacted,
+    iter_url_credentials,
 )
 
 # Load test data from fixture
@@ -51,6 +56,46 @@ NON_REDACTED_VALUES = _FIXTURES["non_redacted_values"]
 CASE_INSENSITIVE_PAIRS = [tuple(group) for group in _FIXTURES["case_insensitive_pairs"]]
 QUERY_CREDENTIAL_CASES = _FIXTURES["query_credential_cases"]["cases"]
 BASE64_CREDENTIAL_PADDING_CASES = _FIXTURES["base64_credential_padding_cases"]["cases"]
+MAC_REGEX_CASES = _FIXTURES["mac_regex_cases"]["cases"]
+URL_CREDENTIAL_CASES = _FIXTURES["url_credential_cases"]["cases"]
+JSON_IDENTITY_KEY_CASES = _FIXTURES["json_identity_key_cases"]["cases"]
+TRANSPORT_BODY_CASES = _FIXTURES["transport_body_cases"]["cases"]
+
+
+class TestMacRegex:
+    """MAC_RE is the one MAC definition for the sanitizer, the validator and check_for_pii."""
+
+    @pytest.mark.parametrize("case", MAC_REGEX_CASES, ids=[c["id"] for c in MAC_REGEX_CASES])
+    def test_matches(self, case: dict) -> None:
+        assert [m.group(0) for m in MAC_RE.finditer(case["text"])] == case["matches"]
+
+    def test_pii_json_mirrors_mac_re(self) -> None:
+        """check_for_pii reads pii.json; the pattern file must carry MAC_RE verbatim."""
+        assert load_pii_patterns()["patterns"]["mac_address"]["regex"] == MAC_RE.pattern
+
+
+class TestIterUrlCredentials:
+    """iter_url_credentials reads a request's whole query with find_query_credential."""
+
+    @pytest.mark.parametrize("case", URL_CREDENTIAL_CASES, ids=[c["id"] for c in URL_CREDENTIAL_CASES])
+    def test_credentials(self, case: dict) -> None:
+        assert [c.credential for c in iter_url_credentials(case["request"])] == case["credentials"]
+
+
+class TestClassifyIdentityField:
+    """A JSON key naming a serial or MAC, holding a value of that shape."""
+
+    @pytest.mark.parametrize("case", JSON_IDENTITY_KEY_CASES, ids=[c["id"] for c in JSON_IDENTITY_KEY_CASES])
+    def test_category(self, case: dict) -> None:
+        assert classify_identity_field(case["key"], case["value"]) == case["category"]
+
+
+class TestDecodeTransportBody:
+    """decode_transport_body returns a body's text, or None for binary."""
+
+    @pytest.mark.parametrize("case", TRANSPORT_BODY_CASES, ids=[c["id"] for c in TRANSPORT_BODY_CASES])
+    def test_decoded(self, case: dict) -> None:
+        assert decode_transport_body(case["content"]) == case["expected"]
 
 
 class TestBase64CredentialPadding:

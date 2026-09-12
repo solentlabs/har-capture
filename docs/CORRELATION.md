@@ -33,13 +33,13 @@ With static placeholders (--no-salt):
 
 har-capture uses standardized reserved ranges to ensure output doesn't conflict with real data:
 
-| Type       | Range                       | Standard                 |
-| ---------- | --------------------------- | ------------------------ |
-| MAC        | `02:xx:xx:xx:xx:xx`         | Locally administered bit |
-| Private IP | `10.255.x.x`                | RFC 1918                 |
-| Public IP  | `192.0.2.x`                 | RFC 5737 TEST-NET-1      |
-| IPv6       | `2001:db8::`                | RFC 3849 documentation   |
-| Email      | `user_xxx@redacted.invalid` | RFC 2606 .invalid TLD    |
+| Type       | Range                                     | Standard                 |
+| ---------- | ----------------------------------------- | ------------------------ |
+| MAC        | `02:xx:xx:xx:xx:xx` (input's layout kept) | Locally administered bit |
+| Private IP | `10.255.x.x`                              | RFC 1918                 |
+| Public IP  | `192.0.2.x`                               | RFC 5737 TEST-NET-1      |
+| IPv6       | `2001:db8::`                              | RFC 3849 documentation   |
+| Email      | `user_xxx@redacted.invalid`               | RFC 2606 .invalid TLD    |
 
 ## Salt Options
 

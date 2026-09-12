@@ -22,8 +22,11 @@ from har_capture.patterns.loader import (
     load_sensitive_patterns,
 )
 from har_capture.patterns.redaction import (
+    MAC_RE,
     URL_VALUED_HEADERS,
     QueryCredential,
+    classify_identity_field,
+    decode_transport_body,
     find_query_credential,
     is_allowlisted,
     is_base64_credential,
@@ -32,8 +35,11 @@ from har_capture.patterns.redaction import (
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
     is_fully_redacted,
+    is_mac_value,
     is_redacted,
+    iter_url_credentials,
     query_param_segment,
+    url_query,
 )
 
 __all__ = [
@@ -48,8 +54,11 @@ __all__ = [
     "clear_pattern_cache",
     "compile_pattern",
     "PatternLoadError",
-    # Redaction checking
+    # Redaction checking and shared detection primitives
+    "MAC_RE",
     "QueryCredential",
+    "classify_identity_field",
+    "decode_transport_body",
     "find_query_credential",
     "is_allowlisted",
     "is_blank_query_value",
@@ -58,8 +67,11 @@ __all__ = [
     "is_cookie_attribute_metadata",
     "is_cookie_attribute_name",
     "is_fully_redacted",
+    "is_mac_value",
     "is_redacted",
+    "iter_url_credentials",
     "query_param_segment",
+    "url_query",
     "URL_VALUED_HEADERS",
     # Hashing
     "Hasher",

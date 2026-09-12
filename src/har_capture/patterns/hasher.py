@@ -8,8 +8,24 @@ values without knowing the originals.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass, field
+
+_MAC_SEPARATORS_RE = re.compile(r"[:.-]")
+
+# (layout regex, separator hash_mac joins the output with). "." is the dotted
+# 4-4-4 grouping; "" is bare 12-hex. Mixed separators fall back to the colon.
+_MAC_LAYOUTS = (
+    (re.compile(r"[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"), "-"),
+    (re.compile(r"[0-9A-Fa-f]{12}"), ""),
+    (re.compile(r"[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"), "."),
+)
+
+
+def _mac_layout(mac: str) -> str:
+    """Return the separator of the input's MAC layout, colon by default."""
+    return next((sep for layout, sep in _MAC_LAYOUTS if layout.fullmatch(mac)), ":")
 
 
 @dataclass
@@ -20,7 +36,7 @@ class Hasher:
     allowing analysts to correlate redacted values without knowing the originals.
 
     Uses format-preserving hashes where possible:
-    - MAC addresses: 02:xx:xx:xx:xx:xx (locally administered)
+    - MAC addresses: 02:xx:xx:xx:xx:xx (locally administered, in the input's layout)
     - Private IPs: 10.255.x.x
     - Public IPs: 192.0.2.x (TEST-NET-1)
     - IPv6: 2001:db8::xxxx:xxxx (documentation prefix)
@@ -109,27 +125,35 @@ class Hasher:
     def hash_mac(self, mac: str) -> str:
         """Hash a MAC address (format-preserving).
 
-        Uses locally administered address range (02:xx:xx:xx:xx:xx).
-        The 02 prefix indicates a locally administered, unicast address.
+        The placeholder is in the locally administered range (first octet
+        ``02``: locally administered, unicast) and occupies the input's
+        layout — separator and grouping survive, so a consumer that parses
+        ``AABBCCDDEEFF`` or ``aabb.ccdd.eeff`` still parses the placeholder.
+        The hash is taken over the hex digits alone, so every layout of one
+        MAC correlates. A value in no MAC layout gets the colon form.
 
         Args:
-            mac: MAC address string (any format)
+            mac: MAC address string (any layout)
 
         Returns:
-            Format-preserving MAC like "02:a1:b2:c3:d4:e5" or "XX:XX:XX:XX:XX:XX" if no salt
+            Format-preserving MAC like "02:a1:b2:c3:d4:e5" in the input's
+            layout, or "XX:XX:XX:XX:XX:XX" if no salt
         """
         if self.salt is None:
             return "XX:XX:XX:XX:XX:XX"
 
-        # Normalize for consistent hashing
-        normalized = mac.upper().replace("-", ":")
-        cache_key = f"MAC:{normalized}"
+        layout = _mac_layout(mac)
+        normalized = _MAC_SEPARATORS_RE.sub("", mac).upper()
+        cache_key = f"MAC{layout}:{normalized}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         hash_bytes = self._get_hash_bytes(normalized, "MAC")
-        # Use 02 prefix (locally administered bit set) + 5 bytes from hash
-        result = f"02:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}:{hash_bytes[3]:02x}:{hash_bytes[4]:02x}"
+        digits = "02" + hash_bytes[:5].hex()
+        if layout == ".":
+            result = f"{digits[:4]}.{digits[4:8]}.{digits[8:]}"
+        else:
+            result = layout.join(digits[i : i + 2] for i in range(0, 12, 2))
 
         self._cache[cache_key] = result
         return result

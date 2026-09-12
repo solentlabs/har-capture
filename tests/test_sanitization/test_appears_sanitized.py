@@ -83,6 +83,10 @@ REDACTION_PATTERN_CASES = [
     ("***MAC***", True, "star_mac"),
     ("***PASSWORD***", True, "star_password"),
     ("02:00:00:00:00:01", True, "locally_administered_mac"),
+    ("02-00-00-00-00-01", True, "locally_administered_mac_hyphen_layout"),
+    ("0200.0000.0001", True, "locally_administered_mac_dotted_layout"),
+    # A bare 12-hex placeholder is indistinguishable from any hex run in a document scan
+    ("020000000001", False, "bare_mac_layout_not_counted"),
     ("10.255.1.2", True, "rfc5737_ip_10"),
     ("192.0.2.123", True, "rfc5737_ip_192"),
     ("user_12345678@redacted.invalid", True, "redacted_email"),

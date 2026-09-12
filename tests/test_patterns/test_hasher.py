@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 import pytest
 
 from har_capture.patterns.hasher import Hasher
+from har_capture.patterns.redaction import is_redacted
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐
 # │ Hasher.create() test cases                                                  │
@@ -42,40 +47,27 @@ def test_hasher_create(salt_input: str | None, expected: str | None, desc: str) 
         assert hasher.salt == expected
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ hash_mac() test cases                                                       │
-# ├─────────────────────────┬───────────────────┬───────────────────────────────┤
-# │ input                   │ expected_prefix   │ description                   │
-# ├─────────────────────────┼───────────────────┼───────────────────────────────┤
-# │ "AA:BB:CC:DD:EE:FF"     │ "02:"             │ standard colon format         │
-# │ "aa:bb:cc:dd:ee:ff"     │ "02:"             │ lowercase                     │
-# │ "AA-BB-CC-DD-EE-FF"     │ "02:"             │ dash separator                │
-# │ "AABBCCDDEEFF"          │ "02:"             │ no separator                  │
-# │ "aabbccddeeff"          │ "02:"             │ lowercase no separator        │
-# └─────────────────────────┴───────────────────┴───────────────────────────────┘
-#
-# fmt: off
-MAC_CASES = [
-    ("AA:BB:CC:DD:EE:FF", "02:", "standard colon format"),
-    ("aa:bb:cc:dd:ee:ff", "02:", "lowercase"),
-    ("AA-BB-CC-DD-EE-FF", "02:", "dash separator"),
-    ("AABBCCDDEEFF",      "02:", "no separator (normalized)"),
-    ("aabbccddeeff",      "02:", "lowercase no separator"),
-]
-# fmt: on
+_FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_hasher.json").read_text())
+HASH_MAC_FORMAT_CASES = _FIXTURES["hash_mac_format_cases"]["cases"]
+HASH_MAC_NORMALIZATION_CASES = _FIXTURES["hash_mac_normalization_cases"]["cases"]
 
 
-@pytest.mark.parametrize(("mac_input", "expected_prefix", "desc"), MAC_CASES)
-def test_hash_mac_with_salt(mac_input: str, expected_prefix: str, desc: str) -> None:
-    """Test hash_mac() produces format-preserving output with salt."""
-    hasher = Hasher.create(salt="test-salt")
-    result = hasher.hash_mac(mac_input)
+@pytest.mark.parametrize("case", HASH_MAC_FORMAT_CASES, ids=[c["id"] for c in HASH_MAC_FORMAT_CASES])
+def test_hash_mac_keeps_layout(case: dict) -> None:
+    """hash_mac() output occupies the input's layout, in the locally administered range."""
+    result = Hasher.create(salt="test-salt").hash_mac(case["input"])
+    assert re.fullmatch(case["output_re"], result), result
+    assert is_redacted(result)
 
-    assert result.startswith(expected_prefix), f"Expected prefix {expected_prefix}, got {result}"
-    # Should be valid MAC format: 02:xx:xx:xx:xx:xx
-    parts = result.split(":")
-    assert len(parts) == 6
-    assert all(len(p) == 2 for p in parts)
+
+@pytest.mark.parametrize(
+    "case", HASH_MAC_NORMALIZATION_CASES, ids=[c["id"] for c in HASH_MAC_NORMALIZATION_CASES]
+)
+def test_hash_mac_correlates_across_layouts(case: dict) -> None:
+    """Every layout of one MAC hashes to the same digits."""
+    hasher = Hasher.create(salt="normalize")
+    digits = {re.sub(r"[^0-9a-f]", "", hasher.hash_mac(mac)) for mac in case["inputs"]}
+    assert len(digits) == 1
 
 
 def test_hash_mac_without_salt() -> None:
@@ -99,15 +91,6 @@ def test_hash_mac_different_values() -> None:
     result1 = hasher.hash_mac("AA:BB:CC:DD:EE:FF")
     result2 = hasher.hash_mac("11:22:33:44:55:66")
     assert result1 != result2
-
-
-def test_hash_mac_normalization() -> None:
-    """Test different formats of same MAC produce same hash."""
-    hasher = Hasher.create(salt="normalize")
-    result1 = hasher.hash_mac("AA:BB:CC:DD:EE:FF")
-    result2 = hasher.hash_mac("aa:bb:cc:dd:ee:ff")
-    result3 = hasher.hash_mac("AA-BB-CC-DD-EE-FF")
-    assert result1 == result2 == result3
 
 
 # ┌─────────────────────────────────────────────────────────────────────────────┐

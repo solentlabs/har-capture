@@ -32,7 +32,7 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.redaction import is_redacted
+from har_capture.patterns.redaction import MAC_RE, is_redacted
 
 if TYPE_CHECKING:
     from typing import Any
@@ -51,9 +51,6 @@ _PIPE_SERIAL_RE = re.compile(r"^(?:SN|S/N|S-N)[-_][A-Za-z0-9]{5,}$", re.IGNORECA
 
 # Already-redacted hash pattern for pipe-delimited values (MAC_a1b2c3d4, SERIAL_deadbeef)
 _ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
-
-# MAC address pattern for pipe-delimited values (exact match)
-_PIPE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 
 
 # Sibling-element label/value pairs where the value occupies its OWN element.
@@ -285,7 +282,7 @@ def _sanitize_pipe_value(
 
     # AUTO-REDACT: Known reliable patterns
     # MAC addresses
-    if _PIPE_MAC_RE.match(value):
+    if MAC_RE.fullmatch(value):
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(value)
 
@@ -654,7 +651,7 @@ def _sanitize_html_impl(
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0))
 
-    html = re.sub(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", replace_mac, html)
+    html = MAC_RE.sub(replace_mac, html)
 
     # 2. Serial Numbers (various label formats)
     # The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags so
@@ -817,8 +814,8 @@ def _sanitize_html_impl(
     # 6. IPv6 Addresses (full and compressed) - strict validation
     def replace_ipv6(match: re.Match[str]) -> str:
         text: str = match.group(0)
-        # Skip if it looks like a MAC address (6 groups of 2 hex chars)
-        if re.match(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", text, re.IGNORECASE):
+        # A MAC pass 1 left alone (a MAC placeholder) is not an IPv6 address
+        if MAC_RE.fullmatch(text):
             return text
         # Use strict validation via ipaddress module
         try:

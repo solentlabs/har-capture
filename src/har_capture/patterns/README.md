@@ -79,8 +79,8 @@ Defines patterns for recognizing already-redacted values (to avoid double-flaggi
   },
   "format_preserving_patterns": {
     "mac": {
-      "pattern": "^02:[0-9a-f]{2}:...",
-      "description": "Locally administered MAC"
+      "pattern": "^02(?:([:-])[0-9a-f]{2}...)$",
+      "description": "Locally administered MAC in any layout hash_mac emits"
     }
   },
   "hash_prefixes": {

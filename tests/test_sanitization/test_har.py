@@ -38,7 +38,6 @@ from har_capture.sanitization.har import (
     _decode_base64_json,
     _detect_client_side_cookies,
     _embed_sanitization_metadata,
-    _extract_url_credential,
     _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
@@ -2343,7 +2342,7 @@ class TestSanitizedCredentialAnnotation:
 
 
 # =============================================================================
-# Server-Token Preservation: _extract_url_credential / _is_echoed_credential
+# Server-Token Preservation: _is_echoed_credential
 # =============================================================================
 
 # URL cred: admin:pass → YWRtaW46cGFzcw==
@@ -2360,85 +2359,6 @@ _NON_UTF8_CREDENTIAL = base64.b64encode(b"\xff\xfe").decode()
 _NO_COLON_CREDENTIAL = base64.b64encode(b"simple").decode()
 
 # fmt: off
-EXTRACT_URL_CREDENTIAL_CASES = [
-    # (request_dict, expected_credential, desc)
-    (
-        {"url": f"https://d.local/login?{_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "bare_cred_in_url",
-    ),
-    (
-        {"url": f"https://d.local/login?token={_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "cred_as_param_value_in_url",
-    ),
-    (
-        {"url": f"https://d.local/status.html?login_{_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "prefixed_cred_in_url",
-    ),
-    (
-        {"url": "", "queryString": [{"name": f"login_{_ADMIN_PASS_RAW.rstrip('=')}", "value": "="}]},
-        _ADMIN_PASS_RAW,
-        "prefixed_cred_split_by_query_parser",
-    ),
-    (
-        {"url": "https://d.local/status", "queryString": []},
-        None,
-        "no_cred_in_url",
-    ),
-    # Bare segment without '=' that isn't a credential
-    (
-        {"url": "https://d.local/page?debug", "queryString": []},
-        None,
-        "bare_non_cred_segment_no_eq",
-    ),
-    # key=value pair where the value isn't a credential
-    (
-        {"url": "https://d.local/page?format=json", "queryString": []},
-        None,
-        "key_value_non_cred_value",
-    ),
-    # Non-string url
-    (
-        {"url": 9000, "queryString": []},
-        None,
-        "non_string_url",
-    ),
-    (
-        {"url": "", "queryString": [{"name": "token", "value": _ADMIN_PASS_RAW}]},
-        _ADMIN_PASS_RAW,
-        "cred_in_querystring_value",
-    ),
-    (
-        {"url": "", "queryString": [{"name": _ADMIN_PASS_RAW, "value": ""}]},
-        _ADMIN_PASS_RAW,
-        "cred_as_querystring_name",
-    ),
-    # Non-dict entry in queryString
-    (
-        {"url": "", "queryString": ["not-a-dict"]},
-        None,
-        "non_dict_querystring_entry",
-    ),
-    # Empty value and a name that isn't a credential
-    (
-        {"url": "", "queryString": [{"name": "format", "value": ""}]},
-        None,
-        "non_cred_name_empty_value",
-    ),
-    (
-        {"url": "", "queryString": []},
-        None,
-        "empty_request",
-    ),
-    (
-        {"url": "https://d.local/page", "queryString": None},
-        None,
-        "null_querystring",
-    ),
-]
-
 IS_ECHOED_CRED_CASES = [
     # (body, url_credential, expected, desc)
     (_ADMIN_PASS_RAW, _ADMIN_PASS_RAW, True,  "exact_match"),
@@ -2489,18 +2409,6 @@ SERVER_TOKEN_PRESERVATION_CASES = [
     ),
 ]
 # fmt: on
-
-
-class TestUrlCredentialExtraction:
-    """Tests for _extract_url_credential."""
-
-    @pytest.mark.parametrize(
-        ("request_dict", "expected", "desc"),
-        EXTRACT_URL_CREDENTIAL_CASES,
-        ids=[c[2] for c in EXTRACT_URL_CREDENTIAL_CASES],
-    )
-    def test_extract_url_credential(self, request_dict: dict, expected: str | None, desc: str) -> None:
-        assert _extract_url_credential(request_dict) == expected, desc
 
 
 class TestIsEchoedCredential:

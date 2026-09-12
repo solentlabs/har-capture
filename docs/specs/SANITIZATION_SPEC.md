@@ -321,7 +321,7 @@ MIME-type based routing (after the decode-first check):
 
 | Pattern       | Detection                                                | Redaction                              |
 | ------------- | -------------------------------------------------------- | -------------------------------------- |
-| MAC addresses | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`                  | `hasher.hash_mac()`                    |
+| MAC addresses | `MAC_RE` (see [MAC addresses](#mac-addresses))           | `hasher.hash_mac()`                    |
 | Private IPs   | 10.x, 172.16-31.x, 192.168.x                             | `hasher.hash_ip(ip, is_private=True)`  |
 | Public IPs    | All other valid IPs                                      | `hasher.hash_ip(ip, is_private=False)` |
 | Emails        | RFC 5321 simplified                                      | `hasher.hash_email()`                  |
@@ -332,6 +332,35 @@ MIME-type based routing (after the decode-first check):
 **Phone numbers require formatting**: a bare 10–11 digit run never matches — separator-free runs are constants,
 counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
 `1732584193` = 0x67452301, were flagged 31× per review before this rule).
+
+### MAC Addresses
+
+One definition, `MAC_RE` in `patterns/redaction.py`, serves `_sanitize_string_patterns`, the HTML engine's pass 1 and
+pipe-delimited scanner, `har-capture validate` and `check_for_pii` (whose `pii.json` `mac_address` regex carries it
+verbatim; a test pins the two). Six hex pairs joined by `:` or `-`, bounded by non-hex characters on both sides:
+
+| Text                 | Matched | Why                                                            |
+| -------------------- | ------- | -------------------------------------------------------------- |
+| `3C:7A:8A:12:34:56`  | yes     | a MAC                                                          |
+| `cm_mac_3C:7A:8A:…`  | yes     | `_` and letters outside a-f are not part of a hex run          |
+| `HWaddr3C:7A:8A:…`   | yes     | same                                                           |
+| `13C:7A:8A:12:34:56` | no      | glued to a hex digit: a fragment of a longer run, not a MAC    |
+| `3C7A8A123456`       | no      | bare 12-hex; recognized only under a MAC-named key (see below) |
+
+The boundary is hex-aware rather than `\b`. Until 0.13.0 the sanitizer used `\b` and the validator used no boundary at
+all, so a MAC glued to `_` or a letter was reported by `validate` and left by every sanitize run, and one glued to a hex
+digit was reported by `validate` while the sanitizer, correctly, left it alone.
+
+**ADR-12 accounting** (redacts a MAC the `\b` form missed):
+
+- *Leak closed:* a MAC written directly after an identifier character (`cm_mac_<MAC>`, `HWaddr<MAC>`) survived sanitize.
+- *Fidelity cost:* none beyond the MAC; the identifier before it is untouched.
+- *Cannot-be-structure proof:* the matched text is the same six colon- or hyphen-joined hex pairs the sanitizer has
+  always redacted. What sits in front of it does not change what it is; a hex digit in front would, and still blocks the
+  match.
+
+Bare (`3C7A8A123456`) and dotted (`3c7a.8a12.3456`) MACs have no separator run to match. `is_mac_value()` recognizes all
+four layouts for callers that already know a value is meant to be a MAC.
 
 **IP address heuristic** (`is_valid_ip_address()`):
 
@@ -354,7 +383,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | ---- | ----------------------------- | --------------------------------------------------- | --------------------------------------- |
 | 0    | Custom patterns               | Domain-specific PII regex                           | Per-pattern prefix                      |
 | 0b   | Web storage                   | `localStorage.setItem('KEY', 'VALUE')`              | Auto-redact if key is sensitive         |
-| 1    | MAC addresses                 | `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`             | `hasher.hash_mac()`                     |
+| 1    | MAC addresses                 | `MAC_RE` (see [MAC addresses](#mac-addresses))      | `hasher.hash_mac()`                     |
 | 2    | Serial numbers (inline)       | `\bSN\b\|S/N\|Serial Number` + value                | `hasher.hash_value(val, "SERIAL")`      |
 | 2b   | Serial numbers (table)        | `<td>Label\b</td><td>VALUE</td>`                    | `hasher.hash_value(val, "SERIAL")`      |
 | 2c   | JS serial variables           | Names with serial+Number/Num/No or ending in serial | `hasher.hash_value(val, "SERIAL")`      |
@@ -689,24 +718,31 @@ hasher = Hasher.create(salt)  # salt = "auto" | None | custom_string
 
 ### Hash Methods
 
-| Method                           | Input                  | Output Format                | Reserved Range                |
-| -------------------------------- | ---------------------- | ---------------------------- | ----------------------------- |
-| `hash_mac(mac)`                  | `AA:BB:CC:DD:EE:FF`    | `02:xx:xx:xx:xx:xx`          | IEEE locally administered bit |
-| `hash_ip(ip, is_private=True)`   | `192.168.1.100`        | `10.255.x.x`                 | RFC 1918                      |
-| `hash_ip(ip, is_private=False)`  | `8.8.8.8`              | `192.0.2.x`                  | RFC 5737 TEST-NET-1           |
-| `hash_ipv6(ipv6)`                | `fe80::1`              | `2001:db8::xxxx:xxxx`        | RFC 3849 documentation        |
-| `hash_email(email)`              | `admin@example.com`    | `user_hash@redacted.invalid` | RFC 2606 `.invalid` TLD       |
-| `hash_value(val, prefix)`        | `SECRET123`            | `TOKEN_a1b2c3d4`             | N/A (prefix-based)            |
-| `hash_generic(val, prefix)`      | (alias for hash_value) |                              |                               |
-| `hash_sensitive_value(val, cat)` | `HomeNetwork`          | `WIFI_a1b2c3d4`              | Category → prefix mapping     |
+| Method                           | Input                  | Output Format                    | Reserved Range                |
+| -------------------------------- | ---------------------- | -------------------------------- | ----------------------------- |
+| `hash_mac(mac)`                  | `AA:BB:CC:DD:EE:FF`    | `02:xx:xx:xx:xx:xx`, layout kept | IEEE locally administered bit |
+| `hash_ip(ip, is_private=True)`   | `192.168.1.100`        | `10.255.x.x`                     | RFC 1918                      |
+| `hash_ip(ip, is_private=False)`  | `8.8.8.8`              | `192.0.2.x`                      | RFC 5737 TEST-NET-1           |
+| `hash_ipv6(ipv6)`                | `fe80::1`              | `2001:db8::xxxx:xxxx`            | RFC 3849 documentation        |
+| `hash_email(email)`              | `admin@example.com`    | `user_hash@redacted.invalid`     | RFC 2606 `.invalid` TLD       |
+| `hash_value(val, prefix)`        | `SECRET123`            | `TOKEN_a1b2c3d4`                 | N/A (prefix-based)            |
+| `hash_generic(val, prefix)`      | (alias for hash_value) |                                  |                               |
+| `hash_sensitive_value(val, cat)` | `HomeNetwork`          | `WIFI_a1b2c3d4`                  | Category → prefix mapping     |
 
 ### Algorithm
 
 ```text
-input = normalize(value)  # lowercase for MAC/email
+input = normalize(value)  # MAC: separators stripped, uppercased; email: lowercased
 digest = SHA-256(salt + ":" + prefix + ":" + input)
 output = format(digest[:N])  # N bytes depending on output format
 ```
+
+**MAC layout.** `hash_mac` writes its placeholder in the input's layout — `02:a1:…`, `02-a1-…`, bare `02a1b2c3d4e5`, or
+dotted `02a1.b2c3.d4e5` — because the placeholder occupies the value's structural position (ADR-12 rule 1): a consumer
+that parses a bare 12-hex `CmMacAddress` must still parse its placeholder. Hex is lowercase; a value in no MAC layout
+(mixed separators, or not a MAC) gets the colon form. The digest is over the hex digits alone, so every layout of one
+MAC correlates: `AA:BB:CC:DD:EE:FF` and `aabbccddeeff` become `02:…` and `02…` with the same digits. Until 0.13.0 every
+placeholder was colon-form and only colon/hyphen inputs correlated. `allowlist.json` recognizes all four layouts.
 
 ### Category-to-Prefix Mapping
 
@@ -731,12 +767,13 @@ placeholder as already redacted. Pass 2 user redactions route through this same 
 
 ### Internal Caching
 
-Per-hasher instance cache (`dict[str, str]`) keyed by `PREFIX:value`:
+Per-hasher instance cache (`dict[str, str]`) keyed by `PREFIX:value` (for MACs, the normalized digits plus the output
+layout):
 
 - Ensures the same value always maps to the same hash within a session **for a given prefix**
 - Grows unbounded (acceptable for typical HAR sizes)
 - Enables correlation preservation: if `AA:BB:CC:DD:EE:FF` appears in 50 entries, it maps to the same
-  `02:xx:xx:xx:xx:xx` every time
+  `02:xx:xx:xx:xx:xx` every time (and the same digits in any other layout)
 
 The prefix is part of the cache key, so a value redacted on two surfaces under different prefixes receives two different
 placeholders — a session token in a response body becomes `FIELD_<a>` while the same token in an `Authorization` header
@@ -869,9 +906,11 @@ base64 alphabet and breaks regex-based detection in the sanitized HAR.
 **Algorithm** (`_scan_url_credentials`):
 
 1. Called on `har_data["log"]["entries"]` before the sanitization loop runs.
-1. For each entry, read the raw URL query string segments, then the structured `queryString` array, with
-   `find_query_credential()` — every shape in [URL Sanitization](#url-sanitization). The scan skips malformed entries
-   (not a dict, no request, `queryString` not a list) so it never raises; rejecting them is structure validation's job.
+1. For each entry, take the first credential `iter_url_credentials()` (`patterns/redaction.py`) finds: it reads the raw
+   URL query string segments, then the structured `queryString` array, with `find_query_credential()` — every shape in
+   [URL Sanitization](#url-sanitization). The query is split at `?` and `#` rather than parsed with `urlparse`, which
+   raises on URLs it cannot parse. The scan skips malformed entries (not a dict, no request, a non-string URL,
+   `queryString` not a list) so it never raises; rejecting them is structure validation's job.
 1. Return `{entry_index: credential}`. The keys become `{"entry_index": i, "location": "url_query_param"}` annotations;
    the values feed [server-token preservation](#server-token-preservation). One scan serves both.
 
@@ -909,8 +948,8 @@ applies: any response body matching `is_base64_credential()` is redacted.
 **Helpers**:
 
 ```python
-def _extract_url_credential(request: dict) -> str | None:
-    """Return the base64 credential carried in a request's URL query, or None."""
+def iter_url_credentials(request: Mapping) -> Iterator[QueryCredential]:  # patterns/redaction.py
+    """Yield every base64(user:pass) credential in a HAR request's query."""
 
 def _is_echoed_credential(body: str, url_credential: str) -> bool:
     """True if body echoes the URL credential or a decoded component of it."""
@@ -997,8 +1036,11 @@ Detects common redaction markers to warn users before double-sanitizing.
    logged, not fatal.
 1. **Malformed input doesn't abort** — JSON decode errors, redaction failures, and invalid regex patterns are logged but
    don't stop sanitization of other entries.
-1. **Format preservation is collision-free** — Reserved IP ranges (TEST-NET, documentation prefixes, locally
-   administered MACs) cannot appear in real traffic, so hash outputs never collide with genuine values.
+1. **Format-preserving placeholders sit in reserved ranges** — TEST-NET and documentation IP ranges cannot appear in
+   real traffic. Locally administered MACs (`02:…`) can — VMs and randomized Wi-Fi MACs use them — so a placeholder and
+   a real locally administered MAC look alike. The sanitizer therefore never skips a MAC that looks like a placeholder
+   (see [Idempotency Boundary](#idempotency-boundary)); the cost falls on `validate`, which cannot tell the two apart
+   and does not report either.
 1. **Known patterns always apply** — MACs, IPs, and emails are auto-redacted regardless of heuristic mode. Heuristic
    mode only affects opaque/suspicious values.
 1. **Cookie metadata is preserved** — In a `Set-Cookie` value, the reserved attributes (`HttpOnly`, `Secure`,
