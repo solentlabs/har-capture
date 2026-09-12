@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repeated requests are no longer dropped from the capture.** Before compressing, the capture removed every request
+  whose method and URL (plus body, for `POST`/`PUT`/`PATCH`) matched an earlier one, keeping the first unconditionally.
+  The response never entered into it, so the half of a repeat that mattered could be the half thrown away: a failed
+  `net::ERR_ABORTED` load kept while its successful retry was discarded (the shape of cable_modem_monitor#213), or a
+  status page visited before login — the unauthenticated answer device integrations ask contributors to record — kept
+  while the same URL's real data page, visited after login, was discarded. Every request now survives, in the order the
+  browser made it; only file-type bloat filtering (fonts, images, media, sourcemaps) removes entries. Captures of pages
+  that are fetched repeatedly get larger. See ADR-15.
+
 ## [0.12.3] - 2026-09-02
 
 ### Fixed

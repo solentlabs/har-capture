@@ -688,10 +688,9 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
    - `include_images=False` → filter .png, .jpg, .jpeg, .gif, .ico, .svg, .webp, .bmp
    - `include_media=False` → filter .mp3, .mp4, .wav, .webm, .ogg, .avi, .mov
    - Always filter: .map (sourcemaps)
-1. **Deduplicate**: Remove entries with the same request key. For `GET`/`HEAD`/etc. the key is `(method, url)`. For
-   `POST`/`PUT`/`PATCH` the key is `(method, url, sha256(body))`, so same-URL submissions with different bodies all
-   survive — a device that logs in via two POSTs to one endpoint (salt request, then derived-key submission) keeps both.
-   Identical retries still dedup.
+   - Nothing else is removed. Repeated requests are **never** collapsed: a failed request and its successful retry, a
+     pre-login and a post-login visit to the same data URL, and identical retries all survive, in recorder order. See
+     [ADR-15](../ARCHITECTURE_DECISIONS.md#adr-15-repeated-requests-are-never-collapsed).
 1. **Write filtered HAR**: Pretty-printed JSON, LF line endings (`newline="\n"` — see
    [Sanitization Spec](SANITIZATION_SPEC.md#constraints--invariants) for why every writer pins it)
 1. **Gzip compress**: Compression level 9, output to `.har.gz`

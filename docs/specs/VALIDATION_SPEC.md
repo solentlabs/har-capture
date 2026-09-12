@@ -424,8 +424,8 @@ handles `.har` and `.har.gz` transparently and is shared with `validate_har()`.
 **Why this exists:** cable_modem_monitor issue #120 (Technicolor CGA6444VF) shipped a HAR whose first request already
 carried a `PHPSESSID` cookie. The login exchange was never inside the capture window, the tool reported success, and a
 full auth config was hand-authored downstream from evidence that did not exist — five months and six contributor
-retests. The companion defect (same-URL POST dedup discarding the login submission) is fixed in
-[Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
+retests. The companion defect (same-URL POST dedup discarding the login submission) is closed: the capture no longer
+collapses repeated requests at all — see [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
 
 ## Compressed-Artifact Freshness Check
 

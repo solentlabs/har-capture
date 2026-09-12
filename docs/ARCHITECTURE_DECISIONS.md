@@ -418,3 +418,40 @@ Index"); no trailing-separator text (`<span id="priwifinet">Private Wi-Fi Networ
 (hint and status text); no known-safe status word (`Enabled`, `Disabled`, `N/A`); no bare integers (row indices); no
 `<option value="">` (chooser placeholders like `-- Select --`); no attribute whose SSID token carries a helper suffix
 (`ssid_help`, `ssid-label`, `ssidTitle`); and no already-redacted value (re-sanitizing must not churn placeholders).
+
+## ADR-15: Repeated Requests Are Never Collapsed
+
+**Date:** 2026-09-11 · **Status:** Accepted · **Issue:** cable_modem_monitor#213
+
+**Context.** `filter_and_compress_har()` deduplicated entries on a request key — `(method, url)`, plus a SHA-256 of the
+body for `POST`/`PUT`/`PATCH` — and kept the first occurrence unconditionally. The key never looked at the response, so
+whenever a repeat differed from the first in outcome or content, the evidence that mattered was the part thrown away.
+That has happened three times:
+
+1. S33 (2025-12-30): a `GetMultipleHNAPs` POST carrying the channel data was dropped as a duplicate of an earlier one.
+   Fixed in 0.5.1 by adding the body hash to the key.
+1. cable_modem_monitor#213 (Arris SB8200): `GET cmswinfo.php` recorded as `status: -1`, `net::ERR_ABORTED`, with only
+   provisional headers. The page rendered in the browser, later entries carry it as `Referer`, and it is served
+   `no-store` — the successful response existed and is not in the HAR. A kept failure followed by a dropped success is
+   the shape the first-occurrence rule produces; the sanitized file cannot prove it happened here, because the raw HAR
+   is deleted by design.
+1. cable_modem_monitor's `MODEM_REQUEST.md` asks contributors to open a status page *before* logging in, to record the
+   device's unauthenticated answer, and then to visit every status page after logging in. On a device whose data URLs
+   carry no token, both visits share `(GET, url)`: the key keeps the pre-login login page and drops the data page.
+   Adding the response status to the key would not help — on the CM2500 both answers are `200`.
+
+**Decision.** Repeated requests are never collapsed. `filter_and_compress_har()` filters by file type (the
+`CaptureOptions` bloat extensions) and nothing else; every other entry survives in recorder order.
+
+**Rejected: widening the key.** Keying on the full outcome — request key plus status, `_failureText`, and a hash of the
+response body — would collapse only byte-identical exchanges. It is still a guess at what makes a repeat redundant, and
+each patch to the key so far has been a response to evidence the previous guess destroyed. Identical bodies can still
+differ in headers that carry the evidence (a fresh `Set-Cookie` on each visit is the session behavior a downstream
+integration has to model), and the key cannot include headers without including `Date`, which differs on every response.
+A capture is evidence; nothing in it is ours to discard on a guess.
+
+**Consequence.** A page fetched repeatedly — polled by its own JavaScript, or revisited during the session — appears
+once per fetch, so captures of busy pages are larger. Bloat filtering is unchanged. The `removed_entries` stat, and the
+CLI's "Removed N bloat entries" line, now count file-type filtering alone, which is what the line always claimed.
+ADR-2's statement that "both the 401 and the authenticated retry are captured" had the same exception — the retry is a
+`GET` to the same URL — and now holds without it.

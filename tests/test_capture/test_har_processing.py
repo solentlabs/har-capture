@@ -23,6 +23,7 @@ from har_capture.capture.browser import (
 
 FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "test_har_processing.json"
 FIXTURES = json.loads(FIXTURES_PATH.read_text())
+REPEATED_REQUEST_CASES = [k for k in FIXTURES["repeated_requests"] if not k.startswith("_")]
 
 
 def _write_har(tmp_path: Path, key: str, filename: str) -> Path:
@@ -47,12 +48,6 @@ def basic_har(tmp_path: Path) -> Path:
 def har_with_bloat(tmp_path: Path) -> Path:
     """Create a HAR file with bloat entries (fonts, images, etc.)."""
     return _write_har(tmp_path, "har_with_bloat", "bloat.har")
-
-
-@pytest.fixture
-def har_with_duplicates(tmp_path: Path) -> Path:
-    """Create a HAR file with duplicate requests."""
-    return _write_har(tmp_path, "har_with_duplicates", "duplicates.har")
 
 
 # =============================================================================
@@ -262,49 +257,19 @@ class TestFilterAndCompressHar:
         # Should only filter sourcemaps
         assert stats["filtered_entries"] == 6  # all except .map
 
-    def test_removes_duplicates(self, har_with_duplicates: Path) -> None:
-        """Test duplicate requests are removed."""
-        _compressed_path, stats = filter_and_compress_har(har_with_duplicates)
-
-        # Original: 4 entries (3 GET, 1 POST)
-        # After dedup: 2 entries (1 GET, 1 POST) - duplicates removed
-        assert stats["original_entries"] == 4
-        assert stats["filtered_entries"] == 2
-
-    def test_preserves_different_methods(self, har_with_duplicates: Path) -> None:
-        """Test different HTTP methods to same URL are preserved."""
-        compressed_path, _stats = filter_and_compress_har(har_with_duplicates)
-
-        with gzip.open(compressed_path, "rt") as f:
-            har = json.load(f)
-
-        methods = [e["request"]["method"] for e in har["log"]["entries"]]
-        assert "GET" in methods
-        assert "POST" in methods
-
-    def test_post_different_bodies_preserved(self, tmp_path: Path) -> None:
-        """Test POSTs to the same URL with different bodies are kept."""
-        har_file = _write_har(tmp_path, "post_different_bodies", "post_bodies.har")
+    @pytest.mark.parametrize("case", REPEATED_REQUEST_CASES)
+    def test_repeated_requests_all_kept(self, tmp_path: Path, case: str) -> None:
+        """Repeated requests all survive, in recorder order (cable_modem_monitor#213)."""
+        entries = FIXTURES["repeated_requests"][case]
+        har_file = tmp_path / "repeated.har"
+        har_file.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}))
 
         compressed_path, stats = filter_and_compress_har(har_file)
 
-        assert stats["original_entries"] == 3
-        assert stats["filtered_entries"] == 3
-
+        assert stats["removed_entries"] == 0
         with gzip.open(compressed_path, "rt") as f:
-            har = json.load(f)
-
-        bodies = [e["request"]["postData"]["text"] for e in har["log"]["entries"]]
-        assert bodies == ["action=1", "action=2", "action=3"]
-
-    def test_post_identical_bodies_deduped(self, tmp_path: Path) -> None:
-        """Test POSTs to the same URL with identical bodies are deduped."""
-        har_file = _write_har(tmp_path, "post_identical_bodies", "post_retry.har")
-
-        _compressed_path, stats = filter_and_compress_har(har_file)
-
-        assert stats["original_entries"] == 2
-        assert stats["filtered_entries"] == 1
+            kept = json.load(f)["log"]["entries"]
+        assert kept == entries
 
     def test_compressed_size_smaller_for_large_file(self, tmp_path: Path) -> None:
         """Test compressed size is smaller than original for sufficiently large files."""
