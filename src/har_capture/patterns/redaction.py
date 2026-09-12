@@ -13,7 +13,8 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from typing import Any
+import urllib.parse
+from typing import Any, NamedTuple
 
 from .loader import load_allowlist
 
@@ -236,9 +237,11 @@ def _decode_base64_text(value: str) -> str | None:
     if not _BASE64_CHARS_RE.match(value):
         return None
 
-    # Must be plausible base64 length (multiple of 4 or close with padding)
+    # Canonical padding only. Python 3.10's b64decode(validate=True) accepts
+    # excess padding that 3.11+ rejects; recognition must not depend on the
+    # interpreter.
     stripped = value.rstrip("=")
-    if len(stripped) < 4:
+    if len(stripped) < 4 or len(value) - len(stripped) != -len(stripped) % 4:
         return None
 
     try:
@@ -277,6 +280,152 @@ def is_base64_credential(value: str) -> bool:
 
     parts = decoded.split(":", 1)
     return len(parts) == 2 and len(parts[0]) >= 1 and len(parts[1]) >= 1
+
+
+class QueryCredential(NamedTuple):
+    """A base64(user:pass) credential located inside one URL query segment.
+
+    The segment reads ``prefix`` followed by the credential. ``prefix`` is kept
+    verbatim when redacting: ``""`` for a bare segment, ``"key="`` for a keyed
+    one, or a marker such as ``"login_"``. ``credential`` is the base64 text as
+    the client produced it, with any URL transport encoding undone.
+    """
+
+    prefix: str
+    credential: str
+    keyed: bool
+
+
+# URL-token firmware can glue a short marker onto the bare token
+# (``?login_<base64>``). '_' is outside the standard base64 alphabet, so the
+# marker boundary is unambiguous.
+_QUERY_CREDENTIAL_MARKER_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]*_)(.+)$")
+
+# The shape Hasher.hash_generic writes: an uppercase prefix, '_', lowercase hex.
+_HASH_PLACEHOLDER_RE = re.compile(r"[A-Z][A-Z0-9_]*_[0-9a-f]{8,}")
+
+# A credential whose padding was stripped is only accepted from this many
+# characters up — the unpadded length of base64("admin:pw"). Below it, short
+# hex and alphanumeric tokens (cache-busters, short commit SHAs) decode to a
+# colon-bearing string by chance often enough to matter.
+_MIN_UNPADDED_CREDENTIAL_LENGTH = 11
+
+# Decoded text that is a URL (scheme://) or opens a JSON object/array: it has
+# a colon, but it is a payload, not user:pass.
+_STRUCTURED_TEXT_RE = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|[{\[])")
+
+# Headers whose value is a URL (RFC 9110). A credential or sensitive
+# parameter in the request URL is repeated in the next request's Referer and
+# can appear in a redirect's Location, so these get the same query treatment
+# as the request URL itself.
+URL_VALUED_HEADERS: frozenset[str] = frozenset({"referer", "location", "content-location"})
+
+
+def _as_base64_credential(raw: str) -> str | None:
+    """Return ``raw`` as a base64 credential, undoing what URL transport did to it.
+
+    A query value can arrive percent-encoded (``%3D`` padding, ``%2B``), with
+    '+' decoded to a space (URLSearchParams, and so Playwright's
+    ``queryString`` array), or with its padding stripped or miscounted.
+    ``unquote`` is used rather than ``unquote_plus``: a raw '+' in a query is
+    a base64 character far more often than an encoded space.
+    """
+    verbatim = list(dict.fromkeys([raw, urllib.parse.unquote(raw), raw.replace(" ", "+")]))
+    for candidate in verbatim:
+        if is_base64_credential(candidate):
+            return candidate
+    # Restoring padding reaches values the verbatim check never has, so it
+    # only accepts a decoded value that could be nothing but user:pass: long
+    # enough, printable, and not a URL or JSON payload that merely contains a
+    # colon. The verbatim check above keeps its long-standing behavior.
+    for candidate in verbatim:
+        unpadded = candidate.rstrip("=")
+        if len(unpadded) < _MIN_UNPADDED_CREDENTIAL_LENGTH:
+            continue
+        padded = unpadded + "=" * (-len(unpadded) % 4)
+        decoded = _decode_base64_text(padded)
+        if (
+            decoded is not None
+            and decoded.isprintable()
+            and not _STRUCTURED_TEXT_RE.match(decoded)
+            and is_base64_credential(padded)
+        ):
+            return padded
+    return None
+
+
+def is_blank_query_value(value: str) -> bool:
+    """True for a query value with nothing in it to redact.
+
+    Empty, or only '=' — the padding remnant a query parser leaves in
+    ``value`` when it splits a bare token at its first '='.
+
+    Args:
+        value: Decoded query parameter value
+
+    Returns:
+        True if the value carries no content
+    """
+    return not value.strip("=")
+
+
+def query_param_segment(param: dict[str, Any]) -> str:
+    """Rejoin a HAR ``queryString`` entry into the query segment it was parsed from.
+
+    The parser splits at the first '=', so a bare credential's base64 padding
+    lands in ``value``. Rejoining lets one segment reader serve both the URL
+    string and the parsed array.
+
+    Args:
+        param: One ``{"name": ..., "value": ...}`` entry
+
+    Returns:
+        ``name=value``, or ``name`` when the value is empty
+    """
+    name = str(param.get("name", ""))
+    value = str(param.get("value", ""))
+    return f"{name}={value}" if value else name
+
+
+def find_query_credential(segment: str) -> QueryCredential | None:
+    """Locate a base64(user:pass) credential in one raw URL query segment.
+
+    The single definition of "URL credential" for the sanitizer, the
+    validator and the credential annotation, so the three cannot disagree
+    about which query shapes carry one. Recognized shapes: a bare segment
+    (``?<b64>``), a keyed value (``?auth=<b64>``), and a marker-prefixed
+    segment (``?login_<b64>``).
+
+    Args:
+        segment: One ``&``-separated query segment, undecoded
+
+    Returns:
+        The located credential, or None
+    """
+    # A hash placeholder the sanitizer wrote (``AUTH_d2c6b8e4``) is itself
+    # marker-shaped, and 8 hex characters sometimes decode to a colon.
+    if not segment or _HASH_PLACEHOLDER_RE.fullmatch(segment):
+        return None
+    # A doubled separator (``/a??<b64>``, ``k==<b64>``) is kept in the prefix
+    # rather than read as part of the credential.
+    body = segment.lstrip("?")
+    lead = segment[: len(segment) - len(body)]
+    credential = _as_base64_credential(body)
+    if credential:
+        return QueryCredential(prefix=lead, credential=credential, keyed=False)
+    key, sep, value = body.partition("=")
+    stripped = value.lstrip("=")
+    if sep and stripped:
+        credential = _as_base64_credential(stripped)
+        if credential:
+            separator = value[: len(value) - len(stripped)]
+            return QueryCredential(prefix=f"{lead}{key}={separator}", credential=credential, keyed=True)
+    marker = _QUERY_CREDENTIAL_MARKER_RE.match(body)
+    if marker:
+        credential = _as_base64_credential(marker.group(2))
+        if credential:
+            return QueryCredential(prefix=lead + marker.group(1), credential=credential, keyed=False)
+    return None
 
 
 def is_base64_decodable_text(value: str) -> bool:

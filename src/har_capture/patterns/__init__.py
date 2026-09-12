@@ -22,13 +22,18 @@ from har_capture.patterns.loader import (
     load_sensitive_patterns,
 )
 from har_capture.patterns.redaction import (
+    URL_VALUED_HEADERS,
+    QueryCredential,
+    find_query_credential,
     is_allowlisted,
     is_base64_credential,
     is_base64_decodable_text,
+    is_blank_query_value,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
     is_fully_redacted,
     is_redacted,
+    query_param_segment,
 )
 
 __all__ = [
@@ -44,13 +49,18 @@ __all__ = [
     "compile_pattern",
     "PatternLoadError",
     # Redaction checking
+    "QueryCredential",
+    "find_query_credential",
     "is_allowlisted",
+    "is_blank_query_value",
     "is_base64_credential",
     "is_base64_decodable_text",
     "is_cookie_attribute_metadata",
     "is_cookie_attribute_name",
     "is_fully_redacted",
     "is_redacted",
+    "query_param_segment",
+    "URL_VALUED_HEADERS",
     # Hashing
     "Hasher",
 ]

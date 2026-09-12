@@ -75,7 +75,7 @@ Severity levels:
 carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it (CM2500
 round 1: three `[ERROR]` on `loginName: admin` exited 1 on a compliant capture). Suppression never applies to
 auto-redact-tier names — `admin` in a password field is a real credential leak. The model applies uniformly to form
-params, urlencoded bodies, JSON fields, and XML elements/attributes via `_classify_field_finding`.
+params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via `_classify_field_finding`.
 
 ## Entry Point
 
@@ -89,33 +89,42 @@ def validate_har(
 
 1. Load HAR (JSON or gzip-compressed)
 1. For each entry in `log.entries`:
-   - `check_url(entry.request.url)` → URL credential detection
+   - `check_url(entry.request.url)` and `check_query_string(entry.request.queryString)` → URL credentials and sensitive
+     query parameters, reported once across the two
    - `check_headers(entry.request.headers)` → Sensitive header detection
    - `check_headers(entry.response.headers)` → Same for response
+   - `check_url(header.value)` for each `Referer` / `Location` / `Content-Location`, and
+     `check_url(response.redirectURL)` → the same query checks
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
    - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
 
-### `check_url(url, location, findings)`
+### `check_url(url, location, findings, custom_patterns, *, field_tiers, seen)` and `check_query_string(params, ...)`
 
-Detects base64-encoded credentials in URL query parameters:
+Check a query wherever it appears — the request URL, the parsed `queryString` array, the URL in a `Referer`, `Location`
+or `Content-Location` header (`URL_VALUED_HEADERS`), and the response's `redirectURL` — with the rules the sanitizer
+applies to it, so an error reported here is one a sanitize run removes (see
+[Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization)):
 
 ```text
-https://device.local/api?auth=dXNlcjpwYXNz
-                              ^^^^^^^^^^^^^^^^
-                              base64("user:pass")
+https://device.local/status.html?login_YWRtaW46cGFzcw==
+                                 ^^^^^^^^^^^^^^^^^^^^^^
+                                 marker + base64("admin:pass")
 ```
 
-1. Parse URL query string
-1. For each parameter value, call `is_base64_credential()`:
-   - Pre-filter: valid base64 characters, plausible length
-   - Decode with `base64.b64decode()` (with validation)
-   - Check decoded string contains exactly one colon between non-empty parts
-1. Also checks raw query string segments (avoids stripping base64 padding)
+1. Split the raw query string on `&` (not `parse_qsl`, which would strip base64 padding); a `queryString` entry is
+   rejoined into its segment with `query_param_segment()`.
+1. A credential in any shape `find_query_credential()` recognizes (bare, marker-prefixed, keyed — under any name) →
+   **error**, unless `is_redacted()` recognizes it as a placeholder.
+1. Otherwise the parameter name is judged by the [field tiers](#finding-dataclass), exactly as for form fields: an
+   auto-redact-tier name with an unredacted value → **error**; a flag-tier name → **warning**, a factory-default
+   username suppressed. Empty values are skipped.
 
-Severity: **error**
+The URL string and the `queryString` array are one query recorded twice, so `validate_har` passes both the same `seen`
+set and a finding present in both is reported once. A URL-valued header is a different place the value leaked to and is
+reported on its own.
 
 ### `check_headers(headers, location, findings)`
 
@@ -516,17 +525,24 @@ sensitive.json
 └── tagValueList.safe_values → Used by: sanitization only (pipe-delimited scanner)
 ```
 
+Code-level detectors shared through `patterns/redaction.py` rather than a JSON file:
+
+- `find_query_credential()` and `query_param_segment()` — URL query credentials. Used by validation (`check_url`,
+  `check_query_string`) and sanitization (`_sanitize_url_query_params`, `_sanitize_query_string_array`,
+  `_scan_url_credentials`).
+- `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization
+  (`_sanitize_headers`).
+
 ### Validation-Only Patterns
 
 These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 
-| Pattern                 | Purpose                                     |
-| ----------------------- | ------------------------------------------- |
-| MAC regex               | Detect unsanitized MACs in response content |
-| Serial regex            | Detect serial numbers in HTML tables        |
-| Netmask check           | Suppress subnet masks in the public-IP scan |
-| IP regex                | Detect public IPs in response content       |
-| Base64 credential check | Detect `user:pass` in URL query params      |
+| Pattern       | Purpose                                     |
+| ------------- | ------------------------------------------- |
+| MAC regex     | Detect unsanitized MACs in response content |
+| Serial regex  | Detect serial numbers in HTML tables        |
+| Netmask check | Suppress subnet masks in the public-IP scan |
+| IP regex      | Detect public IPs in response content       |
 
 ### Sanitization-Only Patterns
 
@@ -566,6 +582,7 @@ Validation is intentionally simpler than sanitization:
    names, MAC/label-serial/IP content patterns are "warning"; factory-default usernames in flag-tier fields are
    suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
-1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, successful decode,
-   and exactly one colon in the decoded string. Random base64-looking strings that don't decode to `user:pass` format
-   are not flagged.
+1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, canonical padding,
+   a strict decode to UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a
+   password may itself contain colons). Random base64-looking strings that don't decode to `user:pass` format are not
+   flagged.

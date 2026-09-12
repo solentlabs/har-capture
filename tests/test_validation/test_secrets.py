@@ -649,6 +649,39 @@ class TestValidateHarURLCredentials:
         assert has_base64 == expect_finding, f"{desc}: expected finding={expect_finding}"
 
 
+VALIDATE_HAR_QUERY_CASES = _DATA["validate_har_query_cases"]["cases"]
+
+
+class TestValidateHarQuery:
+    """validate_har reads every place a query appears, and reports a leak once."""
+
+    @pytest.mark.parametrize(
+        "case", VALIDATE_HAR_QUERY_CASES, ids=[c["id"] for c in VALIDATE_HAR_QUERY_CASES]
+    )
+    def test_query_findings(self, case: dict, tmp_path) -> None:
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": case["request"],
+                        "response": {
+                            "headers": case["response_headers"],
+                            "redirectURL": case.get("redirect_url", ""),
+                            "content": {"text": ""},
+                        },
+                    }
+                ]
+            }
+        }
+        har_file = tmp_path / "test.har"
+        har_file.write_text(json.dumps(har_data))
+
+        findings = validate_har(har_file)
+
+        assert sum(f.severity == "error" for f in findings) == case["errors"]
+        assert sum(f.severity == "warning" for f in findings) == case["warnings"]
+
+
 class TestCheckURLKeyValueCredential:
     """Tests for check_url detecting base64 creds in key=value params."""
 

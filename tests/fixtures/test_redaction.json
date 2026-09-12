@@ -52,5 +52,52 @@
   "case_insensitive_pairs": [
     ["redacted", "Redacted", "REDACTED"],
     ["***password***", "***Password***", "***PASSWORD***"]
-  ]
+  ],
+  "base64_credential_padding_cases": {
+    "_comment": "is_base64_credential requires canonical padding on every supported Python. 3.10's b64decode(validate=True) accepts excess padding that 3.11+ rejects; the result must not depend on the interpreter.",
+    "cases": [
+      {"id": "canonical_one_pad",  "value": "YWRtaW46cGFzc3dvcmQ=",   "expected": true},
+      {"id": "canonical_no_pad",   "value": "YWRtaW46cGFzcw==",       "expected": true},
+      {"id": "excess_padding",     "value": "YWRtaW46cGFzc3dvcmQ==",  "expected": false},
+      {"id": "missing_padding",    "value": "YWRtaW46cGFzc3dvcmQ",    "expected": false},
+      {"id": "padding_on_full_quantum", "value": "YWRtaW46cGFzcw===", "expected": false}
+    ]
+  },
+  "query_credential_cases": {
+    "_comment": "find_query_credential(segment) over one raw URL query segment. prefix is the verbatim text kept ahead of the credential; credential is the base64(user:pass) as the client produced it. The space_for_plus row is the shape URLSearchParams hands Playwright's queryString array: '+' decoded to a space.",
+    "cases": [
+      {"id": "bare_padded",              "segment": "YWRtaW46ZXhhbXBsZS1wdw==",               "prefix": "",       "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "bare_unpadded",            "segment": "YWRtaW46ZXhhbXBsZS1wdw",                 "prefix": "",       "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "keyed_padded",             "segment": "auth=YWRtaW46ZXhhbXBsZS1wdw==",          "prefix": "auth=",  "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
+      {"id": "keyed_raw_plus",           "segment": "auth=YWRtaW46YWRtaW4+cGFzcw==",          "prefix": "auth=",  "credential": "YWRtaW46YWRtaW4+cGFzcw==", "keyed": true},
+      {"id": "keyed_percent_padding",    "segment": "auth=YWRtaW46ZXhhbXBsZS1wdw%3D%3D",      "prefix": "auth=",  "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
+      {"id": "prefixed_padded",          "segment": "login_YWRtaW46ZXhhbXBsZS1wdw==",         "prefix": "login_", "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "prefixed_percent_padding", "segment": "login_YWRtaW46ZXhhbXBsZS1wdw%3D%3D",     "prefix": "login_", "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "prefixed_plus_and_slash",  "segment": "login_YWRtaW46ZmFrZX5+cHc/",             "prefix": "login_", "credential": "YWRtaW46ZmFrZX5+cHc/",     "keyed": false},
+      {"id": "prefixed_space_for_plus",  "segment": "login_YWRtaW46ZmFrZX5 cHc/",             "prefix": "login_", "credential": "YWRtaW46ZmFrZX5+cHc/",     "keyed": false},
+      {"id": "keyed_percent_plus",       "segment": "auth=YWRtaW46YWRtaW4%2BcGFzcw%3D%3D",    "prefix": "auth=",  "credential": "YWRtaW46YWRtaW4+cGFzcw==", "keyed": true},
+      {"id": "keyed_empty_name",         "segment": "=YWRtaW46ZXhhbXBsZS1wdw==",              "prefix": "=",      "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
+      {"id": "marker_and_key_keyed_wins", "segment": "login_x=YWRtaW46ZXhhbXBsZS1wdw==",      "prefix": "login_x=", "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
+      {"id": "uppercase_marker",         "segment": "LOGIN_YWRtaW46ZXhhbXBsZS1wdw==",         "prefix": "LOGIN_", "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "stripped_padding_short",   "segment": "YWRtaW46cHc",                            "prefix": "",       "credential": "YWRtaW46cHc=",             "keyed": false},
+      {"id": "stripped_padding_too_short", "segment": "YTpiYw",                               "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "hex_cache_buster",         "segment": "v=0406a0",                               "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "sanitizer_placeholder",    "segment": "AUTH_d2c6b8e4",                          "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "excess_padding_canonicalized", "segment": "login_YWRtaW46cGFzc3dvcmQ==",        "prefix": "login_", "credential": "YWRtaW46cGFzc3dvcmQ=",     "keyed": false},
+      {"id": "placeholder_shaped_marker_credential", "segment": "AUTH_YWRtaW46U3VwM3JTZWNyZXQx", "prefix": "AUTH_", "credential": "YWRtaW46U3VwM3JTZWNyZXQx", "keyed": false},
+      {"id": "doubled_question_mark",    "segment": "?YWRtaW46ZXhhbXBsZS1wdw==",              "prefix": "?",      "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
+      {"id": "doubled_equals",           "segment": "k==YWRtaW46ZXhhbXBsZS1wdw==",            "prefix": "k==",    "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
+      {"id": "padded_base64_json_redacted_as_before", "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "prefix": "q=", "credential": "eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "keyed": true},
+      {"id": "unpadded_base64_url",      "segment": "state=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbA", "prefix": null, "credential": null,             "keyed": null},
+      {"id": "unpadded_base64_json",     "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ",           "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "multi_underscore_marker",  "segment": "a_login_YWRtaW46ZXhhbXBsZS1wdw==",       "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "keyed_empty_value",        "segment": "password=",                              "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "prefixed_opaque_token",    "segment": "ct_c2Vzc2lvbmlkMTIzNDU2",                "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "prefixed_placeholder",     "segment": "login_AUTH_1a2b3c4d",                    "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "plain_param",              "segment": "id=123",                                 "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "search_query",             "segment": "q=hello+world",                          "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "bare_base64_no_colon",     "segment": "aGVsbG8gd29ybGQ=",                       "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "empty_segment",            "segment": "",                                       "prefix": null,     "credential": null,                       "keyed": null}
+    ]
+  }
 }

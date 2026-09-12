@@ -31,10 +31,14 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
+    URL_VALUED_HEADERS,
+    find_query_credential,
     is_base64_credential,
     is_base64_decodable_text,
+    is_blank_query_value,
     is_cookie_attribute_metadata,
     is_fully_redacted,
+    query_param_segment,
 )
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
@@ -330,54 +334,128 @@ def truncate(value: str, max_len: int = 40) -> str:
     return value[: max_len - 3] + "..."
 
 
+def _check_query_param(
+    segment: str,
+    name: str,
+    value: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    field_tiers: _FieldTiers,
+    seen: set[tuple[str, str]],
+) -> None:
+    """Report one query parameter.
+
+    A credential in any shape is an error — the sanitizer removes every one,
+    whichever rule it uses — and is reported as a credential, the more specific
+    reason. Otherwise the parameter name is judged by the field tiers.
+    ``seen`` suppresses a repeat of the same finding: the URL string and the
+    ``queryString`` array are one query recorded twice.
+    """
+    credential = find_query_credential(segment)
+    classified = None
+    if credential is None and not is_blank_query_value(value) and not is_redacted(value, custom_patterns):
+        classified = _classify_field_finding(name, value, field_tiers)
+
+    if credential is not None:
+        key: tuple[str, str] = ("credential", credential.credential)
+        field = f"query param '{name}'" if credential.keyed else "query string"
+        shape = (
+            "in URL query parameter" if credential.keyed else "as bare or marker-prefixed URL query segment"
+        )
+        finding = Finding(
+            severity="error",
+            location=location,
+            field=field,
+            value=truncate(value if credential.keyed else segment),
+            reason=f"Base64-encoded credential (user:pass) {shape}",
+        )
+    elif classified is not None:
+        severity, matched = classified
+        key = ("field", f"{name}={value}")
+        finding = Finding(
+            severity=severity,
+            location=location,
+            field=f"query param '{name}'",
+            value=truncate(value),
+            reason=f"Sensitive query parameter matching '{matched.pattern}'",
+        )
+    else:
+        return
+    if key not in seen:
+        seen.add(key)
+        findings.append(finding)
+
+
 def check_url(
     url: str,
     location: str,
     findings: list[Finding],
     custom_patterns: str | dict[str, Any] | None = None,
+    *,
+    field_tiers: _FieldTiers | None = None,
+    seen: set[tuple[str, str]] | None = None,
 ) -> None:
-    """Check URL query parameters for base64-encoded credentials.
+    """Check a URL's query for credentials and sensitive parameters.
 
-    Detects URL token authentication patterns where base64(user:pass)
-    is passed as a bare query parameter or parameter value.
+    Credentials use the sanitizer's own definition (``find_query_credential``)
+    and field names its tiers, so an error reported here is one a sanitize run
+    removes.
 
     Args:
-        url: Full URL string
+        url: Full URL string (a request URL, or a URL-valued header)
         location: Location string for findings
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
+        field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
+        seen: Findings already reported for the same request, to skip repeats
     """
     parsed = urllib.parse.urlparse(url)
     if not parsed.query:
         return
-
-    # Single pass over raw segments. We avoid parse_qsl because it treats
-    # '=' as a key/value separator, stripping base64 padding.
+    tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
+    reported = seen if seen is not None else set()
+    # Raw segments, not parse_qsl: it treats '=' as a key/value separator and
+    # would strip base64 padding.
     for segment in parsed.query.split("&"):
-        # First check the full segment (catches base64 tokens with '=' padding)
-        if is_base64_credential(segment) and not is_redacted(segment, custom_patterns):
-            findings.append(
-                Finding(
-                    severity="error",
-                    location=location,
-                    field="query string",
-                    value=truncate(segment),
-                    reason="Base64-encoded credential (user:pass) as bare URL query parameter",
-                )
+        key, sep, raw_value = segment.partition("=")
+        name = urllib.parse.unquote_plus(key)
+        value = urllib.parse.unquote_plus(raw_value) if sep else ""
+        _check_query_param(segment, name, value, location, findings, custom_patterns, tiers, reported)
+
+
+def check_query_string(
+    params: Any,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None = None,
+    *,
+    field_tiers: _FieldTiers | None = None,
+    seen: set[tuple[str, str]] | None = None,
+) -> None:
+    """Check a HAR ``queryString`` array the way ``check_url`` checks the URL.
+
+    The sanitizer rewrites this array independently of the URL string, so a
+    file cleaned in one place and not the other must still be caught.
+
+    Args:
+        params: HAR ``queryString`` entries (already decoded by the query parser)
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional path to custom patterns file
+        field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
+        seen: Findings already reported for the same request, to skip repeats
+    """
+    if not isinstance(params, list):
+        return
+    tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
+    reported = seen if seen is not None else set()
+    for param in params:
+        if isinstance(param, dict) and "name" in param:
+            name, value = str(param["name"]), str(param.get("value", ""))
+            _check_query_param(
+                query_param_segment(param), name, value, location, findings, custom_patterns, tiers, reported
             )
-        elif "=" in segment:
-            _, _, val = segment.partition("=")
-            if val and is_base64_credential(val) and not is_redacted(val, custom_patterns):
-                key = segment.partition("=")[0]
-                findings.append(
-                    Finding(
-                        severity="error",
-                        location=location,
-                        field=f"query param '{key}'",
-                        value=truncate(val),
-                        reason="Base64-encoded credential (user:pass) in URL query parameter",
-                    )
-                )
 
 
 def check_headers(
@@ -896,8 +974,9 @@ def validate_har(
     har_path = Path(har_path)
     findings: list[Finding] = []
 
-    # Compiled once per file — check_content applies them per entry.
+    # Compiled once per file and applied per entry.
     serial_detectors = _compile_serial_detectors(custom_patterns)
+    field_tiers = _compile_field_tiers(custom_patterns)
 
     har_data = load_har(har_path)
 
@@ -920,14 +999,47 @@ def validate_har(
         url = request.get("url", "")
         location = f"Entry {i}: {truncate(url, 60)}"
 
-        # Check URL for base64-encoded credentials in query parameters
-        check_url(url, f"{location} (url)", findings, custom_patterns)
+        # The query as the URL string and as the parsed array: one query recorded
+        # twice, so a finding in both is reported once.
+        seen: set[tuple[str, str]] = set()
+        check_url(url, f"{location} (url)", findings, custom_patterns, field_tiers=field_tiers, seen=seen)
+        check_query_string(
+            request.get("queryString"),
+            f"{location} (queryString)",
+            findings,
+            custom_patterns,
+            field_tiers=field_tiers,
+            seen=seen,
+        )
 
         # Check request headers
         check_headers(request.get("headers", []), f"{location} (request)", findings, custom_patterns)
 
         # Check response headers
         check_headers(response.get("headers", []), f"{location} (response)", findings, custom_patterns)
+
+        # Referer / Location / Content-Location, and HAR's redirectURL copy of
+        # Location, carry a URL whose query can repeat the request URL's
+        # credential or sensitive parameters.
+        redirect_url = response.get("redirectURL")
+        if isinstance(redirect_url, str):
+            check_url(
+                redirect_url, f"{location} (redirectURL)", findings, custom_patterns, field_tiers=field_tiers
+            )
+        for side, headers in (("request", request.get("headers")), ("response", response.get("headers"))):
+            for header in headers if isinstance(headers, list) else []:
+                if (
+                    isinstance(header, dict)
+                    and str(header.get("name", "")).lower() in URL_VALUED_HEADERS
+                    and isinstance(header.get("value"), str)
+                ):
+                    check_url(
+                        header["value"],
+                        f"{location} ({side} header {header['name']})",
+                        findings,
+                        custom_patterns,
+                        field_tiers=field_tiers,
+                    )
 
         # Check POST data
         check_post_data(request.get("postData"), f"{location} (request)", findings, custom_patterns)

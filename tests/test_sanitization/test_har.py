@@ -37,15 +37,16 @@ from har_capture.sanitization.har import (
     HarValidationError,
     _decode_base64_json,
     _detect_client_side_cookies,
-    _detect_url_credential_entries,
     _embed_sanitization_metadata,
-    _extract_url_credential_raw,
+    _extract_url_credential,
     _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
     _sanitize_form_urlencoded,
+    _sanitize_headers,
     _sanitize_json_recursive,
     _sanitize_string_patterns,
+    _scan_url_credentials,
     apply_user_redactions,
     is_flaggable_field,
     is_sensitive_field,
@@ -62,6 +63,7 @@ from har_capture.sanitization.report import (
     RedactionStatus,
     SanitizationReport,
 )
+from har_capture.validation.secrets import validate_har
 
 # =============================================================================
 # Fixture Loading
@@ -2218,6 +2220,13 @@ _CRED_QS_VALUE = [
     {"request": {"url": "https://device.local/api", "headers": [],
                  "queryString": [{"name": "auth", "value": "YWRtaW46cGFzcw=="}]}},
 ]
+_CRED_PREFIXED_URL = [
+    {"request": {"url": "https://device.local/status.html?login_YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
+]
+_CRED_PREFIXED_QS_NAME = [
+    {"request": {"url": "https://device.local/status.html", "headers": [],
+                 "queryString": [{"name": "login_YWRtaW46cGFzcw", "value": "="}]}},
+]
 _NO_CRED_URL = [
     {"request": {"url": "https://device.local/api?id=123&format=json", "headers": [], "queryString": []}},
 ]
@@ -2228,33 +2237,43 @@ _MULTI_ENTRY_CRED = [
     {"request": {"url": "https://device.local/status", "headers": [], "queryString": []}},
     {"request": {"url": "https://device.local/api?YWRtaW46cGFzcw==", "headers": [], "queryString": []}},
 ]
-# Entry with no URL — covers `if url:` False branch
+# Entry with no URL
 _NO_URL_ENTRY = [
     {"request": {"url": "", "headers": [], "queryString": []}},
 ]
-# URL with a bare flag segment (no '=', not a credential) — covers `if "=" in segment:` False branch
+# URL with a bare flag segment (no '=', not a credential)
 _BARE_FLAG_SEGMENT_URL = [
     {"request": {"url": "https://device.local/api?debug&format=json", "headers": [], "queryString": []}},
 ]
-# Non-dict entry in queryString — covers `isinstance(param, dict)` False branch
+# Non-dict entry in queryString
 _NONDICT_QS_ENTRY = [
     {"request": {"url": "https://device.local/api", "headers": [],
                  "queryString": ["not-a-dict", {"name": "session", "value": "abc"}]}},
 ]
+# Malformed HAR input: queryString null, request missing, entry not a dict
+_MALFORMED_ENTRIES = [
+    {"request": {"url": "https://device.local/api", "headers": [], "queryString": None}},
+    {"response": {}},
+    "not-an-entry",
+    {"request": {"url": "https://device.local/api?YWRtaW46cGFzcw==", "headers": [], "queryString": None}},
+]
 
-DETECT_URL_CREDENTIAL_ENTRIES_CASES = [
-    # (entries,              expected_annotations,                              description)
-    (_CRED_BARE_URL,        [{"entry_index": 0, "location": "url_query_param"}], "bare_cred_in_url"),
-    (_CRED_PARAM_VALUE_URL, [{"entry_index": 0, "location": "url_query_param"}], "cred_in_param_value"),
-    (_CRED_QS_NAME,         [{"entry_index": 0, "location": "url_query_param"}], "cred_in_qs_name"),
-    (_CRED_QS_VALUE,        [{"entry_index": 0, "location": "url_query_param"}], "cred_in_qs_value"),
+SCAN_URL_CREDENTIALS_CASES = [
+    # (entries,              expected_entry_indices,                            description)
+    (_CRED_BARE_URL,        [0], "bare_cred_in_url"),
+    (_CRED_PARAM_VALUE_URL, [0], "cred_in_param_value"),
+    (_CRED_QS_NAME,         [0], "cred_in_qs_name"),
+    (_CRED_QS_VALUE,        [0], "cred_in_qs_value"),
+    (_CRED_PREFIXED_URL,    [0], "prefixed_cred_in_url"),
+    (_CRED_PREFIXED_QS_NAME, [0], "prefixed_cred_in_qs_name"),
     (_NO_CRED_URL,          [],                                                  "no_cred_normal_params"),
     (_NON_CRED_BASE64_URL,  [],                                                  "non_cred_base64_no_colon"),
     ([],                    [],                                                  "empty_entries"),
-    (_MULTI_ENTRY_CRED,     [{"entry_index": 1, "location": "url_query_param"}], "correct_entry_index"),
+    (_MULTI_ENTRY_CRED,     [1], "correct_entry_index"),
     (_NO_URL_ENTRY,         [],                                                  "no_url_skipped"),
     (_BARE_FLAG_SEGMENT_URL, [],                                                 "bare_flag_segment_no_eq"),
     (_NONDICT_QS_ENTRY,     [],                                                  "nondict_qs_entry_skipped"),
+    (_MALFORMED_ENTRIES,    [3],                                                 "malformed_entries_skipped"),
 ]
 
 SANITIZE_HAR_SANITIZED_CRED_CASES = [
@@ -2268,15 +2287,23 @@ SANITIZE_HAR_SANITIZED_CRED_CASES = [
 
 
 class TestSanitizedCredentialAnnotation:
-    """Tests for _detect_url_credential_entries and _sanitized_credentials metadata."""
+    """Tests for _scan_url_credentials and the _sanitized_credentials metadata."""
 
     @pytest.mark.parametrize(
         ("entries", "expected", "desc"),
-        DETECT_URL_CREDENTIAL_ENTRIES_CASES,
-        ids=[c[2] for c in DETECT_URL_CREDENTIAL_ENTRIES_CASES],
+        SCAN_URL_CREDENTIALS_CASES,
+        ids=[c[2] for c in SCAN_URL_CREDENTIALS_CASES],
     )
-    def test_detect_url_credential_entries(self, entries: list, expected: list[dict], desc: str) -> None:
-        assert _detect_url_credential_entries(entries) == expected, desc
+    def test_scan_url_credentials(self, entries: list, expected: list[int], desc: str) -> None:
+        assert list(_scan_url_credentials(entries)) == expected, desc
+
+    def test_null_query_string_does_not_crash(self) -> None:
+        """A null queryString is tolerated by the whole sanitize run."""
+        entries = [_MALFORMED_ENTRIES[0], _MALFORMED_ENTRIES[3]]
+        result, _ = sanitize_har({"log": {"entries": entries}}, salt="test")
+        assert result["log"]["_har_capture"]["_sanitized_credentials"] == [
+            {"entry_index": 1, "location": "url_query_param"}
+        ]
 
     @pytest.mark.parametrize(
         ("entries", "expected", "desc"),
@@ -2316,7 +2343,7 @@ class TestSanitizedCredentialAnnotation:
 
 
 # =============================================================================
-# Server-Token Preservation: _extract_url_credential_raw / _is_echoed_credential
+# Server-Token Preservation: _extract_url_credential / _is_echoed_credential
 # =============================================================================
 
 # URL cred: admin:pass → YWRtaW46cGFzcw==
@@ -2327,14 +2354,14 @@ _PASS_RAW = base64.b64encode(b"pass").decode()  # cGFzcw==
 # so is_base64_credential() fires, but it does NOT echo the user's credential.
 _SERVER_TOKEN = base64.b64encode(b"session:abc123").decode()
 
-# url_cred_raw whose b64decode yields non-UTF-8 bytes → triggers the except branch
-_NON_UTF8_CRED_RAW = base64.b64encode(b"\xff\xfe").decode()
-# url_cred_raw that decodes to valid UTF-8 with no colon → triggers the no-colon branch
-_NO_COLON_CRED_RAW = base64.b64encode(b"simple").decode()
+# A URL credential whose b64decode yields non-UTF-8 bytes
+_NON_UTF8_CREDENTIAL = base64.b64encode(b"\xff\xfe").decode()
+# A URL credential that decodes to valid UTF-8 with no colon
+_NO_COLON_CREDENTIAL = base64.b64encode(b"simple").decode()
 
 # fmt: off
-EXTRACT_URL_CRED_RAW_CASES = [
-    # (request_dict, expected_raw, desc)
+EXTRACT_URL_CREDENTIAL_CASES = [
+    # (request_dict, expected_credential, desc)
     (
         {"url": f"https://d.local/login?{_ADMIN_PASS_RAW}", "queryString": []},
         _ADMIN_PASS_RAW,
@@ -2346,23 +2373,33 @@ EXTRACT_URL_CRED_RAW_CASES = [
         "cred_as_param_value_in_url",
     ),
     (
+        {"url": f"https://d.local/status.html?login_{_ADMIN_PASS_RAW}", "queryString": []},
+        _ADMIN_PASS_RAW,
+        "prefixed_cred_in_url",
+    ),
+    (
+        {"url": "", "queryString": [{"name": f"login_{_ADMIN_PASS_RAW.rstrip('=')}", "value": "="}]},
+        _ADMIN_PASS_RAW,
+        "prefixed_cred_split_by_query_parser",
+    ),
+    (
         {"url": "https://d.local/status", "queryString": []},
         None,
         "no_cred_in_url",
     ),
-    # Bare segment without '=' that isn't a cred — exercises 1417→1411 false branch
+    # Bare segment without '=' that isn't a credential
     (
         {"url": "https://d.local/page?debug", "queryString": []},
         None,
         "bare_non_cred_segment_no_eq",
     ),
-    # key=value pair where value isn't a cred — exercises 1420→1411 false branch
+    # key=value pair where the value isn't a credential
     (
         {"url": "https://d.local/page?format=json", "queryString": []},
         None,
         "key_value_non_cred_value",
     ),
-    # Non-string url — exercises line 1408 defensive branch
+    # Non-string url
     (
         {"url": 9000, "queryString": []},
         None,
@@ -2378,13 +2415,13 @@ EXTRACT_URL_CRED_RAW_CASES = [
         _ADMIN_PASS_RAW,
         "cred_as_querystring_name",
     ),
-    # Non-dict entry in queryString — exercises line 1425 continue branch
+    # Non-dict entry in queryString
     (
         {"url": "", "queryString": ["not-a-dict"]},
         None,
         "non_dict_querystring_entry",
     ),
-    # Empty value + non-cred name — exercises 1430→1423 false branch
+    # Empty value and a name that isn't a credential
     (
         {"url": "", "queryString": [{"name": "format", "value": ""}]},
         None,
@@ -2395,22 +2432,27 @@ EXTRACT_URL_CRED_RAW_CASES = [
         None,
         "empty_request",
     ),
+    (
+        {"url": "https://d.local/page", "queryString": None},
+        None,
+        "null_querystring",
+    ),
 ]
 
 IS_ECHOED_CRED_CASES = [
-    # (body, url_cred_raw, expected, desc)
+    # (body, url_credential, expected, desc)
     (_ADMIN_PASS_RAW, _ADMIN_PASS_RAW, True,  "exact_match"),
     (_ADMIN_RAW,      _ADMIN_PASS_RAW, True,  "btoa_user"),
     (_PASS_RAW,       _ADMIN_PASS_RAW, True,  "btoa_password"),
     (_SERVER_TOKEN,   _ADMIN_PASS_RAW, False, "server_token_not_echoed"),
-    # url_cred_raw decodes to plain text with no colon → exercises line 1452 return False
-    ("anything",      _NO_COLON_CRED_RAW, False, "url_cred_no_colon"),
-    # url_cred_raw decodes to non-UTF-8 bytes → exercises except branch (lines 1449-1450)
-    ("anything",      _NON_UTF8_CRED_RAW, False, "url_cred_non_utf8_bytes"),
+    # URL credential decodes to plain text with no colon
+    ("anything",      _NO_COLON_CREDENTIAL, False, "url_cred_no_colon"),
+    # URL credential decodes to non-UTF-8 bytes
+    ("anything",      _NON_UTF8_CREDENTIAL, False, "url_cred_non_utf8_bytes"),
 ]
 
 SERVER_TOKEN_PRESERVATION_CASES = [
-    # (url_cred, response_body, body_preserved, desc)
+    # (url_credential, response_body, body_preserved, desc)
     # Server token: decodes to "session:abc123" — looks like a credential but isn't the user's
     (
         _ADMIN_PASS_RAW,
@@ -2432,47 +2474,62 @@ SERVER_TOKEN_PRESERVATION_CASES = [
         False,
         "no_url_cred_context_still_redacted",
     ),
+    # Prefixed URL credential (login_<b64>) supplies the same echo context as a bare one
+    (
+        f"login_{_ADMIN_PASS_RAW}",
+        _SERVER_TOKEN,
+        True,
+        "server_token_preserved_with_prefixed_url_cred",
+    ),
+    (
+        f"login_{_ADMIN_PASS_RAW}",
+        _ADMIN_PASS_RAW,
+        False,
+        "echoed_prefixed_cred_redacted",
+    ),
 ]
 # fmt: on
 
 
-class TestUrlCredentialRawExtraction:
-    """Tests for _extract_url_credential_raw."""
+class TestUrlCredentialExtraction:
+    """Tests for _extract_url_credential."""
 
     @pytest.mark.parametrize(
         ("request_dict", "expected", "desc"),
-        EXTRACT_URL_CRED_RAW_CASES,
-        ids=[c[2] for c in EXTRACT_URL_CRED_RAW_CASES],
+        EXTRACT_URL_CREDENTIAL_CASES,
+        ids=[c[2] for c in EXTRACT_URL_CREDENTIAL_CASES],
     )
-    def test_extract_url_credential_raw(self, request_dict: dict, expected: str | None, desc: str) -> None:
-        assert _extract_url_credential_raw(request_dict) == expected, desc
+    def test_extract_url_credential(self, request_dict: dict, expected: str | None, desc: str) -> None:
+        assert _extract_url_credential(request_dict) == expected, desc
 
 
 class TestIsEchoedCredential:
     """Tests for _is_echoed_credential."""
 
     @pytest.mark.parametrize(
-        ("body", "url_cred_raw", "expected", "desc"),
+        ("body", "url_credential", "expected", "desc"),
         IS_ECHOED_CRED_CASES,
         ids=[c[3] for c in IS_ECHOED_CRED_CASES],
     )
-    def test_is_echoed_credential(self, body: str, url_cred_raw: str, expected: bool, desc: str) -> None:
-        assert _is_echoed_credential(body, url_cred_raw) == expected, desc
+    def test_is_echoed_credential(self, body: str, url_credential: str, expected: bool, desc: str) -> None:
+        assert _is_echoed_credential(body, url_credential) == expected, desc
 
 
 class TestServerTokenPreservation:
     """Integration tests for server-token preservation in sanitize_har."""
 
     @pytest.mark.parametrize(
-        ("url_cred", "response_body", "body_preserved", "desc"),
+        ("url_credential", "response_body", "body_preserved", "desc"),
         SERVER_TOKEN_PRESERVATION_CASES,
         ids=[c[3] for c in SERVER_TOKEN_PRESERVATION_CASES],
     )
     def test_server_token_preservation(
-        self, url_cred: str | None, response_body: str, body_preserved: bool, desc: str
+        self, url_credential: str | None, response_body: str, body_preserved: bool, desc: str
     ) -> None:
-        url = f"https://device.local/login?{url_cred}" if url_cred else "https://device.local/login"
-        qs = [{"name": url_cred, "value": ""}] if url_cred else []
+        url = (
+            f"https://device.local/login?{url_credential}" if url_credential else "https://device.local/login"
+        )
+        qs = [{"name": url_credential, "value": ""}] if url_credential else []
         har = {
             "log": {
                 "entries": [
@@ -2498,6 +2555,127 @@ class TestServerTokenPreservation:
             assert result_body == response_body, f"{desc}: server token should be preserved"
         else:
             assert result_body != response_body, f"{desc}: credential should be redacted"
+
+
+URL_TOKEN_LOGIN_CASES = _HAR_FIXTURE["url_token_login_cases"]["cases"]
+
+
+class TestUrlTokenLogin:
+    """A URL-token login leaves no credential behind, anywhere in the HAR."""
+
+    @staticmethod
+    def _login_har(case: dict) -> dict:
+        login_url = f"https://192.168.100.1/cmconnectionstatus.html?{case['segment']}"
+        return {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": login_url,
+                            "headers": [],
+                            "queryString": case["query_string"],
+                        },
+                        "response": {"status": 200, "headers": [], "content": {}},
+                    },
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": "https://192.168.100.1/jquery.js",
+                            "headers": [{"name": "Referer", "value": login_url}],
+                            "queryString": [],
+                        },
+                        "response": {"status": 200, "headers": [], "content": {}},
+                    },
+                ]
+            }
+        }
+
+    @pytest.mark.parametrize("case", URL_TOKEN_LOGIN_CASES, ids=[c["id"] for c in URL_TOKEN_LOGIN_CASES])
+    def test_credential_removed_prefix_kept(self, case: dict) -> None:
+        result, _ = sanitize_har(self._login_har(case), salt="test")
+
+        dumped = json.dumps(result)
+        for form in case["credential_forms"]:
+            assert form not in dumped
+        login = result["log"]["entries"][0]["request"]
+        placeholder = urllib.parse.urlparse(login["url"]).query
+        assert placeholder.startswith("login_AUTH_")
+        # One credential, one hash: the URL, the parsed array and the Referer agree.
+        assert login["queryString"] == [{"name": placeholder, "value": ""}]
+        assert result["log"]["entries"][1]["request"]["headers"][0]["value"] == login["url"]
+        assert result["log"]["_har_capture"]["_sanitized_credentials"] == [
+            {"entry_index": 0, "location": "url_query_param"}
+        ]
+
+    @pytest.mark.parametrize("case", URL_TOKEN_LOGIN_CASES, ids=[c["id"] for c in URL_TOKEN_LOGIN_CASES])
+    def test_validate_agrees(self, case: dict, tmp_path: Path) -> None:
+        """Validation reports the raw credential and finds nothing once sanitized."""
+        _assert_validate_agrees(self._login_har(case), tmp_path)
+
+
+URL_VALUED_HEADER_CASES = _HAR_FIXTURE["url_valued_header_cases"]["cases"]
+
+
+def _assert_validate_agrees(raw: dict, tmp_path: Path) -> None:
+    """Validate errors on the raw HAR and reports no error once it is sanitized."""
+    raw_file = tmp_path / "raw.har"
+    raw_file.write_text(json.dumps(raw))
+    sanitized, _ = sanitize_har(raw, salt="test")
+    sanitized_file = tmp_path / "sanitized.har"
+    sanitized_file.write_text(json.dumps(sanitized))
+
+    assert any(f.severity == "error" for f in validate_har(raw_file))
+    assert [f for f in validate_har(sanitized_file) if f.severity == "error"] == []
+
+
+class TestUrlValuedHeaders:
+    """Referer, Location and HAR's redirectURL get the query treatment of the request URL."""
+
+    @staticmethod
+    def _har(case: dict) -> dict:
+        header = {"name": case["header"], "value": case["url"]}
+        response: dict[str, Any] = {
+            "status": 302,
+            "headers": [header] if case["header"] == "Location" else [],
+            "content": {},
+        }
+        if case["header"] == "redirectURL":
+            response["redirectURL"] = case["url"]
+        return {
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "method": "GET",
+                            "url": "https://192.168.100.1/next.html",
+                            "headers": [header] if case["header"] == "Referer" else [],
+                            "queryString": [],
+                        },
+                        "response": response,
+                    }
+                ]
+            }
+        }
+
+    @pytest.mark.parametrize("case", URL_VALUED_HEADER_CASES, ids=[c["id"] for c in URL_VALUED_HEADER_CASES])
+    def test_leaked_forms_removed(self, case: dict) -> None:
+        result, _ = sanitize_har(self._har(case), salt="test")
+
+        dumped = json.dumps(result)
+        for form in case["leaked_forms"]:
+            assert form not in dumped
+
+    @pytest.mark.parametrize("case", URL_VALUED_HEADER_CASES, ids=[c["id"] for c in URL_VALUED_HEADER_CASES])
+    def test_validate_agrees(self, case: dict, tmp_path: Path) -> None:
+        _assert_validate_agrees(self._har(case), tmp_path)
+
+    def test_only_the_query_changes(self) -> None:
+        """Scheme case, an empty ';' and an empty fragment survive a rewrite byte-for-byte."""
+        header = {"name": "Location", "value": "HTTP://Modem.local/a;?password=hunter22#"}
+        _sanitize_headers([header], Hasher(salt="test"))
+        assert header["value"].startswith("HTTP://Modem.local/a;?password=FIELD_")
+        assert header["value"].endswith("#")
 
 
 # ── base64-encoded response bodies & credential values ───────────────────────
@@ -3198,6 +3376,7 @@ BASE64_CRED_URL_CASES = [
     ("https://modem.local/api?token=YWRtaW46cGFzc3dvcmQ=",     True,  "base64_as_param_value"),
     # Base64 cred in value with non-sensitive key (exercises URL-level detection)
     ("https://modem.local/api?ref=YWRtaW46cGFzc3dvcmQ=",      True,  "base64_val_nonsensitive_key"),
+    ("https://modem.local/api?user=YWRtaW46cGFzc3dvcmQ=",     True,  "base64_val_flaggable_key"),
     # Normal query params (should NOT be detected)
     ("https://example.com/page?id=123&format=json",             False, "normal_params"),
     ("https://example.com/page?q=hello+world",                  False, "normal_search_query"),

@@ -141,7 +141,8 @@ Headers are classified into four tiers from `sensitive.json`:
      That is over-redaction, never a leak, and the input does not occur in real device traffic; the alternative — trust
      the first segment unconditionally per RFC 6265 sec. 5.2 — would make `Path=/foo; HttpOnly` emit a redacted `Path`,
      which is the bug this section exists to prevent. Losing attributes on a degenerate header is the better trade.
-1. **All other headers**: Passed through unmodified.
+1. **All other headers**: Passed through unmodified — except the URL-valued headers `Referer`, `Location` and
+   `Content-Location`, whose URL first gets the [query parameter rules](#url-sanitization) (`_sanitize_headers`).
 
 ### Field Sensitivity Classification
 
@@ -207,11 +208,69 @@ the HTML engine honors the override end-to-end.
 
 ### URL Sanitization
 
-**Query parameters** (`_sanitize_url_query_params`):
+**Query parameters** — the same rules wherever a query appears: the request URL (`_sanitize_url_query_params`), the
+parsed `queryString` array (`_sanitize_query_string_array`), the URL-valued headers `Referer`, `Location` and
+`Content-Location` (`URL_VALUED_HEADERS`, handled in `_sanitize_headers`), and the response's `redirectURL` — HAR's copy
+of `Location`. A credential or sensitive parameter in one request's URL is repeated in the next request's `Referer`, and
+a redirect's `Location` can carry one, so each is held to the same standard as the request URL. Only the query is
+rewritten: the rest of the URL — scheme case, an empty `;` or `#`, a relative path — comes back byte-identical.
 
-- Parameter names checked against sensitive field patterns
-- Values checked for base64-encoded credentials (`user:pass` format)
-- Sensitive values redacted with hasher
+Each raw `&`-separated segment is read by `find_query_credential()` (`patterns/redaction.py`). It is the one definition
+of a URL credential, shared with the validator's `check_url` / `check_query_string` and the
+[credential annotation](#url-credential-location-annotation), so they cannot disagree about which query shapes carry
+one. It recognizes three shapes of `base64(user:pass)`:
+
+| Shape                   | Example                   | Kept verbatim |
+| ----------------------- | ------------------------- | ------------- |
+| Bare segment            | `?YWRtaW46cGFzcw==`       | nothing       |
+| Marker-prefixed segment | `?login_YWRtaW46cGFzcw==` | `login_`      |
+| Keyed value             | `?t=YWRtaW46cGFzcw==`     | `t=`          |
+
+A marker is a letter-led alphanumeric run ending in `_`; `_` is outside the standard base64 alphabet, so the boundary is
+unambiguous. When a segment is both keyed and marker-shaped (`login_x=<b64>`), the keyed reading wins. The credential is
+recognized through the transport damage a URL does to it: percent-encoding (`%3D` padding, `%2B`), a raw `+` (read as a
+base64 character, never as a space), and the two things URLSearchParams does before Playwright records the `queryString`
+array — `+` decoded to a space, and padding split off into the value at the first `=`. The array entry is rejoined into
+its segment (`query_param_segment()`) before reading, so both representations get the same answer and the same hash.
+
+Stripped or miscounted padding is restored only for a candidate of at least 11 characters without padding (the length of
+`base64("admin:pw")`) whose decoded text is printable. Below that, short hex and alphanumeric tokens — cache-busters,
+short commit SHAs — decode to a colon-bearing string by chance (`?v=0406a0` does), so a credential shorter than
+`admin:pw` whose padding was stripped is not recognized.
+
+One decision tree serves the URL string and the array (`_classify_query_param`), per parameter:
+
+1. A bare or marker-prefixed credential → `AUTH_<hash>`, marker kept. Any `=` inside it is padding, so the name rules
+   below must not read it as `key=value`. A segment shaped exactly like a hash placeholder (uppercase prefix, `_`,
+   lowercase hex — `AUTH_d2c6b8e4`) is never read as a marker plus a credential, so re-sanitizing a sanitized file
+   leaves it alone; a real credential behind a placeholder-like marker (`AUTH_<b64>`) is still caught. A doubled
+   separator (`/a??<b64>`, `k==<b64>`) stays in the kept prefix.
+1. A blank value — empty, or only `=` (the padding remnant a parser leaves behind) → unchanged.
+1. Sensitive parameter name → `FIELD_<hash>`.
+1. A keyed credential under any other name → `AUTH_<hash>`, key kept. This includes a flaggable name: `?user=<b64>` is a
+   credential, not an identity to review.
+1. Flaggable name → flagged for review.
+
+**ADR-12 accounting** (three changes widen redaction: the marker shape, URL-valued headers, and a credential under an
+identity-style name):
+
+- *Leak closed:* Arris SB8200 URL-token firmware logs in with `?login_<base64(user:pass)>`. Every earlier release left
+  the admin password recoverable from the URL, the `queryString` array, and every later `Referer`. Separately, a
+  sensitive parameter (`?password=…`) or credential in a URL-valued header or `redirectURL` was only cleaned when
+  [Pass 1b](#pass-1b-redacted-value-propagation) happened to match it — never for a value under 16 characters or one
+  whose encoding differed from the request URL's. And `?user=<b64>` was offered for review as a username while the
+  validator reported it as a credential.
+- *Fidelity cost:* none beyond the value itself. The marker, the key and the segment count survive, so the auth flow
+  reads the same and a consumer can still see which request carried the login; a header's URL keeps its path and every
+  non-sensitive parameter.
+- *Cannot-be-structure proof:* the credential tail must decode strictly to UTF-8 `user:pass`. For a correctly padded
+  value that is the long-standing test, unchanged here — it also redacts a padded base64 JSON or URL payload that
+  happens to contain a colon. A restored one, new here, must additionally clear the length floor, be printable, and not
+  be a URL or JSON payload, so restoration adds no structure redaction. Measured 2026-09-12 across the request-URL query
+  segments of 481 cable_modem_monitor fleet HARs (11,065), `find_query_credential()` matches 14 — all `admin:`
+  credentials, 5 bare and 9 marker-prefixed — and nothing else. The header rule adds no new detection: it applies the
+  URL's own rules to the URLs in `Referer`, `Location`, `Content-Location` and `redirectURL`, and over the same fleet it
+  changed no header value. `?user=<b64>` passes the same credential proof as any other keyed value.
 
 **URL path** (`_sanitize_url_path`):
 
@@ -807,12 +866,14 @@ placeholders) and writes `_sanitized_credentials` to `log._har_capture`. This al
 auth entries without pattern-matching the placeholder — `AUTH_<hash>` contains an underscore that falls outside the
 base64 alphabet and breaks regex-based detection in the sanitized HAR.
 
-**Algorithm** (`_detect_url_credential_entries`):
+**Algorithm** (`_scan_url_credentials`):
 
 1. Called on `har_data["log"]["entries"]` before the sanitization loop runs.
-1. For each entry, check the raw URL query string segments and the structured `queryString` array for bare
-   `base64(user:pass)` credentials via `is_base64_credential()`.
-1. Record `{"entry_index": i, "location": "url_query_param"}` for each matching entry.
+1. For each entry, read the raw URL query string segments, then the structured `queryString` array, with
+   `find_query_credential()` — every shape in [URL Sanitization](#url-sanitization). The scan skips malformed entries
+   (not a dict, no request, `queryString` not a list) so it never raises; rejecting them is structure validation's job.
+1. Return `{entry_index: credential}`. The keys become `{"entry_index": i, "location": "url_query_param"}` annotations;
+   the values feed [server-token preservation](#server-token-preservation). One scan serves both.
 
 **Output**:
 
@@ -820,8 +881,8 @@ base64 alphabet and breaks regex-based detection in the sanitized HAR.
 - Always present after `sanitize_har` — even when empty.
 
 ```python
-def _detect_url_credential_entries(entries: list[dict]) -> list[dict]:
-    """Return annotations for entries whose URL query params contain bare base64 credentials."""
+def _scan_url_credentials(entries: list) -> dict[int, str]:
+    """Map entry index to the URL credential its request carries."""
 ```
 
 ### Server-Token Preservation
@@ -848,16 +909,16 @@ applies: any response body matching `is_base64_credential()` is redacted.
 **Helpers**:
 
 ```python
-def _extract_url_credential_raw(request: dict) -> str | None:
-    """Return the raw base64 credential from a request's URL query params, or None."""
+def _extract_url_credential(request: dict) -> str | None:
+    """Return the base64 credential carried in a request's URL query, or None."""
 
-def _is_echoed_credential(body: str, url_cred_raw: str) -> bool:
+def _is_echoed_credential(body: str, url_credential: str) -> bool:
     """True if body echoes the URL credential or a decoded component of it."""
 ```
 
-**Context threading**: `sanitize_har` builds a `{entry_index: raw_cred}` map from the pre-scan results, then passes
-`_url_cred_raw` through `sanitize_entry → _sanitize_response → _sanitize_response_content` for each entry that had a URL
-credential.
+**Context threading**: `sanitize_har` takes the `{entry_index: credential}` map from the pre-scan, then passes
+`_url_credential` through `sanitize_entry → _sanitize_response → _sanitize_response_content` for each entry that had a
+URL credential.
 
 ### Cookie Origin Annotation
 

@@ -7,6 +7,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-09-12
+
+### Security
+
+- **A URL-token login credential with a marker prefix is now redacted.** Arris SB8200 URL-token firmware logs in with
+  `GET …?login_<base64(user:pass)>`. The sanitizer recognized a bare base64 segment and a `key=<base64>` value, but not
+  a segment with a marker glued on, so every earlier release left the admin password recoverable from the URL and from
+  Playwright's `queryString` array — and `har-capture validate` reported the file clean. The credential is now replaced
+  by `AUTH_<hash>` with the `login_` marker kept, so the auth flow still reads the same, and the URL and the array carry
+  the same hash. Recognition survives the ways a URL mangles base64: percent-encoding, a raw `+`, stripped padding, and
+  the `+`-to-space and padding split that Playwright's query parser applies. One detector now serves the sanitizer, the
+  validator and the `_sanitized_credentials` annotation, so they can no longer disagree about which query shapes carry a
+  credential. Across the request URLs of 481 real device captures from cable_modem_monitor it matches 14 segments, every
+  one a `user:pass` login, and nothing else.
+
+  **If you shared a capture of an SB8200 on URL-token firmware** (or any device whose login URL carries a
+  `<word>_<base64>` segment), assume the password in it is exposed: change the device password, and run
+  `har-capture sanitize` on the file with this release. The credential is still in the sanitized file, so this removes
+  it; confirm the "appears to already be sanitized" prompt to proceed.
+
+- **`Referer`, `Location`, `Content-Location` and the response's `redirectURL` get the same query redaction as the
+  request URL.** A credential or a sensitive parameter (`?password=…`) in one request's URL is repeated in the next
+  request's `Referer`, and a redirect's `Location` — which the HAR also records as `redirectURL` — can carry one. Those
+  copies were cleaned only when a later pass happened to match them — never for a value under 16 characters, or one
+  encoded differently from the request URL. Only the query is rewritten; the rest of each URL is left byte-identical.
+
+- **A base64 credential under an identity-style name (`?user=<base64>`) is redacted, not only flagged.** It was offered
+  for review as a username while `validate` still reported it as a credential.
+
+- **`har-capture validate` checks the query everywhere the sanitizer now cleans it.** That is the `queryString` array (a
+  file cleaned in the URL but not the array was reported clean), the URL inside `Referer` / `Location` /
+  `Content-Location`, and `redirectURL`. Query parameter names are judged by the same tiers as form fields: an
+  unredacted `?password=…` is an error, an identity name such as `?username=…` a warning (a factory-default `admin` is
+  not). A leak recorded in both the URL and the array is reported once.
+
+### Fixed
+
+- **A HAR entry with `"queryString": null` no longer crashes `sanitize`.**
+
+- **Base64 credential recognition is identical on every supported Python.** Python 3.10 accepted a value with excess `=`
+  padding as base64 where 3.11+ rejected it, so the same capture could be redacted differently depending on the
+  interpreter. Padding must now be canonical everywhere.
+
 ## [0.12.4] - 2026-09-12
 
 ### Fixed
@@ -1192,6 +1235,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.2]: https://github.com/solentlabs/har-capture/compare/v0.12.1...v0.12.2
 [0.12.3]: https://github.com/solentlabs/har-capture/compare/v0.12.2...v0.12.3
 [0.12.4]: https://github.com/solentlabs/har-capture/compare/v0.12.3...v0.12.4
+[0.12.5]: https://github.com/solentlabs/har-capture/compare/v0.12.4...v0.12.5
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1219,4 +1263,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.4...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.5...HEAD

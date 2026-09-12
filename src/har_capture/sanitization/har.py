@@ -23,12 +23,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
+    URL_VALUED_HEADERS,
     Hasher,
+    QueryCredential,
+    find_query_credential,
     is_base64_credential,
     is_base64_decodable_text,
+    is_blank_query_value,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
     load_sensitive_patterns,
+    query_param_segment,
 )
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
@@ -1144,7 +1149,10 @@ def _sanitize_headers(
     """
     for header in headers:
         if isinstance(header, dict) and "name" in header and "value" in header:
-            header["value"] = sanitize_header_value(header["name"], header["value"], hasher, collector)
+            value = header["value"]
+            if isinstance(value, str) and str(header["name"]).lower() in URL_VALUED_HEADERS:
+                value = _sanitize_url_query_params(value, hasher, collector)
+            header["value"] = sanitize_header_value(header["name"], value, hasher, collector)
 
 
 def _sanitize_url_path(
@@ -1211,12 +1219,52 @@ def _sanitize_url_path(
     return url
 
 
+def _classify_query_param(name: str, value: str, found: QueryCredential | None) -> str:
+    """Decide what happens to one query parameter.
+
+    The single decision tree for the URL string and the parsed ``queryString``
+    array, so the two representations of a query always get the same answer.
+
+    Args:
+        name: Decoded parameter name
+        value: Decoded parameter value
+        found: ``find_query_credential`` on the parameter's raw segment
+
+    Returns:
+        ``"auth"``, ``"field"``, ``"flag"`` or ``"keep"``
+    """
+    # A bare or marker-prefixed credential has no field name: any '=' in it is
+    # base64 padding, so the name rules must not read it as key=value.
+    if found is not None and not found.keyed:
+        return "auth"
+    if is_blank_query_value(value):
+        return "keep"
+    if is_sensitive_field(name):
+        return "field"
+    if found is not None:
+        return "auth"
+    if is_flaggable_field(name):
+        return "flag"
+    return "keep"
+
+
+def _flag_query_value(collector: RedactionCollector, name: str, value: str, where: str) -> None:
+    """Flag a query parameter value whose name is identity-adjacent."""
+    collector.flag_value(
+        value,
+        "field",
+        ConfidenceLevel.MEDIUM,
+        f"{where} param '{name}'",
+        f"Flaggable field name '{name}' in {where}",
+    )
+
+
 def _sanitize_url_query_params(
     url: str,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
 ) -> str:
-    """Sanitize sensitive query parameters in a URL string.
+    """Sanitize credentials and sensitive parameters in a URL's query.
 
     Args:
         url: Full URL string
@@ -1226,51 +1274,71 @@ def _sanitize_url_query_params(
     Returns:
         URL with sensitive query parameter values redacted
     """
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.query:
+    # Split by hand rather than urlparse/urlunparse: only the query changes,
+    # and everything around it (scheme case, empty ';' or '#', a relative
+    # Location) must come back byte-identical. Raw segments, not parse_qsl,
+    # which would read base64 padding as a key/value separator.
+    head, question, rest = url.partition("?")
+    query, hash_mark, fragment = rest.partition("#")
+    if not question or not query:
         return url
 
-    # Process raw query segments instead of parse_qsl to preserve base64
-    # padding ('=') which parse_qsl treats as key/value separator.
-    # Untouched segments pass through verbatim, preserving original encoding.
-    raw_segments = parsed.query.split("&")
     rebuilt_segments = []
     changed = False
-    for segment in raw_segments:
-        if is_base64_credential(segment):
-            # Bare base64(user:pass) token (e.g., ?YWRtaW46cGFzcw==)
-            rebuilt_segments.append(_redact_value(segment, hasher, "AUTH", collector))
+    for segment in query.split("&"):
+        found = find_query_credential(segment)
+        key, sep, raw_value = segment.partition("=")
+        name = urllib.parse.unquote_plus(key)
+        value = urllib.parse.unquote_plus(raw_value) if sep else ""
+        action = _classify_query_param(name, value, found)
+        rebuilt = segment
+        if action == "auth" and found is not None:
+            rebuilt = found.prefix + _redact_value(found.credential, hasher, "AUTH", collector)
             changed = True
-        elif "=" in segment:
-            key, _, val = segment.partition("=")
-            decoded_key = urllib.parse.unquote_plus(key)
-            decoded_val = urllib.parse.unquote_plus(val)
-            if is_sensitive_field(decoded_key) and val:
-                rebuilt_segments.append(f"{key}={_redact_value(decoded_val, hasher, 'FIELD', collector)}")
-                changed = True
-            elif is_flaggable_field(decoded_key) and collector and val:
-                collector.flag_value(
-                    decoded_val,
-                    "field",
-                    ConfidenceLevel.MEDIUM,
-                    f"query param '{decoded_key}'",
-                    f"Flaggable field name '{decoded_key}' in URL query",
-                )
-                rebuilt_segments.append(segment)
-            elif is_base64_credential(decoded_val):
-                # Base64 user:pass in parameter value (e.g., ?token=YWRtaW46cGFzcw==)
-                rebuilt_segments.append(f"{key}={_redact_value(decoded_val, hasher, 'AUTH', collector)}")
-                changed = True
-            else:
-                rebuilt_segments.append(segment)
-        else:
-            rebuilt_segments.append(segment)
+        elif action == "field":
+            rebuilt = f"{key}={_redact_value(value, hasher, 'FIELD', collector)}"
+            changed = True
+        elif action == "flag" and collector:
+            _flag_query_value(collector, name, value, "URL query")
+        rebuilt_segments.append(rebuilt)
 
     if not changed:
         return url
 
-    new_query = "&".join(rebuilt_segments)
-    return urllib.parse.urlunparse(parsed._replace(query=new_query))
+    return f"{head}?{'&'.join(rebuilt_segments)}{hash_mark}{fragment}"
+
+
+def _sanitize_query_string_array(
+    params: list[Any],
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> None:
+    """Sanitize a HAR ``queryString`` array in-place, matching the URL string.
+
+    Args:
+        params: HAR ``queryString`` entries (already decoded by the query parser)
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+    """
+    for param in params:
+        if not isinstance(param, dict) or "name" not in param:
+            continue
+        name = str(param["name"])
+        value = str(param.get("value", ""))
+        found = find_query_credential(query_param_segment(param))
+        action = _classify_query_param(name, value, found)
+        if action == "auth" and found is not None:
+            if found.keyed:
+                param["value"] = _redact_value(found.credential, hasher, "AUTH", collector)
+            else:
+                # The parser may have split the credential at its padding, so
+                # the rejoined segment is rewritten whole into the name.
+                param["name"] = found.prefix + _redact_value(found.credential, hasher, "AUTH", collector)
+                param["value"] = ""
+        elif action == "field":
+            param["value"] = _redact_value(value, hasher, "FIELD", collector)
+        elif action == "flag" and collector:
+            _flag_query_value(collector, name, value, "queryString")
 
 
 def _sanitize_request(
@@ -1311,27 +1379,7 @@ def _sanitize_request(
 
     # Sanitize query string params (in case password is in URL)
     if "queryString" in req and isinstance(req["queryString"], list):
-        for param in req["queryString"]:
-            if isinstance(param, dict) and "name" in param:
-                if is_sensitive_field(param["name"]):
-                    param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
-                elif is_flaggable_field(param["name"]) and collector and param.get("value"):
-                    collector.flag_value(
-                        param["value"],
-                        "field",
-                        ConfidenceLevel.MEDIUM,
-                        f"queryString param '{param['name']}'",
-                        f"Flaggable field name '{param['name']}' in queryString",
-                    )
-                elif is_base64_credential(param.get("value", "")):
-                    # Base64 user:pass in parameter value
-                    param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
-                elif is_base64_credential(param["name"]) or (
-                    not param.get("value") and is_base64_credential(param["name"] + "=")
-                ):
-                    # Bare base64 token as query parameter name
-                    # Also try with '=' appended since parse_qsl strips base64 padding
-                    param["name"] = _redact_value(param["name"], hasher, "AUTH", collector)
+        _sanitize_query_string_array(req["queryString"], hasher, collector)
 
     # Sanitize the URL string itself (query params and path segments)
     if "url" in req and isinstance(req["url"], str):
@@ -1386,7 +1434,7 @@ def _sanitize_response_content(
     collector: RedactionCollector | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
-    url_cred_raw: str | None = None,
+    url_credential: str | None = None,
 ) -> None:
     """Sanitize response content in-place.
 
@@ -1395,7 +1443,7 @@ def _sanitize_response_content(
         collector: Optional collector with hasher for redaction
         custom_patterns: Optional custom patterns (file path or dict)
         heuristics: Heuristic mode for pipe-delimited value detection
-        url_cred_raw: Raw base64 credential from the request URL (if any). When
+        url_credential: Base64 credential from the request URL (if any). When
             provided, a response body that looks like a base64 credential is
             only redacted if it echoes that credential — opaque server-issued
             session tokens are preserved for replay fidelity.
@@ -1421,7 +1469,7 @@ def _sanitize_response_content(
         return
 
     if is_base64_credential(stripped):
-        if url_cred_raw is None or _is_echoed_credential(stripped, url_cred_raw):
+        if url_credential is None or _is_echoed_credential(stripped, url_credential):
             content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
             return
 
@@ -1465,7 +1513,7 @@ def _sanitize_response(
     collector: RedactionCollector | None = None,
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
-    url_cred_raw: str | None = None,
+    url_credential: str | None = None,
 ) -> None:
     """Sanitize a HAR response object in-place.
 
@@ -1474,7 +1522,7 @@ def _sanitize_response(
         collector: Optional collector with hasher for redaction
         custom_patterns: Optional custom patterns (file path or dict)
         heuristics: Heuristic mode for pipe-delimited value detection
-        url_cred_raw: Raw base64 credential from the paired request URL (if any).
+        url_credential: Base64 credential from the paired request URL (if any).
             Forwarded to ``_sanitize_response_content`` for the server-token
             preservation heuristic.
     """
@@ -1484,6 +1532,10 @@ def _sanitize_response(
     if "headers" in resp and isinstance(resp["headers"], list):
         _sanitize_headers(resp["headers"], hasher, collector)
 
+    # HAR's copy of the Location header
+    if isinstance(resp.get("redirectURL"), str):
+        resp["redirectURL"] = _sanitize_url_query_params(resp["redirectURL"], hasher, collector)
+
     # Sanitize cookie objects (Playwright parses Set-Cookie into structured objects)
     if "cookies" in resp and isinstance(resp["cookies"], list):
         for cookie in resp["cookies"]:
@@ -1492,7 +1544,7 @@ def _sanitize_response(
 
     # Sanitize response content
     if "content" in resp and isinstance(resp["content"], dict):
-        _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics, url_cred_raw)
+        _sanitize_response_content(resp["content"], collector, custom_patterns, heuristics, url_credential)
 
 
 def sanitize_entry(
@@ -1503,7 +1555,7 @@ def sanitize_entry(
     collector: RedactionCollector | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
     _skip_copy: bool = False,
-    _url_cred_raw: str | None = None,
+    _url_credential: str | None = None,
 ) -> dict[str, Any]:
     """Sanitize a single HAR entry (request/response pair).
 
@@ -1546,7 +1598,7 @@ def sanitize_entry(
             _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
 
         if "response" in result:
-            _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_cred_raw)
+            _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_credential)
 
     return result
 
@@ -1611,101 +1663,59 @@ def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
     return None
 
 
-def _detect_url_credential_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return annotations for entries whose URL query params contain bare base64 credentials.
-
-    Must be called on the original (pre-sanitization) entries — placeholders written by
-    the sanitizer no longer match the base64-alphabet regex the intake pipeline uses.
-    Returns a list of ``{"entry_index": i, "location": "url_query_param"}`` dicts.
-    """
-    locations = []
-    for i, entry in enumerate(entries):
-        request = entry.get("request", {})
-        found = False
-
-        url = request.get("url", "")
-        if url:
-            parsed = urllib.parse.urlparse(url)
-            for segment in parsed.query.split("&"):
-                if not segment:
-                    continue
-                if is_base64_credential(segment):
-                    found = True
-                    break
-                if "=" in segment:
-                    _, _, val = segment.partition("=")
-                    if is_base64_credential(urllib.parse.unquote_plus(val)):
-                        found = True
-                        break
-
-        if not found:
-            for param in request.get("queryString", []):
-                if not isinstance(param, dict):
-                    continue
-                name = param.get("name", "")
-                val = param.get("value", "")
-                if (
-                    is_base64_credential(val)
-                    or is_base64_credential(name)
-                    or (not val and is_base64_credential(name + "="))
-                ):
-                    found = True
-                    break
-
-        if found:
-            locations.append({"entry_index": i, "location": "url_query_param"})
-
-    return locations
-
-
-def _extract_url_credential_raw(request: dict[str, Any]) -> str | None:
-    """Return the raw base64 credential from a request's URL query params, or None.
-
-    Checks the URL query string first, then the queryString array. Returns the
-    first raw base64(user:pass) value found so the response-body guard can
-    distinguish an echoed credential from a server-issued session token.
-    """
+def _request_query_segments(request: dict[str, Any]) -> Iterator[str]:
+    """Yield a request's query segments: the URL string's first, then ``queryString``'s."""
     url = request.get("url", "")
-    if not isinstance(url, str):
-        url = ""
-    if url:
-        parsed = urllib.parse.urlparse(url)
-        for segment in parsed.query.split("&"):
-            seg: str = segment
-            if not seg:
-                continue
-            if is_base64_credential(seg):
-                return seg
-            if "=" in seg:
-                _, _, raw_val = seg.partition("=")
-                decoded_val = urllib.parse.unquote_plus(raw_val)
-                if is_base64_credential(decoded_val):
-                    return decoded_val
+    if isinstance(url, str) and url:
+        yield from urllib.parse.urlparse(url).query.split("&")
+    params = request.get("queryString")
+    if isinstance(params, list):
+        for param in params:
+            if isinstance(param, dict):
+                yield query_param_segment(param)
 
-    for param in request.get("queryString", []):
-        if not isinstance(param, dict):
-            continue
-        p_name: str = str(param.get("name", ""))
-        p_val: str = str(param.get("value", ""))
-        if is_base64_credential(p_val):
-            return p_val
-        if is_base64_credential(p_name) or (not p_val and is_base64_credential(p_name + "=")):
-            return p_name
 
+def _extract_url_credential(request: dict[str, Any]) -> str | None:
+    """Return the base64 credential carried in a request's URL query, or None.
+
+    The response-body guard compares against it to tell an echoed credential
+    from a server-issued session token.
+    """
+    for segment in _request_query_segments(request):
+        found = find_query_credential(segment)
+        if found:
+            return found.credential
     return None
 
 
-def _is_echoed_credential(body: str, url_cred_raw: str) -> bool:
+def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
+    """Map entry index to the URL credential its request carries.
+
+    Must run on the original (pre-sanitization) entries: once the sanitizer
+    writes ``AUTH_<hash>`` the credential is no longer recognizable. The keys
+    become the ``_sanitized_credentials`` annotation; the values feed the
+    server-token preservation guard.
+    """
+    credentials: dict[int, str] = {}
+    for i, entry in enumerate(entries):
+        request = entry.get("request") if isinstance(entry, dict) else None
+        credential = _extract_url_credential(request) if isinstance(request, dict) else None
+        if credential is not None:
+            credentials[i] = credential
+    return credentials
+
+
+def _is_echoed_credential(body: str, url_credential: str) -> bool:
     """True if body echoes the URL credential or a decoded component of it.
 
-    Returns True when body matches the raw credential exactly, or equals
+    Returns True when body matches the credential exactly, or equals
     btoa(user), btoa(password), or btoa(user:password) derived from it.
     Returns False for opaque server-issued tokens.
     """
-    if body == url_cred_raw:
+    if body == url_credential:
         return True
     try:
-        padded = url_cred_raw.rstrip("=")
+        padded = url_credential.rstrip("=")
         padded += "=" * (-len(padded) % 4)
         decoded = base64.b64decode(padded).decode("utf-8", errors="strict")
     except Exception:
@@ -1918,22 +1928,10 @@ def sanitize_har(
 
     log = result["log"]
 
-    # Pre-scan original entries for URL credential locations before sanitization replaces them
+    # Pre-scan the original entries: sanitization replaces the credentials it
+    # is looking for.
     orig_entries = har_data.get("log", {}).get("entries", [])
-    url_credential_locations = (
-        _detect_url_credential_entries(orig_entries) if isinstance(orig_entries, list) else []
-    )
-
-    # Build an index of the raw credential string per entry index so that the
-    # response-body sanitizer can apply the server-token preservation heuristic.
-    # Iterate orig_entries directly rather than indexing through url_credential_locations
-    # so that the `if raw is not None` branch is exercised by the common case (no cred).
-    _url_cred_by_idx: dict[int, str] = {}
-    if isinstance(orig_entries, list):
-        for i, orig_entry in enumerate(orig_entries):
-            raw = _extract_url_credential_raw(orig_entry.get("request", {}))
-            if raw is not None:
-                _url_cred_by_idx[i] = raw
+    url_credentials = _scan_url_credentials(orig_entries) if isinstance(orig_entries, list) else {}
 
     # Sanitize all entries using the shared collector
     if "entries" in log and isinstance(log["entries"], list):
@@ -1946,7 +1944,7 @@ def sanitize_har(
                     collector=collector,
                     heuristics=heuristics,
                     _skip_copy=True,
-                    _url_cred_raw=_url_cred_by_idx.get(i),
+                    _url_credential=url_credentials.get(i),
                 )
             )
         log["entries"] = sanitized_entries
@@ -1985,7 +1983,9 @@ def sanitize_har(
         client_side = _detect_client_side_cookies(log["entries"])
         meta = log.setdefault("_har_capture", {})
         meta["_client_side_cookies"] = client_side
-        meta["_sanitized_credentials"] = url_credential_locations
+        meta["_sanitized_credentials"] = [
+            {"entry_index": i, "location": "url_query_param"} for i in url_credentials
+        ]
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
     # surfaces with no field name to match (most commonly a URL path segment).
