@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-09-12
+
 ### Fixed
 
 - **Repeated requests are no longer dropped from the capture.** Before compressing, the capture removed every request
@@ -1189,6 +1191,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.1]: https://github.com/solentlabs/har-capture/compare/v0.12.0...v0.12.1
 [0.12.2]: https://github.com/solentlabs/har-capture/compare/v0.12.1...v0.12.2
 [0.12.3]: https://github.com/solentlabs/har-capture/compare/v0.12.2...v0.12.3
+[0.12.4]: https://github.com/solentlabs/har-capture/compare/v0.12.3...v0.12.4
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1216,4 +1219,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.3...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.4...HEAD
