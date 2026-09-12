@@ -38,6 +38,7 @@ from har_capture.patterns.redaction import (
     QueryCredential,
     find_query_credential,
     is_allowlisted,
+    is_base64_credential,
     is_fully_redacted,
     is_redacted,
 )
@@ -49,6 +50,17 @@ REDACTED_VALUES = _FIXTURES["redacted_values"]
 NON_REDACTED_VALUES = _FIXTURES["non_redacted_values"]
 CASE_INSENSITIVE_PAIRS = [tuple(group) for group in _FIXTURES["case_insensitive_pairs"]]
 QUERY_CREDENTIAL_CASES = _FIXTURES["query_credential_cases"]["cases"]
+BASE64_CREDENTIAL_PADDING_CASES = _FIXTURES["base64_credential_padding_cases"]["cases"]
+
+
+class TestBase64CredentialPadding:
+    """Credential recognition does not depend on the interpreter's base64 strictness."""
+
+    @pytest.mark.parametrize(
+        "case", BASE64_CREDENTIAL_PADDING_CASES, ids=[c["id"] for c in BASE64_CREDENTIAL_PADDING_CASES]
+    )
+    def test_padding(self, case: dict) -> None:
+        assert is_base64_credential(case["value"]) is case["expected"]
 
 
 class TestFindQueryCredential:

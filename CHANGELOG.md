@@ -46,6 +46,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A HAR entry with `"queryString": null` no longer crashes `sanitize`.**
 
+- **Base64 credential recognition is identical on every supported Python.** Python 3.10 accepted a value with excess `=`
+  padding as base64 where 3.11+ rejected it, so the same capture could be redacted differently depending on the
+  interpreter. Padding must now be canonical everywhere.
+
 ## [0.12.4] - 2026-09-12
 
 ### Fixed

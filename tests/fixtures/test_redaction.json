@@ -53,6 +53,16 @@
     ["redacted", "Redacted", "REDACTED"],
     ["***password***", "***Password***", "***PASSWORD***"]
   ],
+  "base64_credential_padding_cases": {
+    "_comment": "is_base64_credential requires canonical padding on every supported Python. 3.10's b64decode(validate=True) accepts excess padding that 3.11+ rejects; the result must not depend on the interpreter.",
+    "cases": [
+      {"id": "canonical_one_pad",  "value": "YWRtaW46cGFzc3dvcmQ=",   "expected": true},
+      {"id": "canonical_no_pad",   "value": "YWRtaW46cGFzcw==",       "expected": true},
+      {"id": "excess_padding",     "value": "YWRtaW46cGFzc3dvcmQ==",  "expected": false},
+      {"id": "missing_padding",    "value": "YWRtaW46cGFzc3dvcmQ",    "expected": false},
+      {"id": "padding_on_full_quantum", "value": "YWRtaW46cGFzcw===", "expected": false}
+    ]
+  },
   "query_credential_cases": {
     "_comment": "find_query_credential(segment) over one raw URL query segment. prefix is the verbatim text kept ahead of the credential; credential is the base64(user:pass) as the client produced it. The space_for_plus row is the shape URLSearchParams hands Playwright's queryString array: '+' decoded to a space.",
     "cases": [
@@ -73,6 +83,7 @@
       {"id": "stripped_padding_too_short", "segment": "YTpiYw",                               "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "hex_cache_buster",         "segment": "v=0406a0",                               "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "sanitizer_placeholder",    "segment": "AUTH_d2c6b8e4",                          "prefix": null,     "credential": null,                       "keyed": null},
+      {"id": "excess_padding_canonicalized", "segment": "login_YWRtaW46cGFzc3dvcmQ==",        "prefix": "login_", "credential": "YWRtaW46cGFzc3dvcmQ=",     "keyed": false},
       {"id": "placeholder_shaped_marker_credential", "segment": "AUTH_YWRtaW46U3VwM3JTZWNyZXQx", "prefix": "AUTH_", "credential": "YWRtaW46U3VwM3JTZWNyZXQx", "keyed": false},
       {"id": "doubled_question_mark",    "segment": "?YWRtaW46ZXhhbXBsZS1wdw==",              "prefix": "?",      "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
       {"id": "doubled_equals",           "segment": "k==YWRtaW46ZXhhbXBsZS1wdw==",            "prefix": "k==",    "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},

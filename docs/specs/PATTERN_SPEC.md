@@ -576,7 +576,9 @@ Check order:
 Detects a base64-encoded `user:pass` value:
 
 1. Pre-filter: valid base64 characters, plausible length
-1. Decode: `base64.b64decode()` with validation, strictly to UTF-8
+1. Decode: canonical padding only, then `base64.b64decode()` with validation, strictly to UTF-8. The padding check is
+   explicit because Python 3.10 accepts excess padding that 3.11+ rejects; the answer must not depend on the
+   interpreter.
 1. Check: the decoded string has a colon with at least one character on each side (split at the first colon, so a
    password may contain colons)
 

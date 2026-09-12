@@ -237,9 +237,11 @@ def _decode_base64_text(value: str) -> str | None:
     if not _BASE64_CHARS_RE.match(value):
         return None
 
-    # Must be plausible base64 length (multiple of 4 or close with padding)
+    # Canonical padding only. Python 3.10's b64decode(validate=True) accepts
+    # excess padding that 3.11+ rejects; recognition must not depend on the
+    # interpreter.
     stripped = value.rstrip("=")
-    if len(stripped) < 4:
+    if len(stripped) < 4 or len(value) - len(stripped) != -len(stripped) % 4:
         return None
 
     try:

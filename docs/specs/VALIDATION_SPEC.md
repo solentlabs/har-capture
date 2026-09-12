@@ -582,6 +582,7 @@ Validation is intentionally simpler than sanitization:
    names, MAC/label-serial/IP content patterns are "warning"; factory-default usernames in flag-tier fields are
    suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
-1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, a strict decode to
-   UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a password may
-   itself contain colons). Random base64-looking strings that don't decode to `user:pass` format are not flagged.
+1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, canonical padding,
+   a strict decode to UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a
+   password may itself contain colons). Random base64-looking strings that don't decode to `user:pass` format are not
+   flagged.
