@@ -36,7 +36,10 @@ RESOLUTION="${2:-highest}"
 "$TARGET_PYTHON" -m pip install --upgrade pip --quiet
 if [ "$RESOLUTION" = "lowest" ]; then
     "$TARGET_PYTHON" -m pip install uv --quiet
-    "$TARGET_PYTHON" -m uv pip install --python "$TARGET_PYTHON" --resolution lowest-direct -e ".[dev,cli,capture]" --quiet
+    # uv reads a bare name like ``python`` as "find a virtual environment";
+    # an absolute interpreter path installs into that interpreter, venv or not.
+    INTERPRETER="$("$TARGET_PYTHON" -c 'import sys; print(sys.executable)')"
+    "$TARGET_PYTHON" -m uv pip install --python "$INTERPRETER" --resolution lowest-direct -e ".[dev,cli,capture]" --quiet
 else
     "$TARGET_PYTHON" -m pip install -e ".[dev,cli,capture]" --quiet
 fi

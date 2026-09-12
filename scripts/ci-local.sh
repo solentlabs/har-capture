@@ -84,6 +84,11 @@ fi
 PYTHON="$CI_VENV/bin/python"
 FAILED=0
 
+# The variables GitHub Actions sets. Tools change behavior on them — typer,
+# for one, forces colored output under GITHUB_ACTIONS — so tests run here see
+# what they see in CI.
+export CI=true GITHUB_ACTIONS=true
+
 # ─── Step 1: ruff and mypy (match CI's lint, format and type-check steps) ──
 echo -e "\n${YELLOW}[1/3] ruff check, ruff format --check, mypy${NC}"
 if "$PYTHON" -m ruff check . && "$PYTHON" -m ruff format --check . && "$PYTHON" -m mypy src/; then

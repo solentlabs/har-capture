@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_main.json").read_text())
 CLI_DISPATCH_CASES = _FIXTURES["cli_dispatch_cases"]["cases"]
+
+# typer forces rich's colored output when GITHUB_ACTIONS (or FORCE_COLOR /
+# PY_COLORS) is set, which splits "Usage: har-capture get" with escape codes.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class TestCliDispatch:
@@ -23,8 +28,9 @@ class TestCliDispatch:
 
         result = CliRunner().invoke(app, case["argv"])
 
-        assert result.exit_code == 0, result.output
-        assert case["output_contains"] in result.output
+        output = _ANSI_ESCAPE_RE.sub("", result.output)
+        assert result.exit_code == 0, output
+        assert case["output_contains"] in output
 
 
 class TestCliImport:
