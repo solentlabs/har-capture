@@ -38,16 +38,21 @@ from har_capture.patterns.loader import load_pii_patterns
 from har_capture.patterns.redaction import (
     MAC_RE,
     QueryCredential,
+    QueryPayload,
     classify_identity_field,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
+    find_query_payload,
     is_allowlisted,
     is_base64_credential,
+    is_constant_mac,
     is_fully_redacted,
     is_redacted,
     is_text_mime,
     iter_url_credentials,
+    mime_kind,
+    parse_json_container,
 )
 
 # Load test data from fixture
@@ -64,6 +69,9 @@ JSON_IDENTITY_KEY_CASES = _FIXTURES["json_identity_key_cases"]["cases"]
 TRANSPORT_BODY_CASES = _FIXTURES["transport_body_cases"]["cases"]
 BASE64_PAYLOAD_CASES = _FIXTURES["base64_payload_cases"]["cases"]
 TEXT_MIME_CASES = _FIXTURES["text_mime_cases"]["cases"]
+JSON_CONTAINER_CASES = _FIXTURES["json_container_cases"]["cases"]
+CONSTANT_MAC_CASES = _FIXTURES["constant_mac_cases"]["cases"]
+QUERY_PAYLOAD_CASES = _FIXTURES["query_payload_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -102,12 +110,44 @@ class TestDecodeBase64Payload:
         assert decode_base64_payload(case["value"]) == case["expected"]
 
 
-class TestIsTextMime:
-    """is_text_mime names the mime types whose bodies are text by declaration."""
+class TestMimeKind:
+    """mime_kind is the one mime vocabulary; is_text_mime is a kind being named."""
 
     @pytest.mark.parametrize("case", TEXT_MIME_CASES, ids=[c["id"] for c in TEXT_MIME_CASES])
-    def test_text_mime(self, case: dict) -> None:
-        assert is_text_mime(case["mime"]) is case["expected"]
+    def test_kind(self, case: dict) -> None:
+        assert mime_kind(case["mime"]) == case["kind"]
+        assert is_text_mime(case["mime"]) is (case["kind"] is not None)
+
+
+class TestParseJsonContainer:
+    """parse_json_container accepts objects and arrays and never raises."""
+
+    @pytest.mark.parametrize("case", JSON_CONTAINER_CASES, ids=[c["id"] for c in JSON_CONTAINER_CASES])
+    def test_container(self, case: dict) -> None:
+        text = "[" * case["nesting"] + "]" * case["nesting"] if "nesting" in case else case["text"]
+        assert (parse_json_container(text) is not None) is case["is_container"]
+
+
+class TestIsConstantMac:
+    """is_constant_mac names the broadcast and zero constants in any layout."""
+
+    @pytest.mark.parametrize("case", CONSTANT_MAC_CASES, ids=[c["id"] for c in CONSTANT_MAC_CASES])
+    def test_constant(self, case: dict) -> None:
+        assert is_constant_mac(case["mac"]) is case["constant"]
+
+
+class TestFindQueryPayload:
+    """find_query_payload locates a base64 JSON or URL payload in one raw query segment."""
+
+    @pytest.mark.parametrize("case", QUERY_PAYLOAD_CASES, ids=[c["id"] for c in QUERY_PAYLOAD_CASES])
+    def test_payload(self, case: dict) -> None:
+        found = find_query_payload(case["segment"])
+        if case["encoded"] is None:
+            assert found is None
+        else:
+            assert found is not None
+            assert found == QueryPayload(case["prefix"], case["encoded"], found.text, case["quoted"])
+            assert found.text == decode_base64_payload(case["encoded"])
 
 
 class TestDecodeTransportBody:

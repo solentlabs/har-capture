@@ -240,6 +240,23 @@ def is_mac_value(value: str) -> bool:
     return mac_layout(value) is not None or MAC_RE.fullmatch(value) is not None
 
 
+def is_constant_mac(mac: str) -> bool:
+    """Check if a MAC is one byte repeated: broadcast ``ff:ff:…``, zero ``00:00:…``.
+
+    These are protocol constants, not a device's identity, and scripts
+    compare against them (``if (mac == 'ff:ff:ff:ff:ff:ff')``). Neither tool
+    treats them as PII: redacting one would rewrite program logic.
+
+    Args:
+        mac: A MAC in any layout
+
+    Returns:
+        True if every octet is the same
+    """
+    digits = re.sub(r"[^0-9A-Fa-f]", "", mac).lower()
+    return len(digits) == 12 and digits == digits[:2] * 6
+
+
 # A key is read as its words — camelCase humps, acronyms, digit runs —
 # lowercased and joined with '_' (`StatusSoftwareSerialNum` →
 # `status_software_serial_num`, `CMMACAddress` → `cmmac_address`). The
@@ -300,18 +317,43 @@ def classify_identity_field(key: str, value: object) -> str | None:
     return None
 
 
-# A mime type whose body is text by declaration: text/*, or a JSON, XML or
-# JavaScript subtype (bare or as a +suffix, and whatever the type — DM1000
-# serves `applation/json`), or form-urlencoded. Parameters are ignored.
-_TEXT_MIME_RE = re.compile(
-    r"^\s*(?:text/|[\w.+-]*/(?:[\w.-]*\+)?(?:json|xml|javascript|x-javascript|ecmascript|x-www-form-urlencoded)"
-    r"\s*(?:;|$))",
-    re.IGNORECASE,
-)
+# `type/subtype` at the start of a Content-Type. The type is not checked
+# against the registered set: DM1000 serves `applation/json`.
+_MIME_RE = re.compile(r"^\s*([^\s/;]+)/([^\s;]+)")
+_SCRIPT_SUBTYPES = frozenset({"javascript", "x-javascript", "ecmascript", "x-ecmascript"})
+
+
+def mime_kind(mime: str) -> str | None:
+    """Name what a mime type declares its body to be.
+
+    The one mime vocabulary for routing and decoding. The subtype decides,
+    bare or as a structured-syntax ``+suffix`` (``image/svg+xml``,
+    ``application/problem+json``); parameters and case are ignored.
+
+    Args:
+        mime: A Content-Type value
+
+    Returns:
+        ``"markup"`` (HTML, XML), ``"json"``, ``"text"`` (any other text/*,
+        JavaScript, form data), or None when the type says nothing about text
+        (``application/octet-stream``, ``x-unknown``, images, fonts)
+    """
+    match = _MIME_RE.match(mime)
+    if match is None:
+        return None
+    main, subtype = match.group(1).lower(), match.group(2).lower()
+    suffix = subtype.rpartition("+")[2]
+    if subtype in ("html", "xhtml") or suffix == "xml":
+        return "markup"
+    if suffix == "json":
+        return "json"
+    if main == "text" or suffix in _SCRIPT_SUBTYPES or subtype == "x-www-form-urlencoded":
+        return "text"
+    return None
 
 
 def is_text_mime(mime: str) -> bool:
-    """Check if a mime type declares its body to be text.
+    """Check if a mime type declares its body to be text (see :func:`mime_kind`).
 
     Args:
         mime: A Content-Type value, parameters allowed
@@ -319,7 +361,30 @@ def is_text_mime(mime: str) -> bool:
     Returns:
         True for text/*, JSON, XML, JavaScript and form-urlencoded types
     """
-    return bool(_TEXT_MIME_RE.match(mime))
+    return mime_kind(mime) is not None
+
+
+def parse_json_container(text: str) -> dict[str, Any] | list[Any] | None:
+    """Parse text that is a JSON object or array.
+
+    The one test for "this text is JSON" across the sanitizer and the
+    validator. Nesting too deep for the parser (a ``RecursionError``) is
+    treated like any other text that does not parse — hostile input must not
+    crash either tool.
+
+    Args:
+        text: Candidate JSON text
+
+    Returns:
+        The parsed object or array, or None
+    """
+    if not text.lstrip().startswith(("{", "[")):
+        return None
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    return parsed if isinstance(parsed, dict | list) else None
 
 
 # `charset=` parameter of a Content-Type, quoted or bare.
@@ -332,11 +397,12 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
     A body without ``encoding`` is already text. A ``base64`` body is decoded
     with the mime type's declared charset — or strictly as UTF-8 when none is
     declared, or the declared one is unknown or not a text encoding (``hex``,
-    ``zlib``). Undeclared bytes that are not UTF-8 are read as latin-1 when the
-    mime type says the body is text (:func:`is_text_mime`): capture writes such
-    a page base64 because it is not UTF-8, and a browser renders an undeclared
-    page in a Latin charset. Otherwise bytes that do not decode, or that decode
-    to text holding NUL, are binary: text never holds NUL, fonts and images do.
+    ``zlib``). When that fails and the mime type says the body is text
+    (:func:`is_text_mime`), it is read as latin-1: capture writes a page
+    base64 exactly when its bytes are not UTF-8, whatever charset it declares,
+    and latin-1 maps every byte, so the original bytes stay recoverable.
+    Otherwise bytes that do not decode, or that decode to text holding NUL,
+    are binary: text never holds NUL, fonts and images do.
 
     The one decoder for the sanitizer and the validator, so both read the
     same text from a body and leave the same bodies alone.
@@ -366,11 +432,15 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
         except LookupError:
             decoded = raw.decode("utf-8")
     except UnicodeError:
-        if declared or not is_text_mime(mime):
+        if not is_text_mime(mime):
             return None
         decoded = raw.decode("latin-1")
     return decoded if decoded and "\x00" not in decoded else None
 
+
+# Decoded text that is a URL (scheme://) or opens a JSON object/array: it has
+# a colon, but it is data, never user:pass — whether or not it parses.
+_STRUCTURED_TEXT_RE = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|[{\[])")
 
 # Base64 charset pattern for quick pre-filtering
 _BASE64_CHARS_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
@@ -454,7 +524,7 @@ def is_base64_credential(value: str) -> bool:
         False
     """
     decoded = _decode_base64_text(value)
-    if decoded is None:
+    if decoded is None or _STRUCTURED_TEXT_RE.match(decoded):
         return False
 
     # Check for user:pass pattern — at least one char on each side of colon
@@ -493,10 +563,6 @@ _HASH_PLACEHOLDER_RE = re.compile(r"[A-Z][A-Z0-9_]*_[0-9a-f]{8,}")
 # colon-bearing string by chance often enough to matter.
 _MIN_UNPADDED_CREDENTIAL_LENGTH = 11
 
-# Decoded text that is a URL (scheme://) or opens a JSON object/array: it has
-# a colon, but it is a payload, not user:pass.
-_STRUCTURED_TEXT_RE = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|[{\[])")
-
 # Headers whose value is a URL (RFC 9110). A credential or sensitive
 # parameter in the request URL is repeated in the next request's Referer and
 # can appear in a redirect's Location, so these get the same query treatment
@@ -525,11 +591,8 @@ def decode_base64_payload(value: str) -> str | None:
     decoded = _decode_base64_text(unpadded + "=" * (-len(unpadded) % 4))
     if decoded is None or not _STRUCTURED_TEXT_RE.match(decoded):
         return None
-    if decoded.lstrip()[:1] in "{[":
-        try:
-            json.loads(decoded)
-        except ValueError:
-            return None
+    if decoded.lstrip().startswith(("{", "[")) and parse_json_container(decoded) is None:
+        return None
     return decoded
 
 
@@ -544,24 +607,18 @@ def _as_base64_credential(raw: str) -> str | None:
     """
     verbatim = list(dict.fromkeys([raw, urllib.parse.unquote(raw), raw.replace(" ", "+")]))
     for candidate in verbatim:
-        if is_base64_credential(candidate) and decode_base64_payload(candidate) is None:
+        if is_base64_credential(candidate):
             return candidate
     # Restoring padding reaches values the verbatim check never has, so it
     # only accepts a decoded value that could be nothing but user:pass: long
-    # enough, printable, and not a URL or JSON payload that merely contains a
-    # colon.
+    # enough and printable.
     for candidate in verbatim:
         unpadded = candidate.rstrip("=")
         if len(unpadded) < _MIN_UNPADDED_CREDENTIAL_LENGTH:
             continue
         padded = unpadded + "=" * (-len(unpadded) % 4)
         decoded = _decode_base64_text(padded)
-        if (
-            decoded is not None
-            and decoded.isprintable()
-            and not _STRUCTURED_TEXT_RE.match(decoded)
-            and is_base64_credential(padded)
-        ):
+        if decoded is not None and decoded.isprintable() and is_base64_credential(padded):
             return padded
     return None
 
@@ -646,12 +703,14 @@ class QueryPayload(NamedTuple):
     The segment reads ``prefix`` followed by the payload: ``prefix`` is
     ``""`` for a bare segment or ``"key="`` for a keyed one, kept verbatim.
     ``encoded`` is the base64 as the client produced it, URL transport
-    encoding undone; ``text`` is what it decodes to.
+    encoding undone; ``text`` is what it decodes to. ``quoted`` records that
+    the segment carried it percent-encoded, so a rewrite can do the same.
     """
 
     prefix: str
     encoded: str
     text: str
+    quoted: bool
 
 
 def find_query_payload(segment: str) -> QueryPayload | None:
@@ -678,7 +737,7 @@ def find_query_payload(segment: str) -> QueryPayload | None:
         for candidate in dict.fromkeys([raw, urllib.parse.unquote(raw).replace(" ", "+")]):
             text = decode_base64_payload(candidate) if candidate else None
             if text is not None:
-                return QueryPayload(prefix=prefix, encoded=candidate, text=text)
+                return QueryPayload(prefix=prefix, encoded=candidate, text=text, quoted="%" in raw)
     return None
 
 

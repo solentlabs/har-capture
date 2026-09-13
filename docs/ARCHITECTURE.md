@@ -169,7 +169,8 @@ The core Playwright session. Key design decisions:
 - **Clean context**: `storage_state={"cookies": [], "origins": []}` forces an empty cookie jar — no inherited session
   cookies or credentials
 - **Temp file**: Raw HAR (containing PII) is written to `/tmp` via `mkstemp()`, never to the user's working directory
-- **Embedded content**: Response bodies are base64-encoded within the HAR
+- **Embedded content**: Response bodies are embedded in the HAR — text as text, anything the recorder does not store as
+  text (binary, and some text types) base64 with `encoding: base64`
 - **Service worker blocking**: Prevents cached responses from interfering
 - **HTTPS tolerance**: Self-signed/expired device certificates accepted
 
@@ -243,8 +244,10 @@ graph TD
     sanitized --> pass2[Pass 2: Interactive Review<br>Show flagged → user selects → apply redactions]
 ```
 
-**Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content
-(MIME-dispatched to the HTML engine, JSON traversal, or string pattern matching).
+**Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content —
+transport encoding undone first, then dispatched by mime type, or sniffed when the type says nothing, to the HTML
+engine, JSON traversal, or string pattern matching
+([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#response-content-dispatch)).
 
 **Pass 1b** sweeps the whole HAR once after every entry is done, replacing any remaining verbatim occurrence of an
 already-redacted value with the placeholder that value was assigned. This catches secrets on surfaces that carry no

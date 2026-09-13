@@ -471,8 +471,8 @@ failure ADR-14 forbids.
 **Decision.**
 
 1. **Both tools decode through one function** (`decode_transport_body`): the mime type's charset, else strict UTF-8.
-   Under a text type with no declared charset, bytes that are not UTF-8 are read as latin-1 — capture stores exactly
-   such a page base64, and a browser renders it in a Latin charset.
+   When that fails under a text type, the bytes are read as latin-1 — capture stores a page base64 exactly when its
+   bytes are not UTF-8, whatever charset it declares, and latin-1 maps every byte, so none is lost.
 1. **A decoded body is written back as plain text, `encoding` dropped.** Re-encoding would keep the body out of reach of
    the passes that run on the serialized HAR — Pass 1b propagation and Pass 2's find-and-replace — and a consumer that
    reads HAR reads both forms. An `AUTH_<hash>` placeholder left under `encoding: base64` by an earlier release, which
@@ -486,7 +486,8 @@ pass that works on text in place, and representation is not evidence: the server
 **ADR-12 accounting.** See
 [Sanitization Spec — Response Content Dispatch](specs/SANITIZATION_SPEC.md#response-content-dispatch): the leak closed
 is PII in transport-encoded and untyped bodies that `validate` reported and sanitize left; the fidelity cost is the loss
-of the recorder's base64 representation, with #213's fragments no longer destroyed; the engines' rules are unchanged.
+of the recorder's base64 representation (for a latin-1 read, text that stands in for non-UTF-8 bytes, recoverable by
+encoding it as latin-1), with #213's fragments no longer destroyed; the engines' rules are unchanged.
 
 **Consequence.** A sanitized HAR carries `encoding` only on binary bodies. The one behavior given up: a
 transport-encoded body whose text is literally `user:pass` is no longer replaced, since the base64 that matched was the

@@ -32,7 +32,7 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.redaction import MAC_RE, is_redacted
+from har_capture.patterns.redaction import MAC_RE, is_constant_mac, is_redacted
 
 if TYPE_CHECKING:
     from typing import Any
@@ -283,6 +283,8 @@ def _sanitize_pipe_value(
     # AUTO-REDACT: Known reliable patterns
     # MAC addresses
     if MAC_RE.fullmatch(value):
+        if is_constant_mac(value):
+            return value
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(value)
 
@@ -648,6 +650,8 @@ def _sanitize_html_impl(
     # design; ADR-12 puts the burden of proof on redacting less, not more.
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
+        if is_constant_mac(match.group(0)):
+            return match.group(0)
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0))
 

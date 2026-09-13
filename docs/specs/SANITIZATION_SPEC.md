@@ -254,12 +254,24 @@ One decision tree serves the URL string and the array (`_classify_query_param`),
 1. A keyed base64-wrapped payload → sanitized inside and wrapped again, key kept.
 1. Flaggable name → flagged for review.
 
-**Base64-wrapped payloads.** Decoded, a base64 JSON object or URL has a colon, so `is_base64_credential()` alone reads
-it as `user:pass`. Until 0.13.0 a padded one was replaced whole by `AUTH_<hash>` and an unpadded one was kept verbatim —
-the outcome depended on the payload's length modulo 3, and neither sanitized what was inside. A payload is now never a
-credential (`find_query_credential()` rejects it) and is handled like a transport-encoded body: a JSON payload gets the
-JSON rules, a URL payload these query rules, and the result is wrapped again in the original's padding style. A payload
-with nothing to redact stays byte-identical. `validate` checks inside it the same way (`check_url`).
+**Base64-wrapped payloads.** Decoded, base64 of a JSON object or of a URL has a colon, so a bare `user:pass` test reads
+it as a credential. Until 0.13.0 a padded one was replaced whole by `AUTH_<hash>` and an unpadded one was kept verbatim
+— the outcome depended on the payload's length modulo 3, and neither sanitized what was inside. Now text that decodes to
+structure (a JSON object or array, parsed or not, or a URL) is never a credential on any surface:
+`is_base64_credential()` itself rejects it. In a query, a payload that parses (`find_query_payload()`) is sanitized
+inside — a JSON payload with the JSON rules, a URL payload with these query rules — and `validate` checks inside it with
+the matching checks (`check_json_fields`, `check_url`), in the same order as this tree: a payload under an
+identity-style name is checked inside, not flagged by name. A payload with nothing to redact stays byte-identical. A
+rewritten one is encoded in the original's form: unpadded only where the original visibly stripped its padding (no `=`
+where its length needed one), percent-encoded where the original was, JSON in its original spacing and non-ASCII style.
+In a POST field a payload is not a credential either; what is inside is judged only by the field's name.
+
+**Pass 1 is final inside a payload.** Its values are stored base64, beyond the reach of the passes that work on the
+HAR's text: Pass 1b cannot propagate a redacted value into one, and Pass 2 could not apply a review decision there. So
+nothing inside a payload is offered for review (`RedactionCollector.flags_muted()`), and a secret inside one is redacted
+by Pass 1's rules or not at all. The accepted cost, recorded under ADR-12: a session token another surface redacted
+survives inside a payload unless the payload's own rules catch it — a padded payload was destroyed whole before 0.13.0,
+an unpadded one kept intact; the fleet holds none.
 
 **ADR-12 accounting** (three changes widen redaction: the marker shape, URL-valued headers, and a credential under an
 identity-style name):
@@ -297,7 +309,8 @@ def _sanitize_json_recursive(data, collector, depth=0, max_depth=50):
 
 - Traverses dicts and lists recursively
 - For dicts: checks each key against `is_sensitive_field()` / `is_flaggable_field()`
-- Depth limit of 50 prevents stack overflow on deeply nested/circular JSON
+- Depth limit of 50 prevents stack overflow on deeply nested/circular JSON; text nested too deep for the parser itself
+  is not JSON (`parse_json_container()`), and a response body with it takes the text path
 - Malformed JSON is caught and logged: a POST body is left as-is, a response body takes the text path (sanitization
   continues)
 
@@ -310,13 +323,13 @@ def _sanitize_response_content(content, collector, custom_patterns, heuristics, 
 **1. Undo the transport encoding** (`decode_transport_body()`, `patterns/redaction.py`). HAR's `encoding: base64` is how
 the recorder stored the bytes, not what the server sent
 ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content)). A `base64` body is decoded with the
-mime type's declared charset, else as strict UTF-8; under a text mime type (`is_text_mime()`: `text/*`, JSON, XML,
-JavaScript, form data) undeclared non-UTF-8 bytes are read as latin-1, because capture stores such a page base64
-([`_patch_missing_bodies`](CAPTURE_SPEC.md#eager-response-body-capture)) and a browser renders it in a Latin charset.
-The decoded body is sanitized as that text and **written back as plain text with `encoding` dropped**, so Pass 1b and
-Pass 2's find-and-replace reach it like any other body.
+mime type's declared charset, else as strict UTF-8. When that fails and the type declares text (`mime_kind()`: `text/*`,
+JSON, XML, JavaScript, form data), the bytes are read as latin-1: capture stores a page base64 exactly when its bytes
+are not UTF-8, whatever charset it declares ([`_patch_missing_bodies`](CAPTURE_SPEC.md#eager-response-body-capture)),
+and latin-1 maps every byte. The decoded body is sanitized as that text and **written back as plain text with `encoding`
+dropped**, so Pass 1b and Pass 2's find-and-replace reach it like any other body.
 
-**Binary** is a `base64` body whose bytes are not text: they do not decode (and the mime type does not declare text), or
+**Binary** is a `base64` body whose bytes are not text: they do not decode under a type that does not declare text, or
 they decode to text holding NUL. Binary is written back exactly as recorded — the sanitizer does not touch it and
 `validate` does not scan it, because both read bodies through the same decoder. A body an earlier release wiped to an
 `AUTH_<hash>` placeholder while keeping `encoding: base64` (a state no decoder accepts) has its `encoding` dropped, so
@@ -325,44 +338,58 @@ the output is valid.
 **2. One dispatch on the text** (`_sanitize_body_text`), in order:
 
 1. **A base64-wrapped structured payload** (`decode_base64_payload()`): text that is itself base64 of a JSON object or
-   array, or of a URL. Its colon would read as `user:pass`, but it is data. The payload is sanitized inside — JSON with
-   the JSON rules, a URL with the [query rules](#url-sanitization) — and wrapped again in base64, keeping the original's
-   padding style and JSON spacing; a payload with nothing to redact is left byte-identical.
+   array, or of a URL. Its colon would read as `user:pass`, but it is data. The wrapped text goes through this same
+   dispatch — a URL gets the [query rules](#url-sanitization) first — so every check `validate` runs on it has a remedy,
+   and is wrapped again in base64 (see [Base64-wrapped payloads](#url-sanitization) for the form it is written in). A
+   payload with nothing to redact is left byte-identical.
 1. **A bare base64 credential** → `AUTH_<hash>`, unless it is a server token — see
    [Server-Token Preservation](#server-token-preservation).
-1. **The engine for the body** (`_body_route`): a declared HTML or XML type (including `image/svg+xml`) →
-   `sanitize_html()`; a declared JSON type (including `text/json` and DM1000's misspelled `applation/json`) →
-   `_sanitize_json_recursive()`, falling back to the text path when the text does not parse; any other text type
-   (`text/*`, JavaScript, form data) → the text path. A type that says nothing about its text —
+1. **The engine for the body** (`_body_route`, from `mime_kind()`): a markup type (HTML, XML, any `+xml` such as
+   `image/svg+xml`) → `sanitize_html()`; a JSON type (any `json` subtype or `+json` suffix, whatever the type — DM1000's
+   misspelled `applation/json` included) → JSON traversal, falling back to the text path when the text does not parse;
+   any other text type (`text/*`, JavaScript, form data) → the text path. A type that says nothing about its text —
    `application/octet-stream`, HNAP's `x-unknown`, none — is sniffed: a JSON object or array → JSON, text opening with
    `<` → `sanitize_html()`, else the text path. `validate` scans every body whatever its type, so every text a body can
    carry reaches an engine.
 
-Every non-HTML route first applies the structural credential pass (`redact_structural_credentials`). The text path is
+Every non-HTML route first applies the structural credential pass (`redact_structural_credentials`) and
+`redact_vendor_serials()` (delimiter-aware vendor serials, on the raw text — outside the length guard below, so serial
+coverage never depends on body size, and inside JSON strings as well as plain text). The JSON route then parses the text
+(`parse_json_container()`: nesting too deep for the parser counts as not JSON, never a crash) and runs
+`_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical; changed JSON is re-serialized
+in the original's spacing (compact or default) and with non-ASCII written as the original wrote it. The text path is
 `_sanitize_string_patterns()` (perf length guard: strings over 1 MB are skipped — the guard sat at 10,000 chars until
-2026-08-19, silently exempting the CM2500's 33 KB `utility.js` from MAC/IP/email scans), then `redact_vendor_serials()`
-(delimiter-aware vendor serials — applied outside the length guard so serial coverage never depends on body size).
+2026-08-19, silently exempting the CM2500's 33 KB `utility.js` from MAC/IP/email scans).
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
-transport base64 around plain JSON, reached by step 1 and routed as JSON. Arris SB8200 fragments (`pageheaderA.htm`,
-`footer.htm`) are HTML served as `application/octet-stream` and stored base64; HNAP `x-unknown` bodies carry JSON or
-markup the same way. Until 0.13.0 the body text was never decoded: the credential guard read the transport base64 as
-`base64(user:pass)` whenever the fragment held a colon (CSS, `http://`) and replaced the whole body with `AUTH_<hash>`
-(cable_modem_monitor#213), and a fragment without a colon passed through every pass unscanned, while `validate` decoded
-and scanned both.
+transport base64 around plain JSON. Before 0.13.0 these were sanitized correctly, by accident — the decoder for bodies
+that are *themselves* base64 JSON also decoded the transport layer. The bodies that broke were markup and text. Arris
+SB8200 fragments (`pageheaderA.htm`, `footer.htm`) are HTML served as `application/octet-stream` and stored base64; HNAP
+`x-unknown` bodies carry markup the same way. The credential guard read their transport base64 as `base64(user:pass)`
+whenever the text held a colon (CSS, `http://`) and replaced the whole body with `AUTH_<hash>`
+(cable_modem_monitor#213), and one without a colon passed through every pass unscanned, while `validate` decoded and
+scanned both.
 
 **ADR-12 accounting** (the dispatch redacts in bodies no pass reached before):
 
-- *Leak closed:* PII in transport-encoded bodies, and in bodies of non-text types (`application/octet-stream`,
-  `x-unknown`, form data, SVG) or declared JSON that does not parse, survived sanitize while `validate` reported it.
-- *Fidelity cost:* none beyond the redacted values, and a gain: #213's fragments are no longer destroyed. A
-  transport-encoded body is written as the text it decodes to rather than base64; its bytes are the same text. The lost
-  behavior: a transport-encoded body whose text is literally `user:pass` is no longer replaced — the base64 that matched
-  `is_base64_credential()` was the recorder's, and the same text served plainly was never replaced either.
-- *Cannot-be-structure proof:* the engines and their rules are unchanged; only which text reaches them changes. Measured
-  2026-09-13 across 480 cable_modem_monitor fleet HARs: 180 transport-encoded text bodies (`applation/json`,
-  `application/octet-stream`, `x-unknown`), 16 more that earlier releases had already wiped to `AUTH_`, 1,942 binary
-  bodies (images, fonts) that stay untouched, and no base64-wrapped JSON or URL payload in any body or query.
+- *Leak closed:* PII in transport-encoded markup and text bodies, in bodies of types that say nothing about their text
+  (`application/octet-stream`, `x-unknown`), in form data, SVG, `application/javascript`, and declared JSON that does
+  not parse, and vendor serials in JSON — all reported by `validate` and left by sanitize.
+- *Fidelity cost:* none beyond the redacted values, and a gain: #213's fragments are no longer destroyed, and JSON with
+  nothing to redact is no longer re-serialized. A transport-encoded body is written as the text it decodes to, not its
+  base64; for a latin-1 read that text stands in for bytes that were not UTF-8, and they are recovered by encoding it as
+  latin-1. The lost behavior: a transport-encoded body whose text is literally `user:pass` is no longer replaced — the
+  base64 that matched `is_base64_credential()` was the recorder's, and the same text served plainly was never replaced
+  either.
+- *Cannot-be-structure proof:* the engines and their rules are unchanged; only which text reaches them changes. One rule
+  changes, in the other direction: a MAC that is one byte repeated — broadcast `ff:ff:…`, zero `00:00:…` — is a protocol
+  constant, and scripts compare against it (`if (mac == 'ff:ff:ff:ff:ff:ff')`), so neither tool treats it as PII
+  (`is_constant_mac()`; `validate` already skipped it). Measured 2026-09-13 across 480 cable_modem_monitor fleet HARs:
+  180 transport-encoded text bodies (`applation/json`, `application/octet-stream`, `x-unknown`), 16 more that earlier
+  releases had already wiped to `AUTH_`, 1,942 binary bodies (images, fonts) that stay untouched, and no base64-wrapped
+  JSON or URL payload in any body or query. In script bodies, `application/javascript` now adds 25 private and 14 public
+  IP redactions (example addresses in comments among them — known patterns always apply), while 342 constant MACs across
+  script and markup bodies (296 zero, 46 broadcast) are no longer rewritten.
 
 ### String Pattern Sanitization
 
@@ -389,7 +416,10 @@ pipe-delimited scanner, `har-capture validate` and `check_for_pii` (whose `pii.j
 verbatim; a test pins the two): six hex pairs joined by `:` or `-`, wherever they occur. No boundary is required on
 either side — `wanmac3C:7A:8A:12:34:56` and `3C:7A:8A:12:34:56Enabled` are MACs glued to identifiers. A longer separated
 run is read six pairs at a time. Bare (`3C7A8A123456`) and dotted (`3c7a.8a12.3456`) MACs carry no separator run and are
-not matched in text; `is_mac_value()` and `mac_layout()` recognize them where a value is already known to be a MAC.
+not matched in text; `is_mac_value()` and `mac_layout()` recognize them where a value is already known to be a MAC. A
+MAC that is one byte repeated — broadcast `ff:ff:ff:ff:ff:ff`, zero `00:00:00:00:00:00` — is a protocol constant, not an
+identity, and is left alone by both tools (`is_constant_mac()`; see
+[Response Content Dispatch](#response-content-dispatch)).
 
 Until 0.13.0 the sanitizer required `\b` on both sides and the validator required nothing, so a MAC glued to an
 identifier was reported by `validate` and left by every sanitize run.
@@ -1081,7 +1111,8 @@ Detects common redaction markers to warn users before double-sanitizing.
 1. **Scanner order matters** — Earlier scanners in html.py may redact values that later scanners check. For example, MAC
    scanner (pass 3) runs before IP scanner (pass 5), so MAC addresses aren't misidentified as hex strings.
 1. **Depth limit prevents stack overflow** — JSON recursive traversal is capped at 50 levels. Exceeding the limit is
-   logged, not fatal.
+   logged, not fatal. Text nested past the parser's own limit is treated as text that does not parse
+   (`parse_json_container()`), so hostile nesting never crashes a sanitize run.
 1. **Malformed input doesn't abort** — JSON decode errors, redaction failures, and invalid regex patterns are logged but
    don't stop sanitization of other entries.
 1. **Format-preserving placeholders sit in reserved ranges** — TEST-NET and documentation IP ranges cannot appear in
@@ -1090,7 +1121,7 @@ Detects common redaction markers to warn users before double-sanitizing.
    (see [Idempotency Boundary](#idempotency-boundary)); the cost falls on `validate`, which cannot tell the two apart
    and does not report either.
 1. **Known patterns always apply** — MACs, IPs, and emails are auto-redacted regardless of heuristic mode. Heuristic
-   mode only affects opaque/suspicious values.
+   mode only affects opaque/suspicious values. A constant MAC (one byte repeated) is not a MAC in this sense.
 1. **Cookie metadata is preserved** — In a `Set-Cookie` value, the reserved attributes (`HttpOnly`, `Secure`,
    `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`, `Partitioned`, `Priority`) survive verbatim; only the cookie
    pair's value is redacted. The reserved-word list is `COOKIE_ATTRIBUTE_NAMES` in

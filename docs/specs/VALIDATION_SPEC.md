@@ -122,11 +122,15 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
    padding); a `queryString` entry is rejoined into its segment with `query_param_segment()`.
 1. A credential in any shape `find_query_credential()` recognizes (bare, marker-prefixed, keyed — under any name) →
    **error**, unless `is_redacted()` recognizes it as a placeholder.
-1. Otherwise the parameter name is judged by the [field tiers](#finding-dataclass), exactly as for form fields: an
-   auto-redact-tier name with an unredacted value → **error**; a flag-tier name → **warning**, a factory-default
-   username suppressed. Empty values are skipped.
-1. Otherwise a base64-wrapped JSON or URL payload (`find_query_payload()`) is checked inside, as the sanitizer sanitizes
-   inside it: a JSON payload with `check_json_fields()`, a URL payload with `check_url()`.
+1. Otherwise an auto-redact-tier name with an unredacted value → **error**, judged by the
+   [field tiers](#finding-dataclass) exactly as for form fields.
+1. Otherwise a base64-wrapped JSON or URL payload (`find_query_payload()`) is checked inside — a JSON payload with
+   `check_json_fields()`, a URL payload with `check_url()` — under any other name, including an identity-style one: the
+   sanitizer sanitizes inside it rather than flagging it.
+1. Otherwise a flag-tier name → **warning**, a factory-default username suppressed. Empty values are skipped.
+
+This is the sanitizer's own decision order (`_classify_query_param`), so what one tool does to a parameter, the other
+checks for.
 
 The URL string and the `queryString` array are one query recorded twice, so `validate_har` passes both the same `seen`
 set and a finding present in both is reported once. A URL-valued header is a different place the value leaked to and is
@@ -222,7 +226,8 @@ Severity: **error**
 
 - Pattern: `MAC_RE`, the sanitizer's own definition (see
   [Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses))
-- Skips common test patterns (e.g., `AA:BB:CC:DD:EE:FF`)
+- Skips a constant MAC — one byte repeated, broadcast or zero (`is_constant_mac()`, which the sanitizer also leaves
+  alone) — and the documentation examples `AA:BB:CC:DD:EE:FF` and `00:11:22:33:44:55`
 - Checks via `is_redacted()` before reporting
 
 **Serial numbers (label-anchored, warning):**
@@ -233,6 +238,10 @@ Severity: **error**
 - The inline label patterns require `(?!ize)` after `serial` (jquery's `serialize:`/`serializeArray:` methods matched as
   labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
   noise on the CM2500 round-1 validate run
+- The label must reach its colon within its own text (`serial` plus at most 20 characters, no markup), and a table-cell
+  value's tag chain must stay inside its cell: an unbounded label crossed a whole table row whose serial is a template
+  placeholder (`<?get_cm_sn>`) to the next label's colon, and reported that row's firmware name as a serial on 12 fleet
+  pages (TM1602A, CM820B) that no sanitize run could clear
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**

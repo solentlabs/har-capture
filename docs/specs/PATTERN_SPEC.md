@@ -580,7 +580,7 @@ Detects a base64-encoded `user:pass` value:
    explicit because Python 3.10 accepts excess padding that 3.11+ rejects; the answer must not depend on the
    interpreter.
 1. Check: the decoded string has a colon with at least one character on each side (split at the first colon, so a
-   password may contain colons)
+   password may contain colons), and is not structured text — a URL, or an opening JSON brace or bracket
 
 ### `find_query_credential(segment) -> QueryCredential | None`
 
@@ -619,22 +619,33 @@ A serial value is one whitespace-free token of five or more characters carrying 
 status words (`N/A`, `Enabled`). A MAC value passes `is_mac_value()`; a MAC placeholder is still classified as a MAC,
 since it cannot be told from a real locally administered one, and whether to skip it is the caller's decision.
 
-### `decode_transport_body(content) -> str | None` and `is_text_mime(mime) -> bool`
+### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
 
-The text a HAR body carries. A body without `encoding` is already text; a `base64` body is decoded with the mime type's
-declared charset — or strictly as UTF-8 when none is declared, or the declared one is unknown or not a text encoding
-(`hex`, `zlib`). Undeclared non-UTF-8 bytes under a text type are read as latin-1. Otherwise bytes that do not decode,
-an empty result, or text holding NUL mean binary, and return `None`. `is_text_mime()` names the text types: `text/*`, a
-JSON, XML or JavaScript subtype (bare or as a `+suffix`, whatever the type — DM1000's `applation/json` counts), and
-form-urlencoded. See [ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content).
+`mime_kind()` is the one mime vocabulary: `"markup"` (HTML, XML, any `+xml`), `"json"` (any `json` subtype or `+json`
+suffix, whatever the type — DM1000's `applation/json` counts), `"text"` (other `text/*`, JavaScript, form data), or
+`None` when the type says nothing about text. A subtype that merely contains `json` or `xml` is neither.
+`is_text_mime()` is `mime_kind() is not None`.
+
+`decode_transport_body()` returns the text a HAR body carries. A body without `encoding` is already text; a `base64`
+body is decoded with the mime type's declared charset — or strictly as UTF-8 when none is declared, or the declared one
+is unknown or not a text encoding (`hex`, `zlib`). When that fails under a text type, the bytes are read as latin-1.
+Otherwise bytes that do not decode, an empty result, or text holding NUL mean binary, and return `None`. See
+[ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content).
+
+### `parse_json_container(text)` and `is_constant_mac(mac)`
+
+`parse_json_container()` returns the object or array JSON text holds, or `None` — for scalars, invalid JSON, and nesting
+too deep for the parser, so hostile input never crashes either tool. `is_constant_mac()` is true for a MAC that is one
+byte repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool treats as PII.
 
 ### `decode_base64_payload(value)` and `find_query_payload(segment)`
 
-`decode_base64_payload()` returns the text of a base64-wrapped structured payload — a JSON object or array, or a URL —
-with missing or miscounted padding tolerated, or `None`. Such text has a colon, so `is_base64_credential()` alone would
-read it as `user:pass`; `find_query_credential()` excludes it. `find_query_payload()` locates one in a URL query
-segment, bare or keyed, as a `QueryPayload(prefix, encoded, text)`. See
-[Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
+`decode_base64_payload()` returns the text of a base64-wrapped structured payload — a JSON object or array that parses,
+or a URL — with missing or miscounted padding tolerated, or `None`. Structured text is never a credential:
+`is_base64_credential()` rejects any base64 whose text opens a JSON object or array (parsed or not) or is a URL.
+`find_query_payload()` locates a payload in a URL query segment, bare or keyed, as a
+`QueryPayload(prefix, encoded, text, quoted)` — `quoted` records a percent-encoded original, so a rewrite can be encoded
+the same way. See [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
 
 ### `split_url_query(url)`, `url_query(url)` and `iter_url_credentials(request)`
 

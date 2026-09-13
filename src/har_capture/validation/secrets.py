@@ -38,8 +38,10 @@ from har_capture.patterns.redaction import (
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
+    is_constant_mac,
     is_cookie_attribute_metadata,
     is_fully_redacted,
+    parse_json_container,
     query_param_segment,
     url_query,
 )
@@ -70,15 +72,20 @@ MAC_PATTERN = MAC_RE
 # Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
 # label and value sit in sibling elements (Technicolor .jst span pairs) are caught.
 # The label-anchored patterns require: `(?!ize)` after `serial` so jquery's
-# `serialize:`/`serializeArray:` methods don't match, and a digit in the value
+# `serialize:`/`serializeArray:` methods don't match, a digit in the value
 # so prose/code words after the label (`serialize: function`) don't match —
-# vendor serials always carry digits.
+# vendor serials always carry digits — and a label that ends at a colon
+# within its own text: an unbounded run crossed a template placeholder's
+# whole table row to the next label's colon and reported a firmware name.
 SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"serial(?!ize)[^:]*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(r"serial(?!ize)[^:<>]{0,20}:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
     re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
-    # Serial numbers in HTML table cells (label in one td, value in next td)
+    # Serial numbers in HTML table cells (label in one td, value in next td).
+    # The value's tag chain stays inside its cell: crossing </td> or <tr>
+    # would read the next row's label as the value.
     re.compile(
-        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
+        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*"
+        r"(?:<(?!/?t[dr]\b)[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
         re.IGNORECASE,
     ),
 ]
@@ -354,11 +361,18 @@ def _check_query_param(
     ``seen`` suppresses a repeat of the same finding: the URL string and the
     ``queryString`` array are one query recorded twice.
     """
+    # The sanitizer's decision order (_classify_query_param): a credential,
+    # then a credential-named parameter, then a base64 payload — checked inside,
+    # never flagged by name — and only then an identity-named parameter.
     credential = find_query_credential(segment)
     classified = None
     if credential is None and not is_blank_query_value(value) and not is_redacted(value, custom_patterns):
         classified = _classify_field_finding(name, value, field_tiers)
-    payload = find_query_payload(segment) if credential is None and classified is None else None
+    payload = None
+    if credential is None and (classified is None or classified[0] != "error"):
+        payload = find_query_payload(segment)
+        if payload is not None:
+            classified = None
 
     if credential is not None:
         key: tuple[str, str] = ("credential", credential.credential)
@@ -409,9 +423,10 @@ def _check_query_payload(
     ``queryString`` array — one payload recorded twice — report it once.
     """
     inner: list[Finding] = []
-    if text.lstrip()[:1] in "{[":
+    data = parse_json_container(text)
+    if data is not None:
         path = f"query param '{name}'" if name else "query payload"
-        check_json_fields(json.loads(text), location, inner, path, custom_patterns, _field_tiers=field_tiers)
+        check_json_fields(data, location, inner, path, custom_patterns, _field_tiers=field_tiers)
     else:
         check_url(text, location, inner, custom_patterns, field_tiers=field_tiers)
     for finding in inner:
@@ -656,7 +671,7 @@ def check_post_data(
         try:
             json_data = json.loads(text)
             check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             if "xml" in mime_type:
                 _check_xml_fields(text, location + " (body)", findings, custom_patterns)
 
@@ -859,12 +874,9 @@ def check_content(
     # Check for MAC addresses
     for match in MAC_PATTERN.finditer(content):
         mac = match.group(0)
-        # Skip if it looks anonymized
-        if mac.upper() in ("00:00:00:00:00:00", "AA:BB:CC:DD:EE:FF", "00:11:22:33:44:55"):
-            continue
-        # Skip if all same byte (likely placeholder)
-        parts = mac.upper().replace("-", ":").split(":")
-        if len(set(parts)) == 1:
+        # Documentation examples, and one byte repeated (broadcast, zero): the
+        # sanitizer leaves the constants too, since scripts compare against them.
+        if is_constant_mac(mac) or mac.upper() in ("AA:BB:CC:DD:EE:FF", "00:11:22:33:44:55"):
             continue
         # Skip if it matches hash pattern
         if is_redacted(mac, custom_patterns):

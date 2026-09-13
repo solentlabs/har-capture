@@ -10,6 +10,7 @@ Reuses PII patterns from html.py for consistency.
 from __future__ import annotations
 
 import base64
+import contextlib
 import contextvars
 import copy
 import json
@@ -35,13 +36,15 @@ from har_capture.patterns import (
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
+    is_constant_mac,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
     is_fully_redacted,
     is_redacted,
-    is_text_mime,
     iter_url_credentials,
     load_sensitive_patterns,
+    mime_kind,
+    parse_json_container,
     query_param_segment,
     split_url_query,
 )
@@ -770,7 +773,7 @@ def _sanitize_json_text(
         data = json.loads(text)
         sanitized = _sanitize_json_recursive(data, hasher, collector)
         return json.dumps(sanitized)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         _LOGGER.debug("Non-JSON text encountered in response body, skipping JSON sanitization")
         return text
 
@@ -1066,6 +1069,8 @@ def _sanitize_string_patterns(
 
     # MAC addresses
     def replace_mac(match: re.Match[str]) -> str:
+        if is_constant_mac(match.group(0)):
+            return match.group(0)
         if collector:
             collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0)) if hasher else "***MAC***"
@@ -1275,17 +1280,58 @@ def _classify_query_param(
     return "keep"
 
 
+def _flags_muted(collector: RedactionCollector | None) -> contextlib.AbstractContextManager[None]:
+    """Scope inside a base64 payload: redactions recorded, review flags discarded."""
+    return collector.flags_muted() if collector is not None else contextlib.nullcontext()
+
+
+def _dump_json_like(data: Any, original_data: Any, original_text: str) -> str:
+    """Serialize sanitized JSON the way its original text was written.
+
+    Compact, default spacing, or a 2- or 4-space indent, with non-ASCII
+    escaped or written as-is — whichever reproduces the original exactly;
+    otherwise default spacing with non-ASCII as written.
+    """
+    layouts: tuple[dict[str, Any], ...] = (
+        {"separators": (",", ":")},
+        {"separators": (", ", ": ")},
+        {"indent": 2},
+        {"indent": 4},
+    )
+    for layout in layouts:
+        for ensure_ascii in (False, True):
+            if json.dumps(original_data, ensure_ascii=ensure_ascii, **layout) == original_text.strip():
+                return json.dumps(data, ensure_ascii=ensure_ascii, **layout)
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _rewrap_payload(original: str, text: str, *, quoted: bool) -> str:
+    """Base64-encode sanitized payload text in the original's transport form.
+
+    Unpadded only if the original visibly stripped its padding — no '=' where
+    its length needed one; a full quantum gives no evidence and gets standard
+    base64. Percent-encoded if the original was, so a query parser still
+    reads it.
+    """
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    if not original.endswith("=") and len(original) % 4:
+        encoded = encoded.rstrip("=")
+    return urllib.parse.quote(encoded, safe="") if quoted else encoded
+
+
 def _sanitize_base64_payload(
     payload: QueryPayload,
     hasher: Hasher | None,
     collector: RedactionCollector | None,
 ) -> str | None:
-    """Sanitize inside a base64-wrapped JSON or URL payload and wrap it again.
+    """Sanitize inside a base64-wrapped JSON or URL query payload and wrap it again.
 
-    A JSON payload gets the JSON body rules, a URL payload the query rules.
-    The result keeps the original's padding style (a URL often strips it) and
-    JSON spacing. Nothing is rewritten when nothing inside needed redacting,
-    so an ordinary payload survives byte-for-byte.
+    A JSON payload gets the JSON rules, a URL payload the query rules — the
+    checks ``validate`` runs inside one. Nothing is rewritten when nothing
+    inside needed redacting, so an ordinary payload survives byte-for-byte.
+    Pass 1 is final inside a payload: its values are stored encoded, beyond
+    the reach of Pass 1b and Pass 2's find-and-replace, so none is offered
+    for review.
 
     Args:
         payload: The located payload
@@ -1295,20 +1341,15 @@ def _sanitize_base64_payload(
     Returns:
         The re-encoded payload, or None when it is unchanged
     """
-    if payload.text.lstrip()[:1] in "{[":
-        data = json.loads(payload.text)
-        cleaned = _sanitize_json_recursive(data, hasher, collector)
-        if cleaned == data:
-            return None
-        spaced = re.search(r"[,:]\s", payload.text) is not None
-        sanitized = json.dumps(cleaned, separators=None if spaced else (",", ":"))
-    else:
-        sanitized = _sanitize_url_query_params(payload.text, hasher, collector)
-        if sanitized == payload.text:
-            return None
-    encoded = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
-    padded = payload.encoded.endswith("=") or len(payload.encoded) % 4 == 0
-    return encoded if padded else encoded.rstrip("=")
+    data = parse_json_container(payload.text)
+    with _flags_muted(collector):
+        if data is not None:
+            cleaned = _sanitize_json_recursive(data, hasher, collector)
+            sanitized = None if cleaned == data else _dump_json_like(cleaned, data, payload.text)
+        else:
+            rewritten = _sanitize_url_query_params(payload.text, hasher, collector)
+            sanitized = None if rewritten == payload.text else rewritten
+    return None if sanitized is None else _rewrap_payload(payload.encoded, sanitized, quoted=payload.quoted)
 
 
 def _flag_query_value(collector: RedactionCollector, name: str, value: str, where: str) -> None:
@@ -1466,22 +1507,20 @@ def _sanitize_request(
 def _body_route(mime_type: str, text: str) -> str:
     """Pick the engine for a response body's text: ``"html"``, ``"json"`` or ``"text"``.
 
-    A declared HTML, XML or JSON type routes itself, and any other text type
-    (``text/*``, JavaScript, form data) takes the text path. A body whose type
-    says nothing about its text — ``application/octet-stream``, ``x-unknown``,
-    none at all — is sniffed: a JSON object or array, then markup, else text.
-    ``validate`` scans every body whatever its type, so every text a body can
-    carry must reach an engine.
+    A declared markup or JSON type routes itself, and any other text type
+    (``text/*``, JavaScript, form data) takes the text path (``mime_kind``).
+    A body whose type says nothing about its text — ``application/octet-stream``,
+    ``x-unknown``, none at all — is sniffed: a JSON object or array, then
+    markup, else text. ``validate`` scans every body whatever its type, so
+    every text a body can carry must reach an engine.
     """
-    mime = mime_type.lower()
-    if "html" in mime or "xml" in mime:
+    kind = mime_kind(mime_type)
+    if kind == "markup":
         return "html"
-    if "json" in mime:
-        return "json"
-    if is_text_mime(mime_type):
-        return "text"
+    if kind is not None:
+        return kind
     stripped = text.lstrip()
-    if stripped[:1] in "{[":
+    if stripped.startswith(("{", "[")):
         return "json"
     return "html" if stripped.startswith("<") else "text"
 
@@ -1537,11 +1576,12 @@ def _sanitize_body_text(
 ) -> str:
     """Sanitize a response body's text: the one dispatch for every body.
 
-    In order: a base64-wrapped JSON or URL payload is sanitized inside and
-    wrapped again (the Sercomm DM1000 class — its colon must not read as
-    ``user:pass``); a bare base64 credential is redacted whole unless it is a
-    server token (see ``_is_echoed_credential``); anything else goes to the
-    engine ``_body_route`` picks.
+    In order: a body that is itself base64 of a JSON object or URL is
+    sanitized as the text it wraps — the whole dispatch, so every check
+    ``validate`` runs on it has a remedy — and wrapped again; a bare base64
+    credential is redacted whole unless it is a server token (see
+    ``_is_echoed_credential``); anything else goes to the engine
+    ``_body_route`` picks.
 
     Args:
         text: The body's text, transport encoding already undone
@@ -1559,8 +1599,14 @@ def _sanitize_body_text(
 
     payload_text = decode_base64_payload(stripped)
     if payload_text is not None:
-        sanitized = _sanitize_base64_payload(QueryPayload("", stripped, payload_text), hasher, collector)
-        return text if sanitized is None else sanitized
+        with _flags_muted(collector):
+            inner = payload_text
+            if parse_json_container(inner) is None:
+                inner = _sanitize_url_query_params(inner, hasher, collector)
+            inner = _sanitize_body_text(inner, "", collector, custom_patterns, heuristics, url_credential)
+        if inner == payload_text:
+            return text
+        return _rewrap_payload(stripped, inner, quoted=False)
 
     if is_base64_credential(stripped) and (
         url_credential is None or _is_echoed_credential(stripped, url_credential)
@@ -1573,29 +1619,26 @@ def _sanitize_body_text(
             text, collector=collector, custom_patterns=custom_patterns, heuristics=heuristics
         )
 
-    # Structurally-located credentials (HTML engine pass 7c) for every other
-    # body: a device label block embedded in a script must not be reported by
-    # validate and left by sanitize (ADR-14).
+    # Structurally-located credentials (HTML engine pass 7c) and vendor-format
+    # serials for every other body: a device label block in a script, or a
+    # serial in a JSON string, must not be reported by validate and left by
+    # sanitize (ADR-13, ADR-14). Serials run on the raw text, outside
+    # _sanitize_string_patterns' perf length guard, so serial coverage never
+    # depends on body size.
     if hasher is not None and collector is not None:
         text = redact_structural_credentials(text, hasher, collector, custom_patterns)
-
-    if route == "json":
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            _LOGGER.debug("Body declared or sniffed as JSON does not parse; sanitizing it as text")
-        else:
-            return json.dumps(_sanitize_json_recursive(data, hasher, collector))
-
-    text = _sanitize_string_patterns(text, hasher, collector)
-    # Vendor-format serials (delimiter-aware, domain detectors) — runs
-    # outside _sanitize_string_patterns so its perf length guard can
-    # never cost serial coverage, however large the text body.
-    if hasher is not None and collector is not None:
         serial_detectors = _resolve_serial_detectors(custom_patterns)
         if serial_detectors:
             text = redact_vendor_serials(text, serial_detectors, hasher, collector)
-    return text
+
+    if route == "json":
+        data = parse_json_container(text)
+        if data is not None:
+            cleaned = _sanitize_json_recursive(data, hasher, collector)
+            return text if cleaned == data else _dump_json_like(cleaned, data, text)
+        _LOGGER.debug("Body declared or sniffed as JSON does not parse; sanitizing it as text")
+
+    return _sanitize_string_patterns(text, hasher, collector)
 
 
 def _sanitize_response(

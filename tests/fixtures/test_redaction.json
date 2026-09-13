@@ -96,6 +96,8 @@
       {"id": "doubled_equals",           "segment": "k==YWRtaW46ZXhhbXBsZS1wdw==",            "prefix": "k==",    "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
       {"id": "padded_base64_json_is_a_payload", "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "prefix": null, "credential": null, "keyed": null},
       {"id": "padded_base64_url_is_a_payload", "segment": "state=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbA==", "prefix": null, "credential": null, "keyed": null},
+      {"id": "padded_brace_text_not_a_credential", "segment": "q=e3BhZ2U6MSxzb3J0OjIyfQ==", "prefix": null, "credential": null, "keyed": null},
+      {"id": "unpadded_brace_text_not_a_credential", "segment": "q=e3BhZ2U6MSxzb3J0OjIyfQ", "prefix": null, "credential": null, "keyed": null},
       {"id": "unpadded_base64_url",      "segment": "state=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbA", "prefix": null, "credential": null,             "keyed": null},
       {"id": "unpadded_base64_json",     "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ",           "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "multi_underscore_marker",  "segment": "a_login_YWRtaW46ZXhhbXBsZS1wdw==",       "prefix": null,     "credential": null,                       "keyed": null},
@@ -214,7 +216,8 @@
       {"id": "empty_text",                                        "content": {"text": "", "mimeType": "text/html"},                                                                      "expected": null},
       {"id": "non_text_codec_hex_falls_back_to_utf8",             "content": {"text": "b2s=", "mimeType": "text/plain; charset=hex", "encoding": "base64"},                              "expected": "ok"},
       {"id": "non_text_codec_zlib_falls_back_to_utf8",            "content": {"text": "b2s=", "mimeType": "text/plain; charset=zlib", "encoding": "base64"},                             "expected": "ok"},
-      {"id": "declared_codec_rejects_bytes",                      "content": {"text": "//4=", "mimeType": "text/plain; charset=punycode", "encoding": "base64"},                         "expected": null},
+      {"id": "declared_charset_mismatch_text_mime_latin1",                      "content": {"text": "//4=", "mimeType": "text/plain; charset=punycode", "encoding": "base64"},                         "expected": "\u00ff\u00fe"},
+      {"id": "declared_charset_mismatch_octet_stream_binary", "content": {"text": "//4=", "mimeType": "application/octet-stream; charset=utf-8", "encoding": "base64"}, "expected": null},
       {"id": "whitespace_only_base64",                            "content": {"text": "   ", "mimeType": "text/plain", "encoding": "base64"},                                            "expected": null},
       {"id": "line_wrapped_base64",                               "content": {"text": "b2sg\nb2s=", "mimeType": "text/plain", "encoding": "base64"},                                     "expected": "ok ok"},
       {"id": "nul_in_charset_falls_back_to_utf8",                 "content": {"text": "b2s=", "mimeType": "text/plain; charset=utf\u0000-8", "encoding": "base64"},                      "expected": "ok"},
@@ -241,24 +244,68 @@
     ]
   },
   "text_mime_cases": {
-    "_comment": "is_text_mime(mime): a mime type whose body is text by declaration — text/*, or a JSON, XML or JavaScript type (misspellings with the subtype intact count: DM1000's applation/json), or form-urlencoded. Parameters and case are ignored.",
+    "_comment": "mime_kind(mime): what a mime type declares its body to be — markup (HTML, XML, any +xml), json (any json subtype or +json, whatever the type: DM1000's applation/json), text (other text/*, JavaScript, form data), or null when the type says nothing about text. is_text_mime is kind != null. Parameters and case are ignored; a subtype merely containing 'json' or 'xml' is not one.",
     "cases": [
-      {"id": "text_html",                   "mime": "text/html; charset=utf-8",          "expected": true},
-      {"id": "text_plain",                  "mime": "TEXT/PLAIN",                        "expected": true},
-      {"id": "application_json",            "mime": "application/json",                  "expected": true},
-      {"id": "misspelled_json",             "mime": "applation/json",                    "expected": true},
-      {"id": "problem_json_suffix",         "mime": "application/problem+json",          "expected": true},
-      {"id": "application_xml",             "mime": "application/xml",                   "expected": true},
-      {"id": "svg_xml_suffix",              "mime": "image/svg+xml",                     "expected": true},
-      {"id": "application_javascript",      "mime": "application/javascript",            "expected": true},
-      {"id": "application_x_javascript",    "mime": "application/x-javascript",          "expected": true},
-      {"id": "form_urlencoded",             "mime": "application/x-www-form-urlencoded", "expected": true},
-      {"id": "octet_stream",                "mime": "application/octet-stream",          "expected": false},
-      {"id": "hnap_x_unknown",              "mime": "x-unknown",                         "expected": false},
-      {"id": "woff2",                       "mime": "font/woff2",                        "expected": false},
-      {"id": "png",                         "mime": "image/png",                         "expected": false},
-      {"id": "empty",                       "mime": "",                                  "expected": false},
-      {"id": "jsonp_lookalike_not_subtype", "mime": "application/jsonlines-ish",         "expected": false}
+      {"id": "text_html",                  "mime": "text/html; charset=utf-8",                                                "kind": "markup"},
+      {"id": "text_plain",                 "mime": "TEXT/PLAIN",                                                              "kind": "text"},
+      {"id": "application_json",           "mime": "application/json",                                                        "kind": "json"},
+      {"id": "misspelled_json",            "mime": "applation/json",                                                          "kind": "json"},
+      {"id": "problem_json_suffix",        "mime": "application/problem+json",                                                "kind": "json"},
+      {"id": "application_xml",            "mime": "application/xml",                                                         "kind": "markup"},
+      {"id": "svg_xml_suffix",             "mime": "image/svg+xml",                                                           "kind": "markup"},
+      {"id": "application_javascript",     "mime": "application/javascript",                                                  "kind": "text"},
+      {"id": "application_x_javascript",   "mime": "application/x-javascript",                                                "kind": "text"},
+      {"id": "form_urlencoded",            "mime": "application/x-www-form-urlencoded",                                       "kind": "text"},
+      {"id": "octet_stream",               "mime": "application/octet-stream",                                                "kind": null},
+      {"id": "hnap_x_unknown",             "mime": "x-unknown",                                                               "kind": null},
+      {"id": "woff2",                      "mime": "font/woff2",                                                              "kind": null},
+      {"id": "png",                        "mime": "image/png",                                                               "kind": null},
+      {"id": "empty",                      "mime": "",                                                                        "kind": null},
+      {"id": "jsonlines_ish_not_subtype",  "mime": "application/jsonlines-ish",                                               "kind": null},
+      {"id": "office_document_is_not_xml", "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "kind": null},
+      {"id": "xhtml",                      "mime": "application/xhtml+xml",                                                   "kind": "markup"},
+      {"id": "text_css",                   "mime": "text/css",                                                                "kind": "text"}
+    ]
+  },
+  "json_container_cases": {
+    "_comment": "parse_json_container(text): a JSON object or array, or null. Scalars, invalid JSON and nesting too deep for the parser are not containers — hostile nesting must not crash either tool. 'nesting' builds '[' * n + ']' * n instead of a literal text.",
+    "cases": [
+      {"id": "object",             "text": "{\"a\": 1}",     "is_container": true},
+      {"id": "array",              "text": "[1, 2]",         "is_container": true},
+      {"id": "leading_whitespace", "text": " \n {\"a\": 1}", "is_container": true},
+      {"id": "scalar_number",      "text": "42",             "is_container": false},
+      {"id": "scalar_string",      "text": "\"a\"",          "is_container": false},
+      {"id": "invalid",            "text": "{not json",      "is_container": false},
+      {"id": "empty",              "text": "",               "is_container": false},
+      {"id": "moderate_nesting",   "is_container": true,  "nesting": 100},
+      {"id": "hostile_nesting",    "is_container": false, "nesting": 20000}
+    ]
+  },
+  "constant_mac_cases": {
+    "_comment": "is_constant_mac(mac): one byte repeated — broadcast, zero — in any layout. Protocol constants, not identities: neither tool treats them as PII.",
+    "cases": [
+      {"id": "broadcast",             "mac": "ff:ff:ff:ff:ff:ff", "constant": true},
+      {"id": "zero_hyphen",           "mac": "00-00-00-00-00-00", "constant": true},
+      {"id": "repeated_upper",        "mac": "AA:AA:AA:AA:AA:AA", "constant": true},
+      {"id": "bare_zero",             "mac": "000000000000",      "constant": true},
+      {"id": "device_mac",            "mac": "3C:7A:8A:12:34:56", "constant": false},
+      {"id": "two_bytes_alternating", "mac": "ab:ab:ab:ab:ab:ac", "constant": false},
+      {"id": "not_a_mac",             "mac": "ff:ff",             "constant": false}
+    ]
+  },
+  "query_payload_cases": {
+    "_comment": "find_query_payload(segment): a base64-wrapped JSON or URL payload in one raw query segment. prefix is kept verbatim; encoded is the base64 with URL transport encoding undone; quoted records that the segment percent-encoded it. Credentials and non-payloads give null.",
+    "cases": [
+      {"id": "bare",                        "segment": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",        "prefix": "",      "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "keyed",                       "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",   "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "keyed_unpadded",              "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",    "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",  "quoted": false},
+      {"id": "percent_encoded_padding",     "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0%3D", "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": true},
+      {"id": "space_for_plus",              "segment": "data=eyJrIjoifn5 PiJ9",                                       "prefix": "data=", "encoded": "eyJrIjoifn5+PiJ9",                                     "quoted": false},
+      {"id": "doubled_question_mark",       "segment": "?eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",       "prefix": "?",     "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "doubled_equals",              "segment": "k==eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",     "prefix": "k==",   "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "credential_is_not_a_payload", "segment": "YWRtaW46cGFzc3dvcmQ=",                                        "prefix": null,    "encoded": null,                                                   "quoted": null},
+      {"id": "plain_value",                 "segment": "page=2",                                                      "prefix": null,    "encoded": null,                                                   "quoted": null},
+      {"id": "empty",                       "segment": "",                                                            "prefix": null,    "encoded": null,                                                   "quoted": null}
     ]
   }
 }

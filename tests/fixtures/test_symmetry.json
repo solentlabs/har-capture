@@ -1173,6 +1173,171 @@
         "hunter2hunter2",
         "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy"
       ]
+    },
+    {
+      "id": "declared_charset_mismatch",
+      "_note": "Declares UTF-8, carries a latin-1 byte: capture stores it base64",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html; charset=utf-8",
+              "text": "PHA+qSAzQzo3QTo4QToxMjozNDo1NjwvcD4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "base64_json_body_with_labeled_password",
+      "_note": "The wrapped text gets the whole dispatch",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/panel",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "eyJodG1sIjogIjxzcGFuIGNsYXNzPVwicmVhZG9ubHlMYWJlbFwiPkRlZmF1bHQgUGFzc3dvcmQ6PC9zcGFuPjxzcGFuIGNsYXNzPVwidmFsdWVcIj5vcmFuZ2U0MjEzdGFibGU8L3NwYW4+In0="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password"
+        }
+      ],
+      "leaked": [
+        "orange4213table"
+      ]
+    },
+    {
+      "id": "base64_url_body_with_ip_and_mac",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/where",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "aHR0cDovLzczLjEyLjM0LjU2LzNDOjdBOjhBOjEyOjM0OjU2L3N0YXR1cw=="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        },
+        {
+          "severity": "warning",
+          "reason": "public IP"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_body_vendor_serial",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/info",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "{\"info\": \"7ZZ0000FAKE00\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Vendor-format serial"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "query_payload_under_identity_name",
+      "_note": "A payload wins over an identity-style name in both tools",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?login=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "login",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+      ]
     }
   ]
 }

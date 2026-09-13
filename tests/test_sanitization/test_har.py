@@ -1106,7 +1106,7 @@ class TestFullHarSanitization:
                         "response": {
                             "status": 200,
                             "headers": [],
-                            "content": {"text": "MAC: AA:AA:AA:AA:AA:AA", "mimeType": "text/html"},
+                            "content": {"text": "MAC: 3C:7A:8A:12:34:56", "mimeType": "text/html"},
                         },
                     },
                     {
@@ -1114,15 +1114,15 @@ class TestFullHarSanitization:
                         "response": {
                             "status": 200,
                             "headers": [],
-                            "content": {"text": "MAC: BB:BB:BB:BB:BB:BB", "mimeType": "text/html"},
+                            "content": {"text": "MAC: 3C:7A:8A:12:34:57", "mimeType": "text/html"},
                         },
                     },
                 ],
             }
         }
         result, _ = sanitize_har(har_data, salt=None)
-        assert "AA:AA:AA:AA:AA:AA" not in result["log"]["entries"][0]["response"]["content"]["text"]
-        assert "BB:BB:BB:BB:BB:BB" not in result["log"]["entries"][1]["response"]["content"]["text"]
+        assert "3C:7A:8A:12:34:56" not in result["log"]["entries"][0]["response"]["content"]["text"]
+        assert "3C:7A:8A:12:34:57" not in result["log"]["entries"][1]["response"]["content"]["text"]
 
     def test_handles_missing_log(self) -> None:
         """Test handling of missing log key."""
@@ -2633,13 +2633,12 @@ def _entry_with_response_body(body: str) -> dict[str, Any]:
 
 
 class TestBase64JsonResponseStructure:
-    """Base64-encoded JSON response bodies keep structure; opaque tokens collapse.
+    """A body that is itself base64 JSON keeps its structure; an opaque token collapses.
 
-    Some devices (e.g. the Sercomm DM1000) return data as raw base64-encoded JSON
-    from ``setup.cgi?todo=...`` endpoints with an empty Content-Type. The decoded
-    body is colon-bearing, so the opaque-credential heuristic used to collapse the
-    whole payload into a single ``AUTH_`` token, destroying every field name and
-    the JSON shape. Structure (not PII) must survive — only values are redacted.
+    The decoded body is colon-bearing, so the opaque-credential guard would
+    collapse the whole payload into a single ``AUTH_`` token, destroying every
+    field name and the JSON shape. Structure (not PII) must survive — only
+    values are redacted.
     """
 
     @pytest.mark.parametrize(
@@ -4588,8 +4587,8 @@ class TestTransportEncodedBodies:
 
 
 def _payload_request(segment: str) -> dict[str, Any]:
-    """A GET whose query is one segment, recorded in the URL and the queryString array."""
-    name, sep, value = segment.partition("=")
+    """A GET whose query is one segment, recorded in the URL and (decoded) the queryString array."""
+    name, sep, value = urllib.parse.unquote_plus(segment).partition("=")
     return {
         "request": {
             "method": "GET",
@@ -4603,7 +4602,7 @@ def _payload_request(segment: str) -> dict[str, Any]:
 
 def _decoded_payloads(request: dict[str, Any]) -> list[str]:
     """The payload text in the URL and in the queryString array, decoded."""
-    segment = urllib.parse.urlparse(request["url"]).query
+    segment = urllib.parse.unquote(urllib.parse.urlparse(request["url"]).query)
     array = query_param_segment(request["queryString"][0])
     return [decode_base64_payload(s.partition("=")[2] or s) or "" for s in (segment, array)]
 
@@ -4623,6 +4622,13 @@ class TestBase64QueryPayloads:
             assert request["queryString"] == raw["request"]["queryString"]
             return
         assert "AUTH_" not in request["url"]
+        rewritten = urllib.parse.urlparse(request["url"]).query
+        assert ("%" in rewritten) is case["percent_encoded_output"]
+        encoded = urllib.parse.unquote(rewritten).partition("=")[2] or urllib.parse.unquote(rewritten)
+        if case["unpadded_output"]:
+            assert "=" not in encoded
+        else:
+            assert len(encoded) % 4 == 0
         decoded = _decoded_payloads(request)
         for text in decoded:
             for leaked in case["leaked"]:
@@ -4639,3 +4645,48 @@ class TestBase64QueryPayloads:
         raw = {"log": {"entries": [_payload_request(case["segment"])]}}
         if case["leaked"]:
             _assert_validate_agrees(raw, tmp_path)
+        else:
+            raw_file = tmp_path / "raw.har"
+            raw_file.write_text(json.dumps(raw))
+            assert validate_har(raw_file) == []
+
+    def test_nothing_inside_is_offered_for_review(self) -> None:
+        """Pass 2 cannot reach a value stored base64, so none is flagged from inside a payload."""
+        payload = base64.b64encode(b'{"username": "jdoe-reviewer", "page": 1}').decode()
+        _, report = sanitize_har(
+            {"log": {"entries": [_payload_request(f"data={payload}")]}},
+            salt="payload",
+            heuristics=HeuristicMode.FLAG,
+        )
+        assert [item for item in report.flagged if item.original_value == "jdoe-reviewer"] == []
+
+
+DEEP_NESTING_CASES = _HAR_FIXTURE["deep_nesting_cases"]["cases"]
+_DEEP = "[" * 20000 + "]" * 20000
+
+
+def _deep_nesting_entry(surface: str) -> dict[str, Any]:
+    """One entry carrying JSON nested past the parser's recursion limit on ``surface``."""
+    wrapped = base64.b64encode(_DEEP.encode()).decode()
+    entry = _payload_request(f"d={wrapped}" if surface == "query_payload" else "page=1")
+    content = entry["response"]["content"]
+    if surface == "body_payload":
+        content.update({"text": wrapped, "mimeType": ""})
+    elif surface == "octet_stream_body":
+        content.update({"text": _DEEP, "mimeType": "application/octet-stream"})
+    elif surface == "json_body":
+        content.update({"text": _DEEP, "mimeType": "application/json"})
+    elif surface == "post_json_body":
+        entry["request"]["postData"] = {"mimeType": "application/json", "text": _DEEP}
+    return entry
+
+
+class TestHostileNesting:
+    """JSON nested past the parser's limit is text that does not parse, never a crash."""
+
+    @pytest.mark.parametrize("case", DEEP_NESTING_CASES, ids=[c["id"] for c in DEEP_NESTING_CASES])
+    def test_both_tools_finish(self, case: dict, tmp_path: Path) -> None:
+        sanitized, _ = sanitize_har({"log": {"entries": [_deep_nesting_entry(case["id"])]}}, salt="deep")
+        har_file = tmp_path / "deep.har"
+        har_file.write_text(json.dumps(sanitized))
+        validate_har(har_file)

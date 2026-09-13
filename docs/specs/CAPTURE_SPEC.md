@@ -365,7 +365,7 @@ class BrowserSessionResult:
 ```python
 context = browser_type.new_context(
     record_har_path=temp_file,        # Secure temp file via mkstemp()
-    record_har_content="embed",       # Base64-encode response bodies in HAR
+    record_har_content="embed",       # Embed response bodies in the HAR
     ignore_https_errors=True,         # Accept self-signed device certs
     service_workers="block",          # Prevent caching interference
     storage_state={                   # Force clean context — no inherited state
@@ -384,8 +384,8 @@ Design decisions:
   all 6 failure signatures identified in the MCP intake pipeline.
 - **Temp file for raw HAR**: Created via `tempfile.mkstemp()` — raw PII is never written to the user's directory. The FD
   is closed but the path is kept for Playwright.
-- **Embedded content**: `record_har_content="embed"` base64-encodes response bodies within the HAR JSON, avoiding
-  external file management.
+- **Embedded content**: `record_har_content="embed"` embeds response bodies within the HAR JSON, avoiding external file
+  management: text as text, anything the recorder does not store as text base64 with `encoding: base64`.
 - **Service worker blocking**: `service_workers="block"` prevents cached responses from interfering with fresh device
   captures.
 - **HTTPS tolerance**: Device hardware commonly uses self-signed or expired certificates.

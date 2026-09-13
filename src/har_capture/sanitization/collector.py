@@ -6,6 +6,7 @@ and flagged values during the sanitization process.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,8 @@ from har_capture.sanitization.report import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from har_capture.patterns.hasher import Hasher
 
 
@@ -44,6 +47,22 @@ class RedactionCollector:
     flagged: list[FlaggedValue] = field(default_factory=list)
     redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
     _seen_flagged: set[str] = field(default_factory=set, repr=False)
+    _flags_muted: bool = field(default=False, repr=False)
+
+    @contextmanager
+    def flags_muted(self) -> Iterator[None]:
+        """Discard flags raised inside the block; redactions are still recorded.
+
+        For text the review cannot reach: inside a base64-wrapped payload a
+        value is stored encoded, so Pass 2's find-and-replace on the HAR's
+        text would never find it, and offering it for review would promise a
+        redaction that cannot happen.
+        """
+        previous, self._flags_muted = self._flags_muted, True
+        try:
+            yield
+        finally:
+            self._flags_muted = previous
 
     def record_redacted_value(self, original: str, placeholder: str) -> None:
         """Remember which placeholder an auto-redacted value was given.
@@ -86,13 +105,12 @@ class RedactionCollector:
             context: Surrounding text for user review
             reason: Why this value was flagged
         """
+        if self._flags_muted:
+            return
         # Deduplicate - same value might be found multiple times
         if value in self._seen_flagged:
             # Increment occurrence count (keep first context seen)
-            for f in self.flagged:
-                if f.original_value == value:
-                    f.occurrences += 1
-                    break
+            next(f for f in self.flagged if f.original_value == value).occurrences += 1
             return
 
         self._seen_flagged.add(value)

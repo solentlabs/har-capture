@@ -60,7 +60,9 @@
     {"input_html": "Version: 1.0.0",                          "preserved": "1.0.0",                 "id": "version_string"},
     {"input_html": "Build: 2.4.6.100",                        "preserved": "2.4.6.100",             "id": "version_3_small_octets"},
     {"input_html": "Firmware: 3.4.5.6",                       "preserved": "3.4.5.6",               "id": "version_4_small_octets"},
-    {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"}
+    {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"},
+    {"input_html": "<td>MAC</td><td>00:00:00:00:00:00</td>", "preserved": "00:00:00:00:00:00", "id": "zero_mac_constant"},
+    {"input_html": "if (mac == 'ff:ff:ff:ff:ff:ff') return;", "preserved": "ff:ff:ff:ff:ff:ff", "id": "broadcast_mac_constant"}
   ],
 
   "pii_detection_cases": [
@@ -157,7 +159,11 @@
     {"value": "S/N-DEVICE789",      "expected_unchanged": false, "expected_contains": "SERIAL_", "id": "serial_s_n_prefix"},
     {"value": "Locked",             "expected_unchanged": true,  "id": "status_word_safe"},
     {"value": "OK",                 "expected_unchanged": true,  "id": "status_ok_safe"},
-    {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"}
+    {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"},
+    {"value": "ff-ff-ff-ff-ff-ff", "expected_unchanged": true, "id": "constant_mac_hyphen_kept"},
+    {"value": "3c-7a-8a-12-34-56", "expected_unchanged": false, "expected_not_contain": "3c-7a-8a-12-34-56", "expected_contains": "02-", "id": "device_mac_hyphen_redacted"},
+    {"value": "enable", "expected_unchanged": true, "id": "domain_safe_list_only_value"},
+    {"value": "***partial", "expected_unchanged": true, "id": "star_prefixed_value_treated_as_redacted"}
   ],
 
   "device_label_block_cases": [
