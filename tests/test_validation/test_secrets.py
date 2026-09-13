@@ -1126,3 +1126,11 @@ class TestValidateHarSanitizedCredentials:
         findings = validate_har(har_file)
         mac_findings = [f for f in findings if "MAC" in f.reason or "mac" in f.reason.lower()]
         assert len(mac_findings) >= 1, "MAC check should still fire for annotated entries"
+
+
+def test_serial_patterns_are_the_sanitizers() -> None:
+    """Validate reports labeled serials with the sanitizer's own pass 2/2b patterns."""
+    from har_capture.sanitization.html import SERIAL_LABEL_RE, SERIAL_TABLE_RE
+    from har_capture.validation.secrets import SERIAL_PATTERNS
+
+    assert SERIAL_PATTERNS == [SERIAL_LABEL_RE, SERIAL_TABLE_RE]

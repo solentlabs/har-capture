@@ -1066,3 +1066,11 @@ class TestSetItemHeuristicCoverage:
             result = sanitize_html(html, salt="test", collector=collector, heuristics=HeuristicMode.FLAG)
         assert "opaque_val_999" in result, "value should be preserved in FLAG mode"
         assert len(collector.flagged) > 0, "should have flagged a value"
+
+
+def test_pii_json_mirrors_serial_label_re() -> None:
+    """check_for_pii reads pii.json; its serial_number regex must be SERIAL_LABEL_RE verbatim."""
+    from har_capture.patterns import load_pii_patterns
+    from har_capture.sanitization.html import SERIAL_LABEL_RE
+
+    assert load_pii_patterns()["patterns"]["serial_number"]["regex"] == SERIAL_LABEL_RE.pattern

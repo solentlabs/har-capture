@@ -237,17 +237,12 @@ Severity: **error**
 
 **Serial numbers (label-anchored, warning):**
 
-- Pattern: `SN|S/N|Serial Number|SerialNum` + value — inline, in HTML table cells, or in sibling elements (tag chains
-  tolerate whitespace between tags, per the sibling-element rule in
-  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#scanner-pipeline))
-- The inline label patterns require `(?!ize)` after `serial` (jquery's `serialize:`/`serializeArray:` methods matched as
-  labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
-  noise on the CM2500 round-1 validate run
-- The label must reach its colon within its own text (`serial` plus at most 20 characters, then only its own closing
-  tags — `<b>Serial Number</b>: X`), a table-cell value must carry a digit (as the sanitizer's pass 2b requires), and
-  its tag chain must stay inside its cell: an unbounded label crossed a whole table row whose serial is a template
-  placeholder (`<?get_cm_sn>`) to the next label's colon, and reported that row's firmware name as a serial on 12 fleet
-  pages (TM1602A, CM820B) that no sanitize run could clear
+- Imports the sanitizer's own patterns, `SERIAL_LABEL_RE` and `SERIAL_TABLE_RE` from `sanitization/html.py` (passes 2
+  and 2b; see [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every
+  labeled serial reported here is one a sanitize run removes. Until 0.13.0 `validate` kept its own looser patterns: a
+  label merely containing `serial` (`cmSerialNumber:`) was reported and never removed, and an unbounded label crossed a
+  whole table row whose serial is a template placeholder (`<?get_cm_sn>`) and reported the next row's firmware name on
+  12 fleet pages (TM1602A, CM820B)
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
@@ -561,6 +556,9 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
   sanitization (`_sanitize_response_content`).
 - `split_url_query()` / `url_query()` — a URL's raw query, split by hand. Used by validation (`check_url`) and
   sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
+- `SERIAL_LABEL_RE` / `SERIAL_TABLE_RE` (from `sanitization/html.py`) — labeled serials. Used by validation
+  (`check_content`), sanitization (passes 2 and 2b) and `check_for_pii` (through `pii.json`'s mirrored `serial_number`
+  regex).
 - `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
   HTML engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
 - `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization
@@ -572,7 +570,6 @@ These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 
 | Pattern       | Purpose                                     |
 | ------------- | ------------------------------------------- |
-| Serial regex  | Detect serial numbers in HTML tables        |
 | Netmask check | Suppress subnet masks in the public-IP scan |
 | IP regex      | Detect public IPs in response content       |
 

@@ -1680,6 +1680,127 @@
       "leaked": [
         "7ZZ0000FAKE00"
       ]
+    },
+    {
+      "id": "serial_no_label",
+      "_note": "One label vocabulary for both tools",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial No: ABC1234567</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "serial_no_table_cell",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<tr><td>Serial No.:</td><td>ABC1234567</td></tr>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "bare_serial_label",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial: ABC1234567</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "bare_serial_table_cell",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<tr><td>Serial:</td><td>ABC1234567</td></tr>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
     }
   ]
 }

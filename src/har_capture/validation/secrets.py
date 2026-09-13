@@ -50,6 +50,8 @@ from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
 from har_capture.sanitization.html import (
+    SERIAL_LABEL_RE,
+    SERIAL_TABLE_RE,
     SIBLING_PASSWORD_RE,
     SIBLING_SSID_RE,
     SSID_ATTRIBUTE_RE,
@@ -69,33 +71,9 @@ COOKIE_ATTRIBUTES_ONLY: list[str] = [
 
 MAC_PATTERN = MAC_RE
 
-# Serial number patterns (manufacturer-specific)
-# Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
-# label and value sit in sibling elements (Technicolor .jst span pairs) are caught.
-# The label-anchored patterns require: `(?!ize)` after `serial` so jquery's
-# `serialize:`/`serializeArray:` methods don't match, a digit in the value
-# so prose/code words after the label (`serialize: function`) don't match —
-# vendor serials always carry digits — and a label that reaches its colon
-# within its own text, past at most its own closing tags: an unbounded run
-# crossed a template placeholder's whole table row to the next label's
-# colon and reported a firmware name.
-SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(
-        r"serial(?!ize)[^:<>]{0,20}(?:</\w+>\s*)*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:SN|S/N)\b(?:</\w+>\s*)*[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE
-    ),
-    # Serial numbers in HTML table cells (label in one td, value in next td).
-    # The value's tag chain stays inside its cell: crossing </td> or <tr>
-    # would read the next row's label as the value.
-    re.compile(
-        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*"
-        r"(?:<(?!/?t[dr]\b)[^>]*>\s*)*((?=[A-Za-z0-9\-]*[0-9])[A-Za-z0-9\-]{8,})",
-        re.IGNORECASE,
-    ),
-]
+# Labeled serials: the sanitizer's own patterns (passes 2 and 2b), so every
+# labeled serial reported here is one a sanitize run removes.
+SERIAL_PATTERNS: list[re.Pattern[str]] = [SERIAL_LABEL_RE, SERIAL_TABLE_RE]
 
 # Public IP pattern (not private ranges)
 IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
@@ -934,7 +912,7 @@ def check_content(
     # Check for serial numbers
     for pattern in SERIAL_PATTERNS:
         for match in pattern.finditer(content):
-            value = match.group(0)
+            value = match.group(match.lastindex or 0)
             if not is_redacted(value, custom_patterns):
                 findings.append(
                     Finding(

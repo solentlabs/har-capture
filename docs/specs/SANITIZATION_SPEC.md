@@ -533,15 +533,20 @@ replaces only the value and preserves the intermediate markup — sanitized fixt
 whitespace-tolerant chain is used by the `serial_number` / `wps_pin` patterns in `pii.json` (`check_for_pii`) and the
 `SERIAL_PATTERNS` detectors in `validation/secrets.py`.
 
-**Serial label and value (passes 2, 2b).** The label's own closing tags may precede its separator
-(`<b>Serial Number</b>: VALUE`), and the value must carry a digit, as every real serial does. `validate`'s
-labeled-serial patterns (`serial…`, `SN`, `S/N`, table cells) and `check_for_pii` apply the same two rules; `validate`
-also needs 8 or more characters, so every labeled serial it reports is one pass 2 removes.
+**Serial label and value (passes 2, 2b).** One pair of patterns, `SERIAL_LABEL_RE` and `SERIAL_TABLE_RE` in
+`sanitization/html.py`, serves passes 2 and 2b, `validate` (which imports them) and `check_for_pii` (whose `pii.json`
+`serial_number` regex carries `SERIAL_LABEL_RE` verbatim; a test pins the two) — so a labeled serial `validate` reports
+is one a sanitize run removes. The labels are `Serial Number`, `SerialNum`, `Serial No`, `SN` and `S/N` at a word
+boundary, and a bare `Serial` or `Serial ID` when a separator follows it (`Serial:`, so prose about a serial port is not
+a label); the label's own closing tags may precede its separator (`<b>Serial Number</b>: VALUE`); the value must carry a
+digit, as every real serial does; and a table value's tag chain stays inside its cell.
 
 **ADR-12 accounting** (0.13.0):
 
-- *Leak closed:* a serial whose label element closes before the colon (`<b>Serial Number</b>: X`) was reported by an
-  unbounded `validate` pattern and left by pass 2.
+- *Leak closed:* a serial whose label element closes before the colon (`<b>Serial Number</b>: X`), or labeled
+  `Serial No`, `Serial ID` or a bare `Serial:`, was reported by `validate`'s own looser patterns and left by pass 2.
+  Across the fleet the shared patterns change no pass 2 match (412 before and after); `validate` now reports 76 labeled
+  serials on raw captures where it reported 56, and none after sanitize.
 - *Fidelity gained:* without the digit rule pass 2 redacted words in label position — measured 2026-09-13 across the
   cable_modem_monitor fleet, 132 digit-free values (`Status`, identifiers, labels, status words such as `Disabled`) —
   and every one of the fleet's 69 real labeled serials carries a digit. Those 132 are no longer rewritten.

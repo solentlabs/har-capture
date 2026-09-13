@@ -165,6 +165,36 @@ SSID_OPTION_RE = re.compile(
 )
 
 
+# Labeled serials: pass 2 (label then value, inline or in a sibling element)
+# and pass 2b (label cell, value cell). Defined once and imported by
+# `validation/secrets.py`; `pii.json`'s serial_number regex carries
+# SERIAL_LABEL_RE verbatim (a test pins the two). So the sanitizer, `validate`
+# and `check_for_pii` share one label vocabulary and one value rule, and
+# `validate` never reports a labeled serial no sanitize run removes.
+#
+# The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags, so
+# sibling-element pairs match (Technicolor .jst renders
+# <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and the
+# label's own closing tags may precede its separator (<b>Serial Number</b>:).
+# The value must carry a digit, as every real serial does: without it the
+# passes redacted words in label position ("SN Status", "Serial Number:
+# Disabled"). A table value's tag chain stays inside its cell, so the next
+# row's label is never read as the value. A bare `Serial` or `Serial ID` label
+# counts only with a separator after it (`Serial:`), so prose naming a serial
+# port or number is not a label.
+_SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
+_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,}"
+SERIAL_LABEL_RE = re.compile(
+    r"\b(" + _SERIAL_LABELS + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<[^>]*>\s*)*)(" + _SERIAL_VALUE + r")",
+    re.IGNORECASE,
+)
+SERIAL_TABLE_RE = re.compile(
+    r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:" + _SERIAL_LABELS + r")\b[.:\s]*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*"
+    r"(?:<(?!/?t[dr]\b)[^>]*>\s*)*)(" + _SERIAL_VALUE + r")(?=\s*(?:<[^>]*>\s*)*</td>)",
+    re.IGNORECASE,
+)
+
+
 def is_structural_value_sensitive(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
     r"""Check whether a structurally-located element value should be redacted.
 
@@ -657,16 +687,9 @@ def _sanitize_html_impl(
 
     html = MAC_RE.sub(replace_mac, html)
 
-    # 2. Serial Numbers (various label formats)
-    # The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags so
-    # label/value pairs in sibling elements match (Technicolor .jst renders
-    # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and
-    # the label's own closing tags may precede its separator
-    # (<b>Serial Number</b>: VALUE). The value must carry a digit, as every
-    # real serial does: without it the pass redacted status words and labels
-    # ("SN Status", "Serial Number: Disabled").
-    # The separator + tag run is captured and re-emitted verbatim so redaction
-    # replaces only the value and preserves the surrounding markup.
+    # 2. Serial Numbers (SERIAL_LABEL_RE). The separator + tag run is captured
+    # and re-emitted verbatim so redaction replaces only the value and
+    # preserves the surrounding markup.
     def replace_serial(match: re.Match[str]) -> str:
         if is_redacted(match.group(3), custom_patterns):
             return match.group(0)
@@ -676,15 +699,9 @@ def _sanitize_html_impl(
         serial = match.group(3)
         return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
 
-    html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*(?:</\w+>\s*)*[:\s=]*(?:<[^>]*>\s*)*)"
-        r"((?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,})",
-        replace_serial,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = SERIAL_LABEL_RE.sub(replace_serial, html)
 
-    # 2b. Serial numbers in HTML table cells (label in one <td>, value in next <td>)
+    # 2b. Serial numbers in HTML table cells (SERIAL_TABLE_RE)
     # Handles: <td>...<strong>Serial Number</strong>...</td>\s*<td>VALUE</td>
     def replace_serial_table(match: re.Match[str]) -> str:
         if is_redacted(match.group(2), custom_patterns):
@@ -695,13 +712,7 @@ def _sanitize_html_impl(
         hashed = hasher.hash_generic(serial, "SERIAL")
         return f"{prefix}{hashed}"
 
-    html = re.sub(
-        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)"
-        r"((?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
-        replace_serial_table,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = SERIAL_TABLE_RE.sub(replace_serial_table, html)
 
     # 2d. WPS / pairing / default PIN — 8-digit value anchored by a known label.
     # Pure-digit values can't be flagged heuristically (the universal `^\d+$`

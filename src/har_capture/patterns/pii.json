@@ -7,10 +7,10 @@
       "description": "MAC addresses in colon or dash format (mirrors MAC_RE in redaction.py)"
     },
     "serial_number": {
-      "regex": "(Serial\\s*Number|SerialNum|SN|S/N)\\b\\s*(?:</\\w+>\\s*)*[:\\s=]*(?:<[^>]*>\\s*)*((?=[a-zA-Z0-9\\-]*\\d)[a-zA-Z0-9\\-]{5,})",
+      "regex": "\\b(Serial\\s*Number|SerialNum|Serial\\s*No|Serial(?:\\s*ID)?(?=\\s*(?:</\\w+>\\s*)*[.:=])|SN|S/N)\\b(\\s*(?:</\\w+>\\s*)*[.:\\s=]*(?:<[^>]*>\\s*)*)((?=[a-zA-Z0-9\\-_]*\\d)[a-zA-Z0-9\\-_]{5,})",
       "replacement_prefix": "SERIAL",
       "flags": ["IGNORECASE"],
-      "description": "Device serial numbers with various label formats; tag chain tolerates whitespace between tags so sibling-element label/value pairs match"
+      "description": "Labeled serial numbers (mirrors SERIAL_LABEL_RE in sanitization/html.py): a serial label, its separator and tags, and a value carrying a digit"
     },
     "wps_pin": {
       "regex": "(WPS[\\s_-]*PIN|PIN[\\s_-]*Code|Pairing[\\s_-]*PIN|Default[\\s_-]*PIN)\\b\\s*[:\\s=]*(?:<[^>]*>\\s*)*(\\d{8})\\b",
