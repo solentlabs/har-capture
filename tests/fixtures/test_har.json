@@ -636,7 +636,7 @@
     ]
   },
   "value_pass_body_cases": {
-    "_comment": "JSON values, JSON keys and plain-text bodies get the same format-preserving value passes as the HTML engine (MAC, private and public IPv4, IPv6, email), from the same shared regexes, and its labeled-serial passes on the raw text; the IPv6 constants :: and ::1 stay in both. Keys are sanitized as text because a client table keyed by MAC or address is a PII shape validate reports. absent must not survive; present must.",
+    "_comment": "JSON values, JSON keys and plain-text bodies get the same format-preserving value passes as the HTML engine (MAC, private and public IPv4, IPv6, email), from the same shared regexes, and its labeled-serial passes on the raw text; nest_lists wraps the body in that many arrays, past the key rules' depth; the IPv6 constants :: and ::1 stay in both. Keys are sanitized as text because a client table keyed by MAC or address is a PII shape validate reports. absent must not survive; present must.",
     "cases": [
       {"id": "json_global_ipv6",           "mime": "application/json",       "text": "{\"wan6\": \"2600:1700:abcd:1234::1a\"}",                  "absent": ["2600:1700:abcd:1234::1a"],   "present": ["{\"wan6\": \"2001:db8::"]},
       {"id": "json_link_local_ipv6_inline", "mime": "application/json",      "text": "{\"ll\": \"addr fe80::3c7a:8aff:fe12:3456/64\"}",           "absent": ["fe80::3c7a:8aff:fe12:3456"], "present": ["{\"ll\": \"addr 2001:db8::", "/64\"}"]},
@@ -654,7 +654,72 @@
       {"id": "json_labeled_serial",        "mime": "application/json",       "text": "{\"info\": \"Serial Number: ABC1234567\"}",                  "absent": ["ABC1234567"],                "present": ["{\"info\": \"Serial Number: SERIAL_"]},
       {"id": "text_labeled_serial",        "mime": "text/plain",             "text": "boot ok\nSerial Number: ABC1234567\n",                     "absent": ["ABC1234567"],                "present": ["Serial Number: SERIAL_"]},
       {"id": "json_serial_label_no_digit", "mime": "application/json",       "text": "{\"info\": \"Serial Number: pending\"}",                     "absent": [],                            "present": ["{\"info\": \"Serial Number: pending\"}"]},
+      {"id": "json_empty_password_kept",   "mime": "application/json",       "text": "{\"Password\": \"\"}",                                      "absent": ["FIELD_"],                    "present": ["{\"Password\": \"\"}"]},
+      {"id": "json_field_placeholder_kept", "mime": "application/json",      "text": "{\"LoginPassword\": \"FIELD_51456ee6\"}",                   "absent": [],                            "present": ["{\"LoginPassword\": \"FIELD_51456ee6\"}"]},
+      {"id": "json_password_holding_xxx",  "mime": "application/json",       "text": "{\"Password\": \"myXXXpassword\"}",                         "absent": ["myXXXpassword"],             "present": ["{\"Password\": \"FIELD_"]},
+      {"id": "json_mac_keys_collide",      "mime": "application/json",       "text": "{\"AA:BB:CC:DD:EE:01\": 1, \"aa:bb:cc:dd:ee:01\": 2}",       "absent": ["AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:01"], "present": ["\": 1", "\": 2"]},
+      {"id": "json_three_mac_keys_collide", "mime": "application/json",      "text": "{\"AA:BB:CC:DD:EE:01\": 1, \"aa:bb:cc:dd:ee:01\": 2, \"Aa:Bb:Cc:Dd:Ee:01\": 3}", "absent": ["dd:ee:01", "Dd:Ee:01"], "present": ["\": 1", "~2\": 2", "~3\": 3"]},
+      {"id": "json_mac_in_deep_lists",     "mime": "application/json",       "text": "{\"m\": \"3C:7A:8A:12:34:56\", \"n\": 1}",                    "absent": ["3C:7A:8A:12:34:56"],         "present": ["{\"m\": \"02:", "\"n\": 1}"], "nest_lists": 55},
+      {"id": "json_ipv4_mapped_ipv6",      "mime": "application/json",       "text": "{\"v6\": \"::ffff:192.168.5.4\"}",                          "absent": ["::ffff", "192.168.5.4", "10.255.", ".255."], "present": ["{\"v6\": \"2001:db8::"]},
+      {"id": "json_invalid_octet_kept",    "mime": "application/json",       "text": "{\"ip\": \"192.168.1.999\"}",                               "absent": [],                            "present": ["{\"ip\": \"192.168.1.999\"}"]},
+      {"id": "html_invalid_octet_kept",    "mime": "text/html",              "text": "<td>192.168.1.999</td>",                                    "absent": [],                            "present": ["<td>192.168.1.999</td>"]},
+      {"id": "post_style_json_in_text",    "mime": "text/plain",             "text": "{\"Password\": \"hunter2x\"}",                              "absent": ["hunter2x"],                  "present": ["{\"Password\": \"FIELD_"]},
+      {"id": "json_duplicate_password",    "mime": "application/json",       "text": "{\"password\": \"hunter2x\", \"password\": \"FIELD_abcd1234\"}", "absent": ["hunter2x"],                  "present": ["\"password\": \"FIELD_abcd1234\""]},
+      {"id": "json_markup_across_strings", "mime": "application/json",       "text": "{\"html\": \"<b>Password:</b><i>x\", \"ch\": 6, \"serialNumber\": \"4131N12345678\", \"note\": \"</i>\"}", "absent": ["4131N12345678"], "present": ["\"html\": \"<b>Password:</b><i>x\"", "\"ch\": 6", "\"note\": \"</i>\""]},
+      {"id": "json_escaped_markup_only",   "mime": "application/json",       "text": "{\"html\": \"\\u003cspan\\u003ePassword:\\u003c\\/span\\u003e\\n\\u003cspan\\u003ehunter2x\\u003c\\/span\\u003e\"}", "absent": ["hunter2x"], "present": ["PASS_"]},
+      {"id": "json_lone_surrogate_password", "mime": "application/json",     "text": "{\"password\": \"\\ud800x\"}",                               "absent": ["\\ud800x"],                  "present": ["\"password\": \"FIELD_"]},
+      {"id": "html_lone_surrogate_label",  "mime": "text/html",              "text": "<span>Password:</span><span>ab\ud800c</span>",               "absent": ["ab\ud800c"],                 "present": ["<span>Password:</span><span>PASS_"]},
+      {"id": "json_nesting_past_bound",    "mime": "application/json",       "text": "{\"m\": \"3C:7A:8A:12:34:56\"}",                              "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"m\": \"02:"], "nest_lists": 995},
+      {"id": "json_wifi_password_prefix_shaped", "mime": "application/json", "text": "{\"wifi_password\": \"WIFI_Home2024\"}",                    "absent": ["WIFI_Home2024"],             "present": ["\"wifi_password\": \"FIELD_"]},
+      {"id": "json_password_zero_run",     "mime": "application/json",       "text": "{\"password\": \"00000000\"}",                                "absent": ["00000000"],                  "present": ["\"password\": \"FIELD_"]},
+      {"id": "json_static_placeholder_kept", "mime": "application/json",     "text": "{\"password\": \"***FIELD***\"}",                             "absent": [],                            "present": ["{\"password\": \"***FIELD***\"}"]},
+      {"id": "html_zero_padded_private_ip", "mime": "text/html",             "text": "<p>192.168.001.100</p>",                                    "absent": ["192.168.001.100"],           "present": ["<p>10.255."]},
+      {"id": "html_ipv4_mapped_ipv6",      "mime": "text/html",              "text": "<td>::ffff:192.168.5.4</td>",                               "absent": ["::ffff", "192.168.5.4", ".255."], "present": ["<td>2001:db8::"]},
+      {"id": "json_static_key_collision",  "mime": "application/json",       "text": "{\"3C:7A:8A:12:34:56\": \"a\", \"XX:XX:XX:XX:XX:XX\": \"b\"}", "absent": ["3C:7A:8A:12:34:56"],        "present": ["\"a\"", "\"b\""], "salt": null},
       {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]}
+    ]
+  },
+  "custom_preserved_gateway_cases": {
+    "_comment": "A caller's preserved_gateway_ips (custom_patterns) are kept on every route, not only the HTML engine's: the string patterns resolve them from the same per-call scope.",
+    "custom_patterns": {"preserved_gateway_ips": ["10.1.1.1"]},
+    "cases": [
+      {"id": "html_route", "mime": "text/html",        "text": "<td>10.1.1.1</td>",   "present": "10.1.1.1"},
+      {"id": "json_route", "mime": "application/json", "text": "{\"gw\": \"10.1.1.1\"}", "present": "10.1.1.1"},
+      {"id": "text_route", "mime": "text/plain",       "text": "gw 10.1.1.1",         "present": "10.1.1.1"},
+      {"id": "post_json",  "mime": "application/json", "text": "{\"gw\": \"10.1.1.1\"}", "present": "10.1.1.1", "via": "post"},
+      {"id": "check_for_pii", "mime": "",              "text": "gw 10.1.1.1",         "present": "10.1.1.1", "via": "check_for_pii"}
+    ]
+  },
+  "no_collector_body_cases": {
+    "_comment": "_sanitize_response_content called without a collector (the library's lowest-level entry): nothing to hash with, so the positional passes are skipped and the string patterns write their static placeholders.",
+    "cases": [
+      {"id": "text_mac",   "mime": "text/plain",       "text": "mac 3C:7A:8A:12:34:56",           "present": "mac ***MAC***"},
+      {"id": "text_ipv6",  "mime": "text/plain",       "text": "wan 2600:1700::1a",               "present": "wan ***IPV6***"},
+      {"id": "json_email", "mime": "application/json", "text": "{\"c\": \"a@example.com\"}",     "present": "{\"c\": \"***EMAIL***\"}"}
+    ]
+  },
+  "post_text_cases": {
+    "_comment": "sanitize_post_data on postData.text: urlencoded and XML by type, JSON by content whatever the type, any other text through the string patterns. absent must not survive; present must.",
+    "cases": [
+      {"id": "json_as_text_plain",  "mime": "text/plain;charset=UTF-8", "text": "{\"serialNumber\": \"4131N12345678\", \"Password\": \"hunter2x\"}", "absent": ["4131N12345678", "hunter2x"], "present": ["\"serialNumber\": \"SERIAL_", "\"Password\": \"FIELD_"]},
+      {"id": "json_without_mime",   "mime": "",                         "text": "{\"cmMac\": \"3C7A8A123456\"}",                                  "absent": ["3C7A8A123456"],              "present": ["{\"cmMac\": \"02"]},
+      {"id": "json_nothing_to_do",  "mime": "application/json",         "text": "{\n  \"ch\": 6\n}",                                              "absent": [],                            "present": ["{\n  \"ch\": 6\n}"]},
+      {"id": "form_mime_json",      "mime": "application/x-www-form-urlencoded", "text": "{\"Password\": \"a=b\", \"ch\": 6, \"Note\": \"x\"}",       "absent": ["a=b"],                       "present": ["\"Password\": \"FIELD_", "\"ch\": 6, \"Note\": \"x\"}"]},
+      {"id": "json_mime_unparseable", "mime": "application/json",         "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\":",                     "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"mac\": \"02:"]},
+      {"id": "plain_text_mac",      "mime": "text/plain",               "text": "mac=3C:7A:8A:12:34:56 wan 73.12.34.56",                          "absent": ["3C:7A:8A:12:34:56", "73.12.34.56"], "present": ["mac=02:"]}
+    ]
+  },
+  "cross_route_correlation_cases": {
+    "_comment": "One value in bodies of every route gets one placeholder: the engines share regexes, validity rules, pass order and hasher, so a consumer can follow it across the capture. template holds {v}; placeholder is the regex its replacement must match.",
+    "cases": [
+      {"id": "mac",         "value": "3C:7A:8A:12:34:56",  "placeholder": "02(?::[0-9a-f]{2}){5}"},
+      {"id": "private_ip",  "value": "192.168.5.4",        "placeholder": "10\\.255\\.\\d{1,3}\\.\\d{1,3}"},
+      {"id": "ipv4_mapped", "value": "::ffff:192.168.5.4", "placeholder": "2001:db8::[0-9a-f]{1,4}:[0-9a-f]{1,4}"}
+    ],
+    "bodies": [
+      {"mime": "text/html",        "template": "<td>{v}</td>"},
+      {"mime": "application/json", "template": "{\"v\": \"{v}\"}"},
+      {"mime": "text/plain",       "template": "v {v} end"}
     ]
   }
 }

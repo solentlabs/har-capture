@@ -11,6 +11,7 @@ validation modules.
 from __future__ import annotations
 
 import base64
+import functools
 import ipaddress
 import json
 import logging
@@ -301,6 +302,12 @@ _SERIAL_VALUE_RE = re.compile(r"(?=\S*\d)\S{5,}")
 SSID_KEY_RE = re.compile(r"(?:^|_)ssid(?:_|$)")
 
 
+# Every identity key holds one of these, in any case; a key without one skips
+# the word split.
+_IDENTITY_KEY_HINT_RE = re.compile(r"serial|sn|mac|hw", re.IGNORECASE)
+
+
+@functools.lru_cache(maxsize=4096)
 def _key_words(key: str) -> str:
     return "_".join(word.lower() for word in _KEY_WORD_RE.findall(key))
 
@@ -341,7 +348,7 @@ def classify_identity_field(key: str, value: object) -> str | None:
         >>> classify_identity_field("hmac_algorithm", "AABBCCDDEEFF") is None
         True
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not _IDENTITY_KEY_HINT_RE.search(key):
         return None
     words = _key_words(key)
     if SERIAL_KEY_RE.search(words) and _SERIAL_VALUE_RE.fullmatch(value) and not is_fully_redacted(value):
@@ -375,11 +382,17 @@ def unredacted_identity(
     return identity
 
 
-def iter_json_fields(data: dict[str, Any] | list[Any]) -> Iterator[tuple[str, Any]]:
-    """Yield every ``(key, value)`` pair of a parsed JSON container, at any depth.
+# How deep the key rules reach into a JSON body: the sanitizer's walker, the
+# validator's check_json_fields and check_for_pii all stop here. Past it, the
+# sanitizer still applies its text patterns to every string and key.
+JSON_MAX_DEPTH = 50
 
-    Iterative, so a body nested as deep as ``parse_json_container`` accepts
-    cannot exhaust the stack.
+
+def iter_json_fields(data: dict[str, Any] | list[Any]) -> Iterator[tuple[str, Any]]:
+    """Yield the ``(key, value)`` members of a parsed JSON container, down to ``JSON_MAX_DEPTH``.
+
+    Iterative, and bounded by the depth the sanitizer's key rules reach, so
+    a checker never reports an identity field the sanitizer would not visit.
 
     Args:
         data: A parsed JSON object or array
@@ -387,22 +400,57 @@ def iter_json_fields(data: dict[str, Any] | list[Any]) -> Iterator[tuple[str, An
     Yields:
         Each object member as ``(key, value)``, outer members first
     """
+    stack: list[tuple[Any, int]] = [(data, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > JSON_MAX_DEPTH:
+            continue
+        if isinstance(node, dict):
+            members = json_members(node)
+            yield from members
+            stack.extend((value, depth + 1) for _, value in reversed(members))
+        elif isinstance(node, list):
+            stack.extend((item, depth + 1) for item in reversed(node))
+
+
+def iter_json_strings(data: dict[str, Any] | list[Any]) -> Iterator[str]:
+    r"""Yield every string in a parsed JSON container — values and object keys — at any depth.
+
+    A JSON body's unit of text is the decoded string: the sanitizer's text
+    passes and validate's text checks both read these, never the raw JSON
+    text, so escapes (``\u003c``) hide nothing and no match can run from one
+    string into the next.
+
+    Args:
+        data: A parsed JSON object or array
+
+    Yields:
+        Each object key and string value
+    """
     stack: list[Any] = [data]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            yield from node.items()
-            stack.extend(reversed(list(node.values())))
+            for key, value in json_members(node):
+                yield key
+                if isinstance(value, str):
+                    yield value
+                elif isinstance(value, dict | list):
+                    stack.append(value)
         elif isinstance(node, list):
-            stack.extend(reversed(node))
+            for item in node:
+                if isinstance(item, str):
+                    yield item
+                elif isinstance(item, dict | list):
+                    stack.append(item)
 
 
 # The value regexes both sanitizer engines — the HTML passes and the string
 # patterns JSON values, JSON keys and text bodies take — and validate share,
 # so a body's route never decides whether an address is redacted. pii.json
-# carries PUBLIC_IP_RE, IPV6_RE and EMAIL_RE verbatim for check_for_pii (a
-# test pins them); its private_ip entry differs on purpose, excluding the
-# preserved gateway addresses the engines skip in code.
+# carries all four verbatim for check_for_pii (a test pins them), which skips
+# what the engines keep: preserved gateway addresses, version strings, and
+# IPv6 candidates that are not host addresses.
 PRIVATE_IP_RE = re.compile(
     r"\b(?:"
     r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
@@ -417,16 +465,38 @@ PUBLIC_IP_RE = re.compile(
     r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
     r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
 )
-# An IPv6 candidate: two to seven colon-terminated hex groups and a last one,
-# not glued to a word or another colon on either side (`(?<![:\w])` rather
-# than `\b`, so a compressed `::ffff:…` is found). Candidates are addresses
-# only when is_ipv6_host_address accepts them, which rejects clock times, MACs
-# and the constants `::` and `::1`.
-IPV6_RE = re.compile(r"(?<![:\w])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![:\w])", re.IGNORECASE)
+# An IPv6 candidate: two to seven colon-terminated hex groups and a last
+# group — hex, or the dotted quad of an IPv4-mapped address (`::ffff:1.2.3.4`)
+# — not glued to a word or another colon on either side (`(?<![:\w])` rather
+# than `\b`, so a compressed `::ffff:…` is found), and not running on into a
+# dotted number. A sentence-ending period is not part of it. Candidates are
+# addresses only when is_ipv6_host_address accepts them, which rejects clock
+# times, MACs and the constants `::` and `::1`.
+IPV6_RE = re.compile(
+    r"(?<![:\w])(?:[0-9a-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{0,4})(?![:\w])(?!\.\d)",
+    re.IGNORECASE,
+)
 EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
 )
+
+
+def ipv6_host_spans(text: str) -> list[tuple[int, int]]:
+    """Return the spans of the IPv6 host addresses in text (``IPV6_RE`` + ``is_ipv6_host_address``).
+
+    A checker skips an IPv4 match inside one: an IPv4-mapped address
+    (``::ffff:1.2.3.4``) is one address, which the sanitizer hashes whole.
+
+    Args:
+        text: Text to scan
+
+    Returns:
+        ``(start, end)`` of each address, in order
+    """
+    if ":" not in text:
+        return []
+    return [match.span() for match in IPV6_RE.finditer(text) if is_ipv6_host_address(match.group(0))]
 
 
 def is_ipv6_host_address(candidate: str) -> bool:
@@ -497,42 +567,86 @@ def is_text_mime(mime: str) -> bool:
     return mime_kind(mime) is not None
 
 
-def body_route(mime_type: str, text: str) -> str:
-    """Pick the engine for a response body's text: ``"json"``, ``"html"`` or ``"text"``.
+def route_body(mime_type: str, text: str) -> tuple[str, dict[str, Any] | list[Any] | None]:
+    """Pick the engine for a response body's text, with the JSON it parsed to.
 
     The one routing decision for the sanitizer and the validator. Text that
-    parses as a JSON object or array is JSON whatever its type declares —
-    HNAP answers JSON as ``text/html``, and a markup engine reads no keys.
-    Otherwise a markup type goes to the HTML engine and any other text type
-    to the text path (``mime_kind``); a type that says nothing about text
-    (``application/octet-stream``, ``x-unknown``, none) is sniffed: markup,
-    else text. ``validate`` scans every body whatever its type, so every text
-    a body can carry must reach an engine.
+    parses as a JSON object or array (``parse_json_container``) is JSON
+    whatever its type declares — HNAP answers JSON as ``text/html``, and a
+    markup engine reads no keys. Otherwise a markup type goes to the HTML
+    engine and any other text type to the text path (``mime_kind``); a type
+    that says nothing about text (``application/octet-stream``,
+    ``x-unknown``, none) is sniffed: markup, else text. ``validate`` scans
+    every body whatever its type, so every text a body can carry must reach
+    an engine. The parsed JSON comes back so neither tool parses twice.
 
     Args:
         mime_type: The body's declared Content-Type
         text: The body's text
 
     Returns:
-        ``"json"``, ``"html"`` or ``"text"``
+        ``("json", data)``, ``("html", None)`` or ``("text", None)``
     """
-    if parse_json_container(text) is not None:
-        return "json"
+    data = parse_json_container(text)
+    if data is not None:
+        return "json", data
     kind = mime_kind(mime_type)
     if kind == "markup":
-        return "html"
+        return "html", None
     if kind is not None:
-        return "text"
-    return "html" if text.lstrip().startswith("<") else "text"
+        return "text", None
+    return ("html" if text.lstrip().startswith("<") else "text"), None
+
+
+# Deepest nesting either tool accepts as JSON. Past it a body is text: the
+# sanitizer re-serializes changed JSON with the pure-Python encoder, whose
+# recursion would otherwise run out near the parser's own limit (~990).
+JSON_MAX_NESTING = 400
+
+
+class JsonObjectWithDuplicates(dict):  # type: ignore[type-arg]
+    """A parsed JSON object whose text repeats a key.
+
+    The mapping holds the last value of each key, as every JSON parser (and
+    so every consumer of the capture) reads it; ``shadowed`` holds the
+    earlier ``(key, value)`` pairs, which the validator still checks and the
+    sanitizer drops by re-serializing.
+    """
+
+    shadowed: list[tuple[str, Any]]
+
+
+def _object_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj = dict(pairs)
+    if len(obj) == len(pairs):
+        return obj
+    last = {key: index for index, (key, _) in enumerate(pairs)}
+    duplicated = JsonObjectWithDuplicates(obj)
+    duplicated.shadowed = [pair for index, pair in enumerate(pairs) if last[pair[0]] != index]
+    return duplicated
+
+
+def _nesting_exceeds(data: Any, limit: int) -> bool:
+    stack: list[tuple[Any, int]] = [(data, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(node, dict):
+            stack.extend((value, depth + 1) for value in node.values() if isinstance(value, dict | list))
+        elif isinstance(node, list):
+            stack.extend((item, depth + 1) for item in node if isinstance(item, dict | list))
+    return False
 
 
 def parse_json_container(text: str) -> dict[str, Any] | list[Any] | None:
     """Parse text that is a JSON object or array.
 
     The one test for "this text is JSON" across the sanitizer and the
-    validator. Nesting too deep for the parser (a ``RecursionError``) is
-    treated like any other text that does not parse — hostile input must not
-    crash either tool.
+    validator. Nesting too deep for the parser (a ``RecursionError``), or
+    deeper than ``JSON_MAX_NESTING``, is treated like any other text that
+    does not parse — hostile input must not crash either tool. An object
+    that repeats a key parses to a ``JsonObjectWithDuplicates``.
 
     Args:
         text: Candidate JSON text
@@ -543,10 +657,34 @@ def parse_json_container(text: str) -> dict[str, Any] | list[Any] | None:
     if not text.lstrip().startswith(("{", "[")):
         return None
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(text, object_pairs_hook=_object_hook)
     except (ValueError, RecursionError):
         return None
-    return parsed if isinstance(parsed, dict | list) else None
+    if not isinstance(parsed, dict | list) or _nesting_exceeds(parsed, JSON_MAX_NESTING):
+        return None
+    return parsed
+
+
+def json_members(obj: dict[str, Any]) -> list[tuple[str, Any]]:
+    """Every ``(key, value)`` member of a parsed object, shadowed duplicates included."""
+    members = list(obj.items())
+    if isinstance(obj, JsonObjectWithDuplicates):
+        members.extend(obj.shadowed)
+    return members
+
+
+def has_shadowed_members(data: Any) -> bool:
+    """True when any object in a parsed container repeats a key."""
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, JsonObjectWithDuplicates):
+            return True
+        if isinstance(node, dict):
+            stack.extend(value for value in node.values() if isinstance(value, dict | list))
+        elif isinstance(node, list):
+            stack.extend(item for item in node if isinstance(item, dict | list))
+    return False
 
 
 # `charset=` parameter of a Content-Type, quoted or bare.

@@ -99,8 +99,7 @@ def validate_har(
    - `check_content(entry.response.content)` → bare base64 credentials, JSON fields, MAC, serial, IPv4, IPv6 in text
      content. The body is read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is
      checked as the text it carries, and a binary body is not checked — the sanitizer leaves it untouched too
-     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content)). Its `mimeType` goes along for
-     the sanitizer's routing decision, `body_route()`
+     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content))
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
@@ -185,12 +184,15 @@ Checks form field names and JSON body content:
 1. The text copy is checked independently of `params` — a sanitizer that redacts one copy but not the other must still
    be caught
 
-**JSON body** (`postData.text` with JSON content type):
+**Body text** (`postData.text`), in the sanitizer's order: skipped only when the whole text is one placeholder
+(`is_fully_redacted()` — `is_redacted()` searches, so a `#000000` anywhere would skip a body). Then:
 
-1. Parse JSON
-1. Call `check_json_fields()` for recursive scanning
+1. Text that parses as a JSON object or array (`parse_json_container()`) is JSON whatever its content type — a
+   `text/plain` XHR body, or JSON under jQuery's form-urlencoded default — and gets `check_json_fields()`
+1. Otherwise a form-urlencoded body is split into pairs and checked as form params
 
-**XML body** (`postData.text` with `text/xml` or `application/xml` content type):
+**XML body** (`postData.text` of a markup type, `mime_kind()`: `text/xml`, `application/xml`, any `+xml` such as
+`application/soap+xml` — the sanitizer's predicate too):
 
 1. Parse XML with `xml.etree.ElementTree`
 1. Walk element tree, checking element tag names and attribute names against sensitive field patterns
@@ -206,7 +208,7 @@ flag-tier fields suppressed. The same model applies to every branch above (form 
 ### `check_content(content, location, findings, custom_patterns, **keywords)`
 
 Detects PII patterns in response content text. Keyword-only: `has_sanitized_url_credential`, `serial_detectors`,
-`mime_type` (the body's declared type, for `body_route()`), `field_tiers` (pre-compiled, as for `check_json_fields`).
+`field_tiers` (pre-compiled, as for `check_json_fields`).
 
 **Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
 single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
@@ -229,14 +231,20 @@ structural punctuation, and a match accounting for the entire token rather than 
 
 Severity: **error**
 
-**JSON fields (error / warning):**
+**JSON fields (error):**
 
-- A body the sanitizer routes as JSON (`body_route()`: text that parses as a JSON object or array, whatever its type —
+- A body the sanitizer routes as JSON (`route_body()`: text that parses as a JSON object or array, whatever its type —
   HNAP answers JSON as `text/html`) has its fields checked by `check_json_fields()`, with the rules the sanitizer
   redacts by: identity fields and credential-named keys. Flag-tier names (`username`, `login`) are not reported here —
   in responses they are mostly translation-bundle keys, and the sanitizer only offers them for review, so a warning
   would have no sanitize remedy
 - A MAC reported as an identity field is not reported again by the MAC scan below
+- An object that repeats a key is checked member by member, the shadowed earlier values included (`json_members()`): the
+  parser keeps only the last, and the sanitizer drops the others by re-serializing
+
+**Unit of text.** Every check below reads a text body whole, and a JSON body one decoded string at a time — each value
+and each object key, at any depth (`iter_json_strings()`) — the unit the sanitizer's passes rewrite. An escape
+(`\u003c`) hides no markup, and no pattern pairs a label in one string with a value in the next.
 
 **MAC addresses:**
 
@@ -248,12 +256,12 @@ Severity: **error**
 
 **Serial numbers (label-anchored, warning):**
 
-- Imports the sanitizer's own patterns, `SERIAL_LABEL_RE` and `SERIAL_TABLE_RE` from `sanitization/html.py` (passes 2
-  and 2b; see [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every
-  labeled serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). Until
-  0.13.0 `validate` kept its own looser patterns: a label merely containing `serial` (`cmSerialNumber:`) was reported
-  and never removed, and an unbounded label crossed a whole table row whose serial is a template placeholder
-  (`<?get_cm_sn>`) and reported the next row's firmware name on 12 fleet pages (TM1602A, CM820B)
+- Imports the sanitizer's own pattern, `SERIAL_LABEL_RE` from `sanitization/html.py` (pass 2; see
+  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every labeled
+  serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). Until 0.13.0
+  `validate` kept its own looser patterns: a label merely containing `serial` (`cmSerialNumber:`) was reported and never
+  removed, and an unbounded label crossed a whole table row whose serial is a template placeholder (`<?get_cm_sn>`) and
+  reported the next row's firmware name on 12 fleet pages (TM1602A, CM820B)
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
@@ -305,6 +313,8 @@ Severity: **warning**
   Until 0.13.0 there was no IPv6 check, and 960 IPv6 addresses in JSON bodies across the cable_modem_monitor fleet
   survived sanitize unreported
 - Placeholders (the `2001:db8::` documentation prefix) are skipped via `is_redacted()`
+- An IPv4-mapped address (`::ffff:1.2.3.4`) is one address: its dotted-quad tail is not reported again by the public-IP
+  scan (`ipv6_host_spans()`)
 
 Severity: **warning**
 
@@ -590,18 +600,19 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
   sanitization (`_sanitize_response_content`).
 - `split_url_query()` / `url_query()` — a URL's raw query, split by hand. Used by validation (`check_url`) and
   sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
-- `SERIAL_LABEL_RE` / `SERIAL_TABLE_RE` (from `sanitization/html.py`) — labeled serials. Used by validation
-  (`check_content`), sanitization (passes 2 and 2b) and `check_for_pii` (through `pii.json`'s mirrored `serial_number`
-  regex).
+- `SERIAL_LABEL_RE` (from `sanitization/html.py`) — labeled serials. Used by validation (`check_content`), sanitization
+  (pass 2) and `check_for_pii` (through `pii.json`'s mirrored `serial_number` regex).
 - `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
   HTML engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
   `is_constant_mac()` — the broadcast and zero MACs neither tool treats as PII — is shared the same way.
 - `IPV6_RE` with `is_ipv6_host_address()`, `PUBLIC_IP_RE`, `PRIVATE_IP_RE`, `EMAIL_RE` — addresses in text. Used by
   sanitization (HTML engine passes 4–6 and 11, and `_sanitize_string_patterns` for JSON values, JSON keys and text
-  bodies), validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `public_ip`,
-  `ipv6` and `email` regexes; its `private_ip` entry differs on purpose, excluding the preserved gateway addresses).
-- `body_route()` — which engine a response body's text goes to. Used by sanitization (`_sanitize_body_text`) and
-  validation (`check_content`, to check a JSON-routed body's fields).
+  bodies), validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `private_ip`,
+  `public_ip`, `ipv6` and `email` regexes, skipping what the engines keep).
+- `route_body()` / `parse_json_container()` — which engine a response body's text goes to, and whether text is JSON.
+  Used by sanitization (`_sanitize_body_text`, `sanitize_post_data`) and validation (`check_content`, to check a
+  JSON-routed body's fields; `check_post_data`). `JSON_MAX_DEPTH` bounds the key rules in both tools and in
+  `check_for_pii`.
 - `classify_identity_field()` — a serial or MAC under a key naming it. Used by sanitization (`_sanitize_json_recursive`)
   and, through `unredacted_identity()` (which also skips the sanitizer's own placeholders), by validation
   (`check_json_fields`) and `check_for_pii`.

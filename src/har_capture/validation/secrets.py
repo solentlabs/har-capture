@@ -14,7 +14,6 @@ This module has ZERO third-party dependencies (stdlib + har_capture only).
 
 from __future__ import annotations
 
-import json
 import re
 import urllib.parse
 from dataclasses import dataclass, replace
@@ -29,21 +28,23 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
-    IPV6_RE,
+    JSON_MAX_DEPTH,
     MAC_RE,
     URL_VALUED_HEADERS,
-    body_route,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
     find_query_payload,
+    ipv6_host_spans,
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
     is_constant_mac,
     is_cookie_attribute_metadata,
     is_fully_redacted,
-    is_ipv6_host_address,
+    iter_json_strings,
+    json_members,
+    mime_kind,
     parse_json_container,
     query_param_segment,
     split_url_password,
@@ -55,7 +56,6 @@ from har_capture.patterns.redaction import (
 )
 from har_capture.sanitization.html import (
     SERIAL_LABEL_RE,
-    SERIAL_TABLE_RE,
     SIBLING_PASSWORD_RE,
     SIBLING_SSID_RE,
     SSID_ATTRIBUTE_RE,
@@ -75,9 +75,9 @@ COOKIE_ATTRIBUTES_ONLY: list[str] = [
 
 MAC_PATTERN = MAC_RE
 
-# Labeled serials: the sanitizer's own patterns (passes 2 and 2b), so every
-# labeled serial reported here is one a sanitize run removes.
-SERIAL_PATTERNS: list[re.Pattern[str]] = [SERIAL_LABEL_RE, SERIAL_TABLE_RE]
+# Labeled serials: the sanitizer's own pattern (pass 2), so every labeled
+# serial reported here is one a sanitize run removes.
+SERIAL_PATTERNS: list[re.Pattern[str]] = [SERIAL_LABEL_RE]
 
 # Public IP pattern (not private ranges)
 IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
@@ -675,8 +675,15 @@ def check_post_data(
 
     # Check text (raw body — form-urlencoded, JSON, or XML)
     text = post_data.get("text", "")
-    if text and not is_redacted(text, custom_patterns):
+    # The whole-string form: `is_redacted` matches its allowlist families
+    # with `re.search`, so a `#000000` anywhere in a body would skip it.
+    if text and not is_fully_redacted(text, custom_patterns):
         mime_type = post_data.get("mimeType", "")
+        # JSON by content first, whatever the type, as the sanitizer reads it.
+        json_data = parse_json_container(text)
+        if json_data is not None:
+            check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
+            return
         if "application/x-www-form-urlencoded" in mime_type:
             # The text copy is checked independently of params — a sanitizer
             # that redacts one copy but not the other must still be caught.
@@ -689,12 +696,8 @@ def check_post_data(
                     text_pairs.append((urllib.parse.unquote_plus(name), urllib.parse.unquote_plus(val)))
             _check_form_params(text_pairs, location + " (body)", findings, field_tiers, custom_patterns)
             return
-        try:
-            json_data = json.loads(text)
-            check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
-        except (json.JSONDecodeError, RecursionError):
-            if "xml" in mime_type:
-                _check_xml_fields(text, location + " (body)", findings, custom_patterns)
+        if mime_kind(mime_type) == "markup":
+            _check_xml_fields(text, location + " (body)", findings, custom_patterns)
 
 
 def _check_xml_fields(
@@ -796,14 +799,14 @@ def check_json_fields(
         _field_tiers: Pre-compiled field patterns split by tier. Internal use only.
         _depth: Current recursion depth. Internal use only.
     """
-    if _depth > 50:
+    if _depth > JSON_MAX_DEPTH:
         return
 
     if _field_tiers is None:
         _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
-        for key, value in data.items():
+        for key, value in json_members(data):
             current_path = f"{path}.{key}" if path else key
 
             identity_reason = (
@@ -819,20 +822,24 @@ def check_json_fields(
                         reason=identity_reason,
                     )
                 )
-            # Skip empty or redacted values
-            elif isinstance(value, str) and value and not is_redacted(value, custom_patterns):
-                classified = _classify_field_finding(key, value, _field_tiers)
-                if classified is not None:
-                    severity, pattern = classified
-                    findings.append(
-                        Finding(
-                            severity=severity,
-                            location=location,
-                            field=current_path,
-                            value=truncate(value),
-                            reason=f"Sensitive JSON field matching '{pattern.pattern}'",
-                        )
+            # A sensitive name holding a value that is neither empty nor redacted
+            # (the name is tested first: the allowlist check is the costly one)
+            elif (
+                isinstance(value, str)
+                and value
+                and (classified := _classify_field_finding(key, value, _field_tiers)) is not None
+                and not is_redacted(value, custom_patterns)
+            ):
+                severity, pattern = classified
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        location=location,
+                        field=current_path,
+                        value=truncate(value),
+                        reason=f"Sensitive JSON field matching '{pattern.pattern}'",
                     )
+                )
 
             # Recurse
             if isinstance(value, dict | list):
@@ -868,7 +875,6 @@ def check_content(
     *,
     has_sanitized_url_credential: bool = False,
     serial_detectors: list[Any] | None = None,
-    mime_type: str = "",
     field_tiers: _FieldTiers | None = None,
 ) -> None:
     """Check response content for PII patterns.
@@ -888,8 +894,6 @@ def check_content(
             ``high_confidence_serial_detectors``), applied delimiter-aware to
             candidate tokens. ``None`` compiles them from ``custom_patterns``;
             ``validate_har`` pre-compiles once per file.
-        mime_type: The body's declared Content-Type. A body the sanitizer
-            routes as JSON (``body_route``) has its fields checked too.
         field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
     """
     # `content` is a whole response body, so the whole-string form is required.
@@ -925,23 +929,62 @@ def check_content(
         )
         return
 
-    # A body the sanitizer routes as JSON gets its field rules checked here:
+    # A body the sanitizer routes as JSON (route_body: it parses as a JSON
+    # object or array, whatever its type) gets its field rules checked here:
     # identity keys and credential-named keys, the ones it redacts. Identity-
     # style names (username, login) are only flagged by the sanitizer and
     # are mostly translation-bundle keys in responses, so they are not
     # reported — a warning no sanitize run clears.
     field_macs: set[str] = set()
-    data = (
-        parse_json_container(content) if body_route("" if payload else mime_type, content) == "json" else None
-    )
+    data = parse_json_container(content)
     if data is not None:
         tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
         start = len(findings)
         check_json_fields(data, location, findings, "", custom_patterns, _field_tiers=replace(tiers, flag=()))
         field_macs = {f.value for f in findings[start:] if f.reason == _IDENTITY_REASONS["mac_address"]}
 
+    if serial_detectors is None:
+        serial_detectors = _compile_serial_detectors(custom_patterns)
+    # A JSON body is read one decoded string at a time — every value and key,
+    # at any depth — as the sanitizer reads it: escapes (`\u003c`) hide no
+    # markup, and no match runs from one string into the next.
+    texts = iter_json_strings(data) if data is not None else (content,)
+    seen_serials: set[str] = set()
+    for text in texts:
+        _scan_text(text, location, findings, custom_patterns, serial_detectors, field_macs, seen_serials)
+
+
+# Every labeled-serial label holds one of these (SERIAL_LABEL_RE's vocabulary).
+_SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
+
+
+def _scan_text(
+    text: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    serial_detectors: list[Any],
+    field_macs: set[str],
+    seen_serials: set[str],
+) -> None:
+    """Run the content text checks on one text: a whole body, or one decoded JSON string.
+
+    Args:
+        text: The text to scan
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional custom patterns
+        serial_detectors: Compiled high-confidence vendor serial detectors
+        field_macs: MACs already reported as identity fields of this body
+        seen_serials: Vendor serials already reported for this body
+    """
+    # Each check first tests a character or word its pattern cannot match
+    # without — most decoded JSON strings need none of the regexes.
+    has_colon = ":" in text
+    has_tag = "<" in text
+
     # Check for MAC addresses
-    for match in MAC_PATTERN.finditer(content):
+    for match in MAC_PATTERN.finditer(text) if has_colon or "-" in text else ():
         mac = match.group(0)
         if mac in field_macs:
             continue
@@ -964,8 +1007,8 @@ def check_content(
         )
 
     # Check for serial numbers
-    for pattern in SERIAL_PATTERNS:
-        for match in pattern.finditer(content):
+    for pattern in SERIAL_PATTERNS if _SERIAL_LABEL_HINT_RE.search(text) else ():
+        for match in pattern.finditer(text):
             value = match.group(match.lastindex or 0)
             if not is_redacted(value, custom_patterns):
                 findings.append(
@@ -993,11 +1036,15 @@ def check_content(
     # way to a public issue (issue #194). The SSID is a warning — it identifies
     # the network rather than authenticating to it.
     for sibling_pattern, sibling_severity, sibling_reason in (
-        (SIBLING_PASSWORD_RE, "error", "Plaintext password in a labeled field"),
-        (SIBLING_SSID_RE, "warning", "Wi-Fi network name (SSID) in a labeled field"),
-        (SSID_ATTRIBUTE_RE, "warning", "Wi-Fi network name (SSID) in an SSID-named element"),
+        (
+            (SIBLING_PASSWORD_RE, "error", "Plaintext password in a labeled field"),
+            (SIBLING_SSID_RE, "warning", "Wi-Fi network name (SSID) in a labeled field"),
+            (SSID_ATTRIBUTE_RE, "warning", "Wi-Fi network name (SSID) in an SSID-named element"),
+        )
+        if has_tag
+        else ()
     ):
-        for match in sibling_pattern.finditer(content):
+        for match in sibling_pattern.finditer(text):
             value = match.group(2)
             if is_structural_value_sensitive(value, custom_patterns):
                 findings.append(
@@ -1010,7 +1057,7 @@ def check_content(
                     )
                 )
 
-    for option_value, _offset in iter_ssid_option_values(content, custom_patterns):
+    for option_value, _offset in iter_ssid_option_values(text, custom_patterns) if has_tag else ():
         findings.append(
             Finding(
                 severity="warning",
@@ -1029,11 +1076,8 @@ def check_content(
     # no label for SERIAL_PATTERNS to anchor on, and validate blessed the
     # leak.) Severity is error: a vendor-format match is a known serial
     # layout, not a maybe.
-    if serial_detectors is None:
-        serial_detectors = _compile_serial_detectors(custom_patterns)
     if serial_detectors:
-        seen_serials: set[str] = set()
-        for token_match in VENDOR_SERIAL_TOKEN_RE.finditer(content):
+        for token_match in VENDOR_SERIAL_TOKEN_RE.finditer(text):
             token = token_match.group(0)
             if token in seen_serials:
                 continue
@@ -1055,8 +1099,11 @@ def check_content(
     # the dotted-quad pattern but are not host addresses — the sanitizer
     # preserves all of them, so flagging them here puts cosmetic noise on
     # every healthy capture.
-    for match in IP_PATTERN.finditer(content):
+    ipv6_spans = ipv6_host_spans(text)
+    for match in IP_PATTERN.finditer(text) if "." in text else ():
         ip = match.group(1)
+        if any(start <= match.start() < end for start, end in ipv6_spans):
+            continue  # the IPv4 tail of an IPv4-mapped IPv6 address, reported as IPv6
         if (
             not is_private_ip(ip)
             and not ip.startswith(("255.", "0."))
@@ -1078,9 +1125,9 @@ def check_content(
     # IPV6_RE candidates is_ipv6_host_address accepts), in every body route — a
     # link-local EUI-64 address embeds the device's MAC. Its placeholders
     # (the 2001:db8:: documentation prefix, the static "::") are allowlisted.
-    for match in IPV6_RE.finditer(content):
-        address = match.group(0)
-        if is_ipv6_host_address(address) and not is_redacted(address, custom_patterns):
+    for start, end in ipv6_spans:
+        address = text[start:end]
+        if not is_redacted(address, custom_patterns):
             findings.append(
                 Finding(
                     severity="warning",
@@ -1203,7 +1250,6 @@ def validate_har(
             custom_patterns,
             has_sanitized_url_credential=(i in url_cred_entry_indices),
             serial_detectors=serial_detectors,
-            mime_type=str(content_data.get("mimeType") or ""),
             field_tiers=field_tiers,
         )
 

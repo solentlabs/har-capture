@@ -54,13 +54,13 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `patterns` dict**
 
-| Field                | Type       | Required | Description                                                      |
-| -------------------- | ---------- | -------- | ---------------------------------------------------------------- |
-| `regex`              | string     | Yes      | Python regex pattern for matching PII                            |
-| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)              |
-| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                       |
-| `require_hex_letter` | bool       | No       | For IPv6: reject matches without a-f chars (avoids time strings) |
-| `description`        | string     | No       | Human-readable description                                       |
+| Field                | Type       | Required | Description                                            |
+| -------------------- | ---------- | -------- | ------------------------------------------------------ |
+| `regex`              | string     | Yes      | Python regex pattern for matching PII                  |
+| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)    |
+| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL             |
+| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars |
+| `description`        | string     | No       | Human-readable description                             |
 
 **Built-in patterns:**
 
@@ -630,18 +630,26 @@ value for review rather than redacting it.
 
 The address regexes both sanitizer engines use — the HTML engine's passes 4–6 and 11 and the string patterns that JSON
 values, JSON keys and text bodies take — so whether a value is redacted never depends on its body's route. `pii.json`'s
-`public_ip`, `ipv6` and `email` regexes must equal their `.pattern` (a test pins them); its `private_ip` differs on
-purpose, excluding `preserved_gateway_ips` in the regex where the engines skip them in code. An `IPV6_RE` candidate
-(colon-terminated hex groups, not glued to a word or colon on either side) is an address only when
-`is_ipv6_host_address()` accepts it: `ipaddress` parses it, and it is not the unspecified `::` or loopback `::1` —
-protocol constants like IPv4's `0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test.
+`private_ip`, `public_ip`, `ipv6` and `email` regexes must equal their `.pattern` (a test pins them), and
+`check_for_pii` skips what the engines keep: `preserved_gateway_ips`, version strings, and IPv6 candidates that are not
+host addresses. An `IPV6_RE` candidate (colon-terminated hex groups ending in a hex group or, for an IPv4-mapped
+address, a dotted quad; not glued to a word or colon on either side) is an address only when `is_ipv6_host_address()`
+accepts it: `ipaddress` parses it, and it is not the unspecified `::` or loopback `::1` — protocol constants like IPv4's
+`0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of the
+IPv4 passes, so an IPv4-mapped address is hashed as one.
 
-### `body_route(mime_type, text)`
+### `route_body(mime_type, text)`
 
 The one routing decision for a response body's text, shared by the sanitizer and `validate`: `"json"` when the text
 parses as a JSON object or array whatever the type declares (HNAP answers JSON as `text/html`); else `"html"` for a
 markup `mime_kind()` and `"text"` for any other text kind; a type that says nothing about text is sniffed — `<` opens
-markup, else text. See [Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch).
+markup, else text. It returns the route with the parsed JSON, so neither tool parses a response body twice. See
+[Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch).
+
+`JSON_MAX_DEPTH` (50) is how deep the key rules reach — the sanitizer's walker, `check_json_fields` and
+`iter_json_fields()` all stop there. `iter_json_strings()` yields every decoded string of a parsed body — values and
+keys, at any depth — the unit of text both tools' text passes read. `ipv6_host_spans()` gives the spans of the IPv6 host
+addresses in a text, so a checker does not report an IPv4-mapped address's tail again as IPv4.
 
 ### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
 
@@ -659,8 +667,11 @@ Otherwise bytes that do not decode, an empty result, or text holding NUL mean bi
 ### `parse_json_container(text)` and `is_constant_mac(mac)`
 
 `parse_json_container()` returns the object or array JSON text holds, or `None` — for scalars, invalid JSON, and nesting
-too deep for the parser, so hostile input never crashes either tool. `is_constant_mac()` is true for a MAC that is one
-byte repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool treats as PII.
+too deep for the parser or deeper than `JSON_MAX_NESTING` (400), so hostile input never crashes either tool. An object
+that repeats a key parses to a `JsonObjectWithDuplicates`: the last value of each key, as every parser reads it, with
+the earlier pairs in `shadowed`. `json_members()` gives an object's members with the shadowed ones, and
+`has_shadowed_members()` says whether a parsed body has any. `is_constant_mac()` is true for a MAC that is one byte
+repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool treats as PII.
 
 ### `decode_base64_payload(value)` and `find_query_payload(segment)`
 

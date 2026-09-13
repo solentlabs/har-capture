@@ -245,8 +245,8 @@ graph TD
 ```
 
 **Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content —
-transport encoding undone first, then dispatched by mime type, or sniffed when the type says nothing, to the HTML
-engine, JSON traversal, or string pattern matching
+transport encoding undone first, then dispatched — JSON traversal for text that parses as JSON whatever its type, else
+by mime type, or sniffed when the type says nothing, to the HTML engine or string pattern matching
 ([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#response-content-dispatch)).
 
 **Pass 1b** sweeps the whole HAR once after every entry is done, replacing any remaining verbatim occurrence of an

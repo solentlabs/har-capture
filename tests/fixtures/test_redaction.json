@@ -272,6 +272,8 @@
   "json_container_cases": {
     "_comment": "parse_json_container(text): a JSON object or array, or null. Scalars, invalid JSON and nesting too deep for the parser are not containers — hostile nesting must not crash either tool. 'nesting' builds '[' * n + ']' * n instead of a literal text.",
     "cases": [
+      {"id": "duplicate_key_differing_values", "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\": \"N/A\"}", "is_container": true},
+      {"id": "duplicate_key_same_values",      "text": "{\"ch\": 6, \"ch\": 6}",                                    "is_container": true},
       {"id": "object",             "text": "{\"a\": 1}",     "is_container": true},
       {"id": "array",              "text": "[1, 2]",         "is_container": true},
       {"id": "leading_whitespace", "text": " \n {\"a\": 1}", "is_container": true},
@@ -326,7 +328,7 @@
     ]
   },
   "body_route_cases": {
-    "_comment": "body_route(mime, text): the engine a response body's text goes to. Text that parses as a JSON object or array is JSON whatever its type declares (HNAP answers as text/html); otherwise a markup type goes to the HTML engine, any other text type to the text path, and a type that says nothing about text is sniffed (markup, else text).",
+    "_comment": "route_body(mime, text): the engine a response body's text goes to, with the parsed JSON for the json route. Text that parses as a JSON object or array is JSON whatever its type declares (HNAP answers as text/html); otherwise a markup type goes to the HTML engine, any other text type to the text path, and a type that says nothing about text is sniffed (markup, else text).",
     "cases": [
       {"id": "json_declared",             "mime": "application/json",         "text": "{\"a\": 1}",                  "route": "json"},
       {"id": "json_served_as_html",       "mime": "text/html",                "text": "{\"GetStatusResponse\": {}}", "route": "json"},
@@ -363,6 +365,9 @@
       {"id": "ipv6_loopback_kept",       "regex": "ipv6",       "text": "lo ::1",                           "matches": []},
       {"id": "ipv6_unspecified_kept",    "regex": "ipv6",       "text": "gw6 :: none",                      "matches": []},
       {"id": "ipv6_prefix_length",       "regex": "ipv6",       "text": "2600:1700:abcd:1234::/64",         "matches": ["2600:1700:abcd:1234::"]},
+      {"id": "ipv6_ipv4_mapped",         "regex": "ipv6",       "text": "map ::ffff:192.168.5.4 ok",        "matches": ["::ffff:192.168.5.4"]},
+      {"id": "ipv6_sentence_end",        "regex": "ipv6",       "text": "gateway is fe80::1a.",             "matches": ["fe80::1a"]},
+      {"id": "ipv6_all_digits",          "regex": "ipv6",       "text": "wan 2001:470:1::5 up",             "matches": ["2001:470:1::5"]},
       {"id": "ipv6_zone_index",          "regex": "ipv6",       "text": "fe80::1%eth0",                     "matches": ["fe80::1"]},
       {"id": "ipv6_in_json_string",      "regex": "ipv6",       "text": "{\"v6\": \"2600:1700::1a\"}",   "matches": ["2600:1700::1a"]},
       {"id": "ipv6_clock_time",          "regex": "ipv6",       "text": "uptime 12:34:56",                  "matches": []},
@@ -379,6 +384,15 @@
       {"id": "public_skips_loopback",    "regex": "public_ip",  "text": "127.0.0.1",                        "matches": []},
       {"id": "email_before_pipe",        "regex": "email",      "text": "a@example.com|next",               "matches": ["a@example.com"]},
       {"id": "email_subdomains",         "regex": "email",      "text": "first.last@mail.example.co.uk",    "matches": ["first.last@mail.example.co.uk"]}
+    ]
+  },
+  "iter_json_fields_cases": {
+    "_comment": "iter_json_fields(parsed) yields the (key, value) members at any depth down to JSON_MAX_DEPTH, outer first; 'nest_lists' wraps the text in that many arrays, and members past the depth are not yielded.",
+    "cases": [
+      {"id": "flat",              "text": "{\"a\": 1, \"b\": 2}",              "keys": ["a", "b"]},
+      {"id": "nested_in_list",    "text": "[{\"a\": {\"b\": 1}}, {\"c\": 2}]",  "keys": ["a", "b", "c"]},
+      {"id": "within_depth",      "text": "{\"a\": 1}", "nest_lists": 50,     "keys": ["a"]},
+      {"id": "past_depth",        "text": "{\"a\": 1}", "nest_lists": 51,     "keys": []}
     ]
   }
 }

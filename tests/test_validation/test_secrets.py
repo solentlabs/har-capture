@@ -72,6 +72,8 @@ CHECK_CONTENT_CASES = [
 ]
 
 CHECK_CONTENT_IPV6_CASES = _DATA["check_content_ipv6_cases"]["cases"]
+LABELED_SERIAL_COUNT_CASES = _DATA["labeled_serial_count_cases"]["cases"]
+CHECK_CONTENT_REASON_CASES = _DATA["check_content_reason_cases"]["cases"]
 
 NETMASK_CASES = [(c["ip"], c["expected"], c["id"]) for c in _DATA["netmask_cases"]]
 
@@ -406,6 +408,16 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
 
     assert has_ip == expect_ip, f"IP detection failed for {desc}"
     assert has_mac == expect_mac, f"MAC detection failed for {desc}"
+
+
+@pytest.mark.parametrize(
+    "case", LABELED_SERIAL_COUNT_CASES, ids=[c["id"] for c in LABELED_SERIAL_COUNT_CASES]
+)
+def test_check_content_labeled_serial_count(case: dict) -> None:
+    """Each labeled serial is reported once."""
+    findings: list[Finding] = []
+    check_content(case["content"], "response.body", findings)
+    assert len([f for f in findings if f.reason == "Potential serial number"]) == case["expected"]
 
 
 @pytest.mark.parametrize("case", CHECK_CONTENT_IPV6_CASES, ids=[c["id"] for c in CHECK_CONTENT_IPV6_CASES])
@@ -1141,8 +1153,8 @@ class TestValidateHarSanitizedCredentials:
 
 
 def test_serial_patterns_are_the_sanitizers() -> None:
-    """Validate reports labeled serials with the sanitizer's own pass 2/2b patterns."""
-    from har_capture.sanitization.html import SERIAL_LABEL_RE, SERIAL_TABLE_RE
+    """Validate reports labeled serials with the sanitizer's own pass 2 pattern."""
+    from har_capture.sanitization.html import SERIAL_LABEL_RE
     from har_capture.validation.secrets import SERIAL_PATTERNS
 
-    assert SERIAL_PATTERNS == [SERIAL_LABEL_RE, SERIAL_TABLE_RE]
+    assert SERIAL_PATTERNS == [SERIAL_LABEL_RE]

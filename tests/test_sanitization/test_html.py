@@ -67,6 +67,7 @@ PII_DETECTION_CASES = [
 
 ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_cases"]]
 PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
+PII_JSON_LINE_CASES = _FIXTURE["pii_json_line_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -194,6 +195,12 @@ class TestCheckForPii:
         """check_for_pii reports what the sanitizer rewrites, once, and nothing it keeps."""
         found = [[f["pattern"], f["match"]] for f in check_for_pii(case["content"])]
         assert found == case["findings"]
+
+    @pytest.mark.parametrize("case", PII_JSON_LINE_CASES, ids=[c["id"] for c in PII_JSON_LINE_CASES])
+    def test_json_identity_line(self, case: dict) -> None:
+        """A JSON identity field is reported on its own line, escaped or not."""
+        serials = [f for f in check_for_pii(case["content"]) if f["pattern"] == "serial_number"]
+        assert [f["line"] for f in serials] == [case["line"]]
 
     def test_returns_line_numbers(self) -> None:
         """Test line number reporting."""

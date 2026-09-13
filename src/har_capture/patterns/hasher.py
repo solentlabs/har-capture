@@ -98,7 +98,9 @@ class Hasher:
             Raw SHA-256 hash bytes
         """
         salted = f"{self.salt}:{prefix}:{value}"
-        return hashlib.sha256(salted.encode("utf-8")).digest()
+        # surrogatepass: a JSON body can carry a lone surrogate (`"\ud800"`), and
+        # hashing it must not crash the run.
+        return hashlib.sha256(salted.encode("utf-8", "surrogatepass")).digest()
 
     def hash_value(self, value: str, prefix: str) -> str:
         """Generate a hashed placeholder for a value (non-format-preserving).

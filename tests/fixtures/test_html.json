@@ -48,6 +48,7 @@
     {"input_html": "Duration: 01:23:45",                      "preserved": "01:23:45",              "id": "time_format_short"},
     {"input_html": "Time: 00:00:00",                          "preserved": "00:00:00",              "id": "time_format_midnight"},
     {"input_html": "Localhost: ::1",                          "preserved": "Localhost: ::1",        "id": "ipv6_loopback_constant"},
+    {"input_html": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "preserved": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "id": "table_serial_placeholder_kept"},
     {"input_html": "IPv6 Gateway: ::",                        "preserved": "IPv6 Gateway: ::",      "id": "ipv6_unspecified_constant"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "7.5 dBmV",              "id": "signal_dbmv"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "38.2 dB",               "id": "signal_db"},
@@ -87,6 +88,15 @@
     {"content": "Status: OK",                              "id": "status_value"}
   ],
 
+  "pii_json_line_cases": {
+    "_comment": "check_for_pii reports a JSON identity field on the line its value is written on, found as written or as JSON escapes it.",
+    "cases": [
+      {"id": "plain_value",   "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N12345678\"\n}",        "line": 3},
+      {"id": "repeated_value", "content": "{\"x\": \"ABC12345\",\n\"serialNumber\": \"ABC12345\"}",                "line": 2},
+      {"id": "escaped_value", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N\\u00c912345\"\n}",   "line": 3}
+    ]
+  },
+
   "pii_exact_findings_cases": {
     "_comment": "check_for_pii(content) must report exactly these (pattern, match) pairs. It shares the sanitizer's rules: a JSON fixture's identity fields are reported with validate's predicate (unredacted_identity), a MAC is reported once (not again as an IPv6 candidate), and a match the sanitizer keeps — a constant MAC, a dotted-quad version string — is not reported, since no sanitize run clears it.",
     "cases": [
@@ -99,6 +109,12 @@
       {"id": "ipv6_leading_colons",      "content": "addr ::ffff:c000:280",                             "findings": [["ipv6", "::ffff:c000:280"]]},
       {"id": "ipv6_hashed_placeholder",  "content": "addr 2001:db8::ab12:cd34",                         "findings": []},
       {"id": "ipv6_loopback_kept",       "content": "lo6 ::1 fe80::1a",                                 "findings": [["ipv6", "fe80::1a"]]},
+      {"id": "private_fragment_kept",    "content": "firmware 10.1.2 build",                            "findings": []},
+      {"id": "private_ten_whole",        "content": "lan 10.1.2.3",                                     "findings": [["private_ip", "10.1.2.3"]]},
+      {"id": "gateway_ip_kept",          "content": "gw 192.168.100.1",                                 "findings": []},
+      {"id": "ipv6_all_digits",          "content": "wan 2001:470:1::5",                                "findings": [["ipv6", "2001:470:1::5"]]},
+      {"id": "ipv6_ipv4_mapped_whole",   "content": "map ::ffff:192.0.2.128 ok",                        "findings": [["ipv6", "::ffff:192.0.2.128"]]},
+      {"id": "ipv4_mapped_private_once", "content": "map ::ffff:192.168.5.4 ok",                        "findings": [["ipv6", "::ffff:192.168.5.4"]]},
       {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
       {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
     ]

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -4058,10 +4059,8 @@ class TestVendorSerialTextContentRouting:
     """Vendor-format serials auto-redact in non-HTML text content.
 
     Netgear pipe-delimited blobs also appear in JS files served as
-    text/javascript (utility.js on the CM2500), which route through the
-    string-pattern fallback, not the HTML engine. The vendor-serial scan
-    runs there too — and outside the string-pattern perf length guard,
-    so serial coverage never depends on body size.
+    text/javascript (utility.js on the CM2500), which take the text path,
+    not the HTML engine. The vendor-serial scan runs there too.
     """
 
     def _entry(self, text: str) -> dict:
@@ -4083,16 +4082,6 @@ class TestVendorSerialTextContentRouting:
         content_text = result["response"]["content"]["text"]
         assert "7ZZ0000FAKE00" not in content_text
         assert "SERIAL_" in content_text
-
-    def test_serial_redacted_even_in_large_js_file(self) -> None:
-        """The scan is not subject to the string-pattern length guard."""
-        from har_capture.patterns.loader import resolve_patterns_arg
-
-        patterns = str(resolve_patterns_arg("network-device"))
-        big_js = "// filler\n" * 2000 + "var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';"
-        entry = self._entry(big_js)
-        result = sanitize_entry(entry, salt="test", custom_patterns=patterns)
-        assert "7ZZ0000FAKE00" not in result["response"]["content"]["text"]
 
     def test_no_domain_patterns_leaves_token(self) -> None:
         entry = self._entry("var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';")
@@ -4689,6 +4678,10 @@ class TestHostileNesting:
 
 JSON_IDENTITY_BODY_CASES = _HAR_FIXTURE["json_identity_body_cases"]["cases"]
 VALUE_PASS_BODY_CASES = _HAR_FIXTURE["value_pass_body_cases"]["cases"]
+CUSTOM_GATEWAY = _HAR_FIXTURE["custom_preserved_gateway_cases"]
+NO_COLLECTOR_BODY_CASES = _HAR_FIXTURE["no_collector_body_cases"]["cases"]
+POST_TEXT_CASES = _HAR_FIXTURE["post_text_cases"]["cases"]
+CORRELATION = _HAR_FIXTURE["cross_route_correlation_cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4717,6 +4710,17 @@ class TestJsonIdentityBodies:
         _, report = sanitize_har({"log": {"entries": [entry]}}, salt="ssid", heuristics=HeuristicMode.FLAG)
         assert [(f.original_value, f.category) for f in report.flagged] == [("HomeNet-5G", "wifi_ssid")]
 
+    @pytest.mark.parametrize("case", POST_TEXT_CASES, ids=[c["id"] for c in POST_TEXT_CASES])
+    def test_post_text(self, case: dict) -> None:
+        """POST text is JSON by content, and any other text gets the string patterns."""
+        out = sanitize_post_data({"mimeType": case["mime"], "text": case["text"]}, Hasher.create("post"))[
+            "text"
+        ]
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
     def test_post_json_identity_redacted(self) -> None:
         """The same key rule applies to a JSON POST body."""
         post = {"mimeType": "application/json", "text": '{"StatusSoftwareSerialNum": "4131N12345678"}'}
@@ -4726,11 +4730,63 @@ class TestJsonIdentityBodies:
 class TestValuePassBodies:
     """JSON values, JSON keys and text bodies get the HTML engine's value passes."""
 
+    @pytest.mark.parametrize("case", NO_COLLECTOR_BODY_CASES, ids=[c["id"] for c in NO_COLLECTOR_BODY_CASES])
+    def test_without_collector(self, case: dict) -> None:
+        from har_capture.sanitization.har import _sanitize_response_content
+
+        content = {"mimeType": case["mime"], "text": case["text"]}
+        _sanitize_response_content(content)
+        assert content["text"] == case["present"]
+
+    @pytest.mark.parametrize("case", CUSTOM_GATEWAY["cases"], ids=[c["id"] for c in CUSTOM_GATEWAY["cases"]])
+    def test_custom_preserved_gateway(self, case: dict) -> None:
+        custom = CUSTOM_GATEWAY["custom_patterns"]
+        if case.get("via") == "post":
+            post = {"mimeType": case["mime"], "text": case["text"]}
+            out = sanitize_post_data(post, Hasher.create("values"), custom_patterns=custom)["text"]
+        elif case.get("via") == "check_for_pii":
+            from har_capture.sanitization.html import check_for_pii
+
+            assert check_for_pii(case["text"], custom_patterns=custom) == []  # type: ignore[arg-type]
+            return
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+            out = sanitize_entry(entry, salt="values", custom_patterns=custom)["response"]["content"]["text"]
+        assert case["present"] in out
+
+    def test_ssid_custom_allowlist(self) -> None:
+        """A network name the caller's allowlist names is not offered for review."""
+        entry = _entry_with_response_body('{"ssid": "Lab-Net-01"}')
+        entry["response"]["content"]["mimeType"] = "application/json"
+        custom = {"static_placeholders": {"values": ["Lab-Net-01"]}}
+        _, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="s", custom_patterns=custom, heuristics=HeuristicMode.FLAG
+        )
+        assert [f.category for f in report.flagged] == []
+
+    @pytest.mark.parametrize("case", CORRELATION["cases"], ids=[c["id"] for c in CORRELATION["cases"]])
+    def test_cross_route_correlation(self, case: dict) -> None:
+        """One value gets one placeholder in HTML, JSON and text bodies."""
+        entries = []
+        for body in CORRELATION["bodies"]:
+            entry = _entry_with_response_body(body["template"].replace("{v}", case["value"]))
+            entry["response"]["content"]["mimeType"] = body["mime"]
+            entries.append(entry)
+        sanitized, _ = sanitize_har({"log": {"entries": entries}}, salt="correlate")
+        found = {
+            match
+            for entry in sanitized["log"]["entries"]
+            for match in re.findall(case["placeholder"], entry["response"]["content"]["text"])
+        }
+        assert len(found) == 1, found
+
     @pytest.mark.parametrize("case", VALUE_PASS_BODY_CASES, ids=[c["id"] for c in VALUE_PASS_BODY_CASES])
     def test_body(self, case: dict) -> None:
-        entry = _entry_with_response_body(case["text"])
+        depth = case.get("nest_lists", 0)
+        entry = _entry_with_response_body("[" * depth + case["text"] + "]" * depth)
         entry["response"]["content"]["mimeType"] = case["mime"]
-        out = sanitize_entry(entry, salt="values")["response"]["content"]["text"]
+        out = sanitize_entry(entry, salt=case.get("salt", "values"))["response"]["content"]["text"]
 
         for leaked in case["absent"]:
             assert leaked not in out

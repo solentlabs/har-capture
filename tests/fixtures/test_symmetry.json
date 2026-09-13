@@ -2200,6 +2200,343 @@
       ]
     },
     {
+      "id": "json_escaped_markup_password",
+      "_note": "Re-serializing JSON unescapes markup the raw-text passes could not see",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/page",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"html\": \"\\u003ctd\\u003ePassword:\\u003c/td\\u003e\\u003ctd\\u003ehunter2x\\u003c/td\\u003e\", \"wan\": \"3C:7A:8A:12:34:56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "hunter2x",
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_duplicate_key_mac",
+      "_note": "json.loads keeps only the last duplicate",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/cm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\": \"N/A\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "post_text_plain_json_identity",
+      "_note": "POST JSON is JSON by content, as validate reads it",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "text/plain;charset=UTF-8",
+              "text": "{\"SetDevice\": {\"serialNumber\": \"4131N12345678\", \"cmMac\": \"3C7A8A123456\", \"Password\": \"hunter2x\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678",
+        "3C7A8A123456",
+        "hunter2x"
+      ]
+    },
+    {
+      "id": "json_mac_past_depth_limit",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/deep",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"mac\": \"3C:7A:8A:12:34:56\"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_ipv4_mapped_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/v6",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"v6\": \"::ffff:73.12.34.56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "::ffff:73.12.34.56",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_duplicate_password",
+      "_note": "The shadowed first value must not pass through",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"hunter2hunter2\", \"password\": \"x\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_markup_across_strings",
+      "_note": "Markup split across JSON strings must not pair across them",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/page",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"a\": \"<b>Password:</b><i>x\", \"</i>\": 1, \"password\": \"hunter2hunter2\", \"wan\": \"73.12.34.56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "post_form_mime_json",
+      "_note": "jQuery posts JSON.stringify under its form-urlencoded default",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded; charset=UTF-8",
+              "text": "{\"Login\": {\"Username\": \"admin\", \"Password\": \"hunter2hunter2\"}, \"cmMac\": \"3C7A8A123456\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "3C7A8A123456"
+      ]
+    },
+    {
+      "id": "post_soap_xml_password",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/soap",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/soap+xml",
+              "text": "<Login><Password>hunter2hunter2</Password></Login>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive XML element"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "post_json_holding_zero_run",
+      "_note": "A zero run must not make the whole body look redacted",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"hunter2hunter2\", \"color\": \"#000000\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
       "id": "body_past_old_scan_limit",
       "_note": "Sanitize used to skip string patterns past 1 MB",
       "entries": [
