@@ -14,8 +14,6 @@ This module has ZERO third-party dependencies (stdlib + har_capture only).
 
 from __future__ import annotations
 
-import base64
-import contextlib
 import json
 import re
 import urllib.parse
@@ -33,7 +31,10 @@ from har_capture.patterns.loader import (
 from har_capture.patterns.redaction import (
     MAC_RE,
     URL_VALUED_HEADERS,
+    decode_base64_payload,
+    decode_transport_body,
     find_query_credential,
+    find_query_payload,
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
@@ -357,6 +358,7 @@ def _check_query_param(
     classified = None
     if credential is None and not is_blank_query_value(value) and not is_redacted(value, custom_patterns):
         classified = _classify_field_finding(name, value, field_tiers)
+    payload = find_query_payload(segment) if credential is None and classified is None else None
 
     if credential is not None:
         key: tuple[str, str] = ("credential", credential.credential)
@@ -381,11 +383,42 @@ def _check_query_param(
             value=truncate(value),
             reason=f"Sensitive query parameter matching '{matched.pattern}'",
         )
+    elif payload is not None:
+        _check_query_payload(payload.text, name, location, findings, custom_patterns, field_tiers, seen)
+        return
     else:
         return
     if key not in seen:
         seen.add(key)
         findings.append(finding)
+
+
+def _check_query_payload(
+    text: str,
+    name: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    field_tiers: _FieldTiers,
+    seen: set[tuple[str, str]],
+) -> None:
+    """Check inside a base64 JSON or URL query payload, as the sanitizer sanitizes inside it.
+
+    A JSON payload is checked like a JSON body, a URL payload like any URL.
+    Findings are keyed by field and value, so the URL string and the
+    ``queryString`` array — one payload recorded twice — report it once.
+    """
+    inner: list[Finding] = []
+    if text.lstrip()[:1] in "{[":
+        path = f"query param '{name}'" if name else "query payload"
+        check_json_fields(json.loads(text), location, inner, path, custom_patterns, _field_tiers=field_tiers)
+    else:
+        check_url(text, location, inner, custom_patterns, field_tiers=field_tiers)
+    for finding in inner:
+        key = ("payload", f"{finding.field}={finding.value}")
+        if key not in seen:
+            seen.add(key)
+            findings.append(finding)
 
 
 def check_url(
@@ -802,7 +835,12 @@ def check_content(
         return
 
     stripped = content.strip()
-    if (
+    # A base64-wrapped JSON or URL payload is data, checked as the text it
+    # wraps — the sanitizer sanitizes inside it rather than replacing it.
+    payload = decode_base64_payload(stripped)
+    if payload is not None:
+        content = payload
+    elif (
         not has_sanitized_url_credential
         and is_base64_credential(stripped)
         and not is_redacted(stripped, custom_patterns)
@@ -1047,16 +1085,16 @@ def validate_har(
 
         # Check response content
         content_data = response.get("content", {})
-        text = content_data.get("text", "")
 
         # Handle $fixture references (skip - content is in separate file)
         if "$fixture" in content_data:
             continue
 
-        # Handle base64 encoded content
-        if content_data.get("encoding") == "base64" and text:
-            with contextlib.suppress(Exception):
-                text = base64.b64decode(text).decode("utf-8", errors="replace")
+        # The sanitizer's own decoder: a transport-encoded body is checked as
+        # the text it carries, and binary is left alone by both tools.
+        text = decode_transport_body(content_data)
+        if text is None:
+            continue
 
         check_content(
             text,

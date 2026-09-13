@@ -219,26 +219,25 @@ class TestLargeInputs:
 class TestJsonContentSanitization:
     """Tests for JSON content in responses."""
 
-    def test_invalid_json_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Test invalid JSON in response content logs warning."""
+    def test_invalid_json_sanitized_as_text(self) -> None:
+        """A body declared JSON that does not parse takes the text path, not a skip."""
         entry = {
             "request": {"method": "GET", "url": "http://test/", "headers": []},
             "response": {
                 "status": 200,
                 "headers": [],
                 "content": {
-                    "text": "{ not valid json }",
+                    "text": "{ not valid json, wan 73.12.34.56 }",
                     "mimeType": "application/json",
                 },
             },
         }
 
-        with caplog.at_level("WARNING"):
-            result = sanitize_entry(entry)
+        result = sanitize_entry(entry, salt="edge")
 
-        assert "Invalid JSON" in caplog.text
-        # Original text should be preserved
-        assert result["response"]["content"]["text"] == "{ not valid json }"
+        text = result["response"]["content"]["text"]
+        assert text.startswith("{ not valid json, wan 192.0.2.")
+        assert "73.12.34.56" not in text
 
     def test_json_array_content(self) -> None:
         """Test JSON array content is sanitized."""

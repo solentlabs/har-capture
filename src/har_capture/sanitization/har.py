@@ -27,13 +27,19 @@ from har_capture.patterns import (
     URL_VALUED_HEADERS,
     Hasher,
     QueryCredential,
+    QueryPayload,
+    decode_base64_payload,
+    decode_transport_body,
     find_query_credential,
+    find_query_payload,
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
+    is_fully_redacted,
     is_redacted,
+    is_text_mime,
     iter_url_credentials,
     load_sensitive_patterns,
     query_param_segment,
@@ -1229,7 +1235,12 @@ def _sanitize_url_path(
     return url
 
 
-def _classify_query_param(name: str, value: str, found: QueryCredential | None) -> str:
+def _classify_query_param(
+    name: str,
+    value: str,
+    found: QueryCredential | None,
+    payload: QueryPayload | None,
+) -> str:
     """Decide what happens to one query parameter.
 
     The single decision tree for the URL string and the parsed ``queryString``
@@ -1239,23 +1250,65 @@ def _classify_query_param(name: str, value: str, found: QueryCredential | None) 
         name: Decoded parameter name
         value: Decoded parameter value
         found: ``find_query_credential`` on the parameter's raw segment
+        payload: ``find_query_payload`` on the parameter's raw segment
 
     Returns:
-        ``"auth"``, ``"field"``, ``"flag"`` or ``"keep"``
+        ``"auth"``, ``"field"``, ``"payload"``, ``"flag"`` or ``"keep"``
     """
-    # A bare or marker-prefixed credential has no field name: any '=' in it is
-    # base64 padding, so the name rules must not read it as key=value.
+    # A bare or marker-prefixed credential or payload has no field name: any
+    # '=' in it is base64 padding, so the name rules must not read it as
+    # key=value.
     if found is not None and not found.keyed:
         return "auth"
+    if payload is not None and not payload.prefix.rstrip("?"):
+        return "payload"
     if is_blank_query_value(value):
         return "keep"
     if is_sensitive_field(name):
         return "field"
     if found is not None:
         return "auth"
+    if payload is not None:
+        return "payload"
     if is_flaggable_field(name):
         return "flag"
     return "keep"
+
+
+def _sanitize_base64_payload(
+    payload: QueryPayload,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+) -> str | None:
+    """Sanitize inside a base64-wrapped JSON or URL payload and wrap it again.
+
+    A JSON payload gets the JSON body rules, a URL payload the query rules.
+    The result keeps the original's padding style (a URL often strips it) and
+    JSON spacing. Nothing is rewritten when nothing inside needed redacting,
+    so an ordinary payload survives byte-for-byte.
+
+    Args:
+        payload: The located payload
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        The re-encoded payload, or None when it is unchanged
+    """
+    if payload.text.lstrip()[:1] in "{[":
+        data = json.loads(payload.text)
+        cleaned = _sanitize_json_recursive(data, hasher, collector)
+        if cleaned == data:
+            return None
+        spaced = re.search(r"[,:]\s", payload.text) is not None
+        sanitized = json.dumps(cleaned, separators=None if spaced else (",", ":"))
+    else:
+        sanitized = _sanitize_url_query_params(payload.text, hasher, collector)
+        if sanitized == payload.text:
+            return None
+    encoded = base64.b64encode(sanitized.encode("utf-8")).decode("ascii")
+    padded = payload.encoded.endswith("=") or len(payload.encoded) % 4 == 0
+    return encoded if padded else encoded.rstrip("=")
 
 
 def _flag_query_value(collector: RedactionCollector, name: str, value: str, where: str) -> None:
@@ -1296,14 +1349,20 @@ def _sanitize_url_query_params(
     changed = False
     for segment in query.split("&"):
         found = find_query_credential(segment)
+        payload = find_query_payload(segment) if found is None else None
         key, sep, raw_value = segment.partition("=")
         name = urllib.parse.unquote_plus(key)
         value = urllib.parse.unquote_plus(raw_value) if sep else ""
-        action = _classify_query_param(name, value, found)
+        action = _classify_query_param(name, value, found, payload)
         rebuilt = segment
         if action == "auth" and found is not None:
             rebuilt = found.prefix + _redact_value(found.credential, hasher, "AUTH", collector)
             changed = True
+        elif action == "payload" and payload is not None:
+            sanitized = _sanitize_base64_payload(payload, hasher, collector)
+            if sanitized is not None:
+                rebuilt = payload.prefix + sanitized
+                changed = True
         elif action == "field":
             rebuilt = f"{key}={_redact_value(value, hasher, 'FIELD', collector)}"
             changed = True
@@ -1334,9 +1393,17 @@ def _sanitize_query_string_array(
             continue
         name = str(param["name"])
         value = str(param.get("value", ""))
-        found = find_query_credential(query_param_segment(param))
-        action = _classify_query_param(name, value, found)
-        if action == "auth" and found is not None:
+        segment = query_param_segment(param)
+        found = find_query_credential(segment)
+        payload = find_query_payload(segment) if found is None else None
+        action = _classify_query_param(name, value, found, payload)
+        if action == "payload" and payload is not None:
+            sanitized = _sanitize_base64_payload(payload, hasher, collector)
+            if sanitized is not None:
+                # Re-split the rewritten segment the way the query parser did.
+                new_name, _, new_value = (payload.prefix + sanitized).partition("=")
+                param["name"], param["value"] = new_name, new_value
+        elif action == "auth" and found is not None:
             if found.keyed:
                 param["value"] = _redact_value(found.credential, hasher, "AUTH", collector)
             else:
@@ -1396,46 +1463,27 @@ def _sanitize_request(
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
-# A body made entirely of base64-alphabet characters is a candidate for
-# base64-encoded-JSON decoding (see _decode_base64_json). Cheap pre-filter so
-# HTML/JSON/text bodies bail before a full decode attempt.
-_BASE64_BODY_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
+def _body_route(mime_type: str, text: str) -> str:
+    """Pick the engine for a response body's text: ``"html"``, ``"json"`` or ``"text"``.
 
-
-def _decode_base64_json(value: str) -> Any | None:
-    """Decode a base64 body into a structured JSON payload, if it is one.
-
-    Some devices return their data as raw base64-encoded JSON (often with an
-    empty Content-Type). The decoded text is colon-bearing, so it would
-    otherwise trip the opaque-credential heuristic and be collapsed to a single
-    ``AUTH_`` token — destroying the field names and JSON shape, which are not
-    PII. This discriminator answers "payload or secret?": it returns the parsed
-    object only when ``value`` is valid base64 that decodes to UTF-8 parsing as
-    a JSON object or array. Scalars, non-JSON, and non-base64 inputs return
-    ``None`` so the caller falls back to opaque-token handling.
-
-    Args:
-        value: Candidate base64 string (already stripped).
-
-    Returns:
-        The parsed dict/list, or ``None`` when ``value`` is not base64-encoded
-        JSON (object/array).
+    A declared HTML, XML or JSON type routes itself, and any other text type
+    (``text/*``, JavaScript, form data) takes the text path. A body whose type
+    says nothing about its text — ``application/octet-stream``, ``x-unknown``,
+    none at all — is sniffed: a JSON object or array, then markup, else text.
+    ``validate`` scans every body whatever its type, so every text a body can
+    carry must reach an engine.
     """
-    if not value or not _BASE64_BODY_RE.match(value):
-        return None
-    try:
-        decoded = base64.b64decode(value, validate=True).decode("utf-8")
-    except ValueError:
-        # binascii.Error (bad alphabet/padding) and UnicodeDecodeError are both
-        # ValueError subclasses.
-        return None
-    try:
-        parsed = json.loads(decoded)
-    except ValueError:  # includes json.JSONDecodeError
-        return None
-    if isinstance(parsed, dict | list):
-        return parsed
-    return None
+    mime = mime_type.lower()
+    if "html" in mime or "xml" in mime:
+        return "html"
+    if "json" in mime:
+        return "json"
+    if is_text_mime(mime_type):
+        return "text"
+    stripped = text.lstrip()
+    if stripped[:1] in "{[":
+        return "json"
+    return "html" if stripped.startswith("<") else "text"
 
 
 def _sanitize_response_content(
@@ -1447,6 +1495,12 @@ def _sanitize_response_content(
 ) -> None:
     """Sanitize response content in-place.
 
+    The body is decoded first (``decode_transport_body``): HAR's ``encoding:
+    base64`` is how the recorder stored the bytes, not what the server sent,
+    so a transport-encoded body is sanitized as the text it carries and
+    written back as that text, ``encoding`` dropped. Binary stays as
+    recorded.
+
     Args:
         content: HAR response content object with 'text' and 'mimeType' keys
         collector: Optional collector with hasher for redaction
@@ -1457,64 +1511,91 @@ def _sanitize_response_content(
             only redacted if it echoes that credential — opaque server-issued
             session tokens are preserved for replay fidelity.
     """
-    if "text" not in content or not content["text"]:
+    text = decode_transport_body(content)
+    if text is None:
+        # An earlier release wiped some transport-encoded bodies to an AUTH_
+        # placeholder under `encoding: base64`, which no decoder accepts. The
+        # placeholder is text; the marker is what makes the body invalid.
+        raw = content.get("text")
+        if content.get("encoding") == "base64" and isinstance(raw, str) and is_fully_redacted(raw):
+            del content["encoding"]
         return
+    if content.get("encoding") == "base64":
+        del content["encoding"]
+    content["text"] = _sanitize_body_text(
+        text, str(content.get("mimeType") or ""), collector, custom_patterns, heuristics, url_credential
+    )
 
-    mime_type = content.get("mimeType", "")
+
+def _sanitize_body_text(
+    text: str,
+    mime_type: str,
+    collector: RedactionCollector | None,
+    custom_patterns: str | dict[str, Any] | None,
+    heuristics: HeuristicMode,
+    url_credential: str | None,
+) -> str:
+    """Sanitize a response body's text: the one dispatch for every body.
+
+    In order: a base64-wrapped JSON or URL payload is sanitized inside and
+    wrapped again (the Sercomm DM1000 class — its colon must not read as
+    ``user:pass``); a bare base64 credential is redacted whole unless it is a
+    server token (see ``_is_echoed_credential``); anything else goes to the
+    engine ``_body_route`` picks.
+
+    Args:
+        text: The body's text, transport encoding already undone
+        mime_type: The body's declared mime type
+        collector: Optional collector with hasher for redaction
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for pipe-delimited value detection
+        url_credential: Base64 credential from the request URL (if any)
+
+    Returns:
+        The sanitized text
+    """
     hasher = collector.hasher if collector else None
+    stripped = text.strip()
 
-    stripped = content["text"].strip()
+    payload_text = decode_base64_payload(stripped)
+    if payload_text is not None:
+        sanitized = _sanitize_base64_payload(QueryPayload("", stripped, payload_text), hasher, collector)
+        return text if sanitized is None else sanitized
 
-    # Decode-first discriminator: a base64-encoded *structured* payload (JSON
-    # object or array) must be sanitized value-by-value with its structure
-    # intact — never collapsed to a single AUTH_ token. Devices like the Sercomm
-    # DM1000 return data as raw base64 JSON (empty Content-Type), which decodes
-    # to a colon-bearing string and would otherwise trip the opaque-credential
-    # branch below. Re-encode to base64 on the way out, matching how it arrived.
-    decoded_json = _decode_base64_json(stripped)
-    if decoded_json is not None:
-        sanitized = _sanitize_json_recursive(decoded_json, hasher, collector)
-        content["text"] = base64.b64encode(json.dumps(sanitized).encode()).decode()
-        return
+    if is_base64_credential(stripped) and (
+        url_credential is None or _is_echoed_credential(stripped, url_credential)
+    ):
+        return _redact_value(stripped, hasher, "AUTH", collector)
 
-    if is_base64_credential(stripped):
-        if url_credential is None or _is_echoed_credential(stripped, url_credential):
-            content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
-            return
-
-    if "text/html" in mime_type or "text/xml" in mime_type or "application/xml" in mime_type:
-        content["text"] = sanitize_html(
-            content["text"],
-            collector=collector,
-            custom_patterns=custom_patterns,
-            heuristics=heuristics,
+    route = _body_route(mime_type, text)
+    if route == "html":
+        return sanitize_html(
+            text, collector=collector, custom_patterns=custom_patterns, heuristics=heuristics
         )
-        return
 
     # Structurally-located credentials (HTML engine pass 7c) for every other
-    # text-bearing body. `validate` checks *all* response bodies, so a device
-    # label block embedded in a `.js` or `application/javascript` body would
-    # otherwise be reported as an error that no sanitize run could clear —
-    # sanitize and validate must agree on what they can each see (ADR-14).
-    if hasher is not None and collector is not None and content.get("encoding") != "base64":
-        content["text"] = redact_structural_credentials(content["text"], hasher, collector, custom_patterns)
+    # body: a device label block embedded in a script must not be reported by
+    # validate and left by sanitize (ADR-14).
+    if hasher is not None and collector is not None:
+        text = redact_structural_credentials(text, hasher, collector, custom_patterns)
 
-    if "application/json" in mime_type:
+    if route == "json":
         try:
-            data = json.loads(content["text"])
-            content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
+            data = json.loads(text)
         except json.JSONDecodeError:
-            _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
-    elif (mime_type.startswith("text/") or not mime_type) and content.get("encoding") != "base64":
-        # Fallback: apply pattern-based sanitization to text content
-        content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
-        # Vendor-format serials (delimiter-aware, domain detectors) — runs
-        # outside _sanitize_string_patterns so its perf length guard can
-        # never cost serial coverage, however large the text body.
-        if hasher is not None and collector is not None:
-            serial_detectors = _resolve_serial_detectors(custom_patterns)
-            if serial_detectors:
-                content["text"] = redact_vendor_serials(content["text"], serial_detectors, hasher, collector)
+            _LOGGER.debug("Body declared or sniffed as JSON does not parse; sanitizing it as text")
+        else:
+            return json.dumps(_sanitize_json_recursive(data, hasher, collector))
+
+    text = _sanitize_string_patterns(text, hasher, collector)
+    # Vendor-format serials (delimiter-aware, domain detectors) — runs
+    # outside _sanitize_string_patterns so its perf length guard can
+    # never cost serial coverage, however large the text body.
+    if hasher is not None and collector is not None:
+        serial_detectors = _resolve_serial_detectors(custom_patterns)
+        if serial_detectors:
+            text = redact_vendor_serials(text, serial_detectors, hasher, collector)
+    return text
 
 
 def _sanitize_response(

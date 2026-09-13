@@ -455,3 +455,39 @@ once per fetch, so captures of busy pages are larger. Bloat filtering is unchang
 CLI's "Removed N bloat entries" line, now count file-type filtering alone, which is what the line always claimed.
 ADR-2's statement that "both the 401 and the authenticated retry are captured" had the same exception — the retry is a
 `GET` to the same URL — and now holds without it.
+
+## ADR-16: Transport Encoding Is Not Content
+
+**Date:** 2026-09-13 · **Status:** Accepted · **Issue:** cable_modem_monitor#213
+
+**Context.** A HAR body carries `encoding: base64` when the recorder could not store it as a string — the bytes were not
+UTF-8, or the type was not one the recorder treats as text. That base64 is the recorder's, not the server's. The
+sanitizer nevertheless read `content.text` as if the server had sent it: an Arris SB8200 HTML fragment served as
+`application/octet-stream` looked like `base64(user:pass)` whenever the fragment held a colon, and the whole body became
+`AUTH_<hash>` (#213's `pageheaderA.htm` and `footer.htm`). A fragment without a colon passed through every pass
+unscanned. `validate` decoded the same bodies and scanned them, so it reported PII no sanitize run could remove — the
+failure ADR-14 forbids.
+
+**Decision.**
+
+1. **Both tools decode through one function** (`decode_transport_body`): the mime type's charset, else strict UTF-8.
+   Under a text type with no declared charset, bytes that are not UTF-8 are read as latin-1 — capture stores exactly
+   such a page base64, and a browser renders it in a Latin charset.
+1. **A decoded body is written back as plain text, `encoding` dropped.** Re-encoding would keep the body out of reach of
+   the passes that run on the serialized HAR — Pass 1b propagation and Pass 2's find-and-replace — and a consumer that
+   reads HAR reads both forms. An `AUTH_<hash>` placeholder left under `encoding: base64` by an earlier release, which
+   no decoder accepts, loses the marker.
+1. **Binary stays as recorded, and neither tool scans it.** Bytes that are not text under any of the rules above are not
+   a body either tool can reason about; a check on replacement characters would report what no sanitize run clears.
+
+**Rejected: re-encoding the sanitized text as base64.** It preserves the recorder's representation at the cost of every
+pass that works on text in place, and representation is not evidence: the server sent the bytes, not the base64.
+
+**ADR-12 accounting.** See
+[Sanitization Spec — Response Content Dispatch](specs/SANITIZATION_SPEC.md#response-content-dispatch): the leak closed
+is PII in transport-encoded and untyped bodies that `validate` reported and sanitize left; the fidelity cost is the loss
+of the recorder's base64 representation, with #213's fragments no longer destroyed; the engines' rules are unchanged.
+
+**Consequence.** A sanitized HAR carries `encoding` only on binary bodies. The one behavior given up: a
+transport-encoded body whose text is literally `user:pass` is no longer replaced, since the base64 that matched was the
+recorder's — the same text served as plain text was never replaced either.

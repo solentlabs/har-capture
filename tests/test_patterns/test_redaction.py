@@ -39,12 +39,14 @@ from har_capture.patterns.redaction import (
     MAC_RE,
     QueryCredential,
     classify_identity_field,
+    decode_base64_payload,
     decode_transport_body,
     find_query_credential,
     is_allowlisted,
     is_base64_credential,
     is_fully_redacted,
     is_redacted,
+    is_text_mime,
     iter_url_credentials,
 )
 
@@ -60,6 +62,8 @@ MAC_REGEX_CASES = _FIXTURES["mac_regex_cases"]["cases"]
 URL_CREDENTIAL_CASES = _FIXTURES["url_credential_cases"]["cases"]
 JSON_IDENTITY_KEY_CASES = _FIXTURES["json_identity_key_cases"]["cases"]
 TRANSPORT_BODY_CASES = _FIXTURES["transport_body_cases"]["cases"]
+BASE64_PAYLOAD_CASES = _FIXTURES["base64_payload_cases"]["cases"]
+TEXT_MIME_CASES = _FIXTURES["text_mime_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -88,6 +92,22 @@ class TestClassifyIdentityField:
     @pytest.mark.parametrize("case", JSON_IDENTITY_KEY_CASES, ids=[c["id"] for c in JSON_IDENTITY_KEY_CASES])
     def test_category(self, case: dict) -> None:
         assert classify_identity_field(case["key"], case["value"]) == case["category"]
+
+
+class TestDecodeBase64Payload:
+    """decode_base64_payload tells a base64-wrapped JSON or URL payload from a credential."""
+
+    @pytest.mark.parametrize("case", BASE64_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_PAYLOAD_CASES])
+    def test_decoded(self, case: dict) -> None:
+        assert decode_base64_payload(case["value"]) == case["expected"]
+
+
+class TestIsTextMime:
+    """is_text_mime names the mime types whose bodies are text by declaration."""
+
+    @pytest.mark.parametrize("case", TEXT_MIME_CASES, ids=[c["id"] for c in TEXT_MIME_CASES])
+    def test_text_mime(self, case: dict) -> None:
+        assert is_text_mime(case["mime"]) is case["expected"]
 
 
 class TestDecodeTransportBody:

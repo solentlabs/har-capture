@@ -532,7 +532,9 @@ that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. For each 
 captured bodies cache and patches the body into the HAR entry.
 
 Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to base64 encoding with
-`content.encoding = "base64"`.
+`content.encoding = "base64"`. Sanitization decodes such a body again — as latin-1 when its type is text and no charset
+is declared — and writes it back as plain text (see
+[Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch)).
 
 #### `_patch_missing_bodies(temp_path, captured_bodies) -> int`
 

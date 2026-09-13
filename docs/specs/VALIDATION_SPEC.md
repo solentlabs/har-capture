@@ -96,7 +96,10 @@ def validate_har(
    - `check_url(header.value)` for each `Referer` / `Location` / `Content-Location`, and
      `check_url(response.redirectURL)` → the same query checks
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
-   - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content
+   - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content. The body is
+     read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is checked as the text it
+     carries, and a binary body is not checked — the sanitizer leaves it untouched too
+     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content))
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
@@ -122,6 +125,8 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
 1. Otherwise the parameter name is judged by the [field tiers](#finding-dataclass), exactly as for form fields: an
    auto-redact-tier name with an unredacted value → **error**; a flag-tier name → **warning**, a factory-default
    username suppressed. Empty values are skipped.
+1. Otherwise a base64-wrapped JSON or URL payload (`find_query_payload()`) is checked inside, as the sanitizer sanitizes
+   inside it: a JSON payload with `check_json_fields()`, a URL payload with `check_url()`.
 
 The URL string and the `queryString` array are one query recorded twice, so `validate_har` passes both the same `seen`
 set and a finding present in both is reported once. A URL-valued header is a different place the value leaked to and is
@@ -204,6 +209,8 @@ structural punctuation, and a match accounting for the entire token rather than 
 
 - Strips whitespace from the content, then calls `is_base64_credential()` on the entire body
 - Matches only when the whole body is a bare `base64(user:pass)` token (e.g. a router echoing its auth token)
+- A body that is base64 of a JSON object or array, or of a URL (`decode_base64_payload()`), is a payload, not a
+  credential: the checks below run on the text it wraps, as the sanitizer sanitizes inside it
 - Returns early after flagging — suppresses MAC/serial/IP checks on the same body to avoid noise
 - When `has_sanitized_url_credential=True`, skips this check. Set by `validate_har` for entries listed in
   `log._har_capture._sanitized_credentials` — those entries' response bodies were already evaluated by the sanitizer's
@@ -532,6 +539,11 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
 - `find_query_credential()` and `query_param_segment()` — URL query credentials. Used by validation (`check_url`,
   `check_query_string`) and sanitization (`_sanitize_url_query_params`, `_sanitize_query_string_array`, and
   `_scan_url_credentials` through `iter_url_credentials()`).
+- `find_query_payload()` and `decode_base64_payload()` — base64-wrapped JSON and URL payloads, which are data rather
+  than credentials. Used by validation (`check_url`, `check_query_string`, `check_content`) and sanitization
+  (`_sanitize_url_query_params`, `_sanitize_query_string_array`, `_sanitize_body_text`).
+- `decode_transport_body()` — a body's text, transport encoding undone. Used by validation (`validate_har`) and
+  sanitization (`_sanitize_response_content`).
 - `split_url_query()` / `url_query()` — a URL's raw query, split by hand. Used by validation (`check_url`) and
   sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
 - `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
@@ -590,4 +602,5 @@ Validation is intentionally simpler than sanitization:
 1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, canonical padding,
    a strict decode to UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a
    password may itself contain colons). Random base64-looking strings that don't decode to `user:pass` format are not
-   flagged.
+   flagged, and neither is base64 of a JSON object or array or of a URL: that text always has a colon, and it is a
+   payload, checked inside rather than reported whole.

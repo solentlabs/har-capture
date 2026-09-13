@@ -759,6 +759,420 @@
       "leaked": [
         "3C:7A:8A:12:34:56"
       ]
+    },
+    {
+      "id": "transport_html_fragment_with_colon",
+      "_note": "SB8200 fragment shape: was wiped to AUTH_",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/pageheaderA.htm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "PGRpdiBjbGFzcz0iaGRyIj48YSBocmVmPSJodHRwOi8vMTkyLjE2OC4xMDAuMS8iPlN0YXR1czwvYT4gM0M6N0E6OEE6MTI6MzQ6NTY8L2Rpdj4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "transport_hnap_markup_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/cgi-bin/statushelp",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "x-unknown",
+              "text": "PHRhYmxlPjx0cj48dGQ+U2VyaWFsIE51bWJlcjwvdGQ+PHRkPkFCQzEyMzQ1Njc8L3RkPjwvdHI+PC90YWJsZT4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "transport_misspelled_json_mime",
+      "_note": "Sercomm DM1000 shape",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/setup.cgi?todo=status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "applation/json",
+              "text": "eyJsYW5fbWFjIjogIjNDOjdBOjhBOjEyOjM0OjU2IiwgInN0YXR1cyI6ICJvayJ9",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "transport_double_wrapped_credential",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/echo",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "WVdSdGFXNDZjR0Z6YzNkdmNtUT0=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Bare base64 credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "transport_latin1_html",
+      "_note": "Capture writes a non-UTF-8 text page base64",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "PHA+Q2Fm6SAzQzo3QTo4QToxMjozNDo1NjwvcD4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "invalid_json_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "callback({\"cm\": \"3C:7A:8A:12:34:56\"})"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "form_urlencoded_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "cm=3C:7A:8A:12:34:56&status=ok"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "svg_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/img/status.svg",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "image/svg+xml",
+              "text": "<svg><text>3C:7A:8A:12:34:56</text></svg>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "octet_stream_text_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "WAN MAC 3C:7A:8A:12:34:56"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "base64_json_body_payload",
+      "_note": "A body that is itself base64 JSON, no transport encoding",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/setup.cgi?todo=status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "eyJsYW4iOiAiM0M6N0E6OEE6MTI6MzQ6NTYiLCAiY2giOiAxfQ=="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "query_json_payload_padded",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "data",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+      ]
+    },
+    {
+      "id": "query_json_payload_unpadded",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "data",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0"
+      ]
+    },
+    {
+      "id": "query_url_payload",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?next=aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "next",
+                "value": "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive query parameter"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy"
+      ]
     }
   ]
 }

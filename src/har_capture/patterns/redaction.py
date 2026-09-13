@@ -11,6 +11,7 @@ validation modules.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import urllib.parse
@@ -299,6 +300,28 @@ def classify_identity_field(key: str, value: object) -> str | None:
     return None
 
 
+# A mime type whose body is text by declaration: text/*, or a JSON, XML or
+# JavaScript subtype (bare or as a +suffix, and whatever the type — DM1000
+# serves `applation/json`), or form-urlencoded. Parameters are ignored.
+_TEXT_MIME_RE = re.compile(
+    r"^\s*(?:text/|[\w.+-]*/(?:[\w.-]*\+)?(?:json|xml|javascript|x-javascript|ecmascript|x-www-form-urlencoded)"
+    r"\s*(?:;|$))",
+    re.IGNORECASE,
+)
+
+
+def is_text_mime(mime: str) -> bool:
+    """Check if a mime type declares its body to be text.
+
+    Args:
+        mime: A Content-Type value, parameters allowed
+
+    Returns:
+        True for text/*, JSON, XML, JavaScript and form-urlencoded types
+    """
+    return bool(_TEXT_MIME_RE.match(mime))
+
+
 # `charset=` parameter of a Content-Type, quoted or bare.
 _CHARSET_PARAM_RE = re.compile(r";\s*charset\s*=\s*\"?([^\";\s]+)", re.IGNORECASE)
 
@@ -309,8 +332,11 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
     A body without ``encoding`` is already text. A ``base64`` body is decoded
     with the mime type's declared charset — or strictly as UTF-8 when none is
     declared, or the declared one is unknown or not a text encoding (``hex``,
-    ``zlib``). Bytes that do not decode, or that decode to text holding NUL,
-    are binary: text bodies never contain NUL, while fonts and images do.
+    ``zlib``). Undeclared bytes that are not UTF-8 are read as latin-1 when the
+    mime type says the body is text (:func:`is_text_mime`): capture writes such
+    a page base64 because it is not UTF-8, and a browser renders an undeclared
+    page in a Latin charset. Otherwise bytes that do not decode, or that decode
+    to text holding NUL, are binary: text never holds NUL, fonts and images do.
 
     The one decoder for the sanitizer and the validator, so both read the
     same text from a body and leave the same bodies alone.
@@ -330,7 +356,8 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
         raw = base64.b64decode("".join(text.split()), validate=True)
     except ValueError:
         return None
-    declared = _CHARSET_PARAM_RE.search(str(content.get("mimeType", "")))
+    mime = str(content.get("mimeType", ""))
+    declared = _CHARSET_PARAM_RE.search(mime)
     # A NUL in a codec name raises ValueError from the lookup itself.
     charset = declared.group(1) if declared and "\x00" not in declared.group(1) else "utf-8"
     try:
@@ -339,7 +366,9 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
         except LookupError:
             decoded = raw.decode("utf-8")
     except UnicodeError:
-        return None
+        if declared or not is_text_mime(mime):
+            return None
+        decoded = raw.decode("latin-1")
     return decoded if decoded and "\x00" not in decoded else None
 
 
@@ -475,6 +504,35 @@ _STRUCTURED_TEXT_RE = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*://|[{\[])")
 URL_VALUED_HEADERS: frozenset[str] = frozenset({"referer", "location", "content-location"})
 
 
+def decode_base64_payload(value: str) -> str | None:
+    """Return the text of a base64-wrapped structured payload: a JSON object or array, or a URL.
+
+    Such text always has a colon, so :func:`is_base64_credential` alone reads
+    it as ``user:pass``. It is data — field names, a redirect target — and is
+    sanitized inside rather than replaced whole. Padding may be missing or
+    miscounted, as a URL leaves it.
+
+    Args:
+        value: Candidate base64 text (surrounding whitespace ignored)
+
+    Returns:
+        The decoded payload, or None when ``value`` is not one
+    """
+    stripped = value.strip()
+    unpadded = stripped.rstrip("=")
+    if not unpadded or not _BASE64_CHARS_RE.match(stripped):
+        return None
+    decoded = _decode_base64_text(unpadded + "=" * (-len(unpadded) % 4))
+    if decoded is None or not _STRUCTURED_TEXT_RE.match(decoded):
+        return None
+    if decoded.lstrip()[:1] in "{[":
+        try:
+            json.loads(decoded)
+        except ValueError:
+            return None
+    return decoded
+
+
 def _as_base64_credential(raw: str) -> str | None:
     """Return ``raw`` as a base64 credential, undoing what URL transport did to it.
 
@@ -486,12 +544,12 @@ def _as_base64_credential(raw: str) -> str | None:
     """
     verbatim = list(dict.fromkeys([raw, urllib.parse.unquote(raw), raw.replace(" ", "+")]))
     for candidate in verbatim:
-        if is_base64_credential(candidate):
+        if is_base64_credential(candidate) and decode_base64_payload(candidate) is None:
             return candidate
     # Restoring padding reaches values the verbatim check never has, so it
     # only accepts a decoded value that could be nothing but user:pass: long
     # enough, printable, and not a URL or JSON payload that merely contains a
-    # colon. The verbatim check above keeps its long-standing behavior.
+    # colon.
     for candidate in verbatim:
         unpadded = candidate.rstrip("=")
         if len(unpadded) < _MIN_UNPADDED_CREDENTIAL_LENGTH:
@@ -579,6 +637,48 @@ def find_query_credential(segment: str) -> QueryCredential | None:
         credential = _as_base64_credential(marker.group(2))
         if credential:
             return QueryCredential(prefix=lead + marker.group(1), credential=credential, keyed=False)
+    return None
+
+
+class QueryPayload(NamedTuple):
+    """A base64-wrapped JSON or URL payload located inside one URL query segment.
+
+    The segment reads ``prefix`` followed by the payload: ``prefix`` is
+    ``""`` for a bare segment or ``"key="`` for a keyed one, kept verbatim.
+    ``encoded`` is the base64 as the client produced it, URL transport
+    encoding undone; ``text`` is what it decodes to.
+    """
+
+    prefix: str
+    encoded: str
+    text: str
+
+
+def find_query_payload(segment: str) -> QueryPayload | None:
+    """Locate a base64 JSON or URL payload in one raw URL query segment.
+
+    The payload counterpart of :func:`find_query_credential`, and exclusive
+    with it: a payload is never a credential. Shared by the sanitizer, which
+    sanitizes inside the payload, and the validator, which checks inside it.
+
+    Args:
+        segment: One ``&``-separated query segment, undecoded
+
+    Returns:
+        The located payload, or None
+    """
+    body = segment.lstrip("?")
+    lead = segment[: len(segment) - len(body)]
+    key, sep, value = body.partition("=")
+    readings = [(lead, body)]
+    if sep:
+        stripped = value.lstrip("=")
+        readings.append((f"{lead}{key}={value[: len(value) - len(stripped)]}", stripped))
+    for prefix, raw in readings:
+        for candidate in dict.fromkeys([raw, urllib.parse.unquote(raw).replace(" ", "+")]):
+            text = decode_base64_payload(candidate) if candidate else None
+            if text is not None:
+                return QueryPayload(prefix=prefix, encoded=candidate, text=text)
     return None
 
 

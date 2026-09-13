@@ -31,11 +31,10 @@ from typing import Any
 
 import pytest
 
-from har_capture.patterns import Hasher
+from har_capture.patterns import Hasher, decode_base64_payload, query_param_segment
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
-    _decode_base64_json,
     _detect_client_side_cookies,
     _embed_sanitization_metadata,
     _is_echoed_credential,
@@ -1259,23 +1258,6 @@ class TestResponseContentFallback:
         result = sanitize_entry(entry, salt=None)
         content = result["response"]["content"]["text"]
         assert expected_redacted not in content, f"{desc}: PII should be redacted"
-
-    def test_base64_content_skipped(self) -> None:
-        """Test base64-encoded content is not pattern-sanitized."""
-        entry = {
-            "request": {"method": "GET", "url": "http://test/", "headers": []},
-            "response": {
-                "status": 200,
-                "headers": [],
-                "content": {
-                    "text": "MTkyLjE2OC4xLjEwMA==",
-                    "mimeType": "application/octet-stream",
-                    "encoding": "base64",
-                },
-            },
-        }
-        result = sanitize_entry(entry, salt=None)
-        assert result["response"]["content"]["text"] == "MTkyLjE2OC4xLjEwMA=="
 
 
 class TestNestedJSONSanitization:
@@ -2588,12 +2570,6 @@ class TestUrlValuedHeaders:
 
 # ── base64-encoded response bodies & credential values ───────────────────────
 # base64(user:pass) strings are opaque credentials; base64(JSON) is a payload.
-_B64_OBJECT = base64.b64encode(b'{"a": 1, "b": {"c": 2}}').decode()
-_B64_ARRAY = base64.b64encode(b'[{"x": 1}, {"y": 2}]').decode()
-_B64_SCALAR_NUM = base64.b64encode(b"42").decode()
-_B64_SCALAR_STR = base64.b64encode(b'"just-a-string"').decode()
-_B64_NON_JSON = base64.b64encode(b"admin:password").decode()
-_B64_NON_UTF8 = base64.b64encode(b"\xff\xfe\xfa\xfb").decode()
 _B64_USERPASS = base64.b64encode(b"admin:hunter2").decode()
 
 # base64-JSON object/array each carry a MAC that must be redacted *in place*;
@@ -2605,19 +2581,6 @@ _B64_JSON_ARRAY_PII = base64.b64encode(
 _B64_OPAQUE_CRED = base64.b64encode(b"admin:supersecret").decode()
 
 # fmt: off
-DECODE_BASE64_JSON_CASES = [
-    # (value, is_structured, desc)
-    (_B64_OBJECT,      True,  "base64_json_object"),
-    (_B64_ARRAY,       True,  "base64_json_array"),
-    (_B64_SCALAR_NUM,  False, "base64_json_scalar_number"),
-    (_B64_SCALAR_STR,  False, "base64_json_scalar_string"),
-    (_B64_NON_JSON,    False, "base64_non_json_colon_string"),
-    (_B64_NON_UTF8,    False, "base64_non_utf8_bytes"),
-    ('{"a": 1}',       False, "plain_json_not_base64"),
-    ("<html></html>",  False, "html_not_base64"),
-    ("",               False, "empty_string"),
-]
-
 RESPONSE_BASE64_BODY_CASES = [
     # (body, structure_preserved, desc)
     (_B64_JSON_OBJECT_PII, True,  "base64_json_object_preserved"),
@@ -2714,22 +2677,6 @@ class TestBase64JsonResponseStructure:
         assert decoded["downstream"][0] == {"channel": 1, "power": "-7.0", "snr": "38.5"}
         assert decoded["lan_mac"] != "AA:BB:CC:DD:EE:FF"  # value-pattern redaction
         assert decoded["password"] != "hunter2"  # sensitive field-name redaction
-
-
-class TestDecodeBase64Json:
-    """Unit tests for the _decode_base64_json payload-vs-secret discriminator."""
-
-    @pytest.mark.parametrize(
-        ("value", "is_structured", "desc"),
-        DECODE_BASE64_JSON_CASES,
-        ids=[c[2] for c in DECODE_BASE64_JSON_CASES],
-    )
-    def test_decode_base64_json(self, value: str, is_structured: bool, desc: str) -> None:
-        result = _decode_base64_json(value)
-        if is_structured:
-            assert isinstance(result, dict | list), desc
-        else:
-            assert result is None, desc
 
 
 class TestBase64CredentialInFields:
@@ -4597,3 +4544,98 @@ class TestPropagationEncodedValues:
 
         assert har["log"]["entries"][0]["request"]["url"] == "/a/FIELD_bbbbbbbb/b/FIELD_bbbbbbbb"
         assert count == 2
+
+
+TRANSPORT_ENCODED_BODY_CASES = _HAR_FIXTURE["transport_encoded_body_cases"]["cases"]
+BASE64_QUERY_PAYLOAD_CASES = _HAR_FIXTURE["base64_query_payload_cases"]["cases"]
+
+
+class TestTransportEncodedBodies:
+    """A transport-encoded body is sanitized as the text it carries and written back as text."""
+
+    @pytest.mark.parametrize(
+        "case", TRANSPORT_ENCODED_BODY_CASES, ids=[c["id"] for c in TRANSPORT_ENCODED_BODY_CASES]
+    )
+    def test_body(self, case: dict) -> None:
+        entry = _entry_with_response_body("")
+        entry["response"]["content"] = dict(case["content"])
+        content = sanitize_entry(entry, salt="transport")["response"]["content"]
+
+        assert content.get("encoding") == case["expect_encoding"]
+        for leaked in case["absent"]:
+            assert leaked not in content["text"]
+        for kept in case["present"]:
+            assert kept in content["text"]
+        if "text_equals" in case:
+            assert content["text"] == case["text_equals"]
+
+    def test_user_redaction_reaches_transport_body(self) -> None:
+        """Pass 2's find-and-replace reaches a value flagged inside a transport-encoded body."""
+        phone = "555-123-4567"
+        entry = _entry_with_response_body(base64.b64encode(f"Support line: {phone}".encode()).decode())
+        entry["response"]["content"].update({"mimeType": "application/octet-stream", "encoding": "base64"})
+        sanitized, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="pass2", heuristics=HeuristicMode.FLAG
+        )
+        flagged = [item for item in report.flagged if item.original_value == phone]
+        assert flagged
+        for item in flagged:
+            item.status = RedactionStatus.USER_REDACTED
+
+        redacted = apply_user_redactions(sanitized, report)
+
+        assert phone not in json.dumps(redacted)
+
+
+def _payload_request(segment: str) -> dict[str, Any]:
+    """A GET whose query is one segment, recorded in the URL and the queryString array."""
+    name, sep, value = segment.partition("=")
+    return {
+        "request": {
+            "method": "GET",
+            "url": f"https://192.168.100.1/app.cgi?{segment}",
+            "headers": [],
+            "queryString": [{"name": name, "value": value if sep else ""}],
+        },
+        "response": {"status": 200, "headers": [], "content": {}},
+    }
+
+
+def _decoded_payloads(request: dict[str, Any]) -> list[str]:
+    """The payload text in the URL and in the queryString array, decoded."""
+    segment = urllib.parse.urlparse(request["url"]).query
+    array = query_param_segment(request["queryString"][0])
+    return [decode_base64_payload(s.partition("=")[2] or s) or "" for s in (segment, array)]
+
+
+class TestBase64QueryPayloads:
+    """A base64 JSON or URL query payload is sanitized inside, whatever its padding."""
+
+    @pytest.mark.parametrize(
+        "case", BASE64_QUERY_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_QUERY_PAYLOAD_CASES]
+    )
+    def test_payload(self, case: dict) -> None:
+        raw = _payload_request(case["segment"])
+        request = sanitize_entry(raw, salt="payload")["request"]
+
+        if case["unchanged"]:
+            assert request["url"] == raw["request"]["url"]
+            assert request["queryString"] == raw["request"]["queryString"]
+            return
+        assert "AUTH_" not in request["url"]
+        decoded = _decoded_payloads(request)
+        for text in decoded:
+            for leaked in case["leaked"]:
+                assert leaked not in text
+            for kept in case["decoded_present"]:
+                assert kept in text
+        # The URL and the array carry the same payload.
+        assert decoded[0] == decoded[1]
+
+    @pytest.mark.parametrize(
+        "case", BASE64_QUERY_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_QUERY_PAYLOAD_CASES]
+    )
+    def test_validate_agrees(self, case: dict, tmp_path: Path) -> None:
+        raw = {"log": {"entries": [_payload_request(case["segment"])]}}
+        if case["leaked"]:
+            _assert_validate_agrees(raw, tmp_path)
