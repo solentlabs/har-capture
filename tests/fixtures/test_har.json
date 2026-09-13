@@ -618,5 +618,43 @@
       {"id": "json_body"},
       {"id": "post_json_body"}
     ]
+  },
+  "json_identity_body_cases": {
+    "_comment": "JSON bodies through the sanitizer: a key that names a serial or MAC (classify_identity_field) and holds a value of that shape is redacted — SERIAL_<hash>, or a MAC placeholder in the value's own layout — and nothing else under such a key is. A body is JSON when its text parses as a JSON object or array, whatever type it declares (HNAP answers as text/html). absent must not survive; present must. pad prefixes that many characters of filler, for a body past the old 1 MB scan limit.",
+    "cases": [
+      {"id": "hnap_serial_in_text_html",            "mime": "text/html",              "text": "{\"GetStatusResponse\": {\"StatusSoftwareSerialNum\": \"4131N12345678\", \"StatusSoftwareHdVer\": \"1.0\"}}", "absent": ["4131N12345678"],     "present": ["\"StatusSoftwareSerialNum\": \"SERIAL_", "\"StatusSoftwareHdVer\": \"1.0\""]},
+      {"id": "bare_hex_mac_camel_key",              "mime": "application/json",       "text": "{\"CmMacAddress\": \"3C7A8A123456\"}",                                                                        "absent": ["3C7A8A123456"],      "present": ["{\"CmMacAddress\": \"02"]},
+      {"id": "glued_lowercase_serial_key",          "mime": "application/json",       "text": "{\"cmserialnumber\": \"4131N12345678\"}",                                                                     "absent": ["4131N12345678"],     "present": ["\"SERIAL_"]},
+      {"id": "dotted_mac_key",                      "mime": "application/json",       "text": "{\"hw_addr\": \"3c7a.8a12.3456\"}",                                                                           "absent": ["3c7a.8a12.3456"],    "present": ["{\"hw_addr\": \"02"]},
+      {"id": "mac_key_holding_label",               "mime": "application/json",       "text": "{\"mac_address\": \"MAC Address\"}",                                                                          "absent": [],                    "present": ["\"mac_address\": \"MAC Address\""]},
+      {"id": "serial_key_holding_placeholder_dash", "mime": "application/json",       "text": "{\"serialNumber\": \"-\"}",                                                                                   "absent": [],                    "present": ["\"serialNumber\": \"-\""]},
+      {"id": "mac_filter_flag_kept",                "mime": "application/json",       "text": "{\"MacAddressFilterEnabled\": \"true\"}",                                                                     "absent": [],                    "present": ["\"MacAddressFilterEnabled\": \"true\""]},
+      {"id": "i18n_serial_label_kept",              "mime": "application/json",       "text": "{\"PAGE_STATUS_SYSTEM_SERIAL_NUMBER\": \"Seriennummer\"}",                                                    "absent": [],                    "present": ["Seriennummer"]},
+      {"id": "ssid_key_flag_only",                  "mime": "application/json",       "text": "{\"ssid_24g\": \"HomeNet-5G\", \"ch\": 6}",                                                                   "absent": [],                    "present": ["\"ssid_24g\": \"HomeNet-5G\""]},
+      {"id": "json_in_text_plain",                  "mime": "text/plain",             "text": "{\"serial\": \"4131N12345678\"}",                                                                             "absent": ["4131N12345678"],     "present": ["\"SERIAL_"]},
+      {"id": "large_text_body_scanned",             "mime": "application/javascript", "text": "var cm = '3C:7A:8A:12:34:56';",                                                                               "absent": ["3C:7A:8A:12:34:56"], "present": ["var cm = '02:"],                                                              "pad": 1100000}
+    ]
+  },
+  "value_pass_body_cases": {
+    "_comment": "JSON values, JSON keys and plain-text bodies get the same format-preserving value passes as the HTML engine (MAC, private and public IPv4, IPv6, email), from the same shared regexes, and its labeled-serial passes on the raw text; the IPv6 constants :: and ::1 stay in both. Keys are sanitized as text because a client table keyed by MAC or address is a PII shape validate reports. absent must not survive; present must.",
+    "cases": [
+      {"id": "json_global_ipv6",           "mime": "application/json",       "text": "{\"wan6\": \"2600:1700:abcd:1234::1a\"}",                  "absent": ["2600:1700:abcd:1234::1a"],   "present": ["{\"wan6\": \"2001:db8::"]},
+      {"id": "json_link_local_ipv6_inline", "mime": "application/json",      "text": "{\"ll\": \"addr fe80::3c7a:8aff:fe12:3456/64\"}",           "absent": ["fe80::3c7a:8aff:fe12:3456"], "present": ["{\"ll\": \"addr 2001:db8::", "/64\"}"]},
+      {"id": "html_declared_json_ipv6",    "mime": "text/html",              "text": "{\"GetStatusResponse\": {\"Ipv6\": \"2600:1700::1a\"}}",   "absent": ["2600:1700::1a"],             "present": ["\"Ipv6\": \"2001:db8::"]},
+      {"id": "javascript_ipv6",            "mime": "application/javascript", "text": "var v6 = '2600:1700:abcd:1234::1a';",                      "absent": ["2600:1700:abcd:1234::1a"],   "present": ["var v6 = '2001:db8::"]},
+      {"id": "json_ten_private_ip",        "mime": "application/json",       "text": "{\"lan\": \"10.1.2.3\"}",                                   "absent": ["10.1.2.3"],                  "present": ["{\"lan\": \"10.255."]},
+      {"id": "text_ten_private_ip",        "mime": "text/plain",             "text": "lan 10.1.2.3 up",                                           "absent": ["10.1.2.3"],                  "present": ["lan 10.255."]},
+      {"id": "json_gateway_ip_kept",       "mime": "application/json",       "text": "{\"gw\": \"10.0.0.1\"}",                                    "absent": [],                            "present": ["{\"gw\": \"10.0.0.1\"}"]},
+      {"id": "json_email_before_pipe",     "mime": "application/json",       "text": "{\"list\": \"a@example.com|next\"}",                        "absent": ["a@example.com"],             "present": ["@redacted.invalid|next\"}"]},
+      {"id": "json_clock_time_kept",       "mime": "application/json",       "text": "{\"uptime\": \"12:34:56\"}",                                "absent": [],                            "present": ["{\"uptime\": \"12:34:56\"}"]},
+      {"id": "json_ipv6_constants_kept",   "mime": "application/json",       "text": "{\"gw6\": \"::\", \"lo\": \"::1\"}",                         "absent": [],                            "present": ["{\"gw6\": \"::\", \"lo\": \"::1\"}"]},
+      {"id": "html_ipv6_constants_kept",   "mime": "text/html",              "text": "<td>::</td><td>::1</td>",                                   "absent": [],                            "present": ["<td>::</td><td>::1</td>"]},
+      {"id": "json_mac_key",               "mime": "application/json",       "text": "{\"clients\": {\"3C:7A:8A:12:34:56\": {\"rssi\": -40}}}",   "absent": ["3C:7A:8A:12:34:56"],         "present": ["{\"clients\": {\"02:", "{\"rssi\": -40}"]},
+      {"id": "json_public_ip_key",         "mime": "application/json",       "text": "{\"73.12.34.56\": \"wan\"}",                                "absent": ["73.12.34.56"],               "present": ["{\"192.0.2.", "\": \"wan\"}"]},
+      {"id": "json_labeled_serial",        "mime": "application/json",       "text": "{\"info\": \"Serial Number: ABC1234567\"}",                  "absent": ["ABC1234567"],                "present": ["{\"info\": \"Serial Number: SERIAL_"]},
+      {"id": "text_labeled_serial",        "mime": "text/plain",             "text": "boot ok\nSerial Number: ABC1234567\n",                     "absent": ["ABC1234567"],                "present": ["Serial Number: SERIAL_"]},
+      {"id": "json_serial_label_no_digit", "mime": "application/json",       "text": "{\"info\": \"Serial Number: pending\"}",                     "absent": [],                            "present": ["{\"info\": \"Serial Number: pending\"}"]},
+      {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]}
+    ]
   }
 }

@@ -24,11 +24,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
+    EMAIL_RE,
+    IPV6_RE,
     MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
     URL_VALUED_HEADERS,
     Hasher,
     QueryCredential,
     QueryPayload,
+    body_route,
+    classify_identity_field,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
@@ -40,10 +46,12 @@ from har_capture.patterns import (
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
     is_fully_redacted,
+    is_ipv6_host_address,
     is_redacted,
+    is_ssid_key,
     iter_url_credentials,
+    load_pii_patterns,
     load_sensitive_patterns,
-    mime_kind,
     parse_json_container,
     query_param_segment,
     split_url_password,
@@ -52,6 +60,7 @@ from har_capture.patterns import (
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
     is_valid_ip_address,
+    redact_labeled_serials,
     redact_structural_credentials,
     redact_vendor_serials,
     sanitize_html,
@@ -926,6 +935,19 @@ def _sanitize_xml_fields(
     return ET.tostring(root, encoding="unicode")
 
 
+def _is_reviewable_ssid(key: str, value: object) -> bool:
+    """True for a network name under an SSID-named key — offered for review, never redacted."""
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and is_ssid_key(key)
+        and not is_redacted(value)
+        and not is_safe_value(value)
+    )
+
+
 def _sanitize_json_recursive(
     data: Any,
     hasher: Hasher | None = None,
@@ -950,9 +972,23 @@ def _sanitize_json_recursive(
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
-            key_lower = key.lower()
+            # Every rule reads the original key. The key itself is emitted
+            # through the string patterns: a client table keyed by MAC or
+            # address carries PII in its keys, and validate scans them.
+            out_key = _sanitize_string_patterns(key, hasher, collector)
+            # A key naming a device identity, holding a value of that
+            # identity's shape (classify_identity_field, shared with validate).
+            identity = classify_identity_field(key, value)
             if is_sensitive_field(key) and isinstance(value, str):
-                result[key] = _redact_value(value, hasher, "FIELD", collector)
+                result[out_key] = _redact_value(value, hasher, "FIELD", collector)
+            elif identity == "mac_address" and not is_constant_mac(str(value)):
+                if collector:
+                    collector.record_auto_redaction("mac_address")
+                result[out_key] = hasher.hash_mac(str(value)) if hasher else "***MAC***"
+            elif identity == "serial_number":
+                if collector:
+                    collector.record_auto_redaction("serial_number")
+                result[out_key] = hasher.hash_generic(str(value), "SERIAL") if hasher else "***SERIAL***"
             elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
                 collector.flag_value(
                     value,
@@ -961,25 +997,18 @@ def _sanitize_json_recursive(
                     f"JSON key '{key}'",
                     f"Flaggable field name '{key}' in JSON",
                 )
-                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
-            elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
-                # Explicit MAC address field - always redact
-                if isinstance(value, str) and value and not is_constant_mac(value):
-                    if collector:
-                        collector.record_auto_redaction("mac_address")
-                    result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
-                else:
-                    result[key] = value
-            elif key_lower in ("serial", "serial_number", "serialnumber", "serialnum", "sn"):
-                # Explicit serial number field - always redact
-                if isinstance(value, str) and value:
-                    if collector:
-                        collector.record_auto_redaction("serial_number")
-                    result[key] = hasher.hash_generic(value, "SERIAL") if hasher else "***SERIAL***"
-                else:
-                    result[key] = value
+                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+            elif _is_reviewable_ssid(key, value) and collector:
+                collector.flag_value(
+                    str(value),
+                    "wifi_ssid",
+                    ConfidenceLevel.MEDIUM,
+                    f"JSON key '{key}'",
+                    f"Wi-Fi network name under SSID key '{key}' in JSON",
+                )
+                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
             else:
-                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
         return result
     if isinstance(data, list):
         return [_sanitize_json_recursive(item, hasher, collector, _depth + 1) for item in data]
@@ -995,18 +1024,9 @@ _API_KEY_PREFIX_PATTERN = re.compile(r"^(?:sk|pk|key)-[a-zA-Z0-9]{16,}$")
 _LONG_TOKEN_PATTERN = re.compile(r"^(?=[a-zA-Z]*\d)(?=\d*[a-zA-Z])[a-zA-Z0-9]{32,}$")
 _DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
 
-# Regex patterns for value-based sanitization
-_PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
-# Public IPs: any non-private, non-localhost, non-reserved first octet
-_PUBLIC_IP_PATTERN = re.compile(
-    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
-    r"(?!127\.)(?!0\.)(?!255\.)"
-    r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
-)
-_EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+# Regex patterns for value-based sanitization. The IP, IPv6 and email
+# regexes are the shared ones in patterns/redaction.py, so a value is
+# redacted the same whether its body routes to the HTML engine or here.
 _SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
 _CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
@@ -1057,7 +1077,8 @@ def _sanitize_string_patterns(
 ) -> str:
     """Apply pattern-based sanitization to a string value.
 
-    Redacts MAC addresses, private IPs, and emails found in string values.
+    Redacts MAC addresses, private and public IPv4, IPv6 and email addresses
+    found in string values, with the HTML engine's regexes and placeholders.
 
     Args:
         value: String value to sanitize
@@ -1068,12 +1089,6 @@ def _sanitize_string_patterns(
         Sanitized string
     """
     if not value:
-        return value
-    # Perf guard only — must stay far above real firmware assets, or PII scans
-    # silently skip them. At 10,000 chars this skipped the CM2500's 33 KB
-    # utility.js, leaving MACs/IPs in any large non-HTML text body unscanned.
-    if len(value) > 1_000_000:
-        _LOGGER.debug("Skipping pattern sanitization for long string (length=%d)", len(value))
         return value
 
     # MAC addresses
@@ -1086,8 +1101,8 @@ def _sanitize_string_patterns(
 
     value = MAC_RE.sub(replace_mac, value)
 
-    # Private IPs (keep common gateway IPs)
-    preserved_ips = {"192.168.0.1", "192.168.1.1", "10.0.0.1", "192.168.100.1"}
+    # Private IPs (keep the common gateway IPs pii.json lists)
+    preserved_ips = load_pii_patterns().get("preserved_gateway_ips", [])
 
     def replace_private_ip(match: re.Match[str]) -> str:
         ip = match.group(0)
@@ -1099,7 +1114,7 @@ def _sanitize_string_patterns(
             collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
 
-    value = _PRIVATE_IP_PATTERN.sub(replace_private_ip, value)
+    value = PRIVATE_IP_RE.sub(replace_private_ip, value)
 
     # Public IPs (non-private, non-localhost, non-reserved)
     def replace_public_ip(match: re.Match[str]) -> str:
@@ -1110,7 +1125,18 @@ def _sanitize_string_patterns(
             collector.record_auto_redaction("public_ip")
         return hasher.hash_ip(ip, is_private=False) if hasher else "***IP***"
 
-    value = _PUBLIC_IP_PATTERN.sub(replace_public_ip, value)
+    value = PUBLIC_IP_RE.sub(replace_public_ip, value)
+
+    # IPv6 addresses (a candidate ipaddress rejects, like a clock time, stays)
+    def replace_ipv6(match: re.Match[str]) -> str:
+        candidate = match.group(0)
+        if not is_ipv6_host_address(candidate):
+            return candidate
+        if collector:
+            collector.record_auto_redaction("ipv6")
+        return hasher.hash_ipv6(candidate) if hasher else "***IPV6***"
+
+    value = IPV6_RE.sub(replace_ipv6, value)
 
     # Email addresses
     def replace_email(match: re.Match[str]) -> str:
@@ -1118,7 +1144,7 @@ def _sanitize_string_patterns(
             collector.record_auto_redaction("email")
         return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
 
-    value = _EMAIL_PATTERN.sub(replace_email, value)
+    value = EMAIL_RE.sub(replace_email, value)
 
     # SSN — flag for review instead of auto-redacting
     if collector:
@@ -1555,27 +1581,6 @@ def _sanitize_request(
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
-def _body_route(mime_type: str, text: str) -> str:
-    """Pick the engine for a response body's text: ``"html"``, ``"json"`` or ``"text"``.
-
-    A declared markup or JSON type routes itself, and any other text type
-    (``text/*``, JavaScript, form data) takes the text path (``mime_kind``).
-    A body whose type says nothing about its text — ``application/octet-stream``,
-    ``x-unknown``, none at all — is sniffed: a JSON object or array, then
-    markup, else text. ``validate`` scans every body whatever its type, so
-    every text a body can carry must reach an engine.
-    """
-    kind = mime_kind(mime_type)
-    if kind == "markup":
-        return "html"
-    if kind is not None:
-        return kind
-    stripped = text.lstrip()
-    if stripped.startswith(("{", "[")):
-        return "json"
-    return "html" if stripped.startswith("<") else "text"
-
-
 def _sanitize_response_content(
     content: dict[str, Any],
     collector: RedactionCollector | None = None,
@@ -1632,7 +1637,7 @@ def _sanitize_body_text(
     ``validate`` runs on it has a remedy — and wrapped again; a bare base64
     credential is redacted whole unless it is a server token (see
     ``_is_echoed_credential``); anything else goes to the engine
-    ``_body_route`` picks.
+    ``body_route`` picks.
 
     Args:
         text: The body's text, transport encoding already undone
@@ -1664,20 +1669,21 @@ def _sanitize_body_text(
     ):
         return _redact_value(stripped, hasher, "AUTH", collector)
 
-    route = _body_route(mime_type, text)
+    route = body_route(mime_type, text)
     if route == "html":
         return sanitize_html(
             text, collector=collector, custom_patterns=custom_patterns, heuristics=heuristics
         )
 
-    # Structurally-located credentials (HTML engine pass 7c) and vendor-format
-    # serials for every other body: a device label block in a script, or a
-    # serial in a JSON string, must not be reported by validate and left by
-    # sanitize (ADR-13, ADR-14). Serials run on the raw text, outside
-    # _sanitize_string_patterns' perf length guard, so serial coverage never
-    # depends on body size.
+    # Structurally-located credentials (HTML engine pass 7c), labeled serials
+    # (passes 2 and 2b) and vendor-format serials for every other body: a
+    # device label block in a script, or a serial in a JSON string, must not
+    # be reported by validate and left by sanitize (ADR-13, ADR-14). They run
+    # on the raw text validate scans, so they reach JSON strings as well as
+    # plain text.
     if hasher is not None and collector is not None:
         text = redact_structural_credentials(text, hasher, collector, custom_patterns)
+        text = redact_labeled_serials(text, hasher, collector, custom_patterns)
         serial_detectors = _resolve_serial_detectors(custom_patterns)
         if serial_detectors:
             text = redact_vendor_serials(text, serial_detectors, hasher, collector)

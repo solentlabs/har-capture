@@ -16,7 +16,6 @@
     {"input_html": "Relay: 3.100.200.50",                     "removed": "3.100.200.50",          "placeholder": "0.0.0.0",            "id": "public_ip_low_first_octet"},
     {"input_html": "IPv6: 2001:db8::1",                       "removed": "2001:db8::1",           "placeholder": "::",                 "id": "ipv6_compressed"},
     {"input_html": "IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "removed": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "placeholder": "::", "id": "ipv6_full"},
-    {"input_html": "Localhost: ::1",                          "removed": "::1",                   "placeholder": "::",                 "id": "ipv6_localhost"},
     {"input_html": "password=secret123",                      "removed": "secret123",             "placeholder": "***PASS***",         "id": "password_equals"},
     {"input_html": "passphrase: mysecretphrase",              "removed": "mysecretphrase",        "placeholder": "***PASS***",         "id": "passphrase"},
     {"input_html": "psk=wireless_key_here",                   "removed": "wireless_key_here",     "placeholder": "***PASS***",         "id": "psk_wireless"},
@@ -48,6 +47,8 @@
     {"input_html": "Uptime: 12:34:56",                        "preserved": "12:34:56",              "id": "time_format_hhmmss"},
     {"input_html": "Duration: 01:23:45",                      "preserved": "01:23:45",              "id": "time_format_short"},
     {"input_html": "Time: 00:00:00",                          "preserved": "00:00:00",              "id": "time_format_midnight"},
+    {"input_html": "Localhost: ::1",                          "preserved": "Localhost: ::1",        "id": "ipv6_loopback_constant"},
+    {"input_html": "IPv6 Gateway: ::",                        "preserved": "IPv6 Gateway: ::",      "id": "ipv6_unspecified_constant"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "7.5 dBmV",              "id": "signal_dbmv"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "38.2 dB",               "id": "signal_db"},
     {"input_html": "Frequency: 602.0 MHz",                    "preserved": "602.0 MHz",             "id": "frequency_mhz"},
@@ -85,6 +86,23 @@
     {"content": "Power: 7.5 dBmV",                         "id": "signal_metric"},
     {"content": "Status: OK",                              "id": "status_value"}
   ],
+
+  "pii_exact_findings_cases": {
+    "_comment": "check_for_pii(content) must report exactly these (pattern, match) pairs. It shares the sanitizer's rules: a JSON fixture's identity fields are reported with validate's predicate (unredacted_identity), a MAC is reported once (not again as an IPv6 candidate), and a match the sanitizer keeps — a constant MAC, a dotted-quad version string — is not reported, since no sanitize run clears it.",
+    "cases": [
+      {"id": "json_serial_key",          "content": "{\"StatusSoftwareSerialNum\": \"4131N12345678\"}", "findings": [["serial_number", "4131N12345678"]]},
+      {"id": "json_bare_mac_key",        "content": "{\"CmMacAddress\": \"3C7A8A123456\"}",             "findings": [["mac_address", "3C7A8A123456"]]},
+      {"id": "json_colon_mac_key_once",  "content": "{\"mac\": \"3C:7A:8A:12:34:56\"}",                 "findings": [["mac_address", "3C:7A:8A:12:34:56"]]},
+      {"id": "json_mac_placeholder",     "content": "{\"CmMacAddress\": \"02a1b2c3d4e5\"}",             "findings": []},
+      {"id": "json_serial_placeholder",  "content": "{\"serialNumber\": \"SERIAL_2c9c9cf9\"}",          "findings": []},
+      {"id": "json_serial_label_value",  "content": "{\"PAGE_SERIAL_NUMBER\": \"Seriennummer\"}",        "findings": []},
+      {"id": "ipv6_leading_colons",      "content": "addr ::ffff:c000:280",                             "findings": [["ipv6", "::ffff:c000:280"]]},
+      {"id": "ipv6_hashed_placeholder",  "content": "addr 2001:db8::ab12:cd34",                         "findings": []},
+      {"id": "ipv6_loopback_kept",       "content": "lo6 ::1 fe80::1a",                                 "findings": [["ipv6", "fe80::1a"]]},
+      {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
+      {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
+    ]
+  },
 
   "serial_table_cases": [
     {"html": "<td><strong>Serial Number</strong></td>\n<td>17V541334700308</td>", "serial_value": "17V541334700308", "id": "serial_in_adjacent_td"},

@@ -8,7 +8,9 @@ har-capture sanitizes the following categories of personally identifiable inform
 
 ### MAC Addresses
 
-**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX`
+**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX` anywhere; under a JSON key naming a MAC (`CmMacAddress`,
+`hw_addr`), bare `XXXXXXXXXXXX` and dotted `xxxx.xxxx.xxxx` too. The broadcast and zero MACs are protocol constants and
+stay.
 
 **Examples:**
 
@@ -61,7 +63,7 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 
 ### IPv6 Addresses
 
-**Pattern:** Any IPv6 address
+**Pattern:** Any IPv6 host address. The unspecified `::` and loopback `::1` are protocol constants and stay.
 
 **Examples:**
 
@@ -162,9 +164,13 @@ sk_live_abcd1234         → APIKEY_e5f6a7b8  # pragma: allowlist secret
 **Examples:**
 
 ```text
-SN1234567890    → SERIAL_a1b2c3d4
-S/N: AB-12345   → S/N: SERIAL_e5f6a7b8
+SN1234567890                                → SERIAL_a1b2c3d4
+S/N: AB-12345                               → S/N: SERIAL_e5f6a7b8
+{"StatusSoftwareSerialNum": "4131N12345678"} → {"StatusSoftwareSerialNum": "SERIAL_c9d0e1f2"}
 ```
+
+A JSON key naming a serial counts when its value is one token of five or more characters with a digit; labels and
+placeholders (`Serial Number`, `-`) under such a key stay.
 
 ### Device Names
 

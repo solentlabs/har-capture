@@ -96,10 +96,11 @@ def validate_har(
    - `check_url(header.value)` for each `Referer` / `Location` / `Content-Location`, and
      `check_url(response.redirectURL)` → the same query checks
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
-   - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content. The body is
-     read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is checked as the text it
-     carries, and a binary body is not checked — the sanitizer leaves it untouched too
-     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content))
+   - `check_content(entry.response.content)` → bare base64 credentials, JSON fields, MAC, serial, IPv4, IPv6 in text
+     content. The body is read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is
+     checked as the text it carries, and a binary body is not checked — the sanitizer leaves it untouched too
+     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content)). Its `mimeType` goes along for
+     the sanitizer's routing decision, `body_route()`
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
@@ -202,9 +203,10 @@ Checks form field names and JSON body content:
 Severity: **tiered** — error for auto-redact-tier names, warning for flag-tier names, factory-default usernames in
 flag-tier fields suppressed. The same model applies to every branch above (form params, urlencoded body, JSON, XML).
 
-### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential, serial_detectors)`
+### `check_content(content, location, findings, custom_patterns, **keywords)`
 
-Detects PII patterns in response content text.
+Detects PII patterns in response content text. Keyword-only: `has_sanitized_url_credential`, `serial_detectors`,
+`mime_type` (the body's declared type, for `body_route()`), `field_tiers` (pre-compiled, as for `check_json_fields`).
 
 **Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
 single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
@@ -227,6 +229,15 @@ structural punctuation, and a match accounting for the entire token rather than 
 
 Severity: **error**
 
+**JSON fields (error / warning):**
+
+- A body the sanitizer routes as JSON (`body_route()`: text that parses as a JSON object or array, whatever its type —
+  HNAP answers JSON as `text/html`) has its fields checked by `check_json_fields()`, with the rules the sanitizer
+  redacts by: identity fields and credential-named keys. Flag-tier names (`username`, `login`) are not reported here —
+  in responses they are mostly translation-bundle keys, and the sanitizer only offers them for review, so a warning
+  would have no sanitize remedy
+- A MAC reported as an identity field is not reported again by the MAC scan below
+
 **MAC addresses:**
 
 - Pattern: `MAC_RE`, the sanitizer's own definition (see
@@ -239,10 +250,10 @@ Severity: **error**
 
 - Imports the sanitizer's own patterns, `SERIAL_LABEL_RE` and `SERIAL_TABLE_RE` from `sanitization/html.py` (passes 2
   and 2b; see [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every
-  labeled serial reported here is one a sanitize run removes. Until 0.13.0 `validate` kept its own looser patterns: a
-  label merely containing `serial` (`cmSerialNumber:`) was reported and never removed, and an unbounded label crossed a
-  whole table row whose serial is a template placeholder (`<?get_cm_sn>`) and reported the next row's firmware name on
-  12 fleet pages (TM1602A, CM820B)
+  labeled serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). Until
+  0.13.0 `validate` kept its own looser patterns: a label merely containing `serial` (`cmSerialNumber:`) was reported
+  and never removed, and an unbounded label crossed a whole table row whose serial is a template placeholder
+  (`<?get_cm_sn>`) and reported the next row's firmware name on 12 fleet pages (TM1602A, CM820B)
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
@@ -285,9 +296,29 @@ Severity: **error**
 
 Severity: **warning**
 
+**IPv6 addresses:**
+
+- `IPV6_RE` candidates that `is_ipv6_host_address()` accepts — the sanitizer's own IPv6 pass (`patterns/redaction.py`),
+  so a clock time, a MAC, the unspecified `::` and the loopback `::1` are not reported, and every address that is gets
+  rewritten by any sanitize run, in every body route
+- Reported because a global address locates the subscriber and an EUI-64 link-local address embeds the device's MAC.
+  Until 0.13.0 there was no IPv6 check, and 960 IPv6 addresses in JSON bodies across the cable_modem_monitor fleet
+  survived sanitize unreported
+- Placeholders (the `2001:db8::` documentation prefix) are skipped via `is_redacted()`
+
+Severity: **warning**
+
 ### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth)`
 
-Recursively scans JSON structures for sensitive field names.
+Recursively scans JSON structures for sensitive field names and identity fields.
+
+**Identity fields (error).** A key naming a device identity whose value has that identity's shape
+(`unredacted_identity()`, built on the sanitizer's own `classify_identity_field()`; see
+[JSON Body Traversal](SANITIZATION_SPEC.md#json-body-traversal)) is reported as "Device serial number in a JSON field"
+or "MAC address in a JSON field". The key states what the value is, so the finding is deterministic (ADR-13). Under a
+MAC-named key a MAC placeholder in any layout (`is_mac_placeholder()` — bare and dotted placeholders are not in the
+global allowlist, since a bare `02…` hex run in free text could be anything), a constant MAC, or an allowlisted value is
+clean. An identity finding replaces the field-tier check for that member.
 
 #### Full Signature
 
@@ -350,8 +381,10 @@ def check_json_fields(data, location, findings, path="",
     if isinstance(data, dict):
         for key, value in data.items():
             current_path = f"{path}.{key}" if path else key
-            # Classify key against the field tiers (error / warning / suppressed)
-            if isinstance(value, str) and value and not is_redacted(value):
+            # An identity field first (error), else the field tiers (error / warning / suppressed)
+            if isinstance(value, str) and _identity_finding(key, value, custom_patterns):
+                findings.append(Finding(severity="error", ...))
+            elif isinstance(value, str) and value and not is_redacted(value):
                 classified = _classify_field_finding(key, value, _field_tiers)
                 if classified is not None:
                     severity, pattern = classified
@@ -537,7 +570,8 @@ sensitive.json
 │                                        sanitization (sanitize_header_value, scheme-preserving branch)
 ├── fields.auto_redact_patterns → Used by: validation (check_json_fields, check_post_data)
 │                                           sanitization (is_sensitive_field)
-├── fields.flag_patterns     → Used by: validation (check_json_fields, check_post_data)
+├── fields.flag_patterns     → Used by: validation (check_json_fields and check_post_data on request
+│                                        bodies; not on response bodies — see check_content)
 │                                        sanitization (is_flaggable_field)
 ├── heuristics.detectors     → serial_number @ high confidence: validation (check_content vendor-serial scan)
 │   (domain-merged)                        sanitization (redact_vendor_serials); all others: sanitization only
@@ -561,6 +595,16 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
   regex).
 - `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
   HTML engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
+  `is_constant_mac()` — the broadcast and zero MACs neither tool treats as PII — is shared the same way.
+- `IPV6_RE` with `is_ipv6_host_address()`, `PUBLIC_IP_RE`, `PRIVATE_IP_RE`, `EMAIL_RE` — addresses in text. Used by
+  sanitization (HTML engine passes 4–6 and 11, and `_sanitize_string_patterns` for JSON values, JSON keys and text
+  bodies), validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `public_ip`,
+  `ipv6` and `email` regexes; its `private_ip` entry differs on purpose, excluding the preserved gateway addresses).
+- `body_route()` — which engine a response body's text goes to. Used by sanitization (`_sanitize_body_text`) and
+  validation (`check_content`, to check a JSON-routed body's fields).
+- `classify_identity_field()` — a serial or MAC under a key naming it. Used by sanitization (`_sanitize_json_recursive`)
+  and, through `unredacted_identity()` (which also skips the sanitizer's own placeholders), by validation
+  (`check_json_fields`) and `check_for_pii`.
 - `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization
   (`_sanitize_headers`).
 
@@ -571,18 +615,18 @@ These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 | Pattern       | Purpose                                     |
 | ------------- | ------------------------------------------- |
 | Netmask check | Suppress subnet masks in the public-IP scan |
-| IP regex      | Detect public IPs in response content       |
+| IP regex      | Detect public IPv4 in response content      |
 
 ### Sanitization-Only Patterns
 
 These patterns are used only during sanitization:
 
-| Source                                  | Purpose                                                                                                                |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `pii.json`                              | Full PII detection patterns with replacement prefixes                                                                  |
-| Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above) |
-| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                            |
-| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`)                                                  |
+| Source                                  | Purpose                                                                                                                           |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pii.json`                              | PII detection patterns with replacement prefixes (HTML engine pass 0; `check_for_pii`, whose built-ins mirror the shared regexes) |
+| Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above)            |
+| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                                       |
+| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`)                                                             |
 
 ### Design Intent
 
@@ -607,9 +651,10 @@ Validation is intentionally simpler than sanitization:
 1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`,
    `SameSite`) are not flagged. Only headers with actual session values trigger findings.
 1. **Severity is deterministic** — every finding's severity follows from which pattern matched, never from scoring:
-   headers, auto-redact-tier field names, base64 credentials, and vendor-format serials are "error"; flag-tier field
-   names, MAC/label-serial/IP content patterns are "warning"; factory-default usernames in flag-tier fields are
-   suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic engine).
+   headers, auto-redact-tier field names, JSON identity fields, base64 credentials, and vendor-format serials are
+   "error"; flag-tier field names, MAC/label-serial/IPv4/IPv6 content patterns are "warning"; factory-default usernames
+   in flag-tier fields are suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic
+   engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
 1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, canonical padding,
    a strict decode to UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a

@@ -70,9 +70,9 @@ Underscore-prefixed keys are skipped during the merge process.
 | serial_number | SERIAL              | SN, S/N, Serial Number labels + values              |
 | account_id    | ACCOUNT             | Account, Subscriber, Customer, Device ID labels     |
 | private_ip    | (format-preserving) | 10.x, 172.16-31.x, 192.168.x                        |
-| public_ip     | (format-preserving) | Non-private, non-reserved IPv4                      |
-| ipv6          | (format-preserving) | IPv6 full and compressed forms                      |
-| email         | (format-preserving) | RFC 5321 simplified                                 |
+| public_ip     | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)     |
+| ipv6          | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)          |
+| email         | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                    |
 | session_token | TOKEN               | 20+ char alphanumeric strings                       |
 | csrf_token    | CSRF                | CSRF tokens in meta tags                            |
 | password      | PASS                | password=, passphrase= patterns                     |
@@ -618,6 +618,30 @@ A serial value is one whitespace-free token of five or more characters carrying 
 (`is_fully_redacted()`: `SN0000001234` contains a zero run and is still a serial) — the digit rule is what excludes
 status words (`N/A`, `Enabled`). A MAC value passes `is_mac_value()`; a MAC placeholder is still classified as a MAC,
 since it cannot be told from a real locally administered one, and whether to skip it is the caller's decision.
+
+`unredacted_identity(key, value, custom_patterns)` is that decision for the checkers (`validate`'s `check_json_fields`
+and `check_for_pii`): `classify_identity_field()`, less a MAC placeholder in any layout (`is_mac_placeholder()`: one
+uniform layout, lowercase, first octet `02` — trusted only under a MAC-named key), a constant MAC, or an allowlisted
+value. `iter_json_fields(data)` yields every `(key, value)` member of a parsed container at any depth, iteratively.
+`is_ssid_key(key)` is true when one of a key's words is `ssid` (`ssid_24g`, `guestSSID`): the sanitizer offers such a
+value for review rather than redacting it.
+
+### `PRIVATE_IP_RE`, `PUBLIC_IP_RE`, `IPV6_RE`, `EMAIL_RE` and `is_ipv6_host_address(candidate)`
+
+The address regexes both sanitizer engines use — the HTML engine's passes 4–6 and 11 and the string patterns that JSON
+values, JSON keys and text bodies take — so whether a value is redacted never depends on its body's route. `pii.json`'s
+`public_ip`, `ipv6` and `email` regexes must equal their `.pattern` (a test pins them); its `private_ip` differs on
+purpose, excluding `preserved_gateway_ips` in the regex where the engines skip them in code. An `IPV6_RE` candidate
+(colon-terminated hex groups, not glued to a word or colon on either side) is an address only when
+`is_ipv6_host_address()` accepts it: `ipaddress` parses it, and it is not the unspecified `::` or loopback `::1` —
+protocol constants like IPv4's `0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test.
+
+### `body_route(mime_type, text)`
+
+The one routing decision for a response body's text, shared by the sanitizer and `validate`: `"json"` when the text
+parses as a JSON object or array whatever the type declares (HNAP answers JSON as `text/html`); else `"html"` for a
+markup `mime_kind()` and `"text"` for any other text kind; a type that says nothing about text is sniffed — `<` opens
+markup, else text. See [Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch).
 
 ### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
 

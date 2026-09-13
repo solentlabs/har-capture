@@ -324,5 +324,61 @@
       {"id": "email_address_username",    "url": "http://ken@example.com:Pw123456x@192.168.100.1/", "parts": ["http://ken@example.com:", "Pw123456x", "@192.168.100.1/"]},
       {"id": "scheme_relative_reference", "url": "//admin:Pw123456x@192.168.100.1/status.html",     "parts": ["//admin:", "Pw123456x", "@192.168.100.1/status.html"]}
     ]
+  },
+  "body_route_cases": {
+    "_comment": "body_route(mime, text): the engine a response body's text goes to. Text that parses as a JSON object or array is JSON whatever its type declares (HNAP answers as text/html); otherwise a markup type goes to the HTML engine, any other text type to the text path, and a type that says nothing about text is sniffed (markup, else text).",
+    "cases": [
+      {"id": "json_declared",             "mime": "application/json",         "text": "{\"a\": 1}",                  "route": "json"},
+      {"id": "json_served_as_html",       "mime": "text/html",                "text": "{\"GetStatusResponse\": {}}", "route": "json"},
+      {"id": "json_served_as_text",       "mime": "text/plain",               "text": "[1, 2]",                      "route": "json"},
+      {"id": "json_untyped",              "mime": "",                         "text": " {\"a\": 1}",                 "route": "json"},
+      {"id": "invalid_json_declared",     "mime": "application/json",         "text": "callback({\"a\": 1})",        "route": "text"},
+      {"id": "html_declared",             "mime": "text/html",                "text": "<p>hi</p>",                   "route": "html"},
+      {"id": "brace_led_html_stays_html", "mime": "text/html",                "text": "{not json} <p>hi</p>",        "route": "html"},
+      {"id": "svg",                       "mime": "image/svg+xml",            "text": "<svg/>",                      "route": "html"},
+      {"id": "script",                    "mime": "application/javascript",   "text": "var a = 1;",                  "route": "text"},
+      {"id": "untyped_markup",            "mime": "application/octet-stream", "text": "<div>x</div>",                "route": "html"},
+      {"id": "untyped_text",              "mime": "x-unknown",                "text": "status ok",                   "route": "text"},
+      {"id": "whitespace_only",           "mime": "",                         "text": "   ",                         "route": "text"}
+    ]
+  },
+  "mac_placeholder_cases": {
+    "_comment": "is_mac_placeholder(value): a value hash_mac could have written — a MAC in any layout whose first octet is 02, hex lowercase. For a value already known to be a MAC (under a MAC-named key); as a free-text test a bare 02-prefixed hex run is ambiguous.",
+    "cases": [
+      {"id": "colon",          "value": "02:a1:b2:c3:d4:e5", "placeholder": true},
+      {"id": "hyphen",         "value": "02-a1-b2-c3-d4-e5", "placeholder": true},
+      {"id": "bare",           "value": "02a1b2c3d4e5",      "placeholder": true},
+      {"id": "dotted",         "value": "02a1.b2c3.d4e5",    "placeholder": true},
+      {"id": "real_bare_mac",  "value": "3c7a8a123456",      "placeholder": false},
+      {"id": "uppercase_bare", "value": "02A1B2C3D4E5",      "placeholder": false},
+      {"id": "not_a_mac",      "value": "02abc",             "placeholder": false}
+    ]
+  },
+  "network_value_regex_cases": {
+    "_comment": "The shared value regexes both engines (HTML passes 4-6 and 11, and the JSON/text string patterns) and validate use: matches are the substrings found, in order. For ipv6 a candidate counts only when is_ipv6_host_address accepts it, so clock times, MACs and the constants :: and ::1 are not host addresses. pii.json mirrors public_ip, ipv6 and email verbatim for check_for_pii.",
+    "cases": [
+      {"id": "ipv6_global_compressed",   "regex": "ipv6",       "text": "wan 2600:1700:abcd:1234::1a up",   "matches": ["2600:1700:abcd:1234::1a"]},
+      {"id": "ipv6_link_local_eui64",    "regex": "ipv6",       "text": "fe80::3c7a:8aff:fe12:3456",        "matches": ["fe80::3c7a:8aff:fe12:3456"]},
+      {"id": "ipv6_leading_colons",      "regex": "ipv6",       "text": "map ::ffff:c000:280",              "matches": ["::ffff:c000:280"]},
+      {"id": "ipv6_loopback_kept",       "regex": "ipv6",       "text": "lo ::1",                           "matches": []},
+      {"id": "ipv6_unspecified_kept",    "regex": "ipv6",       "text": "gw6 :: none",                      "matches": []},
+      {"id": "ipv6_prefix_length",       "regex": "ipv6",       "text": "2600:1700:abcd:1234::/64",         "matches": ["2600:1700:abcd:1234::"]},
+      {"id": "ipv6_zone_index",          "regex": "ipv6",       "text": "fe80::1%eth0",                     "matches": ["fe80::1"]},
+      {"id": "ipv6_in_json_string",      "regex": "ipv6",       "text": "{\"v6\": \"2600:1700::1a\"}",   "matches": ["2600:1700::1a"]},
+      {"id": "ipv6_clock_time",          "regex": "ipv6",       "text": "uptime 12:34:56",                  "matches": []},
+      {"id": "ipv6_mac_is_not",          "regex": "ipv6",       "text": "3C:7A:8A:12:34:56",                "matches": []},
+      {"id": "ipv6_glued_to_word",       "regex": "ipv6",       "text": "cm2600:1700::1a",                  "matches": []},
+      {"id": "ipv6_cpp_scope",           "regex": "ipv6",       "text": "std::string",                      "matches": []},
+      {"id": "private_ten",              "regex": "private_ip", "text": "lan 10.1.2.3 up",                  "matches": ["10.1.2.3"]},
+      {"id": "private_172",              "regex": "private_ip", "text": "172.16.5.4",                       "matches": ["172.16.5.4"]},
+      {"id": "private_192_168",          "regex": "private_ip", "text": "192.168.5.4",                      "matches": ["192.168.5.4"]},
+      {"id": "private_172_32_is_not",    "regex": "private_ip", "text": "172.32.0.1",                       "matches": []},
+      {"id": "private_glued_digit",      "regex": "private_ip", "text": "110.1.2.3",                        "matches": []},
+      {"id": "public_dns",               "regex": "public_ip",  "text": "dns 8.8.8.8",                      "matches": ["8.8.8.8"]},
+      {"id": "public_skips_private",     "regex": "public_ip",  "text": "10.1.2.3",                         "matches": []},
+      {"id": "public_skips_loopback",    "regex": "public_ip",  "text": "127.0.0.1",                        "matches": []},
+      {"id": "email_before_pipe",        "regex": "email",      "text": "a@example.com|next",               "matches": ["a@example.com"]},
+      {"id": "email_subdomains",         "regex": "email",      "text": "first.last@mail.example.co.uk",    "matches": ["first.last@mail.example.co.uk"]}
+    ]
   }
 }

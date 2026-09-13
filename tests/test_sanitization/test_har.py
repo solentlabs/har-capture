@@ -4110,24 +4110,17 @@ class TestVendorSerialTextContentRouting:
         assert "7ZZ0000FAKE00" in content["text"]
 
 
-class TestStringPatternLengthGuard:
-    """The perf length guard must sit far above real firmware assets.
+class TestStringPatternsAnySize:
+    """Text is scanned whatever its size, as validate scans it.
 
-    At 10,000 chars it silently exempted the CM2500's 33 KB utility.js
-    from MAC/IP/email scans; it now guards at 1 MB.
+    A length guard exempted the CM2500's 33 KB utility.js at 10,000 chars,
+    and later every body over 1 MB, from MAC/IP/email scans.
     """
 
-    def test_macs_redacted_in_firmware_sized_text(self) -> None:
-        """A ~30 KB body — skipped by the old guard — is scanned."""
-        text = "// filler\n" * 3000 + "device 3C:E4:B0:11:22:33 online"
-        result = _sanitize_string_patterns(text)
-        assert "3C:E4:B0:11:22:33" not in result
-
-    def test_over_one_megabyte_still_skipped(self) -> None:
-        """The guard still exists — bodies over 1 MB pass through unscanned."""
-        text = "x" * 1_000_001 + " 3C:E4:B0:11:22:33"
-        result = _sanitize_string_patterns(text)
-        assert "3C:E4:B0:11:22:33" in result
+    @pytest.mark.parametrize("filler", [30_000, 1_000_001], ids=["firmware_sized", "over_one_megabyte"])
+    def test_macs_redacted(self, filler: int) -> None:
+        text = "x" * filler + " device 3C:E4:B0:11:22:33 online"
+        assert "3C:E4:B0:11:22:33" not in _sanitize_string_patterns(text)
 
 
 class TestSerialDetectorResolverCache:
@@ -4692,3 +4685,54 @@ class TestHostileNesting:
         har_file = tmp_path / "deep.har"
         har_file.write_text(json.dumps(sanitized))
         validate_har(har_file)
+
+
+JSON_IDENTITY_BODY_CASES = _HAR_FIXTURE["json_identity_body_cases"]["cases"]
+VALUE_PASS_BODY_CASES = _HAR_FIXTURE["value_pass_body_cases"]["cases"]
+
+
+class TestJsonIdentityBodies:
+    """A key naming a serial or MAC is redacted when its value has that shape, in any JSON body."""
+
+    @pytest.mark.parametrize(
+        "case", JSON_IDENTITY_BODY_CASES, ids=[c["id"] for c in JSON_IDENTITY_BODY_CASES]
+    )
+    def test_body(self, case: dict) -> None:
+        text = case["text"]
+        if "pad" in case:
+            text = "var pad = '" + "x" * case["pad"] + "'; " + text
+        entry = _entry_with_response_body(text)
+        entry["response"]["content"]["mimeType"] = case["mime"]
+        out = sanitize_entry(entry, salt="identity")["response"]["content"]["text"]
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
+    def test_ssid_key_offered_for_review(self) -> None:
+        """A network name under an SSID-named key is flagged, not redacted."""
+        entry = _entry_with_response_body('{"ssid_24g": "HomeNet-5G"}')
+        entry["response"]["content"]["mimeType"] = "application/json"
+        _, report = sanitize_har({"log": {"entries": [entry]}}, salt="ssid", heuristics=HeuristicMode.FLAG)
+        assert [(f.original_value, f.category) for f in report.flagged] == [("HomeNet-5G", "wifi_ssid")]
+
+    def test_post_json_identity_redacted(self) -> None:
+        """The same key rule applies to a JSON POST body."""
+        post = {"mimeType": "application/json", "text": '{"StatusSoftwareSerialNum": "4131N12345678"}'}
+        assert "4131N12345678" not in sanitize_post_data(post, Hasher.create("post"))["text"]
+
+
+class TestValuePassBodies:
+    """JSON values, JSON keys and text bodies get the HTML engine's value passes."""
+
+    @pytest.mark.parametrize("case", VALUE_PASS_BODY_CASES, ids=[c["id"] for c in VALUE_PASS_BODY_CASES])
+    def test_body(self, case: dict) -> None:
+        entry = _entry_with_response_body(case["text"])
+        entry["response"]["content"]["mimeType"] = case["mime"]
+        out = sanitize_entry(entry, salt="values")["response"]["content"]["text"]
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out

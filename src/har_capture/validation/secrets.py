@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +29,10 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
+    IPV6_RE,
     MAC_RE,
     URL_VALUED_HEADERS,
+    body_route,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
@@ -41,9 +43,11 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_cookie_attribute_metadata,
     is_fully_redacted,
+    is_ipv6_host_address,
     parse_json_container,
     query_param_segment,
     split_url_password,
+    unredacted_identity,
     url_query,
 )
 from har_capture.patterns.redaction import (
@@ -757,6 +761,21 @@ def _check_xml_fields(
                 )
 
 
+# A JSON field whose key names a device identity and whose value has that
+# identity's shape (classify_identity_field, the sanitizer's own predicate) is
+# an error: the key states what the value is (ADR-13 determinism).
+_IDENTITY_REASONS = {
+    "serial_number": "Device serial number in a JSON field",
+    "mac_address": "MAC address in a JSON field",
+}
+
+
+def _identity_finding(key: str, value: str, custom_patterns: str | dict[str, Any] | None) -> str | None:
+    """Return the reason to report an identity field, or None when it is clean (``unredacted_identity``)."""
+    identity = unredacted_identity(key, value, custom_patterns)
+    return None if identity is None else _IDENTITY_REASONS[identity]
+
+
 def check_json_fields(
     data: dict[str, Any] | list[Any],
     location: str,
@@ -787,8 +806,21 @@ def check_json_fields(
         for key, value in data.items():
             current_path = f"{path}.{key}" if path else key
 
+            identity_reason = (
+                _identity_finding(key, value, custom_patterns) if isinstance(value, str) else None
+            )
+            if identity_reason is not None:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field=current_path,
+                        value=truncate(value),
+                        reason=identity_reason,
+                    )
+                )
             # Skip empty or redacted values
-            if isinstance(value, str) and value and not is_redacted(value, custom_patterns):
+            elif isinstance(value, str) and value and not is_redacted(value, custom_patterns):
                 classified = _classify_field_finding(key, value, _field_tiers)
                 if classified is not None:
                     severity, pattern = classified
@@ -836,6 +868,8 @@ def check_content(
     *,
     has_sanitized_url_credential: bool = False,
     serial_detectors: list[Any] | None = None,
+    mime_type: str = "",
+    field_tiers: _FieldTiers | None = None,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -854,6 +888,9 @@ def check_content(
             ``high_confidence_serial_detectors``), applied delimiter-aware to
             candidate tokens. ``None`` compiles them from ``custom_patterns``;
             ``validate_har`` pre-compiles once per file.
+        mime_type: The body's declared Content-Type. A body the sanitizer
+            routes as JSON (``body_route``) has its fields checked too.
+        field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
     """
     # `content` is a whole response body, so the whole-string form is required.
     # `is_redacted` matches its allowlist families with `re.search` — right for
@@ -888,9 +925,26 @@ def check_content(
         )
         return
 
+    # A body the sanitizer routes as JSON gets its field rules checked here:
+    # identity keys and credential-named keys, the ones it redacts. Identity-
+    # style names (username, login) are only flagged by the sanitizer and
+    # are mostly translation-bundle keys in responses, so they are not
+    # reported — a warning no sanitize run clears.
+    field_macs: set[str] = set()
+    data = (
+        parse_json_container(content) if body_route("" if payload else mime_type, content) == "json" else None
+    )
+    if data is not None:
+        tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
+        start = len(findings)
+        check_json_fields(data, location, findings, "", custom_patterns, _field_tiers=replace(tiers, flag=()))
+        field_macs = {f.value for f in findings[start:] if f.reason == _IDENTITY_REASONS["mac_address"]}
+
     # Check for MAC addresses
     for match in MAC_PATTERN.finditer(content):
         mac = match.group(0)
+        if mac in field_macs:
+            continue
         # Documentation examples, and one byte repeated (broadcast, zero): the
         # sanitizer leaves the constants too, since scripts compare against them.
         if is_constant_mac(mac) or mac.upper() in ("AA:BB:CC:DD:EE:FF", "00:11:22:33:44:55"):
@@ -1020,6 +1074,23 @@ def check_content(
                 )
             )
 
+    # IPv6 addresses: every one the sanitizer's IPv6 pass rewrites (the same
+    # IPV6_RE candidates is_ipv6_host_address accepts), in every body route — a
+    # link-local EUI-64 address embeds the device's MAC. Its placeholders
+    # (the 2001:db8:: documentation prefix, the static "::") are allowlisted.
+    for match in IPV6_RE.finditer(content):
+        address = match.group(0)
+        if is_ipv6_host_address(address) and not is_redacted(address, custom_patterns):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    location=location,
+                    field="content",
+                    value=address,
+                    reason="Potential IPv6 address",
+                )
+            )
+
 
 def validate_har(
     har_path: Path | str,
@@ -1132,6 +1203,8 @@ def validate_har(
             custom_patterns,
             has_sanitized_url_credential=(i in url_cred_entry_indices),
             serial_detectors=serial_detectors,
+            mime_type=str(content_data.get("mimeType") or ""),
+            field_tiers=field_tiers,
         )
 
     return findings

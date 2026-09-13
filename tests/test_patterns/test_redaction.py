@@ -36,9 +36,14 @@ import pytest
 
 from har_capture.patterns.loader import load_pii_patterns
 from har_capture.patterns.redaction import (
+    EMAIL_RE,
+    IPV6_RE,
     MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
     QueryCredential,
     QueryPayload,
+    body_route,
     classify_identity_field,
     decode_base64_payload,
     decode_transport_body,
@@ -48,6 +53,8 @@ from har_capture.patterns.redaction import (
     is_base64_credential,
     is_constant_mac,
     is_fully_redacted,
+    is_ipv6_host_address,
+    is_mac_placeholder,
     is_redacted,
     is_text_mime,
     iter_url_credentials,
@@ -74,6 +81,9 @@ JSON_CONTAINER_CASES = _FIXTURES["json_container_cases"]["cases"]
 CONSTANT_MAC_CASES = _FIXTURES["constant_mac_cases"]["cases"]
 QUERY_PAYLOAD_CASES = _FIXTURES["query_payload_cases"]["cases"]
 URL_PASSWORD_CASES = _FIXTURES["url_password_cases"]["cases"]
+BODY_ROUTE_CASES = _FIXTURES["body_route_cases"]["cases"]
+MAC_PLACEHOLDER_CASES = _FIXTURES["mac_placeholder_cases"]["cases"]
+NETWORK_VALUE_REGEX_CASES = _FIXTURES["network_value_regex_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -86,6 +96,26 @@ class TestMacRegex:
     def test_pii_json_mirrors_mac_re(self) -> None:
         """check_for_pii reads pii.json; the pattern file must carry MAC_RE verbatim."""
         assert load_pii_patterns()["patterns"]["mac_address"]["regex"] == MAC_RE.pattern
+
+
+class TestNetworkValueRegexes:
+    """One IP, IPv6 and email definition for both engines, validate and check_for_pii."""
+
+    _REGEXES = {"ipv6": IPV6_RE, "private_ip": PRIVATE_IP_RE, "public_ip": PUBLIC_IP_RE, "email": EMAIL_RE}
+
+    @pytest.mark.parametrize(
+        "case", NETWORK_VALUE_REGEX_CASES, ids=[c["id"] for c in NETWORK_VALUE_REGEX_CASES]
+    )
+    def test_matches(self, case: dict) -> None:
+        found = [m.group(0) for m in self._REGEXES[case["regex"]].finditer(case["text"])]
+        if case["regex"] == "ipv6":
+            found = [candidate for candidate in found if is_ipv6_host_address(candidate)]
+        assert found == case["matches"]
+
+    @pytest.mark.parametrize("name", ["public_ip", "ipv6", "email"])
+    def test_pii_json_mirrors_shared_regex(self, name: str) -> None:
+        """check_for_pii reads pii.json; the pattern file must carry the shared regex verbatim."""
+        assert load_pii_patterns()["patterns"][name]["regex"] == self._REGEXES[name].pattern
 
 
 class TestIterUrlCredentials:
@@ -136,6 +166,22 @@ class TestIsConstantMac:
     @pytest.mark.parametrize("case", CONSTANT_MAC_CASES, ids=[c["id"] for c in CONSTANT_MAC_CASES])
     def test_constant(self, case: dict) -> None:
         assert is_constant_mac(case["mac"]) is case["constant"]
+
+
+class TestBodyRoute:
+    """body_route is the one routing decision for the sanitizer and the validator."""
+
+    @pytest.mark.parametrize("case", BODY_ROUTE_CASES, ids=[c["id"] for c in BODY_ROUTE_CASES])
+    def test_route(self, case: dict) -> None:
+        assert body_route(case["mime"], case["text"]) == case["route"]
+
+
+class TestIsMacPlaceholder:
+    """is_mac_placeholder recognizes hash_mac output in every layout."""
+
+    @pytest.mark.parametrize("case", MAC_PLACEHOLDER_CASES, ids=[c["id"] for c in MAC_PLACEHOLDER_CASES])
+    def test_placeholder(self, case: dict) -> None:
+        assert is_mac_placeholder(case["value"]) is case["placeholder"]
 
 
 class TestSplitUrlPassword:

@@ -1,5 +1,5 @@
 {
-  "_comment": "ADR-14 symmetry harness. Each row is a raw HAR (its entries) that validate must report (raw_findings: severity + reason substring) and that sanitize must clear: after sanitize_har, in every heuristic mode, validate reports nothing and no leaked string survives. 'patterns' names a built-in domain for both tools. All values are synthetic.",
+  "_comment": "ADR-14 symmetry harness. Each row is a raw HAR (its entries) that validate must report (raw_findings: severity + reason substring) and that sanitize must clear: after sanitize_har, in every heuristic mode, validate reports nothing and no leaked string survives. 'patterns' names a built-in domain for both tools; 'pad_chars' prefixes the first entry's response body with that much filler. All values are synthetic.",
   "symmetry_cases": [
     {
       "id": "authorization_basic_header",
@@ -847,8 +847,8 @@
       ],
       "raw_findings": [
         {
-          "severity": "warning",
-          "reason": "MAC address"
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
         }
       ],
       "leaked": [
@@ -1801,6 +1801,435 @@
       "leaked": [
         "ABC1234567"
       ]
+    },
+    {
+      "id": "hnap_serial_in_text_html_json",
+      "_note": "HNAP answers JSON as text/html",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/HNAP1/",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "{\"GetStatusResponse\": {\"StatusSoftwareSerialNum\": \"4131N12345678\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "json_bare_mac_under_mac_key",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/cm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"CmMacAddress\": \"3C7A8A123456\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "3C7A8A123456"
+      ]
+    },
+    {
+      "id": "post_json_serial_key",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"serialNumber\": \"4131N12345678\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "response_json_credential_key",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wifi",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"wifi\": {\"passphrase\": \"orange4213table\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "orange4213table"
+      ]
+    },
+    {
+      "id": "json_body_global_ipv6",
+      "_note": "JSON values never had the HTML engine's IPv6 pass",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wan",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"wan6\": \"2600:1700:abcd:1234::1a\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "2600:1700:abcd:1234::1a"
+      ]
+    },
+    {
+      "id": "html_body_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>2600:1700:abcd:1234::1a</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "2600:1700:abcd:1234::1a"
+      ]
+    },
+    {
+      "id": "javascript_link_local_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/js/status.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var ll = 'fe80::3c7a:8aff:fe12:3456';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "fe80::3c7a:8aff:fe12:3456"
+      ]
+    },
+    {
+      "id": "json_key_mac",
+      "_note": "A client table keyed by MAC",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/clients",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"clients\": {\"3C:7A:8A:12:34:56\": {\"rssi\": -40}}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_key_public_ip",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/peers",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"73.12.34.56\": \"wan\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "public IP"
+        }
+      ],
+      "leaked": [
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_string_labeled_serial",
+      "_note": "Labeled serials were cleared only by the HTML engine",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/info",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"info\": \"Serial Number: ABC1234567\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "html_declared_json_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/HNAP1/",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "{\"GetInfoResponse\": {\"Info\": \"SN: 7ZZ0000FAKE00\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "text_plain_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/log.txt",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": "boot ok\nSerial Number: ABC1234567\n"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "javascript_table_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/js/info.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var row = '<td>Serial Number</td><td>ABC1234567</td>';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "body_past_old_scan_limit",
+      "_note": "Sanitize used to skip string patterns past 1 MB",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/big.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var cm = '3C:7A:8A:12:34:56';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ],
+      "pad_chars": 1100000
     }
   ]
 }

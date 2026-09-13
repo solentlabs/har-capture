@@ -66,6 +66,7 @@ PII_DETECTION_CASES = [
 ]
 
 ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_cases"]]
+PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -185,6 +186,14 @@ class TestCheckForPii:
         """Test allowlisted values are ignored."""
         findings = check_for_pii(content)
         assert len(findings) == 0, f"{desc}: should have no findings"
+
+    @pytest.mark.parametrize(
+        "case", PII_EXACT_FINDINGS_CASES, ids=[c["id"] for c in PII_EXACT_FINDINGS_CASES]
+    )
+    def test_exact_findings(self, case: dict) -> None:
+        """check_for_pii reports what the sanitizer rewrites, once, and nothing it keeps."""
+        found = [[f["pattern"], f["match"]] for f in check_for_pii(case["content"])]
+        assert found == case["findings"]
 
     def test_returns_line_numbers(self) -> None:
         """Test line number reporting."""

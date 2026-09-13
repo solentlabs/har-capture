@@ -9,6 +9,7 @@ forbids. A change that widens either tool adds its rows here.
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,11 @@ def _validate(har: dict[str, Any], path: Path, patterns: str | None) -> list[Fin
 
 
 def _raw_har(case: dict[str, Any]) -> dict[str, Any]:
-    return {"log": {"version": "1.2", "entries": case["entries"]}}
+    entries = copy.deepcopy(case["entries"])
+    if "pad_chars" in case:
+        content = entries[0]["response"]["content"]
+        content["text"] = "var pad = '" + "x" * case["pad_chars"] + "'; " + content["text"]
+    return {"log": {"version": "1.2", "entries": entries}}
 
 
 # ┌───────────────────────────────┬──────────────────────────────────────────────┐

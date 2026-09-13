@@ -35,11 +35,11 @@
       "description": "Public IP addresses"
     },
     "ipv6": {
-      "regex": "\\b([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\\b",
+      "regex": "(?<![:\\w])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![:\\w])",
       "replacement_prefix": "IPV6",
       "flags": ["IGNORECASE"],
       "require_hex_letter": true,
-      "description": "IPv6 addresses (requires hex letter to avoid time formats)"
+      "description": "IPv6 addresses (IPV6_RE; requires a hex letter to avoid time formats)"
     },
     "email": {
       "regex": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\\.[A-Za-z]{2,}\\b",

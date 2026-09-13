@@ -11,6 +11,7 @@ validation modules.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import json
 import logging
 import re
@@ -240,6 +241,22 @@ def is_mac_value(value: str) -> bool:
     return mac_layout(value) is not None or MAC_RE.fullmatch(value) is not None
 
 
+def is_mac_placeholder(value: str) -> bool:
+    """Check if a value is a MAC placeholder ``hash_mac`` could have written.
+
+    A MAC in one uniform layout, lowercase, with first octet ``02``. Only for
+    a value already known to be a MAC — under a MAC-named key — since a bare
+    02-prefixed hex run in free text could be anything.
+
+    Args:
+        value: Candidate value
+
+    Returns:
+        True if the value has the shape of a MAC placeholder
+    """
+    return mac_layout(value) is not None and value == value.lower() and value.startswith("02")
+
+
 def is_constant_mac(mac: str) -> bool:
     """Check if a MAC is one byte repeated: broadcast ``ff:ff:…``, zero ``00:00:…``.
 
@@ -278,9 +295,26 @@ MAC_KEY_RE = re.compile(r"(?:(?<!^h)(?<!_h)mac(?:_?addr(?:ess)?)?|hw_?addr(?:ess
 # and lengths ('1', '12').
 _SERIAL_VALUE_RE = re.compile(r"(?=\S*\d)\S{5,}")
 
+# A key naming a Wi-Fi network name (`ssid`, `ssid_24g`, `WiFiSSID`): its value
+# identifies a network rather than authenticating to it, so it is offered for
+# review, never auto-redacted.
+SSID_KEY_RE = re.compile(r"(?:^|_)ssid(?:_|$)")
+
 
 def _key_words(key: str) -> str:
     return "_".join(word.lower() for word in _KEY_WORD_RE.findall(key))
+
+
+def is_ssid_key(key: str) -> bool:
+    """Check if a field name names a Wi-Fi network name (``ssid``, ``ssid_5g``, ``guestSSID``).
+
+    Args:
+        key: Field name, in any case convention
+
+    Returns:
+        True if one of the key's words is ``ssid``
+    """
+    return bool(SSID_KEY_RE.search(_key_words(key)))
 
 
 def classify_identity_field(key: str, value: object) -> str | None:
@@ -315,6 +349,105 @@ def classify_identity_field(key: str, value: object) -> str | None:
     if MAC_KEY_RE.search(words) and is_mac_value(value):
         return "mac_address"
     return None
+
+
+def unredacted_identity(
+    key: str, value: object, custom_patterns: str | dict[str, Any] | None = None
+) -> str | None:
+    """Classify an identity field ``validate`` and ``check_for_pii`` report.
+
+    ``classify_identity_field`` without the values the sanitizer's own output
+    can hold under a MAC-named key: a MAC placeholder in any layout, a
+    constant MAC (which it keeps), or an allowlisted value.
+
+    Args:
+        key: Field name, in any case convention
+        value: Field value
+        custom_patterns: Optional custom patterns for the allowlist check
+
+    Returns:
+        ``"serial_number"``, ``"mac_address"``, or None when the field is clean
+    """
+    identity = classify_identity_field(key, value)
+    if identity == "mac_address" and isinstance(value, str):
+        if is_redacted(value, custom_patterns) or is_mac_placeholder(value) or is_constant_mac(value):
+            return None
+    return identity
+
+
+def iter_json_fields(data: dict[str, Any] | list[Any]) -> Iterator[tuple[str, Any]]:
+    """Yield every ``(key, value)`` pair of a parsed JSON container, at any depth.
+
+    Iterative, so a body nested as deep as ``parse_json_container`` accepts
+    cannot exhaust the stack.
+
+    Args:
+        data: A parsed JSON object or array
+
+    Yields:
+        Each object member as ``(key, value)``, outer members first
+    """
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield from node.items()
+            stack.extend(reversed(list(node.values())))
+        elif isinstance(node, list):
+            stack.extend(reversed(node))
+
+
+# The value regexes both sanitizer engines — the HTML passes and the string
+# patterns JSON values, JSON keys and text bodies take — and validate share,
+# so a body's route never decides whether an address is redacted. pii.json
+# carries PUBLIC_IP_RE, IPV6_RE and EMAIL_RE verbatim for check_for_pii (a
+# test pins them); its private_ip entry differs on purpose, excluding the
+# preserved gateway addresses the engines skip in code.
+PRIVATE_IP_RE = re.compile(
+    r"\b(?:"
+    r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+    r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|"
+    r"192\.168\.\d{1,3}\.\d{1,3}"
+    r")\b"
+)
+PUBLIC_IP_RE = re.compile(
+    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)(?!127\.)(?!0\.)(?!255\.)"
+    r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
+)
+# An IPv6 candidate: two to seven colon-terminated hex groups and a last one,
+# not glued to a word or another colon on either side (`(?<![:\w])` rather
+# than `\b`, so a compressed `::ffff:…` is found). Candidates are addresses
+# only when is_ipv6_host_address accepts them, which rejects clock times, MACs
+# and the constants `::` and `::1`.
+IPV6_RE = re.compile(r"(?<![:\w])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![:\w])", re.IGNORECASE)
+EMAIL_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
+)
+
+
+def is_ipv6_host_address(candidate: str) -> bool:
+    """Check if an ``IPV6_RE`` candidate is an IPv6 address that names a host.
+
+    The unspecified ``::`` ("none configured") and loopback ``::1`` are
+    protocol constants, like IPv4's ``0.x`` and ``127.x`` that the IPv4
+    regexes exclude: they identify no device, and a placeholder in their
+    place would read as a real address.
+
+    Args:
+        candidate: Text ``IPV6_RE`` matched
+
+    Returns:
+        True if ``ipaddress`` parses it as an IPv6 address other than ``::`` or ``::1``
+    """
+    try:
+        address = ipaddress.IPv6Address(candidate)
+    except ValueError:
+        return False
+    return not (address.is_unspecified or address.is_loopback)
 
 
 # `type/subtype` at the start of a Content-Type. The type is not checked
@@ -362,6 +495,35 @@ def is_text_mime(mime: str) -> bool:
         True for text/*, JSON, XML, JavaScript and form-urlencoded types
     """
     return mime_kind(mime) is not None
+
+
+def body_route(mime_type: str, text: str) -> str:
+    """Pick the engine for a response body's text: ``"json"``, ``"html"`` or ``"text"``.
+
+    The one routing decision for the sanitizer and the validator. Text that
+    parses as a JSON object or array is JSON whatever its type declares —
+    HNAP answers JSON as ``text/html``, and a markup engine reads no keys.
+    Otherwise a markup type goes to the HTML engine and any other text type
+    to the text path (``mime_kind``); a type that says nothing about text
+    (``application/octet-stream``, ``x-unknown``, none) is sniffed: markup,
+    else text. ``validate`` scans every body whatever its type, so every text
+    a body can carry must reach an engine.
+
+    Args:
+        mime_type: The body's declared Content-Type
+        text: The body's text
+
+    Returns:
+        ``"json"``, ``"html"`` or ``"text"``
+    """
+    if parse_json_container(text) is not None:
+        return "json"
+    kind = mime_kind(mime_type)
+    if kind == "markup":
+        return "html"
+    if kind is not None:
+        return "text"
+    return "html" if text.lstrip().startswith("<") else "text"
 
 
 def parse_json_container(text: str) -> dict[str, Any] | list[Any] | None:

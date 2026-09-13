@@ -32,7 +32,19 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.redaction import MAC_RE, is_constant_mac, is_redacted
+from har_capture.patterns.redaction import (
+    EMAIL_RE,
+    IPV6_RE,
+    MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
+    is_constant_mac,
+    is_ipv6_host_address,
+    is_redacted,
+    iter_json_fields,
+    parse_json_container,
+    unredacted_identity,
+)
 
 if TYPE_CHECKING:
     from typing import Any
@@ -351,6 +363,47 @@ def _sanitize_pipe_value(
 
     # Preserve value (either not flagged, or flagged for review)
     return value
+
+
+def redact_labeled_serials(
+    text: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> str:
+    """Redact serials a label names — HTML engine passes 2 and 2b, for every body.
+
+    ``SERIAL_LABEL_RE`` (``Serial Number: VALUE``, the label closed by tags
+    before its separator) and ``SERIAL_TABLE_RE`` (label cell, value cell).
+    The label, separator and tag run are re-emitted verbatim, so only the
+    value is replaced. The value class holds no quote or backslash, so the
+    pass is safe on raw JSON text as well as markup and script — the text
+    ``validate`` scans with the same patterns.
+
+    Args:
+        text: Body text (markup, JSON or plain text)
+        hasher: Hasher for the ``SERIAL_<hash>`` placeholder
+        collector: Collector to record redactions
+        custom_patterns: Optional custom patterns for the allowlist check
+
+    Returns:
+        The text with labeled serial values replaced
+    """
+
+    def replace_serial(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
+        collector.record_auto_redaction("serial_number")
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'SERIAL')}"
+
+    def replace_serial_table(match: re.Match[str]) -> str:
+        if is_redacted(match.group(2), custom_patterns):
+            return match.group(0)
+        collector.record_auto_redaction("serial_number")
+        return f"{match.group(1)}{hasher.hash_generic(match.group(2), 'SERIAL')}"
+
+    text = SERIAL_LABEL_RE.sub(replace_serial, text)
+    return SERIAL_TABLE_RE.sub(replace_serial_table, text)
 
 
 def redact_vendor_serials(
@@ -687,32 +740,8 @@ def _sanitize_html_impl(
 
     html = MAC_RE.sub(replace_mac, html)
 
-    # 2. Serial Numbers (SERIAL_LABEL_RE). The separator + tag run is captured
-    # and re-emitted verbatim so redaction replaces only the value and
-    # preserves the surrounding markup.
-    def replace_serial(match: re.Match[str]) -> str:
-        if is_redacted(match.group(3), custom_patterns):
-            return match.group(0)
-        collector.record_auto_redaction("serial_number")
-        label = match.group(1)
-        sep = match.group(2)
-        serial = match.group(3)
-        return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
-
-    html = SERIAL_LABEL_RE.sub(replace_serial, html)
-
-    # 2b. Serial numbers in HTML table cells (SERIAL_TABLE_RE)
-    # Handles: <td>...<strong>Serial Number</strong>...</td>\s*<td>VALUE</td>
-    def replace_serial_table(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
-            return match.group(0)
-        collector.record_auto_redaction("serial_number")
-        prefix = match.group(1)
-        serial = match.group(2)
-        hashed = hasher.hash_generic(serial, "SERIAL")
-        return f"{prefix}{hashed}"
-
-    html = SERIAL_TABLE_RE.sub(replace_serial_table, html)
+    # 2 / 2b. Labeled serials, inline and in table cells (redact_labeled_serials).
+    html = redact_labeled_serials(html, hasher, collector, custom_patterns)
 
     # 2d. WPS / pairing / default PIN — 8-digit value anchored by a known label.
     # Pure-digit values can't be flagged heuristically (the universal `^\d+$`
@@ -802,15 +831,7 @@ def _sanitize_html_impl(
         collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True)
 
-    html = re.sub(
-        r"\b(?:"
-        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"  # 10.x.x.x
-        r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|"  # 172.16-31.x.x
-        r"192\.168\.\d{1,3}\.\d{1,3}"  # 192.168.x.x
-        r")\b",
-        replace_private_ip,
-        html,
-    )
+    html = PRIVATE_IP_RE.sub(replace_private_ip, html)
 
     # 5. Public IP addresses (any non-private, non-localhost IP)
     def replace_public_ip(match: re.Match[str]) -> str:
@@ -821,37 +842,18 @@ def _sanitize_html_impl(
         collector.record_auto_redaction("public_ip")
         return hasher.hash_ip(ip, is_private=False)
 
-    html = re.sub(
-        r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
-        r"(?!127\.)(?!0\.)(?!255\.)"
-        r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b",
-        replace_public_ip,
-        html,
-    )
+    html = PUBLIC_IP_RE.sub(replace_public_ip, html)
 
-    # 6. IPv6 Addresses (full and compressed) - strict validation
+    # 6. IPv6 Addresses (full and compressed). A candidate ipaddress rejects,
+    # like the clock time "12:34:56", is not an address and stays.
     def replace_ipv6(match: re.Match[str]) -> str:
         text: str = match.group(0)
-        # Use strict validation via ipaddress module
-        try:
-            ipaddress.IPv6Address(text)
-            collector.record_auto_redaction("ipv6")
-            return hasher.hash_ipv6(text)
-        except ipaddress.AddressValueError:
-            # Not a valid IPv6 address (e.g., time format "12:34:56")
+        if not is_ipv6_host_address(text):
             return text
+        collector.record_auto_redaction("ipv6")
+        return hasher.hash_ipv6(text)
 
-    # Match potential IPv6 addresses including compressed forms like ::1
-    # Use (?<![:\w]) instead of \b to handle addresses starting with ::
-    html = re.sub(
-        r"(?<![:\w])([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![:\w])",
-        replace_ipv6,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = IPV6_RE.sub(replace_ipv6, html)
 
     # 7. Passwords/Passphrases in HTML forms or text
     def replace_password(match: re.Match[str]) -> str:
@@ -989,11 +991,7 @@ def _sanitize_html_impl(
         return hasher.hash_email(match.group(0))
 
     # Pattern supports: user@domain.tld, user.name+tag@sub.domain.co.uk
-    html = re.sub(
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b",
-        replace_email,
-        html,
-    )
+    html = EMAIL_RE.sub(replace_email, html)
 
     # 12. Config file paths (may contain ISP/customer identifiers)
     def replace_config(match: re.Match[str]) -> str:
@@ -1142,6 +1140,25 @@ def redact_structural_credentials(
     return SSID_SELECT_RE.sub(replace_select, content)
 
 
+def _sanitizer_rewrites(pattern_name: str, value: str) -> bool:
+    """Check if the sanitizer's pass for a built-in pii.json pattern rewrites a match.
+
+    Args:
+        pattern_name: The pii.json pattern that matched
+        value: The matched text
+
+    Returns:
+        False for a match the sanitizer keeps on purpose, True otherwise
+    """
+    if pattern_name == "mac_address":
+        return not is_constant_mac(value)
+    if pattern_name == "public_ip":
+        return is_valid_ip_address(value)
+    if pattern_name == "ipv6":
+        return is_ipv6_host_address(value)
+    return True
+
+
 def check_for_pii(
     content: str,
     filename: str = "",
@@ -1153,7 +1170,7 @@ def check_for_pii(
     fixtures before they are committed.
 
     Args:
-        content: Text content to check (HTML, etc.)
+        content: Text content to check (HTML, JSON, script)
         filename: Optional filename for context in warnings
         custom_patterns: Optional path to custom patterns JSON file
 
@@ -1229,6 +1246,13 @@ def check_for_pii(
             if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
                 continue
 
+            # A match the sanitizer's own pass keeps is not reported: it has
+            # no remediation. A constant MAC (broadcast, zero), a version
+            # string in dotted-quad shape, and an IPv6 candidate ipaddress
+            # rejects (a MAC or clock time) all stay in sanitized output.
+            if not _sanitizer_rewrites(pattern_name, matched_text):
+                continue
+
             # Find line number
             line_num = content.count("\n", 0, match.start()) + 1
 
@@ -1237,6 +1261,26 @@ def check_for_pii(
                     "pattern": pattern_name,
                     "match": matched_text,
                     "line": line_num,
+                    "filename": filename,
+                }
+            )
+
+    # A JSON fixture's identity fields — a serial or MAC under a key naming
+    # it — with the predicate validate reports them by. A MAC the regex pass
+    # above already reported is not reported twice.
+    data = parse_json_container(content)
+    if data is not None:
+        reported = {(f["pattern"], f["match"]) for f in findings}
+        for key, value in iter_json_fields(data):
+            category = unredacted_identity(key, value, custom_patterns)
+            if category is None or (category, value) in reported:
+                continue
+            reported.add((category, value))
+            findings.append(
+                {
+                    "pattern": category,
+                    "match": value,
+                    "line": content.count("\n", 0, max(content.find(value), 0)) + 1,
                     "filename": filename,
                 }
             )

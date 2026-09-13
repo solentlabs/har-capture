@@ -71,6 +71,8 @@ CHECK_CONTENT_CASES = [
     (c["content"], c["expect_ip"], c["expect_mac"], c["id"]) for c in _DATA["check_content_cases"]
 ]
 
+CHECK_CONTENT_IPV6_CASES = _DATA["check_content_ipv6_cases"]["cases"]
+
 NETMASK_CASES = [(c["ip"], c["expected"], c["id"]) for c in _DATA["netmask_cases"]]
 
 SERIAL_LABEL_FP_CASES = [
@@ -404,6 +406,16 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
 
     assert has_ip == expect_ip, f"IP detection failed for {desc}"
     assert has_mac == expect_mac, f"MAC detection failed for {desc}"
+
+
+@pytest.mark.parametrize("case", CHECK_CONTENT_IPV6_CASES, ids=[c["id"] for c in CHECK_CONTENT_IPV6_CASES])
+def test_check_content_ipv6(case: dict) -> None:
+    """Every IPv6 address the sanitizer rewrites is reported; its placeholders are not."""
+    findings: list[Finding] = []
+    check_content(case["content"], "response.body", findings)
+    ipv6 = [f for f in findings if "IPv6" in f.reason]
+    assert len(ipv6) == case["expected"], findings
+    assert all(f.severity == "warning" for f in ipv6)
 
 
 @pytest.mark.parametrize(
