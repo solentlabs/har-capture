@@ -93,7 +93,18 @@
     "cases": [
       {"id": "plain_value",   "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N12345678\"\n}",        "line": 3},
       {"id": "repeated_value", "content": "{\"x\": \"ABC12345\",\n\"serialNumber\": \"ABC12345\"}",                "line": 2},
+      {"id": "php_escaped_slash", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"AB\\/1234567\"\n}",          "line": 3},
+      {"id": "escaped_key",       "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N12345678\"\n}", "line": 3},
+      {"id": "escaped_key_and_value", "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N\\u00c912345\"\n}", "line": 3},
       {"id": "escaped_value", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N\\u00c912345\"\n}",   "line": 3}
+    ]
+  },
+
+  "pii_custom_pattern_cases": {
+    "_comment": "check_for_pii with custom pii patterns: an entry that is not a pattern object is skipped, and require_hex_letter drops matches with no a-f letter.",
+    "cases": [
+      {"id": "malformed_entry_skipped", "custom_patterns": {"patterns": {"broken": "not-a-pattern"}},                                                 "content": "dns 8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "require_hex_letter",      "custom_patterns": {"patterns": {"hexy": {"regex": "\\b[0-9a-f]{6}\\b", "replacement_prefix": "H", "require_hex_letter": true}}}, "content": "123456 abc123", "findings": [["hexy", "abc123"]]}
     ]
   },
 
@@ -115,6 +126,12 @@
       {"id": "ipv6_all_digits",          "content": "wan 2001:470:1::5",                                "findings": [["ipv6", "2001:470:1::5"]]},
       {"id": "ipv6_ipv4_mapped_whole",   "content": "map ::ffff:192.0.2.128 ok",                        "findings": [["ipv6", "::ffff:192.0.2.128"]]},
       {"id": "ipv4_mapped_private_once", "content": "map ::ffff:192.168.5.4 ok",                        "findings": [["ipv6", "::ffff:192.168.5.4"]]},
+      {"id": "json_markup_split",        "content": "{\"a\": \"<b>Password:</b><i>x\", \"</i>\": 1}",   "findings": []},
+      {"id": "json_escaped_mac",         "content": "{\"m\": \"3C\\u003a7A\\u003a8A\\u003a12\\u003a34\\u003a56\"}", "findings": [["mac_address", "3C:7A:8A:12:34:56"]]},
+      {"id": "serial_placeholder_label", "content": "Serial Number: SERIAL_34067a2e",                   "findings": []},
+      {"id": "serial_placeholder_cell",  "content": "<td>SN</td><td>SERIAL_34067a2e</td>",              "findings": []},
+      {"id": "account_placeholder",      "content": "Account ID: ACCOUNT_1a2b3c4d",                     "findings": []},
+      {"id": "password_input_placeholder", "content": "<input type=\"password\" value=\"PASS_1a2b3c4d\">", "findings": []},
       {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
       {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
     ]

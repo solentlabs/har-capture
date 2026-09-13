@@ -437,7 +437,7 @@ def iter_json_strings(data: dict[str, Any] | list[Any]) -> Iterator[str]:
                     yield value
                 elif isinstance(value, dict | list):
                     stack.append(value)
-        elif isinstance(node, list):
+        else:  # the stack holds only objects and arrays
             for item in node:
                 if isinstance(item, str):
                     yield item
@@ -632,10 +632,8 @@ def _nesting_exceeds(data: Any, limit: int) -> bool:
         node, depth = stack.pop()
         if depth > limit:
             return True
-        if isinstance(node, dict):
-            stack.extend((value, depth + 1) for value in node.values() if isinstance(value, dict | list))
-        elif isinstance(node, list):
-            stack.extend((item, depth + 1) for item in node if isinstance(item, dict | list))
+        children = node.values() if isinstance(node, dict) else node  # only objects and arrays are stacked
+        stack.extend((child, depth + 1) for child in children if isinstance(child, dict | list))
     return False
 
 
@@ -671,20 +669,6 @@ def json_members(obj: dict[str, Any]) -> list[tuple[str, Any]]:
     if isinstance(obj, JsonObjectWithDuplicates):
         members.extend(obj.shadowed)
     return members
-
-
-def has_shadowed_members(data: Any) -> bool:
-    """True when any object in a parsed container repeats a key."""
-    stack: list[Any] = [data]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, JsonObjectWithDuplicates):
-            return True
-        if isinstance(node, dict):
-            stack.extend(value for value in node.values() if isinstance(value, dict | list))
-        elif isinstance(node, list):
-            stack.extend(item for item in node if isinstance(item, dict | list))
-    return False
 
 
 # `charset=` parameter of a Content-Type, quoted or bare.

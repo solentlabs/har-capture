@@ -676,6 +676,13 @@
       {"id": "html_zero_padded_private_ip", "mime": "text/html",             "text": "<p>192.168.001.100</p>",                                    "absent": ["192.168.001.100"],           "present": ["<p>10.255."]},
       {"id": "html_ipv4_mapped_ipv6",      "mime": "text/html",              "text": "<td>::ffff:192.168.5.4</td>",                               "absent": ["::ffff", "192.168.5.4", ".255."], "present": ["<td>2001:db8::"]},
       {"id": "json_static_key_collision",  "mime": "application/json",       "text": "{\"3C:7A:8A:12:34:56\": \"a\", \"XX:XX:XX:XX:XX:XX\": \"b\"}", "absent": ["3C:7A:8A:12:34:56"],        "present": ["\"a\"", "\"b\""], "salt": null},
+      {"id": "json_placeholder_lookalikes", "mime": "application/json",     "text": "{\"a_password\": \"TP_LINK_20231105\", \"b_password\": \"Z9_ffffffff\", \"c_password\": \"***A1_B***\"}", "absent": ["TP_LINK_20231105", "Z9_ffffffff", "***A1_B***"], "present": ["\"a_password\": \"FIELD_"]},
+      {"id": "json_duplicate_keys_nothing_to_do", "mime": "application/json", "text": "{\n    \"ch\": 6,\n    \"ch\": 6,\n    \"name\": \"caf\\u00e9\"\n}", "absent": [],                    "present": ["{\n    \"ch\": 6,\n    \"ch\": 6,\n    \"name\": \"caf\\u00e9\"\n}"]},
+      {"id": "text_sn_before_ssid_select", "mime": "text/plain",             "text": "S/N <select id=\"mac_ssid\"><option value=\"1\">XFSETUP-9210</option></select>", "absent": ["WIFI_"],                     "present": ["SERIAL_"]},
+      {"id": "html_account_id_keeps_tag",  "mime": "text/html",              "text": "<p>Account ID: 998877</p>",                                 "absent": ["998877"],                    "present": ["<p>Account ID: ACCOUNT_", "</p>"]},
+      {"id": "html_serial_label_then_email", "mime": "text/html",            "text": "<p>Serial Number bob@example.com</p>",                      "absent": ["bob@example.com"],           "present": ["<p>Serial Number user_"]},
+      {"id": "json_shadowed_object_value", "mime": "application/json",       "text": "{\"cfg\": {\"password\": \"hunter2x\", \"n\": [1]}, \"cfg\": {\"a\": 1}}", "absent": ["hunter2x"], "present": ["\"cfg\": {\"a\": 1}"]},
+      {"id": "json_shadowed_nested_nothing", "mime": "application/json",     "text": "{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}",                "absent": [],                            "present": ["{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}"]},
       {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]}
     ]
   },
@@ -706,6 +713,7 @@
       {"id": "json_nothing_to_do",  "mime": "application/json",         "text": "{\n  \"ch\": 6\n}",                                              "absent": [],                            "present": ["{\n  \"ch\": 6\n}"]},
       {"id": "form_mime_json",      "mime": "application/x-www-form-urlencoded", "text": "{\"Password\": \"a=b\", \"ch\": 6, \"Note\": \"x\"}",       "absent": ["a=b"],                       "present": ["\"Password\": \"FIELD_", "\"ch\": 6, \"Note\": \"x\"}"]},
       {"id": "json_mime_unparseable", "mime": "application/json",         "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\":",                     "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"mac\": \"02:"]},
+      {"id": "xml_lone_surrogate",  "mime": "text/xml",                 "text": "<a><password>\ud800x</password></a>",                            "absent": [],                            "present": ["<a>"]},
       {"id": "plain_text_mac",      "mime": "text/plain",               "text": "mac=3C:7A:8A:12:34:56 wan 73.12.34.56",                          "absent": ["3C:7A:8A:12:34:56", "73.12.34.56"], "present": ["mac=02:"]}
     ]
   },

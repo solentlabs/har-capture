@@ -7,19 +7,22 @@
       "description": "MAC addresses in colon or dash format (mirrors MAC_RE in redaction.py)"
     },
     "serial_number": {
-      "regex": "\\b(Serial\\s*Number|SerialNum|Serial\\s*No|Serial(?:\\s*ID)?(?=\\s*(?:</\\w+>\\s*)*[.:=])|SN|S/N)\\b(\\s*(?:</\\w+>\\s*)*[.:\\s=]*(?:<[^>]*>\\s*)*)((?=[a-zA-Z0-9\\-_]*\\d)[a-zA-Z0-9\\-_]{5,})",
+      "regex": "\\b(Serial\\s*Number|SerialNum|Serial\\s*No|Serial(?:\\s*ID)?(?=\\s*(?:</\\w+>\\s*)*[.:=])|SN|S/N)\\b(\\s*(?:</\\w+>\\s*)*[.:\\s=]*(?:<[^>]*>\\s*)*)((?=[a-zA-Z0-9\\-_]*\\d)(?![\\w.+-]*@)[a-zA-Z0-9\\-_]{5,})",
+      "value_group": 3,
       "replacement_prefix": "SERIAL",
       "flags": ["IGNORECASE"],
       "description": "Labeled serial numbers (mirrors SERIAL_LABEL_RE in sanitization/html.py): a serial label, its separator and tags, and a value carrying a digit"
     },
     "wps_pin": {
       "regex": "(WPS[\\s_-]*PIN|PIN[\\s_-]*Code|Pairing[\\s_-]*PIN|Default[\\s_-]*PIN)\\b\\s*[:\\s=]*(?:<[^>]*>\\s*)*(\\d{8})\\b",
+      "value_group": 2,
       "replacement_prefix": "PIN",
       "flags": ["IGNORECASE"],
       "description": "WPS / pairing / default PIN labels followed by an 8-digit code (issue #47)"
     },
     "account_id": {
-      "regex": "(Account|Subscriber|Customer|Device)\\s*(ID|Number)\\s*[:\\s=]+\\S+",
+      "regex": "(Account|Subscriber|Customer|Device)\\s*(ID|Number)\\s*[:\\s=]+([^\\s<]+)",
+      "value_group": 3,
       "replacement_prefix": "ACCOUNT",
       "flags": ["IGNORECASE"],
       "description": "Account, subscriber, or customer IDs"
@@ -47,36 +50,42 @@
     },
     "password_field": {
       "regex": "(password|passphrase|psk|key|wpa[0-9]*key)\\s*[=:]\\s*[\"']?([^\"'<>\\s]+)",
+      "value_group": 2,
       "replacement_prefix": "PASS",
       "flags": ["IGNORECASE"],
       "description": "Password fields in HTML/text"
     },
     "password_input": {
       "regex": "(<input[^>]*type=[\"']?password[\"']?[^>]*value=[\"']?)([^\"']+)([\"']?)",
+      "value_group": 2,
       "replacement_prefix": "PASS",
       "flags": ["IGNORECASE"],
       "description": "Password input field values"
     },
     "session_token": {
       "regex": "(session|token|auth|cookie)\\s*[=:]\\s*[\"']?([^\"'<>\\s]{20,})",
+      "value_group": 2,
       "replacement_prefix": "TOKEN",
       "flags": ["IGNORECASE"],
       "description": "Session tokens and auth cookies"
     },
     "csrf_token": {
       "regex": "(<meta[^>]*name=[\"']?csrf-token[\"']?[^>]*content=[\"']?)([^\"']+)([\"']?)",
+      "value_group": 2,
       "replacement_prefix": "CSRF",
       "flags": ["IGNORECASE"],
       "description": "CSRF tokens in meta tags"
     },
     "config_path": {
       "regex": "(Config\\s*File\\s*Name|config\\s*file)\\s*[:\\s=]+([^\\s<>]+\\.cfg)",
+      "value_group": 2,
       "replacement_prefix": "CONFIG",
       "flags": ["IGNORECASE"],
       "description": "Configuration file paths"
     },
     "motorola_password": {
       "regex": "(var\\s+Current(?:Pw|Password)[A-Za-z]*\\s*=\\s*['\"])([^'\"]+)(['\"])",
+      "value_group": 2,
       "replacement_prefix": "PASS",
       "flags": ["IGNORECASE"],
       "description": "Motorola JavaScript password variables"

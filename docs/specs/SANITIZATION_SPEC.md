@@ -359,10 +359,11 @@ Traverses objects and arrays recursively. Every string leaf goes through the
 
 1. Anything else → traversed.
 
-A sensitive key holding an empty string, or exactly a placeholder the sanitizer writes for a field (`PREFIX_<hex>`,
-`***PREFIX***`, `[REDACTED]`), is left as it is: there is no secret to replace, so HNAP's `"Password": ""` stays empty
-and a sanitized value is not hashed again. Anything else is replaced, including a real value that merely looks redacted
-(`WIFI_Home2024`, `00000000`) — `is_redacted()`'s broader allowlist is `validate`'s, which skips more.
+A sensitive key holding an empty string, or exactly the placeholder this rule writes (`FIELD_<hex>`, `***FIELD***`,
+`[REDACTED]`) that `validate` also accepts, is left as it is: there is no secret to replace, so HNAP's `"Password": ""`
+stays empty and a sanitized value is not hashed again. Anything else is replaced, including a real value that merely
+looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fleet's already-sanitized fixtures this
+stops 480 placeholders being hashed again, and 27 empty passwords in POST JSON stay empty.
 
 Every string — each value, and each object key — is the unit of text: it gets the positional passes the HTML engine runs
 (structural credentials, labeled serials, vendor serials; see [Response Content Dispatch](#response-content-dispatch))
@@ -378,8 +379,10 @@ placeholder — the same MAC in two cases, or any two MACs in static mode — ke
   Python's recursion
 - An object repeating a key parses as a `JsonObjectWithDuplicates`: the last value of each key, as every JSON parser
   (and so every consumer of the capture) reads it, with the earlier pairs kept as `shadowed`. `validate` checks those
-  too; the sanitizer always re-serializes such a body, so a shadowed value — say an earlier value under a repeated
-  credential-named key — never passes through. The duplicate members collapse to the one every parser reads
+  too. When any shadowed value has something to redact (probed without counting or flagging), the sanitizer
+  re-serializes the body, so it never passes through: the duplicate members collapse to the one every parser reads, and
+  the body takes the default layout, since text that repeats a key cannot be reproduced. A body whose repeated keys hide
+  nothing is written back byte-identical
 - Malformed JSON is caught and logged: a POST body is left as-is, a response body takes the text path (sanitization
   continues)
 
@@ -438,23 +441,24 @@ the output is valid.
    HNAP's `x-unknown`, none — is sniffed: text opening with `<` → `sanitize_html()`, else the text path. `validate`
    scans every body whatever its type, so every text a body can carry reaches an engine.
 
-The positional passes the HTML engine runs — structural credentials (`redact_structural_credentials`, pass 7c), labeled
-serials (`redact_labeled_serials()`, pass 2) and vendor serials (`redact_vendor_serials()`) — run on every other route
-too (`_positional_passes`), on the unit of text `validate` checks: a text body's whole text, and each decoded string of
-a JSON body (every value and key). Reading JSON one decoded string at a time means an escape (`\u003c`, `\/`) hides no
-markup from either tool, and no match can pair a label in one string with a value in the next — on the raw JSON text a
-structural value could run through a closing quote, and its replacement broke the document. Until 0.13.0 only the HTML
-engine ran pass 2, so a `Serial Number: <value>` in a JSON string, a script or a text body was reported by `validate`
-and left by every sanitize run; the fleet holds none outside HTML bodies. The JSON route then parses the text
-(`parse_json_container()`: nesting too deep for the parser counts as not JSON, never a crash) and runs
-`_sanitize_json_recursive()`. JSON with nothing to redact and no repeated key is written back byte-identical. Changed
-JSON is re-serialized in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default
-spacing, or a 2- or 4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the
-original's surrounding whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing
-with non-ASCII as written. The text path is `_sanitize_string_patterns()`, over the whole body whatever its size. Until
-0.13.0 it skipped strings over 1 MB (10,000 characters until 2026-08-19, which exempted the CM2500's 33 KB
-`utility.js`), while `validate` scanned them. Across the cable_modem_monitor fleet, dropping the guard redacts 48 MACs
-and 12 IP addresses in `text/javascript` bodies over 1 MB, all reported by `validate` before.
+The positional passes the HTML engine runs — labeled serials (`redact_labeled_serials()`, pass 2), vendor serials
+(`redact_vendor_serials()`, 2e) and structural credentials (`redact_structural_credentials`, pass 7c), in that order —
+run on every other route too (`_positional_passes`), so a value two passes could claim gets one placeholder, on the unit
+of text `validate` checks: a text body's whole text, and each decoded string of a JSON body (every value and key).
+Reading JSON one decoded string at a time means an escape (`\u003c`, `\/`) hides no markup from either tool, and no
+match can pair a label in one string with a value in the next — on the raw JSON text a structural value could run
+through a closing quote, and its replacement broke the document. Until 0.13.0 only the HTML engine ran pass 2, so a
+`Serial Number: <value>` in a JSON string, a script or a text body was reported by `validate` and left by every sanitize
+run; the fleet holds none outside HTML bodies. The JSON route then parses the text (`parse_json_container()`: nesting
+too deep for the parser counts as not JSON, never a crash) and runs `_sanitize_json_recursive()`. JSON with nothing to
+redact is written back byte-identical. Changed JSON is re-serialized in whichever layout `json.dumps` can write that
+reproduces the original exactly — compact, default spacing, or a 2- or 4-space indent; non-ASCII escaped or as-is; `/`
+escaped as PHP writes it (`\/`) — inside the original's surrounding whitespace. Anything else (another indent, a number
+spelled `1.50`) falls back to default spacing with non-ASCII as written. The text path is `_sanitize_string_patterns()`,
+over the whole body whatever its size. Until 0.13.0 it skipped strings over 1 MB (10,000 characters until 2026-08-19,
+which exempted the CM2500's 33 KB `utility.js`), while `validate` scanned them. Across the cable_modem_monitor fleet,
+dropping the guard redacts 48 MACs and 12 IP addresses in `text/javascript` bodies over 1 MB, all reported by `validate`
+before.
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
 transport base64 around plain JSON. Before 0.13.0 these were sanitized correctly, by accident — the decoder for bodies
@@ -563,7 +567,10 @@ identity, and is left alone by both tools (`is_constant_mac()`; see
 [Response Content Dispatch](#response-content-dispatch)).
 
 Until 0.13.0 the sanitizer required `\b` on both sides and the validator required nothing, so a MAC glued to an
-identifier was reported by `validate` and left by every sanitize run.
+identifier was reported by `validate` and left by every sanitize run. One constructed shape stays open: five MAC groups
+glued to an IPv4 address (`3C:11:22:33:44:8.8.8.8`), where the address's placeholder completes a sixth group that
+`validate` then reports. Closing it would mean bounding the MAC run, which the glued-identifier rule keeps open on
+purpose; no fleet capture holds the shape.
 
 **ADR-12 accounting** (redacts MACs the `\b` form missed):
 
@@ -592,33 +599,33 @@ numbers.
 The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2c,
 7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
-| Pass | Scanner                        | Pattern                                                | Redaction                               |
-| ---- | ------------------------------ | ------------------------------------------------------ | --------------------------------------- |
-| 0    | Custom patterns                | Domain-specific PII regex                              | Per-pattern prefix                      |
-| 0b   | Web storage                    | `localStorage.setItem('KEY', 'VALUE')`                 | Auto-redact if key is sensitive         |
-| 1    | MAC addresses                  | `MAC_RE` (see [MAC addresses](#mac-addresses))         | `hasher.hash_mac()`                     |
-| 2    | Serial numbers (inline)        | `\bSN\b\|S/N\|Serial Number` + value with a digit      | `hasher.hash_value(val, "SERIAL")`      |
-| 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial    | `hasher.hash_value(val, "SERIAL")`      |
-| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value (issue #47)            | `hasher.hash_value(val, "PIN")`         |
-| 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token     | `hasher.hash_value(val, "SERIAL")`      |
-| 3    | Account/subscriber IDs         | `Account\|Subscriber\|Customer\|Device` + value        | `hasher.hash_value(val, "ACCOUNT")`     |
-| 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)  | `hasher.hash_ip(ip, is_private=True)`   |
-| 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                   | `hasher.hash_ip(ip, is_private=False)`  |
-| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept | `hasher.hash_ipv6()`                    |
-| 7    | Passwords/passphrases          | `password=value`, `passphrase=value`                   | `hasher.hash_value(val, "PASS")`        |
-| 7a   | SSID text labels               | SSID labels in HTML text nodes                         | `hasher.hash_value(val, "WIFI")`        |
-| 7b   | JS password objects            | JavaScript object password fields                      | `hasher.hash_value(val, "PASS")`        |
-| 7c   | Structural label/value         | Value alone in its own element; SSID-named elements    | `hasher.hash_value(val, "PASS"/"WIFI")` |
-| 8    | Password inputs                | `<input type="password" value="...">`                  | `hasher.hash_value(val, "PASS")`        |
-| 8b   | SSID inputs                    | SSID-related input fields                              | `hasher.hash_value(val, "WIFI")`        |
-| 9    | Session tokens                 | 20+ char alphanumeric with label prefix                | `hasher.hash_value(val, "TOKEN")`       |
-| 10   | CSRF tokens                    | CSRF tokens in meta tags                               | `hasher.hash_value(val, "CSRF")`        |
-| 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                | `hasher.hash_email()`                   |
-| 12   | Config paths                   | `.cfg` file references                                 | `hasher.hash_value(val, "CONFIG")`      |
-| 13   | Vendor JS vars                 | Motorola `var CurrentPw_24g = '...'`                   | `hasher.hash_value(val, "PASS")`        |
-| 14   | Pipe-delimited (tagValueList)  | `var name = "val1\|val2\|val3"`                        | Per-value heuristic analysis            |
-| 15   | Pipe-delimited (other)         | Other pipe-delimited variables                         | Per-value heuristic analysis            |
-| 16   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`             | `hasher.hash_value(val, "WIFI")`        |
+| Pass | Scanner                        | Pattern                                                  | Redaction                               |
+| ---- | ------------------------------ | -------------------------------------------------------- | --------------------------------------- |
+| 0    | Custom patterns                | Domain-specific PII regex                                | Per-pattern prefix                      |
+| 0b   | Web storage                    | `localStorage.setItem('KEY', 'VALUE')`                   | Auto-redact if key is sensitive         |
+| 1    | MAC addresses                  | `MAC_RE` (see [MAC addresses](#mac-addresses))           | `hasher.hash_mac()`                     |
+| 2    | Serial numbers (inline)        | `\bSN\b\|S/N\|Serial Number` + value with a digit        | `hasher.hash_value(val, "SERIAL")`      |
+| 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial      | `hasher.hash_value(val, "SERIAL")`      |
+| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value (issue #47)              | `hasher.hash_value(val, "PIN")`         |
+| 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token       | `hasher.hash_value(val, "SERIAL")`      |
+| 3    | Account/subscriber IDs         | `Account\|Subscriber\|Customer\|Device` + value to a tag | `hasher.hash_value(val, "ACCOUNT")`     |
+| 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
+| 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
+| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
+| 7    | Passwords/passphrases          | `password=value`, `passphrase=value`                     | `hasher.hash_value(val, "PASS")`        |
+| 7a   | SSID text labels               | SSID labels in HTML text nodes                           | `hasher.hash_value(val, "WIFI")`        |
+| 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
+| 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")` |
+| 8    | Password inputs                | `<input type="password" value="...">`                    | `hasher.hash_value(val, "PASS")`        |
+| 8b   | SSID inputs                    | SSID-related input fields                                | `hasher.hash_value(val, "WIFI")`        |
+| 9    | Session tokens                 | 20+ char alphanumeric with label prefix                  | `hasher.hash_value(val, "TOKEN")`       |
+| 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`        |
+| 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                  | `hasher.hash_email()`                   |
+| 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
+| 13   | Vendor JS vars                 | Motorola `var CurrentPw_24g = '...'`                     | `hasher.hash_value(val, "PASS")`        |
+| 14   | Pipe-delimited (tagValueList)  | `var name = "val1\|val2\|val3"`                          | Per-value heuristic analysis            |
+| 15   | Pipe-delimited (other)         | Other pipe-delimited variables                           | Per-value heuristic analysis            |
+| 16   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
@@ -784,16 +791,18 @@ def sanitize_html(
 ### `check_for_pii()` — CI/PR Validation
 
 ```python
-def check_for_pii(content: str, filename: str = "", custom_patterns: str | None = None) -> list[dict]:
+def check_for_pii(content: str, filename: str = "", custom_patterns: str | dict | None = None) -> list[dict]:
     """Detect unsanitized PII in fixture files. Returns list of findings."""
 ```
 
-Used in CI to check test fixtures for PII. Has allowlist support for known placeholders. It reports only what a sanitize
-run clears: a match the sanitizer's own pass keeps — a constant MAC, a preserved gateway address, a dotted-quad version
-string, an IPv6 candidate that is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a MAC is
-not reported a second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with
-`validate`'s predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own
-placeholders).
+Used in CI to check test fixtures for PII. It reads what the sanitizer reads — a JSON fixture one decoded string at a
+time, any other content whole — and judges each match's value, not the label around it, against the allowlist (a
+`pii.json` pattern's `value_group`), so a sanitized `Serial Number: SERIAL_<hash>` is clean. It reports only what a
+sanitize run clears: a match the sanitizer's own pass keeps — a constant MAC, a preserved gateway address, a dotted-quad
+version string, an IPv6 candidate that is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a
+MAC is not reported a second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields
+checked with `validate`'s predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the
+sanitizer's own placeholders).
 
 ## Heuristic Engine (heuristics.py)
 

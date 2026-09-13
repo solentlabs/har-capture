@@ -57,6 +57,7 @@ from har_capture.patterns.redaction import (
     is_redacted,
     is_text_mime,
     iter_json_fields,
+    iter_json_strings,
     iter_url_credentials,
     mime_kind,
     parse_json_container,
@@ -86,6 +87,7 @@ BODY_ROUTE_CASES = _FIXTURES["body_route_cases"]["cases"]
 MAC_PLACEHOLDER_CASES = _FIXTURES["mac_placeholder_cases"]["cases"]
 NETWORK_VALUE_REGEX_CASES = _FIXTURES["network_value_regex_cases"]["cases"]
 ITER_JSON_FIELDS_CASES = _FIXTURES["iter_json_fields_cases"]["cases"]
+ITER_JSON_STRINGS_CASES = _FIXTURES["iter_json_strings_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -128,6 +130,14 @@ class TestIterJsonFields:
         depth = case.get("nest_lists", 0)
         data = parse_json_container("[" * depth + case["text"] + "]" * depth)
         assert [key for key, _ in iter_json_fields(data)] == case["keys"]
+
+
+class TestIterJsonStrings:
+    """iter_json_strings yields the decoded strings both tools' text passes read."""
+
+    @pytest.mark.parametrize("case", ITER_JSON_STRINGS_CASES, ids=[c["id"] for c in ITER_JSON_STRINGS_CASES])
+    def test_strings(self, case: dict) -> None:
+        assert sorted(iter_json_strings(parse_json_container(case["text"]))) == sorted(case["strings"])
 
 
 class TestIterUrlCredentials:

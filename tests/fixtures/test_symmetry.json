@@ -2201,7 +2201,7 @@
     },
     {
       "id": "json_escaped_markup_password",
-      "_note": "Re-serializing JSON unescapes markup the raw-text passes could not see",
+      "_note": "Escaped markup is read in the decoded string",
       "entries": [
         {
           "request": {
@@ -2221,6 +2221,10 @@
         }
       ],
       "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password in a labeled field"
+        },
         {
           "severity": "warning",
           "reason": "MAC address"
@@ -2534,6 +2538,38 @@
       ],
       "leaked": [
         "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_password_shaped_like_placeholder",
+      "_note": "A real value shaped like a placeholder is not one",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wifi",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"TP_LINK_20231105\", \"wifi_password\": \"HOME_12345678\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "TP_LINK_20231105",
+        "HOME_12345678"
       ]
     },
     {

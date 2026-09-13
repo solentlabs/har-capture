@@ -68,6 +68,7 @@ PII_DETECTION_CASES = [
 ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_cases"]]
 PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
 PII_JSON_LINE_CASES = _FIXTURE["pii_json_line_cases"]["cases"]
+PII_CUSTOM_PATTERN_CASES = _FIXTURE["pii_custom_pattern_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -201,6 +202,17 @@ class TestCheckForPii:
         """A JSON identity field is reported on its own line, escaped or not."""
         serials = [f for f in check_for_pii(case["content"]) if f["pattern"] == "serial_number"]
         assert [f["line"] for f in serials] == [case["line"]]
+
+    @pytest.mark.parametrize(
+        "case", PII_CUSTOM_PATTERN_CASES, ids=[c["id"] for c in PII_CUSTOM_PATTERN_CASES]
+    )
+    def test_custom_patterns(self, case: dict) -> None:
+        """Custom pii patterns: malformed entries are skipped, require_hex_letter filters."""
+        found = [
+            [f["pattern"], f["match"]]
+            for f in check_for_pii(case["content"], custom_patterns=case["custom_patterns"])
+        ]
+        assert found == case["findings"]
 
     def test_returns_line_numbers(self) -> None:
         """Test line number reporting."""

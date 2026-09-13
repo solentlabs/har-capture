@@ -33,6 +33,7 @@ from har_capture.patterns import (
     PUBLIC_IP_RE,
     URL_VALUED_HEADERS,
     Hasher,
+    JsonObjectWithDuplicates,
     QueryCredential,
     QueryPayload,
     classify_identity_field,
@@ -40,7 +41,6 @@ from har_capture.patterns import (
     decode_transport_body,
     find_query_credential,
     find_query_payload,
-    has_shadowed_members,
     is_allowlisted,
     is_base64_credential,
     is_base64_decodable_text,
@@ -828,31 +828,6 @@ def _sanitize_form_urlencoded(
     return "&".join(pairs)
 
 
-def _sanitize_json_text(
-    text: str,
-    hasher: Hasher | None = None,
-    collector: RedactionCollector | None = None,
-) -> str:
-    """Sanitize a POST body's JSON text with the JSON traversal rules.
-
-    Text with nothing to redact comes back byte-identical, and changed JSON
-    keeps its layout where ``json.dumps`` can reproduce it, as for a response.
-
-    Args:
-        text: JSON text to sanitize
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record redactions
-
-    Returns:
-        Sanitized JSON text, or the text unchanged when it is not a JSON object or array
-    """
-    data = parse_json_container(text)
-    if data is None:
-        _LOGGER.debug("Non-JSON text encountered in POST body, skipping JSON sanitization")
-        return text
-    return _rewrite_json(text, data, hasher, collector)
-
-
 def _rewrite_json(
     text: str,
     data: dict[str, Any] | list[Any],
@@ -861,16 +836,40 @@ def _rewrite_json(
 ) -> str:
     """Sanitize parsed JSON and write it back as its text was written.
 
-    Text with nothing to redact comes back byte-identical. Changed JSON, or
-    JSON repeating a key (whose shadowed values must not pass through), is
-    re-serialized in the original's layout where ``json.dumps`` can
-    reproduce it (``_dump_json_like``); a repeated key keeps its last value,
-    as every JSON parser reads it.
+    Text with nothing to redact comes back byte-identical — a repeated key
+    included, when none of its earlier values has anything to redact either.
+    Otherwise it is re-serialized in the original's layout where
+    ``json.dumps`` can reproduce it (``_dump_json_like``). A repeated key
+    then keeps only its last value, as every JSON parser reads it, so a
+    shadowed secret never passes through; text that repeats a key cannot be
+    reproduced, so such a body takes the default layout.
     """
     cleaned = _sanitize_json_recursive(data, hasher, collector)
-    if cleaned == data and not has_shadowed_members(data):
+    if cleaned == data and not _shadowed_values_change(data, hasher):
         return text
     return _dump_json_like(cleaned, data, text)
+
+
+def _shadowed_values_change(data: Any, hasher: Hasher | None) -> bool:
+    """True when sanitizing a repeated key's earlier value would change it.
+
+    Probed with a throwaway collector: the shadowed members are dropped from
+    the output, so nothing is counted or offered for review twice.
+    """
+    probe = RedactionCollector(hasher=hasher) if hasher is not None else None
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, JsonObjectWithDuplicates):
+            for key, value in node.shadowed:
+                member = {key: value}
+                if _sanitize_json_recursive(member, hasher, probe) != member:
+                    return True
+                if isinstance(value, dict | list):
+                    stack.append(value)
+        children = node.values() if isinstance(node, dict) else node  # only objects and arrays are stacked
+        stack.extend(child for child in children if isinstance(child, dict | list))
+    return False
 
 
 def sanitize_post_data(
@@ -1001,7 +1000,7 @@ def _sanitize_xml_fields(
 
     try:
         root = ET.fromstring(text)  # noqa: S314
-    except ET.ParseError:
+    except (ET.ParseError, UnicodeEncodeError):  # a lone surrogate cannot be encoded to parse
         return text
 
     modified = False
@@ -1035,18 +1034,23 @@ def _is_reviewable_ssid(key: str, value: object) -> bool:
     return not is_allowlisted(value, _active_call_patterns().allowlist) and not is_safe_value(value)
 
 
-# The placeholders _redact_value writes: `PREFIX_<hex>` with a salt,
-# `***PREFIX***` without one, `[REDACTED]` without a hasher.
-_OWN_PLACEHOLDER_RE = re.compile(r"[A-Z][A-Z0-9_]*_[0-9a-f]{8,}|\*\*\*[A-Z][A-Z0-9_]*\*\*\*|\[REDACTED\]")
+# The placeholders _redact_value writes for a credential-named field:
+# `FIELD_<hex>` with a salt, `***FIELD***` without one, `[REDACTED]` without
+# a hasher.
+_OWN_FIELD_PLACEHOLDER_RE = re.compile(r"FIELD_[0-9a-f]{8,}|\*\*\*FIELD\*\*\*|\[REDACTED\]")
 
 
 def _is_own_placeholder(value: str) -> bool:
-    """True for a value that is exactly a placeholder the sanitizer writes for a field.
+    """True for a value that is exactly the placeholder this sanitizer writes for a credential field.
 
-    Narrower than ``is_redacted``: a real value that merely looks redacted
-    (``WIFI_Home2024``, ``00000000``, ``myXXXpassword``) is still replaced.
+    It must also be one ``validate`` accepts (``is_redacted``), so a value
+    kept here is never reported there. A real value that merely looks
+    redacted (``TP_LINK_20231105``, ``WIFI_Home2024``, ``00000000``) is
+    replaced.
     """
-    return _OWN_PLACEHOLDER_RE.fullmatch(value) is not None
+    return _OWN_FIELD_PLACEHOLDER_RE.fullmatch(value) is not None and is_redacted(
+        value, _active_call_patterns().custom_patterns
+    )
 
 
 def _sanitize_key(
@@ -1775,12 +1779,15 @@ def _positional_passes(
     if collector is None or collector.hasher is None:
         return text
     hasher = collector.hasher
-    if "<" in text:
-        text = redact_structural_credentials(text, hasher, collector, custom_patterns)
+    # The HTML engine's order: labeled serials (2), vendor serials (2e), then
+    # structural credentials (7c), so a value both could claim gets the same
+    # placeholder on every route.
     if _SERIAL_LABEL_HINT_RE.search(text):
         text = redact_labeled_serials(text, hasher, collector, custom_patterns)
     if serial_detectors:
         text = redact_vendor_serials(text, list(serial_detectors), hasher, collector)
+    if "<" in text:
+        text = redact_structural_credentials(text, hasher, collector, custom_patterns)
     return text
 
 

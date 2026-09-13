@@ -44,6 +44,7 @@ from har_capture.patterns.redaction import (
     is_ipv6_host_address,
     is_redacted,
     iter_json_fields,
+    iter_json_strings,
     parse_json_container,
     unredacted_identity,
 )
@@ -193,13 +194,15 @@ SSID_OPTION_RE = re.compile(
 # label's own closing tags may precede its separator (<b>Serial Number</b>:).
 # The value must carry a digit, as every real serial does: without it the
 # passes redacted words in label position ("SN Status", "Serial Number:
-# Disabled"). The chain hops only tags, so a following row's label text stops
-# it: a row whose serial is a template placeholder never lends the next row's
-# value. A bare `Serial` or `Serial ID` label
+# Disabled"), and an email's local part is not a serial (the email pass's
+# `user_<hash>@redacted.invalid` would otherwise read as one). The chain hops
+# only tags, so a following row's label text stops it: a row whose serial is a
+# template placeholder never lends the next row's value. A bare `Serial` or
+# `Serial ID` label
 # counts only with a separator after it (`Serial:`), so prose naming a serial
 # port or number is not a label.
 _SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
-_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,}"
+_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?![\w.+-]*@)[a-zA-Z0-9\-_]{5,}"
 SERIAL_LABEL_RE = re.compile(
     r"\b(" + _SERIAL_LABELS + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<[^>]*>\s*)*)(" + _SERIAL_VALUE + r")",
     re.IGNORECASE,
@@ -807,21 +810,19 @@ def _sanitize_html_impl(
     # delimiters; a serial-shaped substring of a longer token never fires.
     html = redact_vendor_serials(html, compiled_detectors, hasher, collector)
 
-    # 3. Account/Subscriber IDs
+    # 3. Account/Subscriber IDs. The label and separator are kept as written
+    # and only the value is replaced; the value stops at a tag, so the markup
+    # around it survives (`<p>Account ID: 998877</p>`).
     def replace_account(match: re.Match[str]) -> str:
-        prefix = match.group(1)
-        suffix = match.group(2)
-        value = match.group(3)
-
-        # Skip if value is already redacted (contains "_" indicating a hash prefix like TEST_xxxxx)
+        value = match.group(2)
+        # Skip if value is already redacted (a hash placeholder like ACCOUNT_xxxxxxxx)
         if "_" in value and re.match(r"^[A-Z]+_[a-f0-9]+$", value):
-            return match.group(0)  # Return unchanged
-
+            return match.group(0)
         collector.record_auto_redaction("account")
-        return f"{prefix} {suffix}: {hasher.hash_generic(match.group(0), 'ACCOUNT')}"
+        return f"{match.group(1)}{hasher.hash_generic(value, 'ACCOUNT')}"
 
     html = re.sub(
-        r"(Account|Subscriber|Customer|Device)\s*(ID|Number)\s*[:\s=]+(\S+)",
+        r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+)([^\s<]+)",
         replace_account,
         html,
         flags=re.IGNORECASE,
@@ -1173,11 +1174,17 @@ def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[
 
 
 def _json_value_line(content: str, key: str, value: str) -> int:
-    """Line of a JSON member in its document: the key and value together, else the value alone.
+    r"""Line of a JSON member in its document: the key and value together, else the value alone.
 
-    Each is looked for as written and as JSON escapes it.
+    Each is looked for as written, as ``json.dumps`` escapes it, and with
+    ``/`` escaped as PHP writes it (``\/``).
     """
-    for key_text, value_text in ((key, value), (json.dumps(key)[1:-1], json.dumps(value)[1:-1])):
+    escaped_key, escaped_value = json.dumps(key)[1:-1], json.dumps(value)[1:-1]
+    for key_text, value_text in (
+        (key, value),
+        (escaped_key, escaped_value),
+        (escaped_key.replace("/", "\\/"), escaped_value.replace("/", "\\/")),
+    ):
         member = re.search(re.escape(f'"{key_text}"') + r"\s*:\s*" + re.escape(f'"{value_text}"'), content)
         if member is not None:
             return content.count("\n", 0, member.start()) + 1
@@ -1187,20 +1194,88 @@ def _json_value_line(content: str, key: str, value: str) -> int:
     return content.count("\n", 0, max(offset, 0)) + 1
 
 
+def _json_string_line(content: str, text: str) -> int:
+    """Line of a JSON document on which a decoded string is written (escaped, else as-is)."""
+    offset = content.find(json.dumps(text)[1:-1])
+    if offset < 0:
+        offset = content.find(text)
+    return content.count("\n", 0, max(offset, 0)) + 1
+
+
+def _fixture_text_findings(
+    text: str,
+    pii: dict[str, Any],
+    allowlist: dict[str, Any],
+    preserved_ips: frozenset[str],
+    custom_patterns: str | dict[str, Any] | None,
+) -> Iterator[tuple[str, str, int]]:
+    """Yield ``(pattern, match, offset)`` for each finding ``check_for_pii`` reports in one text."""
+    # Labeled default credentials in sibling-element label/value pairs. These
+    # live as compiled patterns rather than pii.json entries because the pass-0
+    # generic replacer substitutes the whole match, which would flatten the
+    # label markup this pattern deliberately preserves. Sharing the compiled
+    # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
+    # and this CI fixture gate — from drifting apart (issue #194).
+    for sibling_pattern, sibling_name in (
+        (SIBLING_PASSWORD_RE, "default_password_label"),
+        (SIBLING_SSID_RE, "default_ssid_label"),
+        (SSID_ATTRIBUTE_RE, "ssid_attribute"),
+    ):
+        for match in sibling_pattern.finditer(text):
+            # is_structural_value_sensitive() runs is_redacted() over the
+            # same loaded allowlist, so no separate allowlist check.
+            if is_structural_value_sensitive(match.group(2), custom_patterns):
+                yield sibling_name, match.group(2), match.start(2)
+
+    for option_value, option_offset in iter_ssid_option_values(text, custom_patterns):
+        yield "ssid_select_option", option_value, option_offset
+
+    # An IPv4-mapped IPv6 address is one address, which the sanitizer hashes
+    # whole: its IPv4 tail is not reported again as IPv4.
+    ipv6_spans = ipv6_host_spans(text)
+
+    for pattern_name, pattern_def in pii.get("patterns", {}).items():
+        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
+            continue
+        flags = re.IGNORECASE if "IGNORECASE" in pattern_def.get("flags", []) else 0
+        for match in re.finditer(pattern_def["regex"], text, flags):
+            matched_text = match.group(0)
+            # The allowlist judges the value, not the label around it: a
+            # sanitized `Serial Number: SERIAL_<hash>` is clean.
+            if is_allowlisted(match.group(pattern_def.get("value_group", 0)), allowlist):
+                continue
+            if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
+                continue
+            # A match the sanitizer's own pass keeps is not reported: it has
+            # no remediation. A constant MAC (broadcast, zero), a preserved
+            # gateway address, a version string in dotted-quad shape, and an
+            # IPv6 candidate that is not a host address (a MAC, a clock time,
+            # `::`, `::1`) all stay in sanitized output.
+            if not _sanitizer_rewrites(pattern_name, matched_text, preserved_ips):
+                continue
+            if pattern_name in ("private_ip", "public_ip") and any(
+                start <= match.start() < end for start, end in ipv6_spans
+            ):
+                continue
+            yield pattern_name, matched_text, match.start()
+
+
 def check_for_pii(
     content: str,
     filename: str = "",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Check content for potential PII that should be sanitized.
 
     This function is intended for CI/PR validation to catch unsanitized
-    fixtures before they are committed.
+    fixtures before they are committed. It reports only what a sanitize run
+    clears, reading what the sanitizer reads: a JSON fixture one decoded
+    string (value or key) at a time, any other content whole.
 
     Args:
         content: Text content to check (HTML, JSON, script)
         filename: Optional filename for context in warnings
-        custom_patterns: Optional path to custom patterns JSON file
+        custom_patterns: Optional custom patterns (file path or dict)
 
     Returns:
         List of dicts with 'pattern', 'match', 'line', and 'filename' for each PII found
@@ -1215,90 +1290,21 @@ def check_for_pii(
     preserved_ips = frozenset(pii.get("preserved_gateway_ips", []))
     findings: list[dict[str, Any]] = []
 
-    # Labeled default credentials in sibling-element label/value pairs. These
-    # live as compiled patterns rather than pii.json entries because the pass-0
-    # generic replacer substitutes the whole match, which would flatten the
-    # label markup this pattern deliberately preserves. Sharing the compiled
-    # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
-    # and this CI fixture gate — from drifting apart (issue #194).
-    for sibling_pattern, sibling_name in (
-        (SIBLING_PASSWORD_RE, "default_password_label"),
-        (SIBLING_SSID_RE, "default_ssid_label"),
-        (SSID_ATTRIBUTE_RE, "ssid_attribute"),
-    ):
-        for match in sibling_pattern.finditer(content):
-            value = match.group(2)
-            # No separate allowlist check: is_structural_value_sensitive()
-            # already runs is_redacted(), and both resolve to the same
-            # _check_patterns() over the same loaded allowlist.
-            if not is_structural_value_sensitive(value, custom_patterns):
-                continue
+    data = parse_json_container(content)
+    texts: list[tuple[str, int | None]] = (
+        [(text, _json_string_line(content, text)) for text in iter_json_strings(data)]
+        if data is not None
+        else [(content, None)]
+    )
+    for text, json_line in texts:
+        for pattern, value, offset in _fixture_text_findings(
+            text, pii, allowlist, preserved_ips, custom_patterns
+        ):
             findings.append(
                 {
-                    "pattern": sibling_name,
+                    "pattern": pattern,
                     "match": value,
-                    "line": content.count("\n", 0, match.start(2)) + 1,
-                    "filename": filename,
-                }
-            )
-
-    for option_value, option_offset in iter_ssid_option_values(content, custom_patterns):
-        findings.append(
-            {
-                "pattern": "ssid_select_option",
-                "match": option_value,
-                "line": content.count("\n", 0, option_offset) + 1,
-                "filename": filename,
-            }
-        )
-
-    # An IPv4-mapped IPv6 address is one address, which the sanitizer hashes
-    # whole: its IPv4 tail is not reported again as IPv4.
-    ipv6_spans = ipv6_host_spans(content)
-
-    for pattern_name, pattern_def in pii.get("patterns", {}).items():
-        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
-            continue
-
-        regex = pattern_def["regex"]
-        flags = 0
-        if "flags" in pattern_def:
-            for flag_name in pattern_def["flags"]:
-                if flag_name == "IGNORECASE":
-                    flags |= re.IGNORECASE
-
-        matches = re.finditer(regex, content, flags)
-        for match in matches:
-            matched_text = match.group(0)
-
-            # Skip if it's an allowlisted placeholder
-            if is_allowlisted(matched_text, allowlist):
-                continue
-
-            # For IPv6 pattern, skip if it doesn't contain hex letters (a-f)
-            if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
-                continue
-
-            # A match the sanitizer's own pass keeps is not reported: it has
-            # no remediation. A constant MAC (broadcast, zero), a preserved
-            # gateway address, a version string in dotted-quad shape, and an
-            # IPv6 candidate that is not a host address (a MAC, a clock time,
-            # `::`, `::1`) all stay in sanitized output.
-            if not _sanitizer_rewrites(pattern_name, matched_text, preserved_ips):
-                continue
-            if pattern_name in ("private_ip", "public_ip") and any(
-                start <= match.start() < end for start, end in ipv6_spans
-            ):
-                continue
-
-            # Find line number
-            line_num = content.count("\n", 0, match.start()) + 1
-
-            findings.append(
-                {
-                    "pattern": pattern_name,
-                    "match": matched_text,
-                    "line": line_num,
+                    "line": json_line if json_line is not None else text.count("\n", 0, offset) + 1,
                     "filename": filename,
                 }
             )
@@ -1306,7 +1312,6 @@ def check_for_pii(
     # A JSON fixture's identity fields — a serial or MAC under a key naming
     # it — with the predicate validate reports them by. A MAC the regex pass
     # above already reported is not reported twice.
-    data = parse_json_container(content)
     if data is not None:
         reported = {(f["pattern"], f["match"]) for f in findings}
         for key, value in iter_json_fields(data):

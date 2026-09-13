@@ -1262,10 +1262,10 @@ class TestResponseContentFallback:
 
 
 class TestNestedJSONSanitization:
-    """Tests for _sanitize_json_text handling nested objects."""
+    """Tests for POST JSON bodies with nested objects."""
 
     def test_nested_sensitive_fields_in_post_data(self) -> None:
-        """Test _sanitize_json_text now handles nested sensitive fields."""
+        """Nested sensitive fields in a POST JSON body are redacted."""
         post_data = {
             "mimeType": "application/json",
             "text": '{"data": {"password": "secret", "nested": {"token": "abc123"}}}',
@@ -2989,21 +2989,6 @@ class TestWebStorageSanitization:
         assert check(meta), f"Assertion failed for case: {desc}"
 
 
-class TestSanitizeJsonTextLogging:
-    """Tests for _sanitize_json_text debug logging."""
-
-    def test_sanitize_json_text_invalid_json_logs_debug(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Non-JSON text logs debug message."""
-        import logging
-
-        from har_capture.sanitization.har import _sanitize_json_text
-
-        with caplog.at_level(logging.DEBUG):
-            result = _sanitize_json_text("<html>not json</html>")
-        assert result == "<html>not json</html>"
-        assert "Non-JSON" in caplog.text
-
-
 # =============================================================================
 # Sanitization Metadata Embedding
 # =============================================================================
@@ -4083,6 +4068,16 @@ class TestVendorSerialTextContentRouting:
         assert "7ZZ0000FAKE00" not in content_text
         assert "SERIAL_" in content_text
 
+    def test_serial_redacted_even_in_large_js_file(self) -> None:
+        """A large script body gets the scan too (the text path has no length guard)."""
+        from har_capture.patterns.loader import resolve_patterns_arg
+
+        patterns = str(resolve_patterns_arg("network-device"))
+        big_js = "// filler\n" * 2000 + "var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';"
+        entry = self._entry(big_js)
+        result = sanitize_entry(entry, salt="test", custom_patterns=patterns)
+        assert "7ZZ0000FAKE00" not in result["response"]["content"]["text"]
+
     def test_no_domain_patterns_leaves_token(self) -> None:
         entry = self._entry("var tagValueList = 'V6.01.03|7ZZ0000FAKE00|0';")
         result = sanitize_entry(entry, salt="test")
@@ -4747,7 +4742,7 @@ class TestValuePassBodies:
         elif case.get("via") == "check_for_pii":
             from har_capture.sanitization.html import check_for_pii
 
-            assert check_for_pii(case["text"], custom_patterns=custom) == []  # type: ignore[arg-type]
+            assert check_for_pii(case["text"], custom_patterns=custom) == []
             return
         else:
             entry = _entry_with_response_body(case["text"])

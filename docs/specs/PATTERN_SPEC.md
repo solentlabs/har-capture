@@ -54,13 +54,14 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `patterns` dict**
 
-| Field                | Type       | Required | Description                                            |
-| -------------------- | ---------- | -------- | ------------------------------------------------------ |
-| `regex`              | string     | Yes      | Python regex pattern for matching PII                  |
-| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)    |
-| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL             |
-| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars |
-| `description`        | string     | No       | Human-readable description                             |
+| Field                | Type       | Required | Description                                                                                       |
+| -------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `regex`              | string     | Yes      | Python regex pattern for matching PII                                                             |
+| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)                                               |
+| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                                                        |
+| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars                                            |
+| `value_group`        | int        | No       | `check_for_pii`: the group holding the value, judged against the allowlist (default: whole match) |
+| `description`        | string     | No       | Human-readable description                                                                        |
 
 **Built-in patterns:**
 
@@ -669,9 +670,9 @@ Otherwise bytes that do not decode, an empty result, or text holding NUL mean bi
 `parse_json_container()` returns the object or array JSON text holds, or `None` — for scalars, invalid JSON, and nesting
 too deep for the parser or deeper than `JSON_MAX_NESTING` (400), so hostile input never crashes either tool. An object
 that repeats a key parses to a `JsonObjectWithDuplicates`: the last value of each key, as every parser reads it, with
-the earlier pairs in `shadowed`. `json_members()` gives an object's members with the shadowed ones, and
-`has_shadowed_members()` says whether a parsed body has any. `is_constant_mac()` is true for a MAC that is one byte
-repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool treats as PII.
+the earlier pairs in `shadowed`. `json_members()` gives an object's members with the shadowed ones. `is_constant_mac()`
+is true for a MAC that is one byte repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool
+treats as PII.
 
 ### `decode_base64_payload(value)` and `find_query_payload(segment)`
 

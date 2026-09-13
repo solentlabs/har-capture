@@ -272,6 +272,7 @@
   "json_container_cases": {
     "_comment": "parse_json_container(text): a JSON object or array, or null. Scalars, invalid JSON and nesting too deep for the parser are not containers — hostile nesting must not crash either tool. 'nesting' builds '[' * n + ']' * n instead of a literal text.",
     "cases": [
+      {"id": "mixed_list_nesting",             "text": "[1, {\"a\": [2, \"s\"]}, null]",                          "is_container": true},
       {"id": "duplicate_key_differing_values", "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\": \"N/A\"}", "is_container": true},
       {"id": "duplicate_key_same_values",      "text": "{\"ch\": 6, \"ch\": 6}",                                    "is_container": true},
       {"id": "object",             "text": "{\"a\": 1}",     "is_container": true},
@@ -393,6 +394,15 @@
       {"id": "nested_in_list",    "text": "[{\"a\": {\"b\": 1}}, {\"c\": 2}]",  "keys": ["a", "b", "c"]},
       {"id": "within_depth",      "text": "{\"a\": 1}", "nest_lists": 50,     "keys": ["a"]},
       {"id": "past_depth",        "text": "{\"a\": 1}", "nest_lists": 51,     "keys": []}
+    ]
+  },
+  "iter_json_strings_cases": {
+    "_comment": "iter_json_strings(parsed) yields every decoded string — object keys and string values, in arrays too, shadowed duplicates included — at any depth; numbers, booleans and null are not strings.",
+    "cases": [
+      {"id": "object",            "text": "{\"a\": \"x\", \"n\": 1}",                 "strings": ["a", "x", "n"]},
+      {"id": "array_of_mixed",    "text": "[\"x\", 2, null, [\"y\"], {\"k\": \"v\"}]", "strings": ["x", "y", "k", "v"]},
+      {"id": "escaped_markup",    "text": "{\"h\": \"\\u003cb\\u003e\"}",           "strings": ["h", "<b>"]},
+      {"id": "shadowed_duplicate", "text": "{\"p\": \"first\", \"p\": \"last\"}",    "strings": ["p", "last", "p", "first"]}
     ]
   }
 }

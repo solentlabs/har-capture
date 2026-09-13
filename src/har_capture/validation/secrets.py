@@ -722,7 +722,7 @@ def _check_xml_fields(
 
     try:
         root = ET.fromstring(text)  # noqa: S314
-    except ET.ParseError:
+    except (ET.ParseError, UnicodeEncodeError):  # a lone surrogate cannot be encoded to parse
         return
 
     for elem in root.iter():
