@@ -117,6 +117,8 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
                                  marker + base64("admin:pass")
 ```
 
+1. A password in the URL's userinfo (`split_url_password()`: the `user:password` part ahead of the host) → **error**,
+   unless `is_redacted()` recognizes it as a placeholder.
 1. Read the query with `url_query()` — from the first `?` to the next `#`, as the sanitizer does, rather than
    `urlparse`, which raises on a URL it cannot parse — and split it on `&` (not `parse_qsl`, which would strip base64
    padding); a `queryString` entry is rejoined into its segment with `query_param_segment()`.
@@ -126,7 +128,8 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
    [field tiers](#finding-dataclass) exactly as for form fields.
 1. Otherwise a base64-wrapped JSON or URL payload (`find_query_payload()`) is checked inside — a JSON payload with
    `check_json_fields()`, a URL payload with `check_url()` — under any other name, including an identity-style one: the
-   sanitizer sanitizes inside it rather than flagging it.
+   sanitizer sanitizes inside it rather than flagging it. Only errors found inside are reported: nothing inside a
+   payload is offered for review, so a warning there would have no remedy.
 1. Otherwise a flag-tier name → **warning**, a factory-default username suppressed. Empty values are skipped.
 
 This is the sanitizer's own decision order (`_classify_query_param`), so what one tool does to a parameter, the other
@@ -165,6 +168,8 @@ Checks form field names and JSON body content:
 1. For each parameter, classify `name` via `_classify_field_finding` (see the
    [field-name severity model](#finding-dataclass)): `auto_redact_patterns` match → **error**, `flag_patterns` match →
    **warning**, flag-tier match with a factory-default username value → suppressed
+1. Unless the name is auto-redact-tier, a value that is a base64 JSON or URL payload is checked inside instead, errors
+   only — the sanitizer's order, as in `check_url` above
 1. If matched, check if `value` is already redacted
 1. Report if value is not redacted
 1. If the name did NOT match but the form is **login-shaped** (any parameter name in the form matches a sensitive
@@ -238,10 +243,10 @@ Severity: **error**
 - The inline label patterns require `(?!ize)` after `serial` (jquery's `serialize:`/`serializeArray:` methods matched as
   labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
   noise on the CM2500 round-1 validate run
-- The label must reach its colon within its own text (`serial` plus at most 20 characters, no markup), and a table-cell
-  value's tag chain must stay inside its cell: an unbounded label crossed a whole table row whose serial is a template
-  placeholder (`<?get_cm_sn>`) to the next label's colon, and reported that row's firmware name as a serial on 12 fleet
-  pages (TM1602A, CM820B) that no sanitize run could clear
+- The label must reach its colon within its own text (`serial` plus at most 20 characters, then only its own closing
+  tags — `<b>Serial Number</b>: X`), and a table-cell value's tag chain must stay inside its cell: an unbounded label
+  crossed a whole table row whose serial is a template placeholder (`<?get_cm_sn>`) to the next label's colon, and
+  reported that row's firmware name as a serial on 12 fleet pages (TM1602A, CM820B) that no sanitize run could clear
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**

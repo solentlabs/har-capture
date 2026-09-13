@@ -345,7 +345,7 @@ def mime_kind(mime: str) -> str | None:
     suffix = subtype.rpartition("+")[2]
     if subtype in ("html", "xhtml") or suffix == "xml":
         return "markup"
-    if suffix == "json":
+    if suffix in ("json", "x-json"):
         return "json"
     if main == "text" or suffix in _SCRIPT_SUBTYPES or subtype == "x-www-form-urlencoded":
         return "text"
@@ -763,6 +763,32 @@ def split_url_query(url: str) -> tuple[str, str, str]:
     head, question, rest = url.partition("?")
     query, hash_mark, fragment = rest.partition("#")
     return head + question, query, hash_mark + fragment
+
+
+# RFC 3986 userinfo with a password (`user:password` ahead of the host). The password
+# runs from the first ':' after the scheme's '//' to the '@' that closes the
+# authority; '/', '?' and '#' end the authority, so a later '@' is path.
+_URL_USERINFO_PASSWORD_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://[^/?#@:]*:)([^/?#@]+)(@)")
+
+
+def split_url_password(url: str) -> tuple[str, str, str] | None:
+    """Split out the password a URL's userinfo carries (``user:password`` ahead of the host).
+
+    Browsers strip userinfo from the requests they send, but a ``Location``
+    header or a wrapped URL can still carry it, and the password is a
+    credential by position. Shared by the sanitizer and ``check_url``.
+
+    Args:
+        url: Any URL string
+
+    Returns:
+        ``(before, password, after)`` with ``url == before + password + after``,
+        or None when the URL has no userinfo password
+    """
+    match = _URL_USERINFO_PASSWORD_RE.match(url)
+    if match is None:
+        return None
+    return match.group(1), match.group(2), url[match.start(3) :]
 
 
 def url_query(url: str) -> str:

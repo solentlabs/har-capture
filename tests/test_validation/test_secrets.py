@@ -97,7 +97,10 @@ CHECK_CONTENT_BASE64_CASES = [
     ("[REDACTED]", False, "already_redacted"),
 ]
 
-CHECK_URL_CASES = [(c["url"], c["expected_count"], c["id"]) for c in _DATA["check_url_cases"]]
+CHECK_URL_CASES = [
+    (c["url"], c["expected_count"], c.get("reason", "Base64-encoded credential"), c["id"])
+    for c in _DATA["check_url_cases"]
+]
 
 COOKIE_ATTR_EXTENDED_CASES = [
     (c["value"], c["expected"], c["id"]) for c in _DATA["cookie_attr_extended_cases"]
@@ -583,22 +586,22 @@ def test_validate_har_gzipped(tmp_path) -> None:
 # check_url()
 # ---------------------------------------------------------------------------
 class TestCheckURL:
-    """Tests for check_url() base64 credential detection."""
+    """Tests for check_url() URL credential detection."""
 
     @pytest.mark.parametrize(
-        ("url", "expected_count", "desc"),
+        ("url", "expected_count", "reason", "desc"),
         CHECK_URL_CASES,
-        ids=[c[2] for c in CHECK_URL_CASES],
+        ids=[c[3] for c in CHECK_URL_CASES],
     )
-    def test_check_url(self, url: str, expected_count: int, desc: str) -> None:
-        """Test check_url detects base64-encoded credentials in query strings."""
+    def test_check_url(self, url: str, expected_count: int, reason: str, desc: str) -> None:
+        """check_url reports URL credentials: query credentials and userinfo passwords."""
         from har_capture.validation.secrets import check_url
 
         findings: list[Finding] = []
         check_url(url, "Entry 0", findings)
         assert len(findings) == expected_count, f"{desc}: expected {expected_count} findings"
         if expected_count > 0:
-            assert "Base64-encoded credential" in findings[0].reason
+            assert reason in findings[0].reason
 
 
 # ---------------------------------------------------------------------------

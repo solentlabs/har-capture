@@ -660,7 +660,9 @@ def _sanitize_html_impl(
     # 2. Serial Numbers (various label formats)
     # The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags so
     # label/value pairs in sibling elements match (Technicolor .jst renders
-    # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>).
+    # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and
+    # the label's own closing tags may precede its separator
+    # (<b>Serial Number</b>: VALUE).
     # The separator + tag run is captured and re-emitted verbatim so redaction
     # replaces only the value and preserves the surrounding markup.
     def replace_serial(match: re.Match[str]) -> str:
@@ -673,7 +675,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
 
     html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*(?:</\w+>\s*)*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,

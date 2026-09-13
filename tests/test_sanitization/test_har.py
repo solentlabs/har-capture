@@ -4567,6 +4567,8 @@ class TestTransportEncodedBodies:
             assert kept in content["text"]
         if "text_equals" in case:
             assert content["text"] == case["text_equals"]
+        if "text_suffix" in case:
+            assert content["text"].endswith(case["text_suffix"])
 
     def test_user_redaction_reaches_transport_body(self) -> None:
         """Pass 2's find-and-replace reaches a value flagged inside a transport-encoded body."""

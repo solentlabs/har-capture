@@ -47,6 +47,7 @@ from har_capture.patterns.redaction import (
     mime_kind,
     parse_json_container,
     query_param_segment,
+    split_url_password,
     split_url_query,
     url_query,
 )
@@ -88,6 +89,7 @@ __all__ = [
     "mime_kind",
     "parse_json_container",
     "query_param_segment",
+    "split_url_password",
     "split_url_query",
     "url_query",
     "URL_VALUED_HEADERS",

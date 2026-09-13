@@ -621,9 +621,9 @@ since it cannot be told from a real locally administered one, and whether to ski
 
 ### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
 
-`mime_kind()` is the one mime vocabulary: `"markup"` (HTML, XML, any `+xml`), `"json"` (any `json` subtype or `+json`
-suffix, whatever the type — DM1000's `applation/json` counts), `"text"` (other `text/*`, JavaScript, form data), or
-`None` when the type says nothing about text. A subtype that merely contains `json` or `xml` is neither.
+`mime_kind()` is the one mime vocabulary: `"markup"` (HTML, XML, any `+xml`), `"json"` (any `json` or `x-json` subtype
+or `+json` suffix, whatever the type — DM1000's `applation/json` counts), `"text"` (other `text/*`, JavaScript, form
+data), or `None` when the type says nothing about text. A subtype that merely contains `json` or `xml` is neither.
 `is_text_mime()` is `mime_kind() is not None`.
 
 `decode_transport_body()` returns the text a HAR body carries. A body without `encoding` is already text; a `base64`
@@ -646,6 +646,12 @@ or a URL — with missing or miscounted padding tolerated, or `None`. Structured
 `find_query_payload()` locates a payload in a URL query segment, bare or keyed, as a
 `QueryPayload(prefix, encoded, text, quoted)` — `quoted` records a percent-encoded original, so a rewrite can be encoded
 the same way. See [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
+
+### `split_url_password(url)`
+
+Splits out the password a URL's userinfo carries (the `user:password` part ahead of the host) as
+`(before, password, after)`, so the URL reassembles byte-for-byte, or returns `None`. A port or an `@` in the path is
+not userinfo. Shared by the sanitizer and `check_url`.
 
 ### `split_url_query(url)`, `url_query(url)` and `iter_url_credentials(request)`
 

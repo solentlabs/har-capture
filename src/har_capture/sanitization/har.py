@@ -46,6 +46,7 @@ from har_capture.patterns import (
     mime_kind,
     parse_json_container,
     query_param_segment,
+    split_url_password,
     split_url_query,
 )
 from har_capture.sanitization.collector import RedactionCollector
@@ -723,8 +724,14 @@ def _sanitize_form_urlencoded(
             # Hash the percent-decoded value so the placeholder matches the
             # params copy (HAR stores params decoded).
             decoded_value = urllib.parse.unquote_plus(value)
+            # Same order as the params copy and the query tree.
             if is_sensitive_field(key):
                 value = _redact_value(decoded_value, hasher, "FIELD", collector)
+            elif is_base64_credential(value) or is_base64_credential(decoded_value):
+                # base64(user:pass) — check the raw and percent-decoded forms.
+                value = _redact_value(decoded_value, hasher, "AUTH", collector)
+            elif (payload := _sanitize_payload_field(value, hasher, collector)) is not None:
+                value = payload
             elif is_flaggable_field(key) and collector and value:
                 collector.flag_value(
                     decoded_value,
@@ -733,10 +740,6 @@ def _sanitize_form_urlencoded(
                     f"form field '{key}'",
                     f"Flaggable field name '{key}' in form data",
                 )
-            elif is_base64_credential(value) or is_base64_credential(decoded_value):
-                # base64(user:pass) value in an unrecognized field name —
-                # check the raw and percent-decoded forms.
-                value = _redact_value(decoded_value, hasher, "AUTH", collector)
             elif login_shaped and collector and is_base64_decodable_text(decoded_value):
                 # Likely a vendor-encoded credential (Sercomm/Hitron style).
                 # Flag, never auto-redact: base64-decodable alone is not a
@@ -823,8 +826,18 @@ def sanitize_post_data(
             )
             for param in result["params"]:
                 if isinstance(param, dict) and "name" in param:
+                    # The query tree's order (_classify_query_param): a
+                    # credential or payload value decides before an
+                    # identity-style name, so `user=<b64(user:pass)>` is a
+                    # credential here as it is in a URL.
                     if is_sensitive_field(param["name"]):
                         param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+                    elif is_base64_credential(param.get("value", "")):
+                        param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
+                    elif (
+                        payload := _sanitize_payload_field(str(param.get("value", "")), hasher, collector)
+                    ) is not None:
+                        param["value"] = payload
                     elif is_flaggable_field(param["name"]) and collector and param.get("value"):
                         collector.flag_value(
                             param["value"],
@@ -833,10 +846,6 @@ def sanitize_post_data(
                             f"POST param '{param['name']}'",
                             f"Flaggable field name '{param['name']}' in POST params",
                         )
-                    elif is_base64_credential(param.get("value", "")):
-                        # base64(user:pass) value in an unrecognized field name
-                        # — mirrors the queryString fallback.
-                        param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
                     elif login_shaped and collector and is_base64_decodable_text(param.get("value", "")):
                         # Mirrors the form-text login-shaped heuristic.
                         collector.flag_value(
@@ -955,7 +964,7 @@ def _sanitize_json_recursive(
                 result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
             elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
                 # Explicit MAC address field - always redact
-                if isinstance(value, str) and value:
+                if isinstance(value, str) and value and not is_constant_mac(value):
                     if collector:
                         collector.record_auto_redaction("mac_address")
                     result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
@@ -1165,7 +1174,7 @@ def _sanitize_headers(
         if isinstance(header, dict) and "name" in header and "value" in header:
             value = header["value"]
             if isinstance(value, str) and str(header["name"]).lower() in URL_VALUED_HEADERS:
-                value = _sanitize_url_query_params(value, hasher, collector)
+                value = _sanitize_url(value, hasher, collector)
             header["value"] = sanitize_header_value(header["name"], value, hasher, collector)
 
 
@@ -1286,12 +1295,24 @@ def _flags_muted(collector: RedactionCollector | None) -> contextlib.AbstractCon
 
 
 def _dump_json_like(data: Any, original_data: Any, original_text: str) -> str:
-    """Serialize sanitized JSON the way its original text was written.
+    r"""Serialize sanitized JSON the way its original text was written.
 
     Compact, default spacing, or a 2- or 4-space indent, with non-ASCII
-    escaped or written as-is — whichever reproduces the original exactly;
-    otherwise default spacing with non-ASCII as written.
+    escaped or written as-is and '/' escaped as PHP writes it (``\/``) —
+    whichever reproduces the original exactly — inside the original's
+    surrounding whitespace. What ``json.dumps`` cannot reproduce (another
+    indent, number spellings like ``1.50``) falls back to default spacing
+    with non-ASCII as written.
     """
+    body = original_text.strip()
+    lead = original_text[: len(original_text) - len(original_text.lstrip())]
+    trail = original_text[len(original_text.rstrip()) :]
+    slashes_escaped = "\\/" in body and "/" not in body.replace("\\/", "")
+
+    def render(obj: Any, **options: Any) -> str:
+        text = json.dumps(obj, **options)
+        return text.replace("/", "\\/") if slashes_escaped else text
+
     layouts: tuple[dict[str, Any], ...] = (
         {"separators": (",", ":")},
         {"separators": (", ", ": ")},
@@ -1300,9 +1321,9 @@ def _dump_json_like(data: Any, original_data: Any, original_text: str) -> str:
     )
     for layout in layouts:
         for ensure_ascii in (False, True):
-            if json.dumps(original_data, ensure_ascii=ensure_ascii, **layout) == original_text.strip():
-                return json.dumps(data, ensure_ascii=ensure_ascii, **layout)
-    return json.dumps(data, ensure_ascii=False)
+            if render(original_data, ensure_ascii=ensure_ascii, **layout) == body:
+                return lead + render(data, ensure_ascii=ensure_ascii, **layout) + trail
+    return lead + render(data, ensure_ascii=False) + trail
 
 
 def _rewrap_payload(original: str, text: str, *, quoted: bool) -> str:
@@ -1347,9 +1368,34 @@ def _sanitize_base64_payload(
             cleaned = _sanitize_json_recursive(data, hasher, collector)
             sanitized = None if cleaned == data else _dump_json_like(cleaned, data, payload.text)
         else:
-            rewritten = _sanitize_url_query_params(payload.text, hasher, collector)
+            rewritten = _sanitize_url(payload.text, hasher, collector)
             sanitized = None if rewritten == payload.text else rewritten
     return None if sanitized is None else _rewrap_payload(payload.encoded, sanitized, quoted=payload.quoted)
+
+
+def _sanitize_payload_field(
+    value: str,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+) -> str | None:
+    """Sanitize a POST field whose whole value is a base64 JSON or URL payload.
+
+    The same rule as a query payload (``_sanitize_base64_payload``): a payload
+    is never a credential, and what is inside is sanitized in place.
+
+    Args:
+        value: The field's value (raw or decoded — URL transport encoding is undone)
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        The rewritten value, or None when the value is not a payload or is unchanged
+    """
+    payload = find_query_payload(value)
+    if payload is None or payload.prefix.strip("?"):
+        return None
+    sanitized = _sanitize_base64_payload(payload, hasher, collector)
+    return None if sanitized is None else payload.prefix + sanitized
 
 
 def _flag_query_value(collector: RedactionCollector, name: str, value: str, where: str) -> None:
@@ -1363,12 +1409,12 @@ def _flag_query_value(collector: RedactionCollector, name: str, value: str, wher
     )
 
 
-def _sanitize_url_query_params(
+def _sanitize_url(
     url: str,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
 ) -> str:
-    """Sanitize credentials and sensitive parameters in a URL's query.
+    """Sanitize the credentials a URL carries: its userinfo password and its query.
 
     Args:
         url: Full URL string
@@ -1376,8 +1422,13 @@ def _sanitize_url_query_params(
         collector: Optional collector to record redactions
 
     Returns:
-        URL with sensitive query parameter values redacted
+        URL with the userinfo password and sensitive query values redacted
     """
+    userinfo = split_url_password(url)
+    if userinfo is not None:
+        before_password, password, after_password = userinfo
+        url = before_password + _redact_value(password, hasher, "AUTH", collector) + after_password
+
     # Only the query changes: everything around it (scheme case, an empty
     # ';' or '#', a relative Location) comes back byte-identical. Raw
     # segments, not parse_qsl, which would read base64 padding as a key/value
@@ -1500,7 +1551,7 @@ def _sanitize_request(
 
     # Sanitize the URL string itself (query params and path segments)
     if "url" in req and isinstance(req["url"], str):
-        req["url"] = _sanitize_url_query_params(req["url"], hasher, collector)
+        req["url"] = _sanitize_url(req["url"], hasher, collector)
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
@@ -1602,7 +1653,7 @@ def _sanitize_body_text(
         with _flags_muted(collector):
             inner = payload_text
             if parse_json_container(inner) is None:
-                inner = _sanitize_url_query_params(inner, hasher, collector)
+                inner = _sanitize_url(inner, hasher, collector)
             inner = _sanitize_body_text(inner, "", collector, custom_patterns, heuristics, url_credential)
         if inner == payload_text:
             return text
@@ -1667,7 +1718,7 @@ def _sanitize_response(
 
     # HAR's copy of the Location header
     if isinstance(resp.get("redirectURL"), str):
-        resp["redirectURL"] = _sanitize_url_query_params(resp["redirectURL"], hasher, collector)
+        resp["redirectURL"] = _sanitize_url(resp["redirectURL"], hasher, collector)
 
     # Sanitize cookie objects (Playwright parses Set-Cookie into structured objects)
     if "cookies" in resp and isinstance(resp["cookies"], list):

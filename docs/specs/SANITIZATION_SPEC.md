@@ -178,15 +178,16 @@ def sanitize_post_data(
 ) -> dict[str, Any] | None:
 ```
 
-1. **Form params** (`postData.params`): Each parameter checked against `is_sensitive_field()` (auto-redact) and
-   `is_flaggable_field()` (flag). A parameter whose name is not recognized but whose value is a `base64(user:pass)`
-   credential (`is_base64_credential()`) is redacted as `AUTH` — mirroring the query-param fallback, so base64-wrapped
-   credentials in device-specific field names do not slip past field-name redaction. A parameter whose name is not
-   recognized in a **login-shaped** form (any parameter name in the form matches a sensitive or flaggable pattern) whose
-   value is base64 decoding to printable text (`is_base64_decodable_text()`) is flagged for review at MEDIUM confidence,
-   category `credential` — not auto-redacted, since base64-decodable alone is not a 100%-confidence signal. This is the
-   backstop for vendor credential fields the name patterns don't know yet (the Sercomm/Hitron `pws` class,
-   cable_modem_monitor issue #92; `pws` itself is now a built-in auto-redact pattern).
+1. **Form params** (`postData.params`): In the [query tree's order](#url-sanitization): `is_sensitive_field()`
+   (auto-redact); a value that is a `base64(user:pass)` credential (`is_base64_credential()`) is redacted as `AUTH` —
+   before an identity-style name is considered, so base64-wrapped credentials in device-specific or identity-named
+   fields do not slip past field-name redaction; a base64 JSON or URL payload value is sanitized inside; then
+   `is_flaggable_field()` (flag). A parameter whose name is not recognized in a **login-shaped** form (any parameter
+   name in the form matches a sensitive or flaggable pattern) whose value is base64 decoding to printable text
+   (`is_base64_decodable_text()`) is flagged for review at MEDIUM confidence, category `credential` — not auto-redacted,
+   since base64-decodable alone is not a 100%-confidence signal. This is the backstop for vendor credential fields the
+   name patterns don't know yet (the Sercomm/Hitron `pws` class, cable_modem_monitor issue #92; `pws` itself is now a
+   built-in auto-redact pattern).
 1. **URL-encoded body** (`_sanitize_form_urlencoded`): Detected via content type, parsed and redacted. The same
    `base64(user:pass)` value fallback and login-shaped flag heuristic apply (checking the raw and percent-decoded
    forms). Redaction hashes the **percent-decoded** value, so the placeholder assigned to a secret in the text copy
@@ -263,15 +264,18 @@ inside — a JSON payload with the JSON rules, a URL payload with these query ru
 the matching checks (`check_json_fields`, `check_url`), in the same order as this tree: a payload under an
 identity-style name is checked inside, not flagged by name. A payload with nothing to redact stays byte-identical. A
 rewritten one is encoded in the original's form: unpadded only where the original visibly stripped its padding (no `=`
-where its length needed one), percent-encoded where the original was, JSON in its original spacing and non-ASCII style.
-In a POST field a payload is not a credential either; what is inside is judged only by the field's name.
+where its length needed one), percent-encoded where the original was, JSON as
+[the body rules](#response-content-dispatch) write it. A POST field (form params or an urlencoded body) follows the same
+tree: a credential-named field is redacted whole, a `base64(user:pass)` value is a credential before an identity-style
+name is considered, and a payload value is sanitized inside.
 
 **Pass 1 is final inside a payload.** Its values are stored base64, beyond the reach of the passes that work on the
 HAR's text: Pass 1b cannot propagate a redacted value into one, and Pass 2 could not apply a review decision there. So
 nothing inside a payload is offered for review (`RedactionCollector.flags_muted()`), and a secret inside one is redacted
-by Pass 1's rules or not at all. The accepted cost, recorded under ADR-12: a session token another surface redacted
-survives inside a payload unless the payload's own rules catch it — a padded payload was destroyed whole before 0.13.0,
-an unpadded one kept intact; the fleet holds none.
+by Pass 1's rules or not at all. `validate` reports only the errors it finds inside a payload for the same reason: an
+identity-style field there has no review to clear it. The accepted cost, recorded under ADR-12: a session token another
+surface redacted survives inside a payload unless the payload's own rules catch it — a padded payload was destroyed
+whole before 0.13.0, an unpadded one kept intact; the fleet holds none.
 
 **ADR-12 accounting** (three changes widen redaction: the marker shape, URL-valued headers, and a credential under an
 identity-style name):
@@ -292,6 +296,22 @@ identity-style name):
   and 9 marker-prefixed — and nothing else. The header rule adds no new detection: it applies the URL's own rules to the
   URLs in `Referer`, `Location`, `Content-Location` and `redirectURL`, and over the same fleet it changed no header
   value. `?user=<b64>` passes the same credential proof as any other keyed value.
+
+**Userinfo password.** A URL's userinfo (RFC 3986: the `user:password` part ahead of the host) carries a credential by
+position (`split_url_password()`, shared with `check_url`); the password becomes `AUTH_<hash>` and the user, host and
+rest of the URL are untouched. It applies wherever the query rules do, and inside a base64-wrapped URL payload. Browsers
+strip userinfo from the requests they send, so it arrives in a `Location` header or a wrapped URL.
+
+**ADR-12 accounting** (a new detection, and the POST order):
+
+- *Leak closed:* a userinfo password survived every sanitize run, and `validate` reported nothing; a padded wrapped URL
+  carrying one was only removed before 0.13.0 because the whole value was taken for a credential. And a POST field with
+  an identity-style name holding `base64(user:pass)` was flagged for review, where the same value in a query has been
+  redacted since 0.12.5.
+- *Fidelity cost:* none beyond the password; the URL's structure survives.
+- *Cannot-be-structure proof:* RFC 3986 gives the text between `scheme://user:` and the authority's `@` no other
+  meaning. Measured 2026-09-13, no URL across the cable_modem_monitor fleet's request URLs, `Referer`, `Location`,
+  `Content-Location` or `redirectURL` values carries userinfo, so the rule changes no fleet capture.
 
 **URL path** (`_sanitize_url_path`):
 
@@ -356,10 +376,12 @@ Every non-HTML route first applies the structural credential pass (`redact_struc
 `redact_vendor_serials()` (delimiter-aware vendor serials, on the raw text — outside the length guard below, so serial
 coverage never depends on body size, and inside JSON strings as well as plain text). The JSON route then parses the text
 (`parse_json_container()`: nesting too deep for the parser counts as not JSON, never a crash) and runs
-`_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical; changed JSON is re-serialized
-in the original's spacing (compact or default) and with non-ASCII written as the original wrote it. The text path is
-`_sanitize_string_patterns()` (perf length guard: strings over 1 MB are skipped — the guard sat at 10,000 chars until
-2026-08-19, silently exempting the CM2500's 33 KB `utility.js` from MAC/IP/email scans).
+`_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical. Changed JSON is re-serialized
+in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default spacing, or a 2- or
+4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the original's surrounding
+whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing with non-ASCII as
+written. The text path is `_sanitize_string_patterns()` (perf length guard: strings over 1 MB are skipped — the guard
+sat at 10,000 chars until 2026-08-19, silently exempting the CM2500's 33 KB `utility.js` from MAC/IP/email scans).
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
 transport base64 around plain JSON. Before 0.13.0 these were sanitized correctly, by accident — the decoder for bodies

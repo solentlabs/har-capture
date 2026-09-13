@@ -53,6 +53,7 @@ from har_capture.patterns.redaction import (
     iter_url_credentials,
     mime_kind,
     parse_json_container,
+    split_url_password,
 )
 
 # Load test data from fixture
@@ -72,6 +73,7 @@ TEXT_MIME_CASES = _FIXTURES["text_mime_cases"]["cases"]
 JSON_CONTAINER_CASES = _FIXTURES["json_container_cases"]["cases"]
 CONSTANT_MAC_CASES = _FIXTURES["constant_mac_cases"]["cases"]
 QUERY_PAYLOAD_CASES = _FIXTURES["query_payload_cases"]["cases"]
+URL_PASSWORD_CASES = _FIXTURES["url_password_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -134,6 +136,17 @@ class TestIsConstantMac:
     @pytest.mark.parametrize("case", CONSTANT_MAC_CASES, ids=[c["id"] for c in CONSTANT_MAC_CASES])
     def test_constant(self, case: dict) -> None:
         assert is_constant_mac(case["mac"]) is case["constant"]
+
+
+class TestSplitUrlPassword:
+    """split_url_password finds a userinfo password and nothing else."""
+
+    @pytest.mark.parametrize("case", URL_PASSWORD_CASES, ids=[c["id"] for c in URL_PASSWORD_CASES])
+    def test_parts(self, case: dict) -> None:
+        parts = split_url_password(case["url"])
+        assert parts == (tuple(case["parts"]) if case["parts"] else None)
+        if parts:
+            assert "".join(parts) == case["url"]
 
 
 class TestFindQueryPayload:

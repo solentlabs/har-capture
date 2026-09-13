@@ -43,6 +43,7 @@ from har_capture.patterns.redaction import (
     is_fully_redacted,
     parse_json_container,
     query_param_segment,
+    split_url_password,
     url_query,
 )
 from har_capture.patterns.redaction import (
@@ -74,11 +75,15 @@ MAC_PATTERN = MAC_RE
 # The label-anchored patterns require: `(?!ize)` after `serial` so jquery's
 # `serialize:`/`serializeArray:` methods don't match, a digit in the value
 # so prose/code words after the label (`serialize: function`) don't match —
-# vendor serials always carry digits — and a label that ends at a colon
-# within its own text: an unbounded run crossed a template placeholder's
-# whole table row to the next label's colon and reported a firmware name.
+# vendor serials always carry digits — and a label that reaches its colon
+# within its own text, past at most its own closing tags: an unbounded run
+# crossed a template placeholder's whole table row to the next label's
+# colon and reported a firmware name.
 SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"serial(?!ize)[^:<>]{0,20}:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(
+        r"serial(?!ize)[^:<>]{0,20}(?:</\w+>\s*)*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}",
+        re.IGNORECASE,
+    ),
     re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
     # Serial numbers in HTML table cells (label in one td, value in next td).
     # The value's tag chain stays inside its cell: crossing </td> or <tr>
@@ -407,6 +412,30 @@ def _check_query_param(
         findings.append(finding)
 
 
+def _payload_findings(
+    text: str,
+    name: str,
+    location: str,
+    custom_patterns: str | dict[str, Any] | None,
+    field_tiers: _FieldTiers,
+) -> list[Finding]:
+    """Check inside a base64 JSON or URL payload, as the sanitizer sanitizes inside it.
+
+    A JSON payload is checked like a JSON body, a URL payload like any URL.
+    Only errors are kept: inside a payload Pass 1 is final, so an
+    identity-style field there is never offered for review, and a warning
+    about it would have no remedy.
+    """
+    inner: list[Finding] = []
+    data = parse_json_container(text)
+    if data is not None:
+        path = f"'{name}' payload" if name else "payload"
+        check_json_fields(data, location, inner, path, custom_patterns, _field_tiers=field_tiers)
+    else:
+        check_url(text, location, inner, custom_patterns, field_tiers=field_tiers)
+    return [finding for finding in inner if finding.severity == "error"]
+
+
 def _check_query_payload(
     text: str,
     name: str,
@@ -416,20 +445,12 @@ def _check_query_payload(
     field_tiers: _FieldTiers,
     seen: set[tuple[str, str]],
 ) -> None:
-    """Check inside a base64 JSON or URL query payload, as the sanitizer sanitizes inside it.
+    """Report the findings inside a query payload once per query.
 
-    A JSON payload is checked like a JSON body, a URL payload like any URL.
     Findings are keyed by field and value, so the URL string and the
     ``queryString`` array — one payload recorded twice — report it once.
     """
-    inner: list[Finding] = []
-    data = parse_json_container(text)
-    if data is not None:
-        path = f"query param '{name}'" if name else "query payload"
-        check_json_fields(data, location, inner, path, custom_patterns, _field_tiers=field_tiers)
-    else:
-        check_url(text, location, inner, custom_patterns, field_tiers=field_tiers)
-    for finding in inner:
+    for finding in _payload_findings(text, name, location, custom_patterns, field_tiers):
         key = ("payload", f"{finding.field}={finding.value}")
         if key not in seen:
             seen.add(key)
@@ -459,6 +480,17 @@ def check_url(
         field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
         seen: Findings already reported for the same request, to skip repeats
     """
+    userinfo = split_url_password(url)
+    if userinfo is not None and not is_redacted(userinfo[1], custom_patterns):
+        findings.append(
+            Finding(
+                severity="error",
+                location=location,
+                field="URL userinfo",
+                value=truncate(userinfo[1]),
+                reason="Password in URL userinfo",
+            )
+        )
     query = url_query(url)
     if not query:
         return
@@ -602,8 +634,13 @@ def _check_form_params(
         if not value or is_redacted(value, custom_patterns):
             continue
 
+        # The sanitizer's order: a credential-named field, then a base64
+        # payload (checked inside), then an identity-named field.
         classified = _classify_field_finding(name, value, field_tiers)
-        if classified is not None:
+        payload = find_query_payload(value) if classified is None or classified[0] != "error" else None
+        if payload is not None and not payload.prefix.strip("?"):
+            findings.extend(_payload_findings(payload.text, name, location, custom_patterns, field_tiers))
+        elif classified is not None:
             severity, matched = classified
             findings.append(
                 Finding(
