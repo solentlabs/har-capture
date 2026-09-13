@@ -1547,6 +1547,139 @@
       "leaked": [
         "Sup3rSecret99"
       ]
+    },
+    {
+      "id": "userinfo_password_holding_at_sign",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://admin:p@ss99word@192.168.100.1/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "p@ss99word",
+        "ss99word"
+      ]
+    },
+    {
+      "id": "userinfo_email_username",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://ken@example.com:Pw123456x@192.168.100.1/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Pw123456x"
+      ]
+    },
+    {
+      "id": "userinfo_in_scheme_relative_location",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "//admin:Pw123456x@192.168.100.1/status.html"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Pw123456x"
+      ]
+    },
+    {
+      "id": "sn_label_closed_before_colon",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p><b>SN</b>: 7ZZ0000FAKE00</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
     }
   ]
 }

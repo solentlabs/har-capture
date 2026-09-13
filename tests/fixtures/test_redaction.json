@@ -311,15 +311,18 @@
     ]
   },
   "url_password_cases": {
-    "_comment": "split_url_password(url): the password in a URL's userinfo, split so the URL reassembles byte-for-byte. Only a scheme://user:password@ authority has one; a port, a path '@', or a user without a password do not.",
+    "_comment": "split_url_password(url): the password in a URL's userinfo, split so the URL reassembles byte-for-byte. The authority ends at the first '/', '?' or '#'; its userinfo runs to the authority's last '@' (as browsers parse it, so a password or an email-address username may hold '@'); the password starts after the userinfo's first ':'. A port, a path '@', or a user without a password give none.",
     "cases": [
-      {"id": "user_and_password",     "url": "http://admin:Sup3r@192.168.100.1/status", "parts": ["http://admin:", "Sup3r", "@192.168.100.1/status"]},
-      {"id": "password_with_colon",   "url": "http://a:b:c@h/",                         "parts": ["http://a:", "b:c", "@h/"]},
-      {"id": "ftp_scheme",            "url": "ftp://u:p@h",                             "parts": ["ftp://u:", "p", "@h"]},
-      {"id": "port_not_userinfo",     "url": "http://host:8080/a@b",                    "parts": null},
-      {"id": "user_without_password", "url": "https://user@host/",                      "parts": null},
-      {"id": "at_in_query",           "url": "http://h/p?next=u:p@x",                   "parts": null},
-      {"id": "relative_url",          "url": "/rel?x=1",                                "parts": null}
+      {"id": "user_and_password",         "url": "http://admin:Sup3r@192.168.100.1/status",         "parts": ["http://admin:", "Sup3r", "@192.168.100.1/status"]},
+      {"id": "password_with_colon",       "url": "http://a:b:c@h/",                                 "parts": ["http://a:", "b:c", "@h/"]},
+      {"id": "ftp_scheme",                "url": "ftp://u:p@h",                                     "parts": ["ftp://u:", "p", "@h"]},
+      {"id": "port_not_userinfo",         "url": "http://host:8080/a@b",                            "parts": null},
+      {"id": "user_without_password",     "url": "https://user@host/",                              "parts": null},
+      {"id": "at_in_query",               "url": "http://h/p?next=u:p@x",                           "parts": null},
+      {"id": "relative_url",              "url": "/rel?x=1",                                        "parts": null},
+      {"id": "at_sign_inside_password",   "url": "http://admin:p@ss99word@192.168.100.1/",          "parts": ["http://admin:", "p@ss99word", "@192.168.100.1/"]},
+      {"id": "email_address_username",    "url": "http://ken@example.com:Pw123456x@192.168.100.1/", "parts": ["http://ken@example.com:", "Pw123456x", "@192.168.100.1/"]},
+      {"id": "scheme_relative_reference", "url": "//admin:Pw123456x@192.168.100.1/status.html",     "parts": ["//admin:", "Pw123456x", "@192.168.100.1/status.html"]}
     ]
   }
 }

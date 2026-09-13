@@ -765,10 +765,12 @@ def split_url_query(url: str) -> tuple[str, str, str]:
     return head + question, query, hash_mark + fragment
 
 
-# RFC 3986 userinfo with a password (`user:password` ahead of the host). The password
-# runs from the first ':' after the scheme's '//' to the '@' that closes the
-# authority; '/', '?' and '#' end the authority, so a later '@' is path.
-_URL_USERINFO_PASSWORD_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://[^/?#@:]*:)([^/?#@]+)(@)")
+# The authority runs from '//' — after a scheme, or opening a scheme-relative
+# reference, which a Location header may carry — to the first '/', '?' or '#'; its
+# userinfo is everything before the authority's last '@' — WHATWG parsing,
+# which is what browsers do, so a password or an email-address username may
+# itself hold '@'. The password starts after the userinfo's first ':'.
+_URL_USERINFO_RE = re.compile(r"^((?:[A-Za-z][A-Za-z0-9+.-]*:)?//)([^/?#]*)@")
 
 
 def split_url_password(url: str) -> tuple[str, str, str] | None:
@@ -785,10 +787,13 @@ def split_url_password(url: str) -> tuple[str, str, str] | None:
         ``(before, password, after)`` with ``url == before + password + after``,
         or None when the URL has no userinfo password
     """
-    match = _URL_USERINFO_PASSWORD_RE.match(url)
+    match = _URL_USERINFO_RE.match(url)
     if match is None:
         return None
-    return match.group(1), match.group(2), url[match.start(3) :]
+    user, colon, password = match.group(2).partition(":")
+    if not colon or not password:
+        return None
+    return match.group(1) + user + colon, password, url[match.end(2) :]
 
 
 def url_query(url: str) -> str:

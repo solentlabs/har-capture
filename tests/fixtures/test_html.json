@@ -62,7 +62,9 @@
     {"input_html": "Firmware: 3.4.5.6",                       "preserved": "3.4.5.6",               "id": "version_4_small_octets"},
     {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"},
     {"input_html": "<td>MAC</td><td>00:00:00:00:00:00</td>", "preserved": "00:00:00:00:00:00", "id": "zero_mac_constant"},
-    {"input_html": "if (mac == 'ff:ff:ff:ff:ff:ff') return;", "preserved": "ff:ff:ff:ff:ff:ff", "id": "broadcast_mac_constant"}
+    {"input_html": "if (mac == 'ff:ff:ff:ff:ff:ff') return;", "preserved": "ff:ff:ff:ff:ff:ff", "id": "broadcast_mac_constant"},
+    {"input_html": "<p><b>Serial Number</b>: Disabled</p>", "preserved": "Disabled", "id": "serial_label_status_word_kept"},
+    {"input_html": "<td>SN</td><td>Enabled</td>", "preserved": "Enabled", "id": "serial_table_status_word_kept"}
   ],
 
   "pii_detection_cases": [

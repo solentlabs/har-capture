@@ -84,13 +84,15 @@ SERIAL_PATTERNS: list[re.Pattern[str]] = [
         r"serial(?!ize)[^:<>]{0,20}(?:</\w+>\s*)*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}",
         re.IGNORECASE,
     ),
-    re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
+    re.compile(
+        r"\b(?:SN|S/N)\b(?:</\w+>\s*)*[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE
+    ),
     # Serial numbers in HTML table cells (label in one td, value in next td).
     # The value's tag chain stays inside its cell: crossing </td> or <tr>
     # would read the next row's label as the value.
     re.compile(
         r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*"
-        r"(?:<(?!/?t[dr]\b)[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
+        r"(?:<(?!/?t[dr]\b)[^>]*>\s*)*((?=[A-Za-z0-9\-]*[0-9])[A-Za-z0-9\-]{8,})",
         re.IGNORECASE,
     ),
 ]

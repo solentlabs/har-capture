@@ -662,7 +662,9 @@ def _sanitize_html_impl(
     # label/value pairs in sibling elements match (Technicolor .jst renders
     # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and
     # the label's own closing tags may precede its separator
-    # (<b>Serial Number</b>: VALUE).
+    # (<b>Serial Number</b>: VALUE). The value must carry a digit, as every
+    # real serial does: without it the pass redacted status words and labels
+    # ("SN Status", "Serial Number: Disabled").
     # The separator + tag run is captured and re-emitted verbatim so redaction
     # replaces only the value and preserves the surrounding markup.
     def replace_serial(match: re.Match[str]) -> str:
@@ -675,7 +677,8 @@ def _sanitize_html_impl(
         return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
 
     html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*(?:</\w+>\s*)*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})",
+        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*(?:</\w+>\s*)*[:\s=]*(?:<[^>]*>\s*)*)"
+        r"((?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,})",
         replace_serial,
         html,
         flags=re.IGNORECASE,
@@ -693,7 +696,8 @@ def _sanitize_html_impl(
         return f"{prefix}{hashed}"
 
     html = re.sub(
-        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
+        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)"
+        r"((?=[a-zA-Z0-9\-_]*\d)[a-zA-Z0-9\-_]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
         replace_serial_table,
         html,
         flags=re.IGNORECASE,

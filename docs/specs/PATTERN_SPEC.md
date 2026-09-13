@@ -650,8 +650,9 @@ the same way. See [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#
 ### `split_url_password(url)`
 
 Splits out the password a URL's userinfo carries (the `user:password` part ahead of the host) as
-`(before, password, after)`, so the URL reassembles byte-for-byte, or returns `None`. A port or an `@` in the path is
-not userinfo. Shared by the sanitizer and `check_url`.
+`(before, password, after)`, so the URL reassembles byte-for-byte, or returns `None`. The authority ends at the first
+`/`, `?` or `#`; its userinfo runs to the authority's last `@`, as browsers parse it, and the password starts after the
+userinfo's first `:`. A port or an `@` in the path is not userinfo. Shared by the sanitizer and `check_url`.
 
 ### `split_url_query(url)`, `url_query(url)` and `iter_url_credentials(request)`
 

@@ -244,9 +244,10 @@ Severity: **error**
   labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
   noise on the CM2500 round-1 validate run
 - The label must reach its colon within its own text (`serial` plus at most 20 characters, then only its own closing
-  tags — `<b>Serial Number</b>: X`), and a table-cell value's tag chain must stay inside its cell: an unbounded label
-  crossed a whole table row whose serial is a template placeholder (`<?get_cm_sn>`) to the next label's colon, and
-  reported that row's firmware name as a serial on 12 fleet pages (TM1602A, CM820B) that no sanitize run could clear
+  tags — `<b>Serial Number</b>: X`), a table-cell value must carry a digit (as the sanitizer's pass 2b requires), and
+  its tag chain must stay inside its cell: an unbounded label crossed a whole table row whose serial is a template
+  placeholder (`<?get_cm_sn>`) to the next label's colon, and reported that row's firmware name as a serial on 12 fleet
+  pages (TM1602A, CM820B) that no sanitize run could clear
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
