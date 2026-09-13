@@ -114,9 +114,9 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
                                  marker + base64("admin:pass")
 ```
 
-1. Read the query with `url_query()` — split at `?` and `#`, as the sanitizer does, rather than `urlparse`, which raises
-   on a URL it cannot parse — and split it on `&` (not `parse_qsl`, which would strip base64 padding); a `queryString`
-   entry is rejoined into its segment with `query_param_segment()`.
+1. Read the query with `url_query()` — from the first `?` to the next `#`, as the sanitizer does, rather than
+   `urlparse`, which raises on a URL it cannot parse — and split it on `&` (not `parse_qsl`, which would strip base64
+   padding); a `queryString` entry is rejoined into its segment with `query_param_segment()`.
 1. A credential in any shape `find_query_credential()` recognizes (bare, marker-prefixed, keyed — under any name) →
    **error**, unless `is_redacted()` recognizes it as a placeholder.
 1. Otherwise the parameter name is judged by the [field tiers](#finding-dataclass), exactly as for form fields: an
@@ -214,8 +214,7 @@ Severity: **error**
 **MAC addresses:**
 
 - Pattern: `MAC_RE`, the sanitizer's own definition (see
-  [Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses)), so every MAC reported here is one a sanitize
-  run replaces
+  [Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses))
 - Skips common test patterns (e.g., `AA:BB:CC:DD:EE:FF`)
 - Checks via `is_redacted()` before reporting
 
@@ -533,7 +532,8 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
 - `find_query_credential()` and `query_param_segment()` — URL query credentials. Used by validation (`check_url`,
   `check_query_string`) and sanitization (`_sanitize_url_query_params`, `_sanitize_query_string_array`, and
   `_scan_url_credentials` through `iter_url_credentials()`).
-- `url_query()` — a URL's raw query. Used by validation (`check_url`) and sanitization (`iter_url_credentials`).
+- `split_url_query()` / `url_query()` — a URL's raw query, split by hand. Used by validation (`check_url`) and
+  sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
 - `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
   HTML engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
 - `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization

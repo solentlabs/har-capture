@@ -73,8 +73,8 @@ har-capture sanitize capture.har --salt my-secret-key --patterns base
 har-capture sanitize capture.har --no-salt --patterns base
 ```
 
-- All IPs become `192.0.2.1`
-- All MACs become `02:00:00:00:00:00`
+- All IPs become `0.0.0.0`
+- All MACs become `XX:XX:XX:XX:XX:XX`
 - Correlation is lost
 - Compatible with tools expecting static values
 

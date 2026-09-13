@@ -2,9 +2,9 @@
   "_comment": "PII detection patterns for sanitization and validation",
   "patterns": {
     "mac_address": {
-      "regex": "(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])",
+      "regex": "(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}",
       "replacement_prefix": "MAC",
-      "description": "MAC addresses in colon or dash format, bounded by non-hex characters (mirrors MAC_RE in redaction.py)"
+      "description": "MAC addresses in colon or dash format (mirrors MAC_RE in redaction.py)"
     },
     "serial_number": {
       "regex": "(Serial\\s*Number|SerialNum|SN|S/N)\\b\\s*[:\\s=]*(?:<[^>]*>\\s*)*([a-zA-Z0-9\\-]{5,})",

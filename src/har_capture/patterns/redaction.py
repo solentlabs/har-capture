@@ -11,7 +11,6 @@ validation modules.
 from __future__ import annotations
 
 import base64
-import codecs
 import logging
 import re
 import urllib.parse
@@ -194,26 +193,42 @@ def is_allowlisted(value: str, allowlist: dict[str, Any] | None = None) -> bool:
 # ── Shared detection helpers ─────────────────────────────────────────────────
 
 # The one MAC definition for the sanitizer, the validator and check_for_pii
-# (pii.json's mac_address regex carries it verbatim; a test pins the two).
-# Six hex pairs joined by ':' or '-', bounded by non-hex characters. The
-# boundary is hex-aware rather than `\b`: a MAC glued to '_' or to a letter
-# outside a-f is still a MAC — `\b` missed `cm_mac_3C:7A:…`, which the
-# validator reported and no sanitize run cleared — while one glued to a hex
-# digit is a fragment of a longer hex run.
-MAC_RE = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])")
+# (pii.json's mac_address regex carries it verbatim; a test pins the two): six
+# hex pairs joined by ':' or '-', wherever they occur. No boundary is required
+# on either side — a MAC glued to an identifier (`wanmac3C:7A:…`) is still a
+# MAC, and nothing else in device traffic has this separator run.
+MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
 
-# The MAC layouts that carry no separator run for MAC_RE to match. Without a
-# label a bare 12-hex run cannot be told from any other hex, so these are
-# only recognized where a key names the value a MAC.
-_BARE_MAC_RE = re.compile(r"[0-9A-Fa-f]{12}")
-_DOTTED_MAC_RE = re.compile(r"[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}")
+# Whole-value MAC layouts, keyed by the separator a placeholder in that layout
+# is written with: "." is the dotted 4-4-4 grouping, "" is bare 12-hex. Bare
+# and dotted MACs carry no separator run for MAC_RE to find in text; they are
+# recognized only where the value is already known to be a MAC.
+_MAC_LAYOUTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}"), ":"),
+    (re.compile(r"[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"), "-"),
+    (re.compile(r"[0-9A-Fa-f]{12}"), ""),
+    (re.compile(r"[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"), "."),
+)
+
+
+def mac_layout(value: str) -> str | None:
+    """Return the separator of a whole value's MAC layout.
+
+    Args:
+        value: Candidate value
+
+    Returns:
+        ``":"`` or ``"-"`` (six pairs), ``""`` (bare 12-hex), ``"."`` (dotted
+        4-4-4), or None when the value is not a MAC in one uniform layout
+    """
+    return next((sep for layout, sep in _MAC_LAYOUTS if layout.fullmatch(value)), None)
 
 
 def is_mac_value(value: str) -> bool:
     """Check if a whole value is a MAC address in any layout.
 
-    Separated (``AA:BB:CC:DD:EE:FF``, ``aa-bb-…``), bare (``AABBCCDDEEFF``)
-    or dotted (``aabb.ccdd.eeff``).
+    Separated (``AA:BB:CC:DD:EE:FF``, ``aa-bb-…``, or mixed separators), bare
+    (``AABBCCDDEEFF``) or dotted (``aabb.ccdd.eeff``).
 
     Args:
         value: Candidate value
@@ -221,26 +236,28 @@ def is_mac_value(value: str) -> bool:
     Returns:
         True if the value is exactly one MAC address
     """
-    return bool(MAC_RE.fullmatch(value) or _BARE_MAC_RE.fullmatch(value) or _DOTTED_MAC_RE.fullmatch(value))
+    return mac_layout(value) is not None or MAC_RE.fullmatch(value) is not None
 
 
-# A JSON key is read as its words — camelCase humps, acronyms, digit runs —
+# A key is read as its words — camelCase humps, acronyms, digit runs —
 # lowercased and joined with '_' (`StatusSoftwareSerialNum` →
-# `status_software_serial_num`, `wanMACAddr` → `wan_mac_addr`), so one pattern
-# covers every spelling. The identity must be the key's final word(s):
-# `serialNumberLabel` and `MacAddressFilterEnabled` name something about the
-# identity, not the identity. A whole word is required, so `hmac` and
-# `ofdmachannel` are not MAC keys. Of the bare abbreviations only an exact
-# `sn` counts; `snr` is a signal ratio.
+# `status_software_serial_num`, `CMMACAddress` → `cmmac_address`). The
+# identity must end the key: `serialNumberLabel` and `MacAddressFilterEnabled`
+# name something about the identity, and `macaddr.wan` is not recognized.
+# Within the last word a glued prefix is allowed (`cmserialnumber`,
+# `wanmacaddr`, `ethmac`), except `h` alone: a word starting `hmac` names a
+# message authentication code. Of the bare abbreviations only an exact `sn`
+# counts; `snr` is a signal ratio.
 _KEY_WORD_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
-SERIAL_KEY_RE = re.compile(r"(?:^|_)serial(?:_?(?:num(?:ber)?|no))?(?:_\d+)?$|^sn$")
-MAC_KEY_RE = re.compile(r"(?:^|_)(?:mac(?:_?addr(?:ess)?)?|hw_?addr(?:ess)?)(?:_\d+)?$")
+SERIAL_KEY_RE = re.compile(r"serial(?:_?(?:num(?:ber)?|no))?(?:_\d+)?$|^sn$")
+MAC_KEY_RE = re.compile(r"(?:(?<!^h)(?<!_h)mac(?:_?addr(?:ess)?)?|hw_?addr(?:ess)?)(?:_\d+)?$")
 
 # A serial is one whitespace-free token of five or more characters carrying a
-# digit. Every real serial across the cable_modem_monitor fleet carries one;
-# the digit-free values under serial keys are placeholders ('-', 'N/A') and
-# i18n labels ('Seriennummer'). Five mirrors the HTML engine's labeled-serial
-# value class and rejects flags and lengths ('1', '12').
+# digit. Every real serial across the cable_modem_monitor fleet carries one,
+# while the digit-free values under serial keys are placeholders ('-', 'N/A')
+# and labels ('Seriennummer') — the digit rule is what excludes status words.
+# Five mirrors the HTML engine's labeled-serial value class and rejects flags
+# and lengths ('1', '12').
 _SERIAL_VALUE_RE = re.compile(r"(?=\S*\d)\S{5,}")
 
 
@@ -251,11 +268,11 @@ def _key_words(key: str) -> str:
 def classify_identity_field(key: str, value: object) -> str | None:
     """Classify a field whose key names a device identity and whose value has its shape.
 
-    The one definition shared by the JSON sanitizer and the validator. Shape
-    only: whether the value is already a placeholder is the caller's
-    decision, because the two identities differ — a serial placeholder
-    (``SERIAL_<hash>``) must be skipped, while a format-preserving MAC
-    placeholder is indistinguishable from a real locally administered MAC.
+    The one definition shared by the JSON sanitizer and the validator. A
+    serial already replaced by a placeholder is not a serial. A MAC
+    placeholder is still classified: it cannot be told from a real locally
+    administered MAC, so whether to skip it is the caller's decision — the
+    sanitizer never does.
 
     Args:
         key: Field name, in any case convention
@@ -275,7 +292,7 @@ def classify_identity_field(key: str, value: object) -> str | None:
     if not isinstance(value, str):
         return None
     words = _key_words(key)
-    if SERIAL_KEY_RE.search(words) and _SERIAL_VALUE_RE.fullmatch(value):
+    if SERIAL_KEY_RE.search(words) and _SERIAL_VALUE_RE.fullmatch(value) and not is_fully_redacted(value):
         return "serial_number"
     if MAC_KEY_RE.search(words) and is_mac_value(value):
         return "mac_address"
@@ -290,9 +307,10 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
     """Return the text a HAR body carries, undoing its transport encoding.
 
     A body without ``encoding`` is already text. A ``base64`` body is decoded
-    with the mime type's declared charset, else strictly as UTF-8. Bytes that
-    do not decode, or that decode to text holding NUL, are binary: text
-    bodies never contain NUL, while fonts and images routinely do.
+    with the mime type's declared charset — or strictly as UTF-8 when none is
+    declared, or the declared one is unknown or not a text encoding (``hex``,
+    ``zlib``). Bytes that do not decode, or that decode to text holding NUL,
+    are binary: text bodies never contain NUL, while fonts and images do.
 
     The one decoder for the sanitizer and the validator, so both read the
     same text from a body and leave the same bodies alone.
@@ -312,18 +330,17 @@ def decode_transport_body(content: Mapping[str, Any]) -> str | None:
         raw = base64.b64decode("".join(text.split()), validate=True)
     except ValueError:
         return None
-    charset = "utf-8"
     declared = _CHARSET_PARAM_RE.search(str(content.get("mimeType", "")))
-    if declared:
-        try:
-            charset = codecs.lookup(declared.group(1)).name
-        except LookupError:
-            _LOGGER.debug("Unknown charset %r, decoding as UTF-8", declared.group(1))
+    # A NUL in a codec name raises ValueError from the lookup itself.
+    charset = declared.group(1) if declared and "\x00" not in declared.group(1) else "utf-8"
     try:
-        decoded = raw.decode(charset)
-    except UnicodeDecodeError:
+        try:
+            decoded = raw.decode(charset)
+        except LookupError:
+            decoded = raw.decode("utf-8")
+    except UnicodeError:
         return None
-    return None if "\x00" in decoded else decoded
+    return decoded if decoded and "\x00" not in decoded else None
 
 
 # Base64 charset pattern for quick pre-filtering
@@ -565,20 +582,33 @@ def find_query_credential(segment: str) -> QueryCredential | None:
     return None
 
 
-def url_query(url: str) -> str:
-    """Return a URL's raw query: the text between the first '?' and the next '#'.
+def split_url_query(url: str) -> tuple[str, str, str]:
+    """Split a URL around its raw query, so that ``url == before + query + after``.
 
-    Split by hand rather than with ``urlparse``, which raises on input it
-    cannot parse (an unbalanced IPv6 bracket) — the sanitizer rewrites
-    queries this way, so every reader of one must read the same text.
+    The query runs from the first '?' to the next '#': ``before`` ends with
+    that '?' (it is the whole URL when there is none) and ``after`` is the
+    '#' and what follows. A '?' after a '#' therefore opens a query too —
+    hash-routed pages carry their parameters there (``#/login?password=…``),
+    and a URL-valued header can repeat them. Split by hand rather than with
+    ``urlparse``, which raises on input it cannot parse (an unbalanced IPv6
+    bracket) and does not give back the bytes it read. Every reader and
+    rewriter of a query uses this split.
 
     Args:
         url: Any URL string
 
     Returns:
-        The undecoded query, or ``""`` when there is none
+        ``(before, query, after)``; ``query`` is undecoded and ``""`` when
+        there is none
     """
-    return url.partition("?")[2].partition("#")[0]
+    head, question, rest = url.partition("?")
+    query, hash_mark, fragment = rest.partition("#")
+    return head + question, query, hash_mark + fragment
+
+
+def url_query(url: str) -> str:
+    """Return a URL's raw, undecoded query (see :func:`split_url_query`)."""
+    return split_url_query(url)[1]
 
 
 def iter_url_credentials(request: Mapping[str, Any]) -> Iterator[QueryCredential]:

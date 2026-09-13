@@ -63,8 +63,6 @@ COOKIE_ATTRIBUTES_ONLY: list[str] = [
     r"^$",
 ]
 
-# The shared MAC definition, under validation's public name — the sanitizer
-# redacts exactly what this reports.
 MAC_PATTERN = MAC_RE
 
 # Serial number patterns (manufacturer-specific)

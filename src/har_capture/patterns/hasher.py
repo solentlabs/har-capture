@@ -12,20 +12,22 @@ import re
 import secrets
 from dataclasses import dataclass, field
 
-_MAC_SEPARATORS_RE = re.compile(r"[:.-]")
+from har_capture.patterns.redaction import is_mac_value, mac_layout
 
-# (layout regex, separator hash_mac joins the output with). "." is the dotted
-# 4-4-4 grouping; "" is bare 12-hex. Mixed separators fall back to the colon.
-_MAC_LAYOUTS = (
-    (re.compile(r"[0-9A-Fa-f]{2}(?:-[0-9A-Fa-f]{2}){5}"), "-"),
-    (re.compile(r"[0-9A-Fa-f]{12}"), ""),
-    (re.compile(r"[0-9A-Fa-f]{4}(?:\.[0-9A-Fa-f]{4}){2}"), "."),
-)
+_NON_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
 
 
-def _mac_layout(mac: str) -> str:
-    """Return the separator of the input's MAC layout, colon by default."""
-    return next((sep for layout, sep in _MAC_LAYOUTS if layout.fullmatch(mac)), ":")
+def _mac_digest_input(mac: str) -> str:
+    """Canonical text a MAC is hashed from: its digits as uppercase colon pairs.
+
+    Every layout of one MAC reads the same, and the colon form is what every
+    release before 0.13.0 hashed, so a fixed salt keeps giving a colon MAC the
+    same placeholder. A value in no MAC layout is hashed as it was then.
+    """
+    if not is_mac_value(mac):
+        return mac.upper().replace("-", ":")
+    digits = _NON_HEX_RE.sub("", mac).upper()
+    return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
 
 
 @dataclass
@@ -142,8 +144,9 @@ class Hasher:
         if self.salt is None:
             return "XX:XX:XX:XX:XX:XX"
 
-        layout = _mac_layout(mac)
-        normalized = _MAC_SEPARATORS_RE.sub("", mac).upper()
+        separator = mac_layout(mac)
+        layout = ":" if separator is None else separator
+        normalized = _mac_digest_input(mac)
         cache_key = f"MAC{layout}:{normalized}"
         if cache_key in self._cache:
             return self._cache[cache_key]

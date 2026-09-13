@@ -8,8 +8,7 @@ har-capture sanitizes the following categories of personally identifiable inform
 
 ### MAC Addresses
 
-**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX` in text; bare `XXXXXXXXXXXX` and dotted `XXXX.XXXX.XXXX` under a
-MAC-named key
+**Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX`
 
 **Examples:**
 

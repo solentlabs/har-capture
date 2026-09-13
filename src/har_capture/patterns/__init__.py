@@ -38,7 +38,9 @@ from har_capture.patterns.redaction import (
     is_mac_value,
     is_redacted,
     iter_url_credentials,
+    mac_layout,
     query_param_segment,
+    split_url_query,
     url_query,
 )
 
@@ -70,7 +72,9 @@ __all__ = [
     "is_mac_value",
     "is_redacted",
     "iter_url_credentials",
+    "mac_layout",
     "query_param_segment",
+    "split_url_query",
     "url_query",
     "URL_VALUED_HEADERS",
     # Hashing

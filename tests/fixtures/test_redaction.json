@@ -39,10 +39,7 @@
     "PASS_abcdef12",
     "TOKEN_87654321",
     "FIELD_deadbeef",
-    "02-aa-bb-cc-dd-ee",
-    "02aabbccddee",
-    "02AABBCCDDEE",
-    "02aa.bbcc.ddee"
+    "02-aa-bb-cc-dd-ee"
   ],
   "non_redacted_values": [
     "my_password",
@@ -54,7 +51,10 @@
     "http://example.com",
     "3c7a8a123456",
     "02aabbccdde",
-    "02:aa-bb:cc-dd:ee"
+    "02:aa-bb:cc-dd:ee",
+    "02aabbccddee",
+    "02aa.bbcc.ddee",
+    "02deadbeef12"
   ],
   "case_insensitive_pairs": [
     ["redacted", "Redacted", "REDACTED"],
@@ -108,24 +108,25 @@
     ]
   },
   "mac_regex_cases": {
-    "_comment": "MAC_RE over free text: matches are the MAC substrings found, in order. A MAC is bounded by non-hex characters on both sides, so one glued to a letter outside a-f or to '_' is still a MAC, while one glued to a hex digit is part of a longer run and is not. Bare 12-hex is not matched here: without a label it cannot be told from any other hex run.",
+    "_comment": "MAC_RE over free text: matches are the MAC substrings found, in order. Six hex pairs joined by ':' or '-' match wherever they occur, glued to anything, so validate and sanitize agree on every such run. Across 11,953 MAC runs in the cable_modem_monitor fleet (2026-09-12) every one sits between punctuation or whitespace. A longer separated run is read six pairs at a time. Bare 12-hex is not matched: without a label it cannot be told from any other hex run.",
     "cases": [
-      {"id": "colon_standalone",          "text": "mac 3C:7A:8A:12:34:56 end",           "matches": ["3C:7A:8A:12:34:56"]},
-      {"id": "hyphen_lowercase",          "text": "3c-7a-8a-12-34-56",                   "matches": ["3c-7a-8a-12-34-56"]},
-      {"id": "quoted_json_value",         "text": "\"3C:7A:8A:12:34:56\"",               "matches": ["3C:7A:8A:12:34:56"]},
-      {"id": "glued_to_underscore",       "text": "cm_mac_3C:7A:8A:12:34:56",            "matches": ["3C:7A:8A:12:34:56"]},
-      {"id": "glued_to_non_hex_letter",   "text": "HWaddr3C:7A:8A:12:34:56",             "matches": ["3C:7A:8A:12:34:56"]},
-      {"id": "glued_to_hex_digit_before", "text": "13C:7A:8A:12:34:56",                  "matches": []},
-      {"id": "glued_to_hex_letter_after", "text": "3C:7A:8A:12:34:56A",                  "matches": []},
-      {"id": "seven_groups_first_six",    "text": "3C:7A:8A:12:34:56:78",                "matches": ["3C:7A:8A:12:34:56"]},
-      {"id": "bare_twelve_hex",           "text": "3C7A8A123456",                        "matches": []},
-      {"id": "clock_time",                "text": "uptime 12:34:56",                     "matches": []},
-      {"id": "ipv6_compressed",           "text": "fe80::3c7a:8aff:fe12:3456",           "matches": []},
-      {"id": "two_macs",                  "text": "3C:7A:8A:12:34:56,3C:7A:8A:12:34:57", "matches": ["3C:7A:8A:12:34:56", "3C:7A:8A:12:34:57"]}
+      {"id": "colon_standalone",           "text": "mac 3C:7A:8A:12:34:56 end",           "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "hyphen_lowercase",           "text": "3c-7a-8a-12-34-56",                   "matches": ["3c-7a-8a-12-34-56"]},
+      {"id": "quoted_json_value",          "text": "\"3C:7A:8A:12:34:56\"",               "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_underscore",        "text": "cm_mac_3C:7A:8A:12:34:56",            "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_non_hex_letter",    "text": "HWaddr3C:7A:8A:12:34:56",             "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_hex_letter_before", "text": "wanmac3C:7A:8A:12:34:56",             "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_hex_digit_before",  "text": "13C:7A:8A:12:34:56",                  "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_word_after",        "text": "3C:7A:8A:12:34:56Enabled",            "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "seven_groups_first_six",     "text": "3C:7A:8A:12:34:56:78",                "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "bare_twelve_hex",            "text": "3C7A8A123456",                        "matches": []},
+      {"id": "clock_time",                 "text": "uptime 12:34:56",                     "matches": []},
+      {"id": "ipv6_compressed",            "text": "fe80::3c7a:8aff:fe12:3456",           "matches": []},
+      {"id": "two_macs",                   "text": "3C:7A:8A:12:34:56,3C:7A:8A:12:34:57", "matches": ["3C:7A:8A:12:34:56", "3C:7A:8A:12:34:57"]}
     ]
   },
   "url_credential_cases": {
-    "_comment": "iter_url_credentials(request): every base64(user:pass) credential in a request's query, as find_query_credential reads it: the URL string's segments first, then the queryString array (so a credential recorded in both appears twice). The query is read by splitting at '?' and '#', so a URL urlparse rejects (an unbalanced IPv6 bracket) is still read. Malformed requests yield nothing.",
+    "_comment": "iter_url_credentials(request): every base64(user:pass) credential in a request's query, as find_query_credential reads it: the URL string's segments first, then the queryString array (so a credential recorded in both appears twice). The query is read with split_url_query — from the first '?' to the next '#', so a hash route's '#/page?…' parameters count and a credential in a plain fragment does not — which never raises, unlike urlparse (an unbalanced IPv6 bracket). Malformed requests yield nothing.",
     "cases": [
       {"id": "bare_in_url",                    "request": {"url": "https://d.local/login?YWRtaW46cGFzcw==", "queryString": []},                                         "credentials": ["YWRtaW46cGFzcw=="]},
       {"id": "keyed_in_url",                   "request": {"url": "https://d.local/login?token=YWRtaW46cGFzcw==", "queryString": []},                                   "credentials": ["YWRtaW46cGFzcw=="]},
@@ -137,6 +138,7 @@
       {"id": "credential_as_array_name",       "request": {"url": "", "queryString": [{"name": "YWRtaW46cGFzcw==", "value": ""}]},                                      "credentials": ["YWRtaW46cGFzcw=="]},
       {"id": "unbalanced_ipv6_bracket",        "request": {"url": "http://[::1/login?YWRtaW46cGFzcw=="},                                                                "credentials": ["YWRtaW46cGFzcw=="]},
       {"id": "credential_in_fragment_ignored", "request": {"url": "https://d.local/login#YWRtaW46cGFzcw=="},                                                            "credentials": []},
+      {"id": "hash_route_query",               "request": {"url": "https://d.local/login#tab?YWRtaW46cGFzcw=="},                                                        "credentials": ["YWRtaW46cGFzcw=="]},
       {"id": "no_query",                       "request": {"url": "https://d.local/status", "queryString": []},                                                         "credentials": []},
       {"id": "bare_non_credential_segment",    "request": {"url": "https://d.local/page?debug", "queryString": []},                                                     "credentials": []},
       {"id": "key_value_non_credential",       "request": {"url": "https://d.local/page?format=json", "queryString": []},                                               "credentials": []},
@@ -149,36 +151,54 @@
     ]
   },
   "json_identity_key_cases": {
-    "_comment": "classify_identity_field(key, value): a key that names a serial or MAC, holding a value of that identity's shape. Keys are split into words (camelCase, acronyms, separators); the identity word must end the key. Shape only: whether the value is already a placeholder is the caller's decision. Serial values are one whitespace-free token of 5+ characters with a digit (every real serial across the fleet carries one; the digit-free values are placeholders like '-'). MAC values are any MAC form: separated, bare 12-hex, or dotted.",
+    "_comment": "classify_identity_field(key, value): a key that names a serial or MAC, holding a value of that identity's shape. Keys are read as words (camelCase, acronyms, separators); the identity must end the key, though its last word may carry a glued prefix ('cmserialnumber') — except a word starting 'hmac'. A serial placeholder is not a serial; a MAC placeholder is still a MAC (it cannot be told from a real one). Serial values are one whitespace-free token of 5+ characters with a digit (every real serial across the fleet carries one; the digit-free values are placeholders like '-'). MAC values are any MAC form: separated, bare 12-hex, or dotted.",
     "cases": [
-      {"id": "hnap_status_software_serial", "key": "StatusSoftwareSerialNum",          "value": "ABC123DEF456",      "category": "serial_number"},
-      {"id": "bare_hex_mac_camel_key",      "key": "CmMacAddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
-      {"id": "all_digit_serial",            "key": "serialnumber",                     "value": "123456789012345",   "category": "serial_number"},
-      {"id": "exact_sn",                    "key": "sn",                               "value": "TEST12345",         "category": "serial_number"},
-      {"id": "suffix_serial",               "key": "deviceSerial",                     "value": "X1Y2Z3W4",          "category": "serial_number"},
-      {"id": "serial_no",                   "key": "SerialNo",                         "value": "SN-00012345",       "category": "serial_number"},
-      {"id": "screaming_serial_number",     "key": "SYSTEM_SERIAL_NUMBER",             "value": "4106844207105213",  "category": "serial_number"},
-      {"id": "acronym_mac_addr",            "key": "wanMACAddr",                       "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
-      {"id": "numbered_mac_key",            "key": "macaddress_5",                     "value": "3C-7A-8A-12-34-56", "category": "mac_address"},
-      {"id": "dotted_mac_hw_addr",          "key": "hw_addr",                          "value": "3c7a.8a12.3456",    "category": "mac_address"},
-      {"id": "exact_mac",                   "key": "mac",                              "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
-      {"id": "i18n_label_no_digit",         "key": "PAGE_STATUS_SYSTEM_SERIAL_NUMBER", "value": "Seriennummer",      "category": null},
-      {"id": "hmac_is_not_mac",             "key": "hmac_algorithm",                   "value": "3C7A8A123456",      "category": null},
-      {"id": "ofdma_is_not_mac",            "key": "ofdmachannel",                     "value": "3C7A8A123456",      "category": null},
-      {"id": "mac_filter_flag",             "key": "MacAddressFilterEnabled",          "value": "true",              "category": null},
-      {"id": "dash_placeholder",            "key": "serialNumber",                     "value": "-",                 "category": null},
-      {"id": "status_word",                 "key": "serialNumber",                     "value": "N/A",               "category": null},
-      {"id": "serial_port",                 "key": "serialPort",                       "value": "ttyS0",             "category": null},
-      {"id": "serial_number_label_key",     "key": "serialNumberLabel",                "value": "S/N 1234",          "category": null},
-      {"id": "serial_with_space",           "key": "serial",                           "value": "SN 12345",          "category": null},
-      {"id": "short_flag",                  "key": "serial",                           "value": "1",                 "category": null},
-      {"id": "snr_is_not_sn",               "key": "snr",                              "value": "38.5dB",            "category": null},
-      {"id": "mac_status_word",             "key": "mac",                              "value": "Enabled",           "category": null},
-      {"id": "non_string_value",            "key": "serialNumber",                     "value": 12345678,            "category": null}
+      {"id": "hnap_status_software_serial",   "key": "StatusSoftwareSerialNum",          "value": "ABC123DEF456",      "category": "serial_number"},
+      {"id": "bare_hex_mac_camel_key",        "key": "CmMacAddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "all_digit_serial",              "key": "serialnumber",                     "value": "123456789012345",   "category": "serial_number"},
+      {"id": "exact_sn",                      "key": "sn",                               "value": "TEST12345",         "category": "serial_number"},
+      {"id": "suffix_serial",                 "key": "deviceSerial",                     "value": "X1Y2Z3W4",          "category": "serial_number"},
+      {"id": "serial_no",                     "key": "SerialNo",                         "value": "SN-00012345",       "category": "serial_number"},
+      {"id": "screaming_serial_number",       "key": "SYSTEM_SERIAL_NUMBER",             "value": "4106844207105213",  "category": "serial_number"},
+      {"id": "acronym_mac_addr",              "key": "wanMACAddr",                       "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "numbered_mac_key",              "key": "macaddress_5",                     "value": "3C-7A-8A-12-34-56", "category": "mac_address"},
+      {"id": "dotted_mac_hw_addr",            "key": "hw_addr",                          "value": "3c7a.8a12.3456",    "category": "mac_address"},
+      {"id": "exact_mac",                     "key": "mac",                              "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "i18n_label_no_digit",           "key": "PAGE_STATUS_SYSTEM_SERIAL_NUMBER", "value": "Seriennummer",      "category": null},
+      {"id": "hmac_is_not_mac",               "key": "hmac_algorithm",                   "value": "3C7A8A123456",      "category": null},
+      {"id": "ofdma_is_not_mac",              "key": "ofdmachannel",                     "value": "3C7A8A123456",      "category": null},
+      {"id": "mac_filter_flag",               "key": "MacAddressFilterEnabled",          "value": "true",              "category": null},
+      {"id": "dash_placeholder",              "key": "serialNumber",                     "value": "-",                 "category": null},
+      {"id": "status_word",                   "key": "serialNumber",                     "value": "N/A",               "category": null},
+      {"id": "serial_port",                   "key": "serialPort",                       "value": "ttyS0",             "category": null},
+      {"id": "serial_number_label_key",       "key": "serialNumberLabel",                "value": "S/N 1234",          "category": null},
+      {"id": "serial_with_space",             "key": "serial",                           "value": "SN 12345",          "category": null},
+      {"id": "short_flag",                    "key": "serial",                           "value": "1",                 "category": null},
+      {"id": "snr_is_not_sn",                 "key": "snr",                              "value": "38.5dB",            "category": null},
+      {"id": "mac_status_word",               "key": "mac",                              "value": "Enabled",           "category": null},
+      {"id": "non_string_value",              "key": "serialNumber",                     "value": 12345678,            "category": null},
+      {"id": "glued_lowercase_mac_address",   "key": "cmmacaddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_lowercase_mac_addr",      "key": "wanmacaddr",                       "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "glued_acronym_mac",             "key": "CMMACAddress",                     "value": "3C-7A-8A-12-34-56", "category": "mac_address"},
+      {"id": "glued_lowercase_mac",           "key": "dhcpmac",                          "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_lowercase_serial",        "key": "cmserialnumber",                   "value": "SN0012345678",      "category": "serial_number"},
+      {"id": "mac_placeholder_still_mac",     "key": "mac",                              "value": "02:aa:bb:cc:dd:ee", "category": "mac_address"},
+      {"id": "bare_hmac_key",                 "key": "hmac",                             "value": "3C7A8A123456",      "category": null},
+      {"id": "identity_not_last_word",        "key": "macaddr.wan",                      "value": "3C7A8A123456",      "category": null},
+      {"id": "serial_placeholder_not_serial", "key": "SerialNumber",                     "value": "SERIAL_2c9c9cf9",   "category": null},
+      {"id": "glued_eth_mac",                 "key": "ethmac",                           "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_switch_mac",              "key": "switchmac",                        "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_bluetooth_mac",           "key": "bluetoothmac",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_wlan_eth_mac_addr",       "key": "wlanethmacaddr",                   "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "prefixed_hmac_word",            "key": "x_hmac",                           "value": "3C7A8A123456",      "category": null},
+      {"id": "serial_containing_zero_run",    "key": "serialNumber",                     "value": "SN0000001234",      "category": "serial_number"},
+      {"id": "all_digit_serial_zero_run",     "key": "serialNumber",                     "value": "4106000000215",     "category": "serial_number"},
+      {"id": "serial_containing_xxx",         "key": "SerialNum",                        "value": "ABCXXX12345",       "category": "serial_number"},
+      {"id": "static_serial_placeholder",     "key": "SerialNumber",                     "value": "***SERIAL***",      "category": null}
     ]
   },
   "transport_body_cases": {
-    "_comment": "decode_transport_body(content): the text a HAR response body carries. A body without 'encoding' is already text. A base64 body is decoded with the mime type's charset, else strict UTF-8; bytes that do not decode, or decode to text holding NUL, are binary and give None.",
+    "_comment": "decode_transport_body(content): the text a HAR response body carries. A body without 'encoding' is already text. A base64 body is decoded with the mime type's charset — or strict UTF-8 when none is declared or the declared one is unknown or not a text encoding; bytes that do not decode, or decode to text holding NUL, are binary and give None.",
     "cases": [
       {"id": "plain_text_unchanged",                      "content": {"text": "<p>hi</p>", "mimeType": "text/html"},                                                             "expected": "<p>hi</p>"},
       {"id": "base64_utf8_json",                          "content": {"text": "eyJtYWMiOiAiM0M6N0E6OEE6MTI6MzQ6NTYifQ==", "mimeType": "application/json", "encoding": "base64"}, "expected": "{\"mac\": \"3C:7A:8A:12:34:56\"}"},
@@ -190,7 +210,13 @@
       {"id": "ascii_with_nul_is_binary",                  "content": {"text": "YWIAY2Q=", "mimeType": "application/octet-stream", "encoding": "base64"},                         "expected": null},
       {"id": "invalid_base64",                            "content": {"text": "not base64!!", "mimeType": "text/plain", "encoding": "base64"},                                   "expected": null},
       {"id": "missing_text",                              "content": {"mimeType": "text/html"},                                                                                  "expected": null},
-      {"id": "empty_text",                                "content": {"text": "", "mimeType": "text/html"},                                                                      "expected": null}
+      {"id": "empty_text",                                "content": {"text": "", "mimeType": "text/html"},                                                                      "expected": null},
+      {"id": "non_text_codec_hex_falls_back_to_utf8",     "content": {"text": "b2s=", "mimeType": "text/plain; charset=hex", "encoding": "base64"},                              "expected": "ok"},
+      {"id": "non_text_codec_zlib_falls_back_to_utf8",    "content": {"text": "b2s=", "mimeType": "text/plain; charset=zlib", "encoding": "base64"},                             "expected": "ok"},
+      {"id": "declared_codec_rejects_bytes",              "content": {"text": "//4=", "mimeType": "text/plain; charset=punycode", "encoding": "base64"},                         "expected": null},
+      {"id": "whitespace_only_base64",                    "content": {"text": "   ", "mimeType": "text/plain", "encoding": "base64"},                                            "expected": null},
+      {"id": "line_wrapped_base64",                       "content": {"text": "b2sg\nb2s=", "mimeType": "text/plain", "encoding": "base64"},                                     "expected": "ok ok"},
+      {"id": "nul_in_charset_falls_back_to_utf8",         "content": {"text": "b2s=", "mimeType": "text/plain; charset=utf\u0000-8", "encoding": "base64"},                      "expected": "ok"}
     ]
   }
 }

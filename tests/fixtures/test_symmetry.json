@@ -483,8 +483,224 @@
       ]
     },
     {
+      "id": "html_mac_hyphen_layout",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>CM MAC</td><td>3C-7A-8A-12-34-56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C-7A-8A-12-34-56"
+      ]
+    },
+    {
+      "id": "json_body_mac_value",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"cm_status\": {\"hw\": \"3C:7A:8A:12:34:56\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "labeled_password_shaped_like_mac_placeholder",
+      "_note": "A bare 12-hex value starting 02 is not a placeholder outside a MAC-named field",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<span class=\"readonlyLabel\">Default Password:</span><span class=\"value\">02deadbeef12</span>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password"
+        }
+      ],
+      "leaked": [
+        "02deadbeef12"
+      ]
+    },
+    {
+      "id": "labeled_serial_shaped_like_mac_placeholder",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>Serial Number</td><td>021234567890</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "021234567890"
+      ]
+    },
+    {
+      "id": "url_credential_in_unparseable_url",
+      "_note": "urlparse rejects the URL; both tools split it by hand",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://[::1/login?YWRtaW46cGFzc3dvcmQ=",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Base64-encoded credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "hash_route_query_in_location_header",
+      "_note": "A hash-routed page carries its parameters after '#'",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://192.168.100.1/#/login?password=hunter2hunter2"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive query parameter"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "mac_glued_to_hex_letter",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>wanmac3C:7A:8A:12:34:56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
       "id": "mac_glued_to_underscore_in_html",
-      "_note": "MAC_RE edge: a MAC after a non-hex word character is still a MAC",
+      "_note": "A MAC glued to an identifier is still a MAC",
       "entries": [
         {
           "request": {
@@ -515,7 +731,7 @@
     },
     {
       "id": "mac_glued_to_letter_in_text",
-      "_note": "MAC_RE edge: a MAC after a non-hex word character is still a MAC",
+      "_note": "A MAC glued to an identifier is still a MAC",
       "entries": [
         {
           "request": {

@@ -9,65 +9,63 @@ from pathlib import Path
 import pytest
 
 from har_capture.patterns.hasher import Hasher
-from har_capture.patterns.redaction import is_redacted
-
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ Hasher.create() test cases                                                  │
-# ├──────────────┬─────────────────────┬────────────────────────────────────────┤
-# │ salt_input   │ expected_salt_type  │ description                            │
-# ├──────────────┼─────────────────────┼────────────────────────────────────────┤
-# │ "auto"       │ str (32 hex chars)  │ generates random salt                  │
-# │ "random"     │ str (32 hex chars)  │ alias for auto                         │
-# │ None         │ None                │ static placeholders mode               │
-# │ "my-salt"    │ "my-salt"           │ custom salt preserved                  │
-# │ ""           │ ""                  │ empty string is valid salt             │
-# └──────────────┴─────────────────────┴────────────────────────────────────────┘
-#
-# fmt: off
-CREATE_CASES = [
-    ("auto",     "random_hex", "generates random salt"),
-    ("random",   "random_hex", "alias for auto"),
-    (None,       None,         "static placeholders mode"),
-    ("my-salt",  "my-salt",    "custom salt preserved"),
-    ("",         "",           "empty string is valid salt"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize(("salt_input", "expected", "desc"), CREATE_CASES)
-def test_hasher_create(salt_input: str | None, expected: str | None, desc: str) -> None:
-    """Test Hasher.create() with various salt options."""
-    hasher = Hasher.create(salt=salt_input)
-
-    if expected == "random_hex":
-        assert hasher.salt is not None
-        assert len(hasher.salt) == 32  # 16 bytes = 32 hex chars
-        assert all(c in "0123456789abcdef" for c in hasher.salt)
-    else:
-        assert hasher.salt == expected
-
+from har_capture.patterns.redaction import is_redacted, mac_layout
 
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_hasher.json").read_text())
-HASH_MAC_FORMAT_CASES = _FIXTURES["hash_mac_format_cases"]["cases"]
-HASH_MAC_NORMALIZATION_CASES = _FIXTURES["hash_mac_normalization_cases"]["cases"]
 
 
-@pytest.mark.parametrize("case", HASH_MAC_FORMAT_CASES, ids=[c["id"] for c in HASH_MAC_FORMAT_CASES])
+def _cases(key: str) -> list[dict]:
+    return _FIXTURES[key]["cases"]
+
+
+def _ids(key: str) -> list[str]:
+    return [c["id"] for c in _cases(key)]
+
+
+@pytest.mark.parametrize("case", _cases("create_cases"), ids=_ids("create_cases"))
+def test_hasher_create(case: dict) -> None:
+    """Hasher.create() mints, disables, or keeps the salt."""
+    hasher = Hasher.create(salt=case["salt"])
+
+    if case["expected"] == "random_hex":
+        assert hasher.salt is not None
+        assert re.fullmatch(r"[0-9a-f]{32}", hasher.salt)
+    else:
+        assert hasher.salt == case["expected"]
+
+
+@pytest.mark.parametrize("case", _cases("hash_mac_format_cases"), ids=_ids("hash_mac_format_cases"))
 def test_hash_mac_keeps_layout(case: dict) -> None:
     """hash_mac() output occupies the input's layout, in the locally administered range."""
     result = Hasher.create(salt="test-salt").hash_mac(case["input"])
     assert re.fullmatch(case["output_re"], result), result
-    assert is_redacted(result)
 
 
 @pytest.mark.parametrize(
-    "case", HASH_MAC_NORMALIZATION_CASES, ids=[c["id"] for c in HASH_MAC_NORMALIZATION_CASES]
+    "case", _cases("hash_mac_normalization_cases"), ids=_ids("hash_mac_normalization_cases")
 )
 def test_hash_mac_correlates_across_layouts(case: dict) -> None:
-    """Every layout of one MAC hashes to the same digits."""
+    """One hasher gives every layout of one MAC the same digits, each in its own layout."""
     hasher = Hasher.create(salt="normalize")
-    digits = {re.sub(r"[^0-9a-f]", "", hasher.hash_mac(mac)) for mac in case["inputs"]}
-    assert len(digits) == 1
+    results = [hasher.hash_mac(mac) for mac in case["inputs"]]
+
+    assert len({re.sub(r"[^0-9a-f]", "", r) for r in results}) == 1
+    for mac, result in zip(case["inputs"], results, strict=True):
+        expected = mac_layout(mac)
+        assert mac_layout(result) == (":" if expected is None else expected), (mac, result)
+
+
+@pytest.mark.parametrize("case", _cases("hash_mac_stable_cases"), ids=_ids("hash_mac_stable_cases"))
+def test_hash_mac_stable_under_fixed_salt(case: dict) -> None:
+    """A fixed salt keeps giving a MAC the placeholder earlier releases gave it."""
+    assert Hasher.create(salt=case["salt"]).hash_mac(case["input"]) == case["expected"]
+
+
+def test_hash_mac_separated_placeholders_are_redacted() -> None:
+    """The allowlist recognizes the colon and hyphen placeholders text scans meet."""
+    hasher = Hasher.create(salt="test-salt")
+    assert is_redacted(hasher.hash_mac("3C:7A:8A:12:34:56"))
+    assert is_redacted(hasher.hash_mac("3C-7A-8A-12-34-56"))
 
 
 def test_hash_mac_without_salt() -> None:
@@ -93,37 +91,12 @@ def test_hash_mac_different_values() -> None:
     assert result1 != result2
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ hash_ip() test cases                                                        │
-# ├─────────────────────────┬────────────┬──────────────┬───────────────────────┤
-# │ input                   │ is_private │ expected_pfx │ description           │
-# ├─────────────────────────┼────────────┼──────────────┼───────────────────────┤
-# │ "192.168.1.1"           │ True       │ "10.255."    │ private IP            │
-# │ "10.0.0.1"              │ True       │ "10.255."    │ private 10.x          │
-# │ "172.16.0.1"            │ True       │ "10.255."    │ private 172.x         │
-# │ "8.8.8.8"               │ False      │ "192.0.2."   │ public IP             │
-# │ "1.1.1.1"               │ False      │ "192.0.2."   │ cloudflare DNS        │
-# └─────────────────────────┴────────────┴──────────────┴───────────────────────┘
-#
-# fmt: off
-IP_CASES = [
-    ("192.168.1.1", True,  "10.255.",  "private IP"),
-    ("10.0.0.1",    True,  "10.255.",  "private 10.x"),
-    ("172.16.0.1",  True,  "10.255.",  "private 172.x"),
-    ("8.8.8.8",     False, "192.0.2.", "public IP (Google DNS)"),
-    ("1.1.1.1",     False, "192.0.2.", "public IP (Cloudflare)"),
-]
-# fmt: on
+@pytest.mark.parametrize("case", _cases("hash_ip_cases"), ids=_ids("hash_ip_cases"))
+def test_hash_ip_with_salt(case: dict) -> None:
+    """hash_ip() keeps IPv4 form in the reserved range for its class."""
+    result = Hasher.create(salt="test-salt").hash_ip(case["ip"], is_private=case["is_private"])
 
-
-@pytest.mark.parametrize(("ip_input", "is_private", "expected_prefix", "desc"), IP_CASES)
-def test_hash_ip_with_salt(ip_input: str, is_private: bool, expected_prefix: str, desc: str) -> None:
-    """Test hash_ip() produces format-preserving output."""
-    hasher = Hasher.create(salt="test-salt")
-    result = hasher.hash_ip(ip_input, is_private=is_private)
-
-    assert result.startswith(expected_prefix), f"Expected prefix {expected_prefix}, got {result}"
-    # Should be valid IP format
+    assert result.startswith(case["prefix"]), result
     parts = result.split(".")
     assert len(parts) == 4
     assert all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
@@ -146,34 +119,10 @@ def test_hash_ip_caching() -> None:
     assert "PRIV_IP:192.168.1.1" in hasher._cache
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ hash_ipv6() test cases                                                      │
-# ├─────────────────────────────────────┬───────────────┬───────────────────────┤
-# │ input                               │ expected_pfx  │ description           │
-# ├─────────────────────────────────────┼───────────────┼───────────────────────┤
-# │ "fe80::1"                           │ "2001:db8::"  │ link-local            │
-# │ "2001:4860:4860::8888"              │ "2001:db8::"  │ Google DNS IPv6       │
-# │ "::1"                               │ "2001:db8::"  │ localhost             │
-# │ "fd00::1234:5678"                   │ "2001:db8::"  │ unique local          │
-# └─────────────────────────────────────┴───────────────┴───────────────────────┘
-#
-# fmt: off
-IPV6_CASES = [
-    ("fe80::1",                "2001:db8::", "link-local address"),
-    ("2001:4860:4860::8888",   "2001:db8::", "Google DNS IPv6"),
-    ("::1",                    "2001:db8::", "localhost"),
-    ("fd00::1234:5678",        "2001:db8::", "unique local address"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize(("ipv6_input", "expected_prefix", "desc"), IPV6_CASES)
-def test_hash_ipv6_with_salt(ipv6_input: str, expected_prefix: str, desc: str) -> None:
-    """Test hash_ipv6() produces format-preserving output."""
-    hasher = Hasher.create(salt="test-salt")
-    result = hasher.hash_ipv6(ipv6_input)
-
-    assert result.startswith(expected_prefix), f"Expected prefix {expected_prefix}, got {result}"
+@pytest.mark.parametrize("case", _cases("hash_ipv6_cases"), ids=_ids("hash_ipv6_cases"))
+def test_hash_ipv6_with_salt(case: dict) -> None:
+    """hash_ipv6() writes into the documentation prefix."""
+    assert Hasher.create(salt="test-salt").hash_ipv6(case["ip"]).startswith("2001:db8::")
 
 
 def test_hash_ipv6_without_salt() -> None:
@@ -208,35 +157,11 @@ def test_hash_ipv6_caching() -> None:
     assert result1 == result2
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ hash_email() test cases                                                     │
-# ├─────────────────────────────────────┬───────────────────────────────────────┤
-# │ input                               │ description                           │
-# ├─────────────────────────────────────┼───────────────────────────────────────┤
-# │ "user@example.com"                  │ standard email                        │
-# │ "USER@EXAMPLE.COM"                  │ uppercase (normalized)                │
-# │ "test.user+tag@domain.co.uk"        │ complex email                         │
-# │ "a@b.c"                             │ minimal valid email                   │
-# └─────────────────────────────────────┴───────────────────────────────────────┘
-#
-# fmt: off
-EMAIL_CASES = [
-    ("user@example.com",            "standard email"),
-    ("USER@EXAMPLE.COM",            "uppercase (normalized)"),
-    ("test.user+tag@domain.co.uk",  "complex email"),
-    ("a@b.c",                       "minimal valid email"),
-]
-# fmt: on
-
-
-@pytest.mark.parametrize(("email_input", "desc"), EMAIL_CASES)
-def test_hash_email_with_salt(email_input: str, desc: str) -> None:
-    """Test hash_email() produces format-preserving output."""
-    hasher = Hasher.create(salt="test-salt")
-    result = hasher.hash_email(email_input)
-
-    assert result.startswith("user_"), f"Expected user_ prefix, got {result}"
-    assert result.endswith("@redacted.invalid"), f"Expected @redacted.invalid suffix, got {result}"
+@pytest.mark.parametrize("case", _cases("hash_email_cases"), ids=_ids("hash_email_cases"))
+def test_hash_email_with_salt(case: dict) -> None:
+    """hash_email() writes a placeholder in the .invalid TLD."""
+    result = Hasher.create(salt="test-salt").hash_email(case["email"])
+    assert re.fullmatch(r"user_[0-9a-f]{8}@redacted\.invalid", result), result
 
 
 def test_hash_email_without_salt() -> None:
@@ -254,46 +179,17 @@ def test_hash_email_normalization() -> None:
     assert result1 == result2
 
 
-# ┌─────────────────────────────────────────────────────────────────────────────┐
-# │ hash_value() / hash_generic() test cases                                    │
-# ├────────────────┬─────────────┬──────────────────────────────────────────────┤
-# │ value          │ prefix      │ description                                  │
-# ├────────────────┼─────────────┼──────────────────────────────────────────────┤
-# │ "ABC123"       │ "SERIAL"    │ serial number                                │
-# │ "secret-token" │ "TOKEN"     │ auth token                                   │
-# │ "password123"  │ "PASS"      │ password                                     │
-# │ ""             │ "EMPTY"     │ empty value                                  │
-# └────────────────┴─────────────┴──────────────────────────────────────────────┘
-#
-# fmt: off
-GENERIC_CASES = [
-    ("ABC123",       "SERIAL", "serial number"),
-    ("secret-token", "TOKEN",  "auth token"),
-    ("password123",  "PASS",   "password"),
-    ("",             "EMPTY",  "empty value"),
-]
-# fmt: on
+@pytest.mark.parametrize("case", _cases("hash_value_cases"), ids=_ids("hash_value_cases"))
+def test_hash_value_with_salt(case: dict) -> None:
+    """hash_value() writes PREFIX_ plus 8 hex characters."""
+    result = Hasher.create(salt="test-salt").hash_value(case["value"], case["prefix"])
+    assert re.fullmatch(rf"{case['prefix']}_[0-9a-f]{{8}}", result), result
 
 
-@pytest.mark.parametrize(("value", "prefix", "desc"), GENERIC_CASES)
-def test_hash_value_with_salt(value: str, prefix: str, desc: str) -> None:
-    """Test hash_value() produces prefixed hashed output."""
-    hasher = Hasher.create(salt="test-salt")
-    result = hasher.hash_value(value, prefix)
-
-    assert result.startswith(f"{prefix}_"), f"Expected {prefix}_ prefix, got {result}"
-    # Should have 8 hex chars after underscore
-    hash_part = result.split("_")[1]
-    assert len(hash_part) == 8
-    assert all(c in "0123456789abcdef" for c in hash_part)
-
-
-@pytest.mark.parametrize(("value", "prefix", "desc"), GENERIC_CASES)
-def test_hash_value_without_salt(value: str, prefix: str, desc: str) -> None:
-    """Test hash_value() returns static placeholder without salt."""
-    hasher = Hasher.create(salt=None)
-    result = hasher.hash_value(value, prefix)
-    assert result == f"***{prefix}***"
+@pytest.mark.parametrize("case", _cases("hash_value_cases"), ids=_ids("hash_value_cases"))
+def test_hash_value_without_salt(case: dict) -> None:
+    """hash_value() returns the static placeholder without a salt."""
+    assert Hasher.create(salt=None).hash_value(case["value"], case["prefix"]) == f"***{case['prefix']}***"
 
 
 def test_hash_generic_is_alias() -> None:

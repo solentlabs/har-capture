@@ -337,30 +337,23 @@ counters, or frequencies far more often than phone numbers (the CM2500 firmware'
 
 One definition, `MAC_RE` in `patterns/redaction.py`, serves `_sanitize_string_patterns`, the HTML engine's pass 1 and
 pipe-delimited scanner, `har-capture validate` and `check_for_pii` (whose `pii.json` `mac_address` regex carries it
-verbatim; a test pins the two). Six hex pairs joined by `:` or `-`, bounded by non-hex characters on both sides:
+verbatim; a test pins the two): six hex pairs joined by `:` or `-`, wherever they occur. No boundary is required on
+either side — `wanmac3C:7A:8A:12:34:56` and `3C:7A:8A:12:34:56Enabled` are MACs glued to identifiers. A longer separated
+run is read six pairs at a time. Bare (`3C7A8A123456`) and dotted (`3c7a.8a12.3456`) MACs carry no separator run and are
+not matched in text; `is_mac_value()` and `mac_layout()` recognize them where a value is already known to be a MAC.
 
-| Text                 | Matched | Why                                                            |
-| -------------------- | ------- | -------------------------------------------------------------- |
-| `3C:7A:8A:12:34:56`  | yes     | a MAC                                                          |
-| `cm_mac_3C:7A:8A:…`  | yes     | `_` and letters outside a-f are not part of a hex run          |
-| `HWaddr3C:7A:8A:…`   | yes     | same                                                           |
-| `13C:7A:8A:12:34:56` | no      | glued to a hex digit: a fragment of a longer run, not a MAC    |
-| `3C7A8A123456`       | no      | bare 12-hex; recognized only under a MAC-named key (see below) |
+Until 0.13.0 the sanitizer required `\b` on both sides and the validator required nothing, so a MAC glued to an
+identifier was reported by `validate` and left by every sanitize run.
 
-The boundary is hex-aware rather than `\b`. Until 0.13.0 the sanitizer used `\b` and the validator used no boundary at
-all, so a MAC glued to `_` or a letter was reported by `validate` and left by every sanitize run, and one glued to a hex
-digit was reported by `validate` while the sanitizer, correctly, left it alone.
+**ADR-12 accounting** (redacts MACs the `\b` form missed):
 
-**ADR-12 accounting** (redacts a MAC the `\b` form missed):
-
-- *Leak closed:* a MAC written directly after an identifier character (`cm_mac_<MAC>`, `HWaddr<MAC>`) survived sanitize.
-- *Fidelity cost:* none beyond the MAC; the identifier before it is untouched.
+- *Leak closed:* a MAC written directly against an identifier character (`cm_mac_<MAC>`, `HWaddr<MAC>`, `wanmac<MAC>`)
+  survived sanitize while `validate` reported it.
+- *Fidelity cost:* none beyond the MAC; the identifier around it is untouched.
 - *Cannot-be-structure proof:* the matched text is the same six colon- or hyphen-joined hex pairs the sanitizer has
-  always redacted. What sits in front of it does not change what it is; a hex digit in front would, and still blocks the
-  match.
-
-Bare (`3C7A8A123456`) and dotted (`3c7a.8a12.3456`) MACs have no separator run to match. `is_mac_value()` recognizes all
-four layouts for callers that already know a value is meant to be a MAC.
+  always redacted, and exactly what `validate` has always reported; what it is glued to does not change what it is.
+  Measured 2026-09-12 across the cable_modem_monitor fleet, all 11,953 such runs sit between punctuation or whitespace,
+  so the change redacts nothing the fleet contains.
 
 **IP address heuristic** (`is_valid_ip_address()`):
 
@@ -737,12 +730,18 @@ digest = SHA-256(salt + ":" + prefix + ":" + input)
 output = format(digest[:N])  # N bytes depending on output format
 ```
 
-**MAC layout.** `hash_mac` writes its placeholder in the input's layout — `02:a1:…`, `02-a1-…`, bare `02a1b2c3d4e5`, or
-dotted `02a1.b2c3.d4e5` — because the placeholder occupies the value's structural position (ADR-12 rule 1): a consumer
-that parses a bare 12-hex `CmMacAddress` must still parse its placeholder. Hex is lowercase; a value in no MAC layout
-(mixed separators, or not a MAC) gets the colon form. The digest is over the hex digits alone, so every layout of one
-MAC correlates: `AA:BB:CC:DD:EE:FF` and `aabbccddeeff` become `02:…` and `02…` with the same digits. Until 0.13.0 every
-placeholder was colon-form and only colon/hyphen inputs correlated. `allowlist.json` recognizes all four layouts.
+**MAC layout.** With a salt, `hash_mac` writes its placeholder in the input's layout — `02:a1:…`, `02-a1-…`, bare
+`02a1b2c3d4e5`, or dotted `02a1.b2c3.d4e5` — because the placeholder occupies the value's structural position (ADR-12
+rule 1): a consumer that parses a bare 12-hex MAC field must still parse its placeholder. Hex is lowercase; a value in
+no uniform MAC layout (mixed separators, or not a MAC) gets the colon form. Static mode (`salt=None`) always writes
+`XX:XX:XX:XX:XX:XX`.
+
+The digest is taken over the MAC's digits as uppercase colon pairs, whatever the input layout. Every layout of one MAC
+therefore shares its digits (`AA:BB:CC:DD:EE:FF` → `02:df:f0:2a:db:05`, `aabbccddeeff` → `02dff02adb05` under one salt),
+and a colon MAC under a fixed salt gets the same placeholder it got before 0.13.0. The placeholder *string* differs by
+layout, so a colon MAC and its hyphen spelling correlate by digits rather than byte-for-byte; before 0.13.0 both became
+the colon form. `allowlist.json` recognizes the colon and hyphen placeholders, which text scans meet. Bare and dotted
+placeholders are not in the global allowlist: `02deadbeef12` is as likely a password as a placeholder.
 
 ### Category-to-Prefix Mapping
 

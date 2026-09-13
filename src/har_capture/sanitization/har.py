@@ -33,9 +33,11 @@ from har_capture.patterns import (
     is_blank_query_value,
     is_cookie_attribute_metadata,
     is_cookie_attribute_name,
+    is_redacted,
     iter_url_credentials,
     load_sensitive_patterns,
     query_param_segment,
+    split_url_query,
 )
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
@@ -1156,6 +1158,13 @@ def _sanitize_headers(
             header["value"] = sanitize_header_value(header["name"], value, hasher, collector)
 
 
+def _url_path(url: str) -> str:
+    """Return a URL's path, split by hand like its query (see ``split_url_query``)."""
+    head = split_url_query(url)[0].removesuffix("?").partition("#")[0]
+    _, scheme_sep, rest = head.partition("://")
+    return "/" + rest.partition("/")[2] if scheme_sep else head
+
+
 def _sanitize_url_path(
     url: str,
     hasher: Hasher | None = None,  # noqa: ARG001
@@ -1175,13 +1184,13 @@ def _sanitize_url_path(
     Returns:
         The original URL, unchanged
     """
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.path or parsed.path == "/":
+    path = _url_path(url)
+    if not path or path == "/":
         return url
 
     # Flag suspicious path segments for review instead of auto-redacting
     if collector:
-        for segment in parsed.path.split("/"):
+        for segment in path.split("/"):
             if not segment:
                 continue
             if _UUID_PATTERN.match(segment):
@@ -1275,13 +1284,12 @@ def _sanitize_url_query_params(
     Returns:
         URL with sensitive query parameter values redacted
     """
-    # Split by hand rather than urlparse/urlunparse: only the query changes,
-    # and everything around it (scheme case, empty ';' or '#', a relative
-    # Location) must come back byte-identical. Raw segments, not parse_qsl,
-    # which would read base64 padding as a key/value separator.
-    head, question, rest = url.partition("?")
-    query, hash_mark, fragment = rest.partition("#")
-    if not question or not query:
+    # Only the query changes: everything around it (scheme case, an empty
+    # ';' or '#', a relative Location) comes back byte-identical. Raw
+    # segments, not parse_qsl, which would read base64 padding as a key/value
+    # separator.
+    before, query, after = split_url_query(url)
+    if not query:
         return url
 
     rebuilt_segments = []
@@ -1306,7 +1314,7 @@ def _sanitize_url_query_params(
     if not changed:
         return url
 
-    return f"{head}?{'&'.join(rebuilt_segments)}{hash_mark}{fragment}"
+    return before + "&".join(rebuilt_segments) + after
 
 
 def _sanitize_query_string_array(
@@ -2216,14 +2224,13 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
         r"DEVICE_[a-f0-9]{8}",  # Hashed device names
         r"PRIV_IP_[a-f0-9]{8}",  # Hashed private IPs (old format)
         r"\*\*\*[A-Z]+\*\*\*",  # Static placeholders
-        r"\b02([:-])[a-f0-9]{2}(?:\1[a-f0-9]{2}){4}\b",  # Hashed MACs, separated layouts
-        r"\b02[a-f0-9]{2}\.[a-f0-9]{4}\.[a-f0-9]{4}\b",  # Hashed MACs, dotted layout
         r"10\.255\.\d+\.\d+",  # Hashed private IPs
         r"192\.0\.2\.\d+",  # Hashed public IPs (TEST-NET-1)
         r"user_[a-f0-9]{8}@redacted\.invalid",  # Hashed emails
     ]
 
-    total_matches = 0
+    # Hashed MACs: the MACs in the document that the allowlist calls placeholders
+    total_matches = sum(1 for match in MAC_RE.finditer(content) if is_redacted(match.group(0)))
     for pattern in redaction_patterns:
         matches = re.findall(pattern, content, re.IGNORECASE)
         total_matches += len(matches)

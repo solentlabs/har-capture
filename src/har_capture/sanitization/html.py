@@ -814,9 +814,6 @@ def _sanitize_html_impl(
     # 6. IPv6 Addresses (full and compressed) - strict validation
     def replace_ipv6(match: re.Match[str]) -> str:
         text: str = match.group(0)
-        # A MAC pass 1 left alone (a MAC placeholder) is not an IPv6 address
-        if MAC_RE.fullmatch(text):
-            return text
         # Use strict validation via ipaddress module
         try:
             ipaddress.IPv6Address(text)

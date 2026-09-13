@@ -1,0 +1,28 @@
+{
+  "_comment": "appears_sanitized fixtures: which placeholder shapes count toward the already-sanitized threshold.",
+  "redaction_pattern_cases": {
+    "_comment": "appears_sanitized counts placeholders in the serialized HAR: 15 copies of 'text' either reach the threshold of 10 (detected) or do not. Hashed MACs are counted as MAC_RE matches the allowlist recognizes, so only the colon and hyphen layouts count: bare and dotted placeholders cannot be told from other hex in a document. The static XX:XX:XX:XX:XX:XX is not a counted pattern.",
+    "cases": [
+      {"id": "mac_hash",                               "text": "MAC_a1b2c3d4",                   "detected": true},
+      {"id": "pass_hash",                              "text": "PASS_12345678",                  "detected": true},
+      {"id": "token_hash",                             "text": "TOKEN_abcdef12",                 "detected": true},
+      {"id": "serial_hash",                            "text": "SERIAL_fedcba98",                "detected": true},
+      {"id": "wifi_hash",                              "text": "WIFI_11223344",                  "detected": true},
+      {"id": "device_hash",                            "text": "DEVICE_aabbccdd",                "detected": true},
+      {"id": "star_mac",                               "text": "***MAC***",                      "detected": true},
+      {"id": "star_password",                          "text": "***PASSWORD***",                 "detected": true},
+      {"id": "locally_administered_mac",               "text": "02:00:00:00:00:01",              "detected": true},
+      {"id": "locally_administered_mac_hyphen_layout", "text": "02-00-00-00-00-01",              "detected": true},
+      {"id": "mac_placeholder_glued_to_identifier",    "text": "cm_mac_02:aa:bb:cc:dd:ee",       "detected": true},
+      {"id": "dotted_mac_layout_not_counted",          "text": "0200.0000.0001",                 "detected": false},
+      {"id": "bare_mac_layout_not_counted",            "text": "020000000001",                   "detected": false},
+      {"id": "rfc5737_ip_10",                          "text": "10.255.1.2",                     "detected": true},
+      {"id": "rfc5737_ip_192",                         "text": "192.0.2.123",                    "detected": true},
+      {"id": "redacted_email",                         "text": "user_12345678@redacted.invalid", "detected": true},
+      {"id": "normal_text",                            "text": "normal text",                    "detected": false},
+      {"id": "real_mac",                               "text": "12:34:56:78:9A:BC",              "detected": false},
+      {"id": "private_ip",                             "text": "192.168.1.1",                    "detected": false},
+      {"id": "masked_mac_not_detected",                "text": "XX:XX:XX:XX:XX:XX",              "detected": false}
+    ]
+  }
+}

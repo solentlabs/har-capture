@@ -4,7 +4,7 @@ Every row in ``tests/fixtures/test_symmetry.json`` is a raw HAR carrying one lea
 Validate must report it, and after ``sanitize_har`` — in every heuristic mode —
 validate must report nothing and the leaked value must be gone. A row that fails
 the second half is a check that can fail with no remediation path, which ADR-14
-forbids. Units that widen either tool add their rows here.
+forbids. A change that widens either tool adds its rows here.
 """
 
 from __future__ import annotations

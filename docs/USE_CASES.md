@@ -513,7 +513,8 @@ ______________________________________________________________________
 1. Every occurrence of MAC `AA:BB:CC:DD:EE:FF` maps to `02:a1:b2:c3:d4:e5`
 1. Every occurrence of IP `192.168.1.100` maps to `10.255.42.17`
 1. Downstream analysis can still determine: "device `02:a1:b2:c3:d4:e5` made requests on entries 1, 5, 12"
-1. Salt is stored in sanitization metadata for Pass 2 consistency
+1. The salt is kept in the sanitization report (never in the HAR, whose metadata records only `salt_mode`) for Pass 2
+   consistency
 
 **Variations**:
 

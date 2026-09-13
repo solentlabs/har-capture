@@ -46,7 +46,8 @@ without har-capture carrying any product-specific code.
    reducing noise.
 
 1. **Correlation-preserving.** Redacted values use format-preserving salted hashes so the same MAC address always maps
-   to the same placeholder within a session, preserving the ability to trace behavior across requests.
+   to the same placeholder digits within a session — each occurrence in the layout it was written in — preserving the
+   ability to trace behavior across requests.
 
 1. **PII never persists on disk unsanitized.** Raw captures go to temp files, get sanitized immediately, and the temp
    file is deleted. Even on crash, the raw HAR lives in `/tmp`, not the user's working directory.

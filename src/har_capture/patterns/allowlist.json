@@ -15,8 +15,8 @@
   "format_preserving_patterns": {
     "_comment": "Regex patterns for format-preserving hashes (RFC-reserved ranges)",
     "mac": {
-      "pattern": "^02(?:([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}|[0-9a-f]{10}|[0-9a-f]{2}\\.[0-9a-f]{4}\\.[0-9a-f]{4})$",
-      "description": "Locally administered MAC in any layout hash_mac emits (02:xx:xx:xx:xx:xx, 02-xx-..., 02xxxxxxxxxx, 02xx.xxxx.xxxx)"
+      "pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$",
+      "description": "Locally administered MAC, colon or hyphen layout (02:xx:xx:xx:xx:xx, 02-xx-xx-xx-xx-xx)"
     },
     "private_ip": {
       "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
