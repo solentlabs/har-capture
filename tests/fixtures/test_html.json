@@ -25,6 +25,8 @@
     {"input_html": "config file: isp_settings.cfg",           "removed": "isp_settings.cfg",      "placeholder": "***CONFIG***",       "id": "config_lowercase"},
     {"input_html": "Account ID: 12345678",                    "removed": "12345678",              "placeholder": "***ACCOUNT***",      "id": "account_id"},
     {"input_html": "Subscriber Number: SUB-9876",             "removed": "SUB-9876",              "placeholder": "***ACCOUNT***",      "id": "subscriber_number"},
+    {"input_html": "<p>Account ID: <b>998877</b></p>",        "removed": "998877",                "placeholder": "Account ID: <b>***ACCOUNT***</b></p>", "id": "account_id_tag_wrapped"},
+    {"input_html": "Customer Number: DEV_abc123",             "removed": "DEV_abc123",            "placeholder": "Customer Number: ***ACCOUNT***", "id": "account_id_prefix_shaped"},
     {"input_html": "SSID: HomeNetwork",                       "removed": "HomeNetwork",           "placeholder": "***WIFI***",         "id": "ssid_text_label"},
     {"input_html": "Network Name=MyWiFi5G",                   "removed": "MyWiFi5G",              "placeholder": "***WIFI***",         "id": "network_name_label"},
     {"input_html": "password_24g: 'MyP@ssw0rd'",              "removed": "MyP@ssw0rd",            "placeholder": "***PASS***",         "id": "js_password_obj"},
@@ -63,6 +65,7 @@
     {"input_html": "Build: 2.4.6.100",                        "preserved": "2.4.6.100",             "id": "version_3_small_octets"},
     {"input_html": "Firmware: 3.4.5.6",                       "preserved": "3.4.5.6",               "id": "version_4_small_octets"},
     {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"},
+    {"input_html": "Account ID: [REDACTED]",                 "preserved": "Account ID: [REDACTED]", "id": "account_allowlisted_kept"},
     {"input_html": "<td>MAC</td><td>00:00:00:00:00:00</td>", "preserved": "00:00:00:00:00:00", "id": "zero_mac_constant"},
     {"input_html": "if (mac == 'ff:ff:ff:ff:ff:ff') return;", "preserved": "ff:ff:ff:ff:ff:ff", "id": "broadcast_mac_constant"},
     {"input_html": "<p><b>Serial Number</b>: Disabled</p>", "preserved": "Disabled", "id": "serial_label_status_word_kept"},
@@ -89,14 +92,23 @@
   ],
 
   "pii_json_line_cases": {
-    "_comment": "check_for_pii reports a JSON identity field on the line its value is written on, found as written or as JSON escapes it.",
+    "_comment": "check_for_pii reports each JSON finding on the line its string is written on — every occurrence on its own line, however the string is escaped. findings lists [pattern, line] in report order. nest_lists wraps the content in that many arrays: identity fields are read down to JSON_MAX_DEPTH, as the sanitizer's key rules reach.",
     "cases": [
-      {"id": "plain_value",   "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N12345678\"\n}",        "line": 3},
-      {"id": "repeated_value", "content": "{\"x\": \"ABC12345\",\n\"serialNumber\": \"ABC12345\"}",                "line": 2},
-      {"id": "php_escaped_slash", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"AB\\/1234567\"\n}",          "line": 3},
-      {"id": "escaped_key",       "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N12345678\"\n}", "line": 3},
-      {"id": "escaped_key_and_value", "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N\\u00c912345\"\n}", "line": 3},
-      {"id": "escaped_value", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N\\u00c912345\"\n}",   "line": 3}
+      {"id": "plain_value",   "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N12345678\"\n}",        "findings": [["serial_number", 3]]},
+      {"id": "repeated_value", "content": "{\"x\": \"ABC12345\",\n\"serialNumber\": \"ABC12345\"}",                "findings": [["serial_number", 2]]},
+      {"id": "php_escaped_slash", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"AB\\/1234567\"\n}",          "findings": [["serial_number", 3]]},
+      {"id": "escaped_key",       "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N12345678\"\n}", "findings": [["serial_number", 3]]},
+      {"id": "escaped_key_and_value", "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N\\u00c912345\"\n}", "findings": [["serial_number", 3]]},
+      {"id": "escaped_value", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N\\u00c912345\"\n}",   "findings": [["serial_number", 3]]},
+      {"id": "repeated_text_value", "content": "{\"a\": \"mac 3C:7A:8A:12:34:56\",\n\"b\": \"mac 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 1], ["mac_address", 2]]},
+      {"id": "unicode_escaped_colons", "content": "{\"a\": 1,\n\"m\": \"3C\\u003a7A\\u003a8A\\u003a12\\u003a34\\u003a56\"}", "findings": [["mac_address", 2]]},
+      {"id": "php_escaped_slash_text", "content": "{\"a\": 1,\n\"u\": \"http:\\/\\/x\\/ mac 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 2]]},
+      {"id": "raw_non_ascii_escaped_quote", "content": "{\"a\": 1,\n\"n\": \"café \\\"q\\\" 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 2]]},
+      {"id": "pii_in_key",          "content": "{\"a\": 1,\n\"3C:7A:8A:12:34:56\": 1}",                        "findings": [["mac_address", 2]]},
+      {"id": "key_text_repeated_as_value", "content": "{\"sn\": \"x\",\n\"note\": \"sn\", \"serialNumber\": \"4131N12345678\"}", "findings": [["serial_number", 2]]},
+      {"id": "identity_within_depth", "content": "{\"serialNumber\": \"4131N12345678\"}", "nest_lists": 50,     "findings": [["serial_number", 1]]},
+      {"id": "identity_past_depth",   "content": "{\"serialNumber\": \"4131N12345678\"}", "nest_lists": 51,     "findings": []},
+      {"id": "identity_after_nested_close", "content": "{\"a\": [[{\"b\": 1}]],\n\"serialNumber\": \"4131N12345678\"}", "nest_lists": 50, "findings": [["serial_number", 2]]}
     ]
   },
 
@@ -105,6 +117,18 @@
     "cases": [
       {"id": "malformed_entry_skipped", "custom_patterns": {"patterns": {"broken": "not-a-pattern"}},                                                 "content": "dns 8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
       {"id": "require_hex_letter",      "custom_patterns": {"patterns": {"hexy": {"regex": "\\b[0-9a-f]{6}\\b", "replacement_prefix": "H", "require_hex_letter": true}}}, "content": "123456 abc123", "findings": [["hexy", "abc123"]]}
+    ]
+  },
+
+  "custom_pattern_compile_cases": {
+    "_comment": "A custom pii pattern is compiled one way for the HTML engine's pass 0 and check_for_pii (loader.compile_pattern): every re flag named in flags is honoured, an invalid regex is skipped rather than crashing, and a value_group the match does not have falls back to the whole match. The pattern is installed as 'p'; removed must not survive sanitize_html; findings is check_for_pii's exact [pattern, match] list.",
+    "cases": [
+      {"id": "ignorecase",           "pattern": {"regex": "secret\\d+",        "replacement_prefix": "S", "flags": ["IGNORECASE"]}, "content": "SECRET123",        "removed": "SECRET123", "findings": [["p", "SECRET123"]]},
+      {"id": "multiline",            "pattern": {"regex": "^SECRET\\d+$",      "replacement_prefix": "S", "flags": ["MULTILINE"]},  "content": "a\nSECRET123\nb", "removed": "SECRET123", "findings": [["p", "SECRET123"]]},
+      {"id": "dotall",               "pattern": {"regex": "BEGIN.+?END",         "replacement_prefix": "S", "flags": ["DOTALL"]},     "content": "BEGIN\nx9\nEND",   "removed": "x9",        "findings": [["p", "BEGIN\nx9\nEND"]]},
+      {"id": "invalid_regex_skipped", "pattern": {"regex": "([",                 "replacement_prefix": "B"},                          "content": "dns 8.8.8.8",       "removed": "8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "value_group_out_of_range", "pattern": {"regex": "ID-(\\d+)",     "replacement_prefix": "V", "value_group": 5},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]},
+      {"id": "value_group_unmatched", "pattern": {"regex": "ID-(?:(x)|\\d+)",  "replacement_prefix": "V", "value_group": 1},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]}
     ]
   },
 
@@ -126,13 +150,22 @@
       {"id": "ipv6_all_digits",          "content": "wan 2001:470:1::5",                                "findings": [["ipv6", "2001:470:1::5"]]},
       {"id": "ipv6_ipv4_mapped_whole",   "content": "map ::ffff:192.0.2.128 ok",                        "findings": [["ipv6", "::ffff:192.0.2.128"]]},
       {"id": "ipv4_mapped_private_once", "content": "map ::ffff:192.168.5.4 ok",                        "findings": [["ipv6", "::ffff:192.168.5.4"]]},
+      {"id": "ipv4_mapped_zero_padded_once", "content": "map ::ffff:192.168.001.100 ok",                "findings": [["ipv6", "::ffff:192.168.001.100"]]},
       {"id": "json_markup_split",        "content": "{\"a\": \"<b>Password:</b><i>x\", \"</i>\": 1}",   "findings": []},
       {"id": "json_escaped_mac",         "content": "{\"m\": \"3C\\u003a7A\\u003a8A\\u003a12\\u003a34\\u003a56\"}", "findings": [["mac_address", "3C:7A:8A:12:34:56"]]},
       {"id": "serial_placeholder_label", "content": "Serial Number: SERIAL_34067a2e",                   "findings": []},
       {"id": "serial_placeholder_cell",  "content": "<td>SN</td><td>SERIAL_34067a2e</td>",              "findings": []},
       {"id": "account_placeholder",      "content": "Account ID: ACCOUNT_1a2b3c4d",                     "findings": []},
+      {"id": "serial_followed_by_at",    "content": "Serial Number: 4131N12345678@cm1",                 "findings": [["serial_number", "Serial Number: 4131N12345678"]]},
+      {"id": "email_after_serial_label", "content": "Serial Number: admin123@example.com",              "findings": [["email", "admin123@example.com"]]},
+      {"id": "account_tag_wrapped",      "content": "<p>Account ID: <b>998877</b></p>",                 "findings": [["account_id", "Account ID: <b>998877"]]},
+      {"id": "account_tag_wrapped_placeholder", "content": "<p>Account ID: <b>ACCOUNT_1a2b3c4d</b></p>", "findings": []},
+      {"id": "account_prefix_shaped",    "content": "Customer Number: DEV_abc123",                      "findings": [["account_id", "Customer Number: DEV_abc123"]]},
+      {"id": "account_allowlisted",      "content": "Account ID: [REDACTED]",                           "findings": []},
       {"id": "password_input_placeholder", "content": "<input type=\"password\" value=\"PASS_1a2b3c4d\">", "findings": []},
       {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
+      {"id": "card_luhn_valid",          "content": "card 4111111111111111",                            "findings": [["credit_card_visa", "4111111111111111"]]},
+      {"id": "card_luhn_invalid_kept",   "content": "card 4111111111111112 id 5555555555554444",        "findings": [["credit_card_mastercard", "5555555555554444"]]},
       {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
     ]
   },

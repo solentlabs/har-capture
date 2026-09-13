@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import urllib.parse
+import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from .loader import load_allowlist
@@ -383,34 +384,10 @@ def unredacted_identity(
 
 
 # How deep the key rules reach into a JSON body: the sanitizer's walker, the
-# validator's check_json_fields and check_for_pii all stop here. Past it, the
-# sanitizer still applies its text patterns to every string and key.
+# validator's check_json_fields and check_for_pii's identity fields all stop
+# here. Past it, the sanitizer still applies its text patterns to every string
+# and key.
 JSON_MAX_DEPTH = 50
-
-
-def iter_json_fields(data: dict[str, Any] | list[Any]) -> Iterator[tuple[str, Any]]:
-    """Yield the ``(key, value)`` members of a parsed JSON container, down to ``JSON_MAX_DEPTH``.
-
-    Iterative, and bounded by the depth the sanitizer's key rules reach, so
-    a checker never reports an identity field the sanitizer would not visit.
-
-    Args:
-        data: A parsed JSON object or array
-
-    Yields:
-        Each object member as ``(key, value)``, outer members first
-    """
-    stack: list[tuple[Any, int]] = [(data, 0)]
-    while stack:
-        node, depth = stack.pop()
-        if depth > JSON_MAX_DEPTH:
-            continue
-        if isinstance(node, dict):
-            members = json_members(node)
-            yield from members
-            stack.extend((value, depth + 1) for _, value in reversed(members))
-        elif isinstance(node, list):
-            stack.extend((item, depth + 1) for item in reversed(node))
 
 
 def iter_json_strings(data: dict[str, Any] | list[Any]) -> Iterator[str]:
@@ -476,10 +453,34 @@ IPV6_RE = re.compile(
     r"(?<![:\w])(?:[0-9a-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-f]{0,4})(?![:\w])(?!\.\d)",
     re.IGNORECASE,
 )
-EMAIL_RE = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
+# An email's local part and domain (dot-separated labels ending in an
+# alphabetic TLD), as regex source: the labeled-serial value rule uses them to
+# tell an email after a serial label (not a serial) from a serial followed by
+# `@host` (a serial).
+EMAIL_LOCAL_PART = r"[A-Za-z0-9._%+-]+"
+EMAIL_DOMAIN = (
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
 )
+EMAIL_RE = re.compile(r"\b" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN)
+
+
+def luhn_valid(number: str) -> bool:
+    """Check a digit string against the Luhn checksum every payment card number carries.
+
+    The card patterns' value test for the text path and ``check_for_pii``:
+    a card-shaped number that fails it is a counter or an ID, and is kept.
+
+    Args:
+        number: Digit-only string
+
+    Returns:
+        True if the number passes the Luhn check
+    """
+    checksum = 0
+    for i, digit in enumerate(int(c) for c in reversed(number)):
+        value = digit * 2 if i % 2 == 1 else digit
+        checksum += value - 9 if value > 9 else value
+    return checksum % 10 == 0
 
 
 def ipv6_host_spans(text: str) -> list[tuple[int, int]]:
@@ -513,6 +514,13 @@ def is_ipv6_host_address(candidate: str) -> bool:
     Returns:
         True if ``ipaddress`` parses it as an IPv6 address other than ``::`` or ``::1``
     """
+    # An IPv4-mapped tail with zero-padded octets (`::ffff:192.168.001.100`),
+    # as some devices print IPv4, is still one address: ipaddress rejects the
+    # padding, and the IPv4 passes read the padded quad as an address too.
+    head, _, tail = candidate.rpartition(":")
+    octets = tail.split(".")
+    if len(octets) == 4 and all(octet.isdigit() and len(octet) <= 3 for octet in octets):
+        candidate = f"{head}:{'.'.join(str(int(octet)) for octet in octets)}"
     try:
         address = ipaddress.IPv6Address(candidate)
     except ValueError:
@@ -669,6 +677,31 @@ def json_members(obj: dict[str, Any]) -> list[tuple[str, Any]]:
     if isinstance(obj, JsonObjectWithDuplicates):
         members.extend(obj.shadowed)
     return members
+
+
+# A UTF-16 surrogate code unit on its own: JSON can carry one (`"\ud800"`), and
+# no encoder accepts it.
+_LONE_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
+def parse_xml(text: str) -> ET.Element | None:
+    """Parse an XML document for the field checks the sanitizer and ``validate`` both run.
+
+    The one parse for both tools, so they read the same fields from a body.
+    A lone surrogate cannot be encoded for the parser; it is read as U+FFFD,
+    so one stray code unit elsewhere in a body does not switch off the check
+    of every field in it.
+
+    Args:
+        text: Candidate XML text
+
+    Returns:
+        The root element, or None when the text is not well-formed XML
+    """
+    try:
+        return ET.fromstring(_LONE_SURROGATE_RE.sub("\ufffd", text))  # noqa: S314
+    except ET.ParseError:
+        return None
 
 
 # `charset=` parameter of a Content-Type, quoted or bare.

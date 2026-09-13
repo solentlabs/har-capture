@@ -56,8 +56,10 @@ from har_capture.patterns import (
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
+    luhn_valid,
     mime_kind,
     parse_json_container,
+    parse_xml,
     query_param_segment,
     route_body,
     split_url_password,
@@ -207,14 +209,6 @@ def _compile_sensitive_field_patterns(
     auto_patterns = fields.get("auto_redact_patterns", [])
     flag_patterns = fields.get("flag_patterns", [])
 
-    # Fallback for legacy format
-    if not auto_patterns:
-        legacy = fields.get("patterns", [])
-        if legacy:
-            auto_patterns = legacy
-        else:
-            auto_patterns = ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]
-
     auto_re = re.compile("|".join(auto_patterns), re.IGNORECASE)
     flag_re = re.compile("|".join(flag_patterns), re.IGNORECASE) if flag_patterns else None
     return auto_re, flag_re
@@ -314,7 +308,7 @@ def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _Cal
 
 
 # The active call's patterns for helpers with no custom_patterns parameter
-# (_sanitize_string_patterns, _sanitize_json_recursive), so a caller's
+# (the string patterns' address passes, the JSON walker), so a caller's
 # preserved gateway addresses, allowlist and vendor serial formats hold on
 # every route, as they do in the HTML engine. None: the built-in patterns.
 _CALL_PATTERNS_CTX: contextvars.ContextVar[_CallPatterns | None] = contextvars.ContextVar(
@@ -851,19 +845,21 @@ def _rewrite_json(
 
 
 def _shadowed_values_change(data: Any, hasher: Hasher | None) -> bool:
-    """True when sanitizing a repeated key's earlier value would change it.
+    """True when a repeated key's earlier value would be redacted or offered for review.
 
     Probed with a throwaway collector: the shadowed members are dropped from
-    the output, so nothing is counted or offered for review twice.
+    the output, so nothing is counted or offered for review twice. A value
+    the review would be offered must be dropped too — kept, it would pass
+    through with no review item while validate reports it.
     """
-    probe = RedactionCollector(hasher=hasher) if hasher is not None else None
+    probe = RedactionCollector(hasher=hasher if hasher is not None else Hasher(salt=None))
     stack: list[Any] = [data]
     while stack:
         node = stack.pop()
         if isinstance(node, JsonObjectWithDuplicates):
             for key, value in node.shadowed:
                 member = {key: value}
-                if _sanitize_json_recursive(member, hasher, probe) != member:
+                if _sanitize_json_recursive(member, hasher, probe) != member or probe.flagged:
                     return True
                 if isinstance(value, dict | list):
                     stack.append(value)
@@ -971,7 +967,7 @@ def sanitize_post_data(
                     heuristics=heuristics,
                 )
             else:
-                # Any other text: the string patterns, as for a text response body.
+                # Any other text: the string patterns (no positional passes).
                 result["text"] = _sanitize_string_patterns(text, hasher, collector)
 
     return result
@@ -998,9 +994,8 @@ def _sanitize_xml_fields(
     """
     import xml.etree.ElementTree as ET
 
-    try:
-        root = ET.fromstring(text)  # noqa: S314
-    except (ET.ParseError, UnicodeEncodeError):  # a lone surrogate cannot be encoded to parse
+    root = parse_xml(text)
+    if root is None:
         return text
 
     modified = False
@@ -1209,25 +1204,6 @@ _PHONE_PATTERN = re.compile(
 )
 
 
-def _luhn_check(number: str) -> bool:
-    """Validate a number string using the Luhn algorithm.
-
-    Args:
-        number: Digit-only string to validate
-
-    Returns:
-        True if the number passes Luhn validation
-    """
-    digits = [int(c) for c in number]
-    checksum = 0
-    for i, digit in enumerate(reversed(digits)):
-        value = digit * 2 if i % 2 == 1 else digit
-        if value > 9:
-            value -= 9
-        checksum += value
-    return checksum % 10 == 0
-
-
 def _sanitize_string_patterns(
     value: str,
     hasher: Hasher | None = None,
@@ -1248,8 +1224,14 @@ def _sanitize_string_patterns(
     """
     if not value:
         return value
+    value = _redact_macs(value, hasher, collector)
+    value = _redact_ip_addresses(value, hasher, collector)
+    return _redact_emails_and_numbers(value, hasher, collector)
 
-    # MAC addresses
+
+def _redact_macs(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
+    """The string patterns' MAC pass (the HTML engine's pass 1): every MAC but a constant one."""
+
     def replace_mac(match: re.Match[str]) -> str:
         if is_constant_mac(match.group(0)):
             return match.group(0)
@@ -1259,6 +1241,11 @@ def _sanitize_string_patterns(
 
     if ":" in value or "-" in value:
         value = MAC_RE.sub(replace_mac, value)
+    return value
+
+
+def _redact_ip_addresses(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
+    """The string patterns' address passes (the HTML engine's 6, 4 and 5): IPv6, private and public IPv4."""
 
     # IPv6 addresses, before IPv4 so an IPv4-mapped address (`::ffff:1.2.3.4`)
     # is one address. A candidate that is not a host address (a clock time,
@@ -1299,8 +1286,14 @@ def _sanitize_string_patterns(
 
     if "." in value:
         value = PUBLIC_IP_RE.sub(replace_public_ip, value)
+    return value
 
-    # Email addresses
+
+def _redact_emails_and_numbers(
+    value: str, hasher: Hasher | None, collector: RedactionCollector | None
+) -> str:
+    """The string patterns' email pass (the HTML engine's 11), then SSNs and phones (flagged) and cards."""
+
     def replace_email(match: re.Match[str]) -> str:
         if collector:
             collector.record_auto_redaction("email")
@@ -1338,7 +1331,7 @@ def _sanitize_string_patterns(
     # Credit cards (with Luhn validation to reduce false positives)
     def replace_cc(match: re.Match[str]) -> str:
         number = match.group(0)
-        if not _luhn_check(number):
+        if not luhn_valid(number):
             return number
         if collector:
             collector.record_auto_redaction("credit_card")
@@ -1752,50 +1745,56 @@ def _sanitize_request(
 _SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
 
 
-def _positional_passes(
+def _sanitize_body_string(
     text: str,
+    hasher: Hasher | None,
     collector: RedactionCollector | None,
     custom_patterns: str | dict[str, Any] | None,
     serial_detectors: Sequence[Any],
 ) -> str:
-    """Apply the HTML engine's positional passes to a text outside the HTML engine.
+    """Sanitize a text outside the HTML engine in that engine's pass order.
 
-    Structurally-located credentials (pass 7c), labeled serials (pass 2) and
-    vendor-format serials: a device label block in a script, or a serial in a
-    JSON string, must not be reported by validate and left by sanitize
-    (ADR-13, ADR-14). The text is a whole text body, or one decoded JSON
-    string — the unit validate checks — so an escape hides nothing and no
-    match crosses from one JSON string into the next.
+    A text body, or one decoded JSON string — the unit validate checks — so an
+    escape hides nothing and no match crosses from one JSON string into the
+    next. Besides the string patterns it takes the HTML engine's positional
+    passes: labeled serials (pass 2), vendor-format serials (2e) and
+    structurally-located credentials (7c), since a device label block in a
+    script, or a serial in a JSON string, must not be reported by validate and
+    left by sanitize (ADR-13, ADR-14). The order is the HTML engine's — MAC
+    (1), serials (2, 2e), IPv6 and IPv4 (6, 4, 5), structural credentials
+    (7c), email (11) — so a value two passes could claim (a MAC after a serial
+    label, an address in a password's element) gets the same placeholder on
+    every route.
 
     Args:
         text: The text
-        collector: Collector with hasher (no collector: nothing to hash with)
+        hasher: Hasher for the string patterns (None: static placeholders)
+        collector: Collector with hasher for the positional passes (None:
+            nothing to hash with, so they are skipped)
         custom_patterns: Optional custom patterns for the allowlist checks
         serial_detectors: Compiled high-confidence vendor serial detectors
 
     Returns:
-        The text with those values replaced
+        The sanitized text
     """
-    if collector is None or collector.hasher is None:
+    if not text:
         return text
-    hasher = collector.hasher
-    # The HTML engine's order: labeled serials (2), vendor serials (2e), then
-    # structural credentials (7c), so a value both could claim gets the same
-    # placeholder on every route.
-    if _SERIAL_LABEL_HINT_RE.search(text):
-        text = redact_labeled_serials(text, hasher, collector, custom_patterns)
-    if serial_detectors:
-        text = redact_vendor_serials(text, list(serial_detectors), hasher, collector)
-    if "<" in text:
-        text = redact_structural_credentials(text, hasher, collector, custom_patterns)
-    return text
+    text = _redact_macs(text, hasher, collector)
+    if collector is not None:
+        if _SERIAL_LABEL_HINT_RE.search(text):
+            text = redact_labeled_serials(text, collector.hasher, collector, custom_patterns)
+        if serial_detectors:
+            text = redact_vendor_serials(text, list(serial_detectors), collector.hasher, collector)
+    text = _redact_ip_addresses(text, hasher, collector)
+    if collector is not None and "<" in text:
+        text = redact_structural_credentials(text, collector.hasher, collector, custom_patterns)
+    return _redact_emails_and_numbers(text, hasher, collector)
 
 
 def _sanitize_json_string(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
-    """A decoded JSON string (value or key): the positional passes, then the string patterns."""
+    """A decoded JSON string (value or key), as any text outside the HTML engine."""
     active = _active_call_patterns()
-    value = _positional_passes(value, collector, active.custom_patterns, active.serial_detectors)
-    return _sanitize_string_patterns(value, hasher, collector)
+    return _sanitize_body_string(value, hasher, collector, active.custom_patterns, active.serial_detectors)
 
 
 def _sanitize_response_content(
@@ -1895,8 +1894,9 @@ def _sanitize_body_text(
     if route == "json" and data is not None:
         return _rewrite_json(text, data, hasher, collector)
 
-    text = _positional_passes(text, collector, custom_patterns, _resolve_serial_detectors(custom_patterns))
-    return _sanitize_string_patterns(text, hasher, collector)
+    return _sanitize_body_string(
+        text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)
+    )
 
 
 def _sanitize_response(

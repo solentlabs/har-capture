@@ -20,22 +20,27 @@ PII Categories Removed:
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 from har_capture.patterns import (
     Hasher,
+    compile_pattern,
     is_allowlisted,
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
 )
 from har_capture.patterns.redaction import (
+    EMAIL_DOMAIN,
+    EMAIL_LOCAL_PART,
     EMAIL_RE,
     IPV6_RE,
+    JSON_MAX_DEPTH,
     MAC_RE,
     PRIVATE_IP_RE,
     PUBLIC_IP_RE,
@@ -43,8 +48,7 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_ipv6_host_address,
     is_redacted,
-    iter_json_fields,
-    iter_json_strings,
+    luhn_valid,
     parse_json_container,
     unredacted_identity,
 )
@@ -194,17 +198,28 @@ SSID_OPTION_RE = re.compile(
 # label's own closing tags may precede its separator (<b>Serial Number</b>:).
 # The value must carry a digit, as every real serial does: without it the
 # passes redacted words in label position ("SN Status", "Serial Number:
-# Disabled"), and an email's local part is not a serial (the email pass's
-# `user_<hash>@redacted.invalid` would otherwise read as one). The chain hops
-# only tags, so a following row's label text stops it: a row whose serial is a
-# template placeholder never lends the next row's value. A bare `Serial` or
-# `Serial ID` label
-# counts only with a separator after it (`Serial:`), so prose naming a serial
-# port or number is not a label.
+# Disabled"). An email's local part is not a serial (the email pass's
+# `user_<hash>@redacted.invalid` would otherwise read as one), but only a
+# whole email is excluded: a serial followed by `@host` (`4131N12345678@cm1`)
+# is still a serial. The chain hops only tags, so a following row's label
+# text stops it: a row whose serial is a template placeholder never lends the
+# next row's value. A bare `Serial` or `Serial ID` label counts only with a
+# separator after it (`Serial:`), so prose naming a serial port or number is
+# not a label.
 _SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
-_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?![\w.+-]*@)[a-zA-Z0-9\-_]{5,}"
+_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?!" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN + r")[a-zA-Z0-9\-_]{5,}"
 SERIAL_LABEL_RE = re.compile(
     r"\b(" + _SERIAL_LABELS + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<[^>]*>\s*)*)(" + _SERIAL_VALUE + r")",
+    re.IGNORECASE,
+)
+
+# Account/subscriber IDs: pass 3. Group 1 runs from the label through its
+# separator and any tags opening the value's element (`Account ID: <b>`), kept
+# as written; group 2 is the value, which stops at a tag so the closing markup
+# survives. `pii.json`'s account_id regex carries it verbatim (a test pins the
+# two), so check_for_pii reports what this pass replaces.
+ACCOUNT_LABEL_RE = re.compile(
+    r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+(?:<[^>]*>\s*)*)([^\s<]+)",
     re.IGNORECASE,
 )
 
@@ -668,16 +683,12 @@ def _sanitize_html_impl(
 
         if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
             continue
-
-        regex = pattern_def["regex"]
+        # Compiled as check_for_pii compiles it: every named flag, and an
+        # invalid regex skipped (logged) rather than failing the run.
+        regex = compile_pattern(pattern_def)
+        if regex is None:
+            continue
         prefix = pattern_def.get("replacement_prefix", "CUSTOM")
-
-        # Handle regex flags
-        flags = 0
-        if "flags" in pattern_def:
-            for flag_name in pattern_def["flags"]:
-                if flag_name == "IGNORECASE":
-                    flags |= re.IGNORECASE
 
         def make_replacer(prefix: str, pname: str) -> Any:
             def replace_custom(match: re.Match[str]) -> str:
@@ -686,7 +697,7 @@ def _sanitize_html_impl(
 
             return replace_custom
 
-        html = re.sub(regex, make_replacer(prefix, pattern_name), html, flags=flags)
+        html = regex.sub(make_replacer(prefix, pattern_name), html)
 
     # 0b. Web Storage setItem() calls in inline <script> blocks
     # Catches: localStorage.setItem("key", "value") and sessionStorage.setItem("key", "value")
@@ -742,7 +753,7 @@ def _sanitize_html_impl(
     # `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and
     # `10.255.62.183` a legitimate private address — skipping them to buy
     # cosmetic stability would leak real values. They stay non-idempotent by
-    # design; ADR-12 puts the burden of proof on redacting less, not more.
+    # design: the guard would pass a real address through, a named leak.
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
         if is_constant_mac(match.group(0)):
@@ -810,23 +821,18 @@ def _sanitize_html_impl(
     # delimiters; a serial-shaped substring of a longer token never fires.
     html = redact_vendor_serials(html, compiled_detectors, hasher, collector)
 
-    # 3. Account/Subscriber IDs. The label and separator are kept as written
-    # and only the value is replaced; the value stops at a tag, so the markup
-    # around it survives (`<p>Account ID: 998877</p>`).
+    # 3. Account/Subscriber IDs (ACCOUNT_LABEL_RE). The label, separator and
+    # any tags before the value are kept as written and only the value is
+    # replaced, so the markup around it survives. A value the allowlist
+    # recognizes is kept — check_for_pii's test, so the two agree.
     def replace_account(match: re.Match[str]) -> str:
         value = match.group(2)
-        # Skip if value is already redacted (a hash placeholder like ACCOUNT_xxxxxxxx)
-        if "_" in value and re.match(r"^[A-Z]+_[a-f0-9]+$", value):
+        if is_redacted(value, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("account")
         return f"{match.group(1)}{hasher.hash_generic(value, 'ACCOUNT')}"
 
-    html = re.sub(
-        r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+)([^\s<]+)",
-        replace_account,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = ACCOUNT_LABEL_RE.sub(replace_account, html)
 
     # 6. IPv6 Addresses (full and compressed) — run ahead of passes 4 and 5, so
     # an IPv4-mapped address (`::ffff:1.2.3.4`) is hashed as one address. A
@@ -1170,41 +1176,83 @@ def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[
         return is_valid_ip_address(value)
     if pattern_name == "ipv6":
         return is_ipv6_host_address(value)
+    if pattern_name.startswith("credit_card_"):
+        return luhn_valid(value)
     return True
 
 
-def _json_value_line(content: str, key: str, value: str) -> int:
-    r"""Line of a JSON member in its document: the key and value together, else the value alone.
+# The tokens of a JSON document that locate its strings: a string literal
+# (escapes included), a bracket, a colon or a comma.
+_JSON_TOKEN_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[{}\[\]:,]')
 
-    Each is looked for as written, as ``json.dumps`` escapes it, and with
-    ``/`` escaped as PHP writes it (``\/``).
+
+def _iter_json_literals(content: str) -> Iterator[tuple[str, int, str | None, int]]:
+    """Yield every string literal of a JSON document, in document order.
+
+    As ``(decoded, offset, key, depth)``: ``key`` is the member's key when
+    the literal is an object member's value, else None, and ``depth`` is the
+    nesting depth of the container holding it, the root's members at 0. Only
+    for text that parsed as JSON, where every quote outside a literal opens
+    one, so one scan finds each literal once — a repeated value at each of
+    its offsets, however it is escaped.
     """
-    escaped_key, escaped_value = json.dumps(key)[1:-1], json.dumps(value)[1:-1]
-    for key_text, value_text in (
-        (key, value),
-        (escaped_key, escaped_value),
-        (escaped_key.replace("/", "\\/"), escaped_value.replace("/", "\\/")),
+    depth = -1
+    last_string: str | None = None
+    key: str | None = None
+    for match in _JSON_TOKEN_RE.finditer(content):
+        lexeme = match.group()
+        if lexeme[0] == '"':
+            decoded = json.loads(lexeme) if "\\" in lexeme else lexeme[1:-1]
+            yield decoded, match.start(), key, depth
+            last_string, key = decoded, None
+        elif lexeme == ":":
+            key = last_string
+        else:
+            key = None
+            if lexeme in "{[":
+                depth += 1
+            elif lexeme in "}]":
+                depth -= 1
+
+
+def _line_numbers(content: str) -> Callable[[int], int]:
+    """Map an offset in ``content`` to its 1-based line, by bisecting the newline offsets."""
+    newlines = [match.start() for match in re.finditer("\n", content)]
+    return lambda offset: bisect.bisect_left(newlines, offset) + 1
+
+
+def _compiled_pii_patterns(pii: dict[str, Any]) -> list[tuple[str, re.Pattern[str], dict[str, Any]]]:
+    """The pii.json patterns as ``(name, regex, definition)``, compiled by ``compile_pattern``.
+
+    The HTML engine's pass 0 compiles custom patterns the same way, so every
+    named flag holds in both; an entry that is not a pattern, or whose regex
+    does not compile, is skipped.
+    """
+    compiled = []
+    for name, definition in pii.get("patterns", {}).items():
+        if isinstance(definition, dict) and "regex" in definition:
+            regex = compile_pattern(definition)
+            if regex is not None:
+                compiled.append((name, regex, definition))
+    return compiled
+
+
+def _match_value(match: re.Match[str], value_group: object) -> str:
+    """The group a pattern names as its value; the whole match when the match has no such group or it did not take part."""
+    if (
+        isinstance(value_group, int)
+        and not isinstance(value_group, bool)
+        and 0 <= value_group <= match.re.groups
     ):
-        member = re.search(re.escape(f'"{key_text}"') + r"\s*:\s*" + re.escape(f'"{value_text}"'), content)
-        if member is not None:
-            return content.count("\n", 0, member.start()) + 1
-    offset = content.find(value)
-    if offset < 0:
-        offset = content.find(json.dumps(value)[1:-1])
-    return content.count("\n", 0, max(offset, 0)) + 1
-
-
-def _json_string_line(content: str, text: str) -> int:
-    """Line of a JSON document on which a decoded string is written (escaped, else as-is)."""
-    offset = content.find(json.dumps(text)[1:-1])
-    if offset < 0:
-        offset = content.find(text)
-    return content.count("\n", 0, max(offset, 0)) + 1
+        value = match.group(value_group)
+        if value is not None:
+            return value
+    return match.group(0)
 
 
 def _fixture_text_findings(
     text: str,
-    pii: dict[str, Any],
+    patterns: list[tuple[str, re.Pattern[str], dict[str, Any]]],
     allowlist: dict[str, Any],
     preserved_ips: frozenset[str],
     custom_patterns: str | dict[str, Any] | None,
@@ -1234,15 +1282,12 @@ def _fixture_text_findings(
     # whole: its IPv4 tail is not reported again as IPv4.
     ipv6_spans = ipv6_host_spans(text)
 
-    for pattern_name, pattern_def in pii.get("patterns", {}).items():
-        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
-            continue
-        flags = re.IGNORECASE if "IGNORECASE" in pattern_def.get("flags", []) else 0
-        for match in re.finditer(pattern_def["regex"], text, flags):
+    for pattern_name, regex, pattern_def in patterns:
+        for match in regex.finditer(text):
             matched_text = match.group(0)
             # The allowlist judges the value, not the label around it: a
             # sanitized `Serial Number: SERIAL_<hash>` is clean.
-            if is_allowlisted(match.group(pattern_def.get("value_group", 0)), allowlist):
+            if is_allowlisted(_match_value(match, pattern_def.get("value_group", 0)), allowlist):
                 continue
             if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
                 continue
@@ -1286,46 +1331,41 @@ def check_for_pii(
         'mac_address'
     """
     pii = load_pii_patterns(custom_patterns)
+    patterns = _compiled_pii_patterns(pii)
     allowlist = load_allowlist(custom_patterns)
     preserved_ips = frozenset(pii.get("preserved_gateway_ips", []))
+    line_of = _line_numbers(content)
     findings: list[dict[str, Any]] = []
 
-    data = parse_json_container(content)
-    texts: list[tuple[str, int | None]] = (
-        [(text, _json_string_line(content, text)) for text in iter_json_strings(data)]
-        if data is not None
-        else [(content, None)]
-    )
-    for text, json_line in texts:
+    def report(pattern: str, value: str, offset: int) -> None:
+        findings.append({"pattern": pattern, "match": value, "line": line_of(offset), "filename": filename})
+
+    if parse_json_container(content) is None:
         for pattern, value, offset in _fixture_text_findings(
-            text, pii, allowlist, preserved_ips, custom_patterns
+            content, patterns, allowlist, preserved_ips, custom_patterns
         ):
-            findings.append(
-                {
-                    "pattern": pattern,
-                    "match": value,
-                    "line": json_line if json_line is not None else text.count("\n", 0, offset) + 1,
-                    "filename": filename,
-                }
-            )
+            report(pattern, value, offset)
+        return findings
 
-    # A JSON fixture's identity fields — a serial or MAC under a key naming
-    # it — with the predicate validate reports them by. A MAC the regex pass
-    # above already reported is not reported twice.
-    if data is not None:
-        reported = {(f["pattern"], f["match"]) for f in findings}
-        for key, value in iter_json_fields(data):
-            category = unredacted_identity(key, value, custom_patterns)
-            if category is None or (category, value) in reported:
-                continue
+    # A JSON fixture is read one decoded string at a time, each reported on
+    # the line its literal starts on. Its identity fields — a serial or MAC
+    # under a key naming it, down to the depth the sanitizer's key rules
+    # reach — use the predicate validate reports them by; a value the text
+    # passes already reported is not reported twice.
+    identity_fields: list[tuple[str, str, int]] = []
+    for text, offset, key, depth in _iter_json_literals(content):
+        for pattern, value, _ in _fixture_text_findings(
+            text, patterns, allowlist, preserved_ips, custom_patterns
+        ):
+            report(pattern, value, offset)
+        if key is not None and depth <= JSON_MAX_DEPTH:
+            category = unredacted_identity(key, text, custom_patterns)
+            if category is not None:
+                identity_fields.append((category, text, offset))
+
+    reported = {(f["pattern"], f["match"]) for f in findings}
+    for category, value, offset in identity_fields:
+        if (category, value) not in reported:
             reported.add((category, value))
-            findings.append(
-                {
-                    "pattern": category,
-                    "match": value,
-                    "line": _json_value_line(content, key, value),
-                    "filename": filename,
-                }
-            )
-
+            report(category, value, offset)
     return findings

@@ -46,6 +46,7 @@ from har_capture.patterns.redaction import (
     json_members,
     mime_kind,
     parse_json_container,
+    parse_xml,
     query_param_segment,
     split_url_password,
     unredacted_identity,
@@ -124,9 +125,6 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
     fields = sensitive.get("fields", {})
     # Combine both tiers for validation — pre-commit should catch all sensitive fields
     patterns: list[str] = fields.get("auto_redact_patterns", []) + fields.get("flag_patterns", [])
-    # Fallback for legacy format
-    if not patterns:
-        patterns = fields.get("patterns", [])
     return patterns
 
 
@@ -190,10 +188,6 @@ def _compile_field_tiers(custom_patterns: str | dict[str, Any] | None = None) ->
     fields = sensitive.get("fields", {})
     auto: list[str] = fields.get("auto_redact_patterns", [])
     flag: list[str] = fields.get("flag_patterns", [])
-    # Fallback for legacy format — legacy files predate the tier split, so
-    # their patterns keep the stricter (error) treatment.
-    if not auto and not flag:
-        auto = fields.get("patterns", [])
     return _FieldTiers(
         auto_redact=tuple(re.compile(p, re.IGNORECASE) for p in auto),
         flag=tuple(re.compile(p, re.IGNORECASE) for p in flag),
@@ -716,13 +710,10 @@ def _check_xml_fields(
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
     """
-    import xml.etree.ElementTree as ET
-
     field_tiers = _compile_field_tiers(custom_patterns)
 
-    try:
-        root = ET.fromstring(text)  # noqa: S314
-    except (ET.ParseError, UnicodeEncodeError):  # a lone surrogate cannot be encoded to parse
+    root = parse_xml(text)
+    if root is None:
         return
 
     for elem in root.iter():

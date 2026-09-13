@@ -183,6 +183,8 @@ Checks form field names and JSON body content:
 1. Run the same checks as form params, with the location suffix `(body)`
 1. The text copy is checked independently of `params` — a sanitizer that redacts one copy but not the other must still
    be caught
+1. Values are judged by field name, as the sanitizer judges them: a MAC, IP address or email under a field name that is
+   not sensitive is not reported (see [SANITIZATION_SPEC — POST data](SANITIZATION_SPEC.md#post-data-sanitization))
 
 **Body text** (`postData.text`), in the sanitizer's order: skipped only when the whole text is one placeholder
 (`is_fully_redacted()` — `is_redacted()` searches, so a `#000000` anywhere would skip a body). Then:
@@ -194,7 +196,8 @@ Checks form field names and JSON body content:
 **XML body** (`postData.text` of a markup type, `mime_kind()`: `text/xml`, `application/xml`, any `+xml` such as
 `application/soap+xml` — the sanitizer's predicate too):
 
-1. Parse XML with `xml.etree.ElementTree`
+1. Parse XML with `parse_xml()`, the sanitizer's parse too (`xml.etree.ElementTree`; a lone surrogate is read as U+FFFD,
+   so it does not switch off the check)
 1. Walk element tree, checking element tag names and attribute names against sensitive field patterns
 1. Strip namespace prefixes if present (`{http://ns}tagname` → `tagname`)
 1. Report findings for elements whose text content is not redacted

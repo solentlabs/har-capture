@@ -508,28 +508,16 @@ COMPILE_FIELD_PATTERN_CASES = [
         ["deployenv"],
     ),
     (
-        "legacy_patterns_key_only",
-        {"fields": {"patterns": ["legacytok"]}},
-        ["legacytok"],
-        None,
-    ),
-    (
-        "hardcoded_fallback_when_fields_empty",
-        {"fields": {}},
-        ["password", "secret", "token", "key", "auth"],
-        None,
-    ),
-    (
-        "hardcoded_fallback_when_fields_missing_entirely",
-        {},
-        ["password", "secret", "token"],
+        "no_flag_patterns",
+        {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+        ["vendorpw"],
         None,
     ),
 ]
 
 
 class TestCompileSensitiveFieldPatterns:
-    """Direct coverage for :func:`_compile_sensitive_field_patterns` legacy paths."""
+    """Direct coverage for :func:`_compile_sensitive_field_patterns`."""
 
     @pytest.mark.parametrize(
         ("desc", "sensitive_data", "auto_matches", "flag_matches"),
@@ -4764,17 +4752,17 @@ class TestValuePassBodies:
     def test_cross_route_correlation(self, case: dict) -> None:
         """One value gets one placeholder in HTML, JSON and text bodies."""
         entries = []
-        for body in CORRELATION["bodies"]:
+        for body in case.get("bodies", CORRELATION["bodies"]):
             entry = _entry_with_response_body(body["template"].replace("{v}", case["value"]))
             entry["response"]["content"]["mimeType"] = body["mime"]
             entries.append(entry)
         sanitized, _ = sanitize_har({"log": {"entries": entries}}, salt="correlate")
-        found = {
-            match
+        per_body = [
+            set(re.findall(case["placeholder"], entry["response"]["content"]["text"]))
             for entry in sanitized["log"]["entries"]
-            for match in re.findall(case["placeholder"], entry["response"]["content"]["text"])
-        }
-        assert len(found) == 1, found
+        ]
+        assert all(per_body), per_body
+        assert len(set().union(*per_body)) == 1, per_body
 
     @pytest.mark.parametrize("case", VALUE_PASS_BODY_CASES, ids=[c["id"] for c in VALUE_PASS_BODY_CASES])
     def test_body(self, case: dict) -> None:

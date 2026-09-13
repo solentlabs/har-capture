@@ -195,9 +195,14 @@ def sanitize_post_data(
    `base64(user:pass)` value fallback and login-shaped flag heuristic apply (checking the raw and percent-decoded
    forms). Redaction hashes the **percent-decoded** value, so the placeholder assigned to a secret in the text copy
    matches the one assigned to the same secret in `postData.params` (which HAR stores decoded) — encoding differences
-   must not break correlation.
-1. **XML body** (`sanitize_html`): a markup type (`mime_kind()`: `text/xml`, `application/xml`, any `+xml` such as
-   `application/soap+xml`) — the predicate `validate`'s XML check uses too. Delegated to the HTML content engine, which
+   must not break correlation. A value is judged by its field name and the credential shapes, as a query parameter's is:
+   a MAC, IP address or email in the value of a field whose name is not sensitive is neither redacted nor reported by
+   `validate`. Across the CMM fleet (0.13.0) none of 709 form bodies and none of 6,234 query values holds one.
+1. **XML body** (`_sanitize_xml_fields`, then `sanitize_html`): a markup type (`mime_kind()`: `text/xml`,
+   `application/xml`, any `+xml` such as `application/soap+xml`) — the predicate `validate`'s XML check uses too. Its
+   elements and attributes are first redacted by name, parsed by `parse_xml()`, the one parse `validate`'s XML check
+   uses: a lone surrogate is read as U+FFFD, so one stray code unit does not switch off every field in the body (a
+   changed body is re-serialized with U+FFFD in its place). The body is then delegated to the HTML content engine, which
    runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are
    sanitized identically to XML response content.
 1. **Raw text**: Falls through to string pattern matching.
@@ -363,12 +368,14 @@ A sensitive key holding an empty string, or exactly the placeholder this rule wr
 `[REDACTED]`) that `validate` also accepts, is left as it is: there is no secret to replace, so HNAP's `"Password": ""`
 stays empty and a sanitized value is not hashed again. Anything else is replaced, including a real value that merely
 looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fleet's already-sanitized fixtures this
-stops 480 placeholders being hashed again, and 27 empty passwords in POST JSON stay empty.
+stops 480 of the sanitizer's own placeholders being hashed again (46 in POST JSON, 434 in responses), 27 empty passwords
+in POST JSON stay empty, and 4 look-alike values under a credential key are replaced (measured with this rule, 0.13.0).
 
 Every string — each value, and each object key — is the unit of text: it gets the positional passes the HTML engine runs
-(structural credentials, labeled serials, vendor serials; see [Response Content Dispatch](#response-content-dispatch))
-and then the [string patterns](#string-pattern-sanitization), exactly the text `validate` checks. So a client table
-keyed by MAC or address (`{"3C:7A:8A:12:34:56": {...}}`) keeps its shape with the key hashed. Two keys that hash to one
+(labeled serials, vendor serials, structural credentials) interleaved with the
+[string patterns](#string-pattern-sanitization) in the HTML engine's order (see
+[Response Content Dispatch](#response-content-dispatch)), exactly the text `validate` checks. So a client table keyed by
+MAC or address (`{"3C:7A:8A:12:34:56": {...}}`) keeps its shape with the key hashed. Two keys that hash to one
 placeholder — the same MAC in two cases, or any two MACs in static mode — keep both members: the later key gets a `~2`
 (`~3`, …) suffix rather than overwriting the first.
 
@@ -379,10 +386,12 @@ placeholder — the same MAC in two cases, or any two MACs in static mode — ke
   Python's recursion
 - An object repeating a key parses as a `JsonObjectWithDuplicates`: the last value of each key, as every JSON parser
   (and so every consumer of the capture) reads it, with the earlier pairs kept as `shadowed`. `validate` checks those
-  too. When any shadowed value has something to redact (probed without counting or flagging), the sanitizer
-  re-serializes the body, so it never passes through: the duplicate members collapse to the one every parser reads, and
-  the body takes the default layout, since text that repeats a key cannot be reproduced. A body whose repeated keys hide
-  nothing is written back byte-identical
+  too. When any shadowed value has something to redact or to offer for review (probed with a throwaway collector, so it
+  is neither counted nor flagged), the sanitizer re-serializes the body, so it never passes through: the duplicate
+  members collapse to the one every parser reads, and the body takes the default layout, since text that repeats a key
+  cannot be reproduced. A shadowed value that would be offered for review is dropped rather than kept, because the
+  review never sees it while `validate` reports it. A body whose repeated keys hide nothing is written back
+  byte-identical
 - Malformed JSON is caught and logged: a POST body is left as-is, a response body takes the text path (sanitization
   continues)
 
@@ -442,23 +451,25 @@ the output is valid.
    scans every body whatever its type, so every text a body can carry reaches an engine.
 
 The positional passes the HTML engine runs — labeled serials (`redact_labeled_serials()`, pass 2), vendor serials
-(`redact_vendor_serials()`, 2e) and structural credentials (`redact_structural_credentials`, pass 7c), in that order —
-run on every other route too (`_positional_passes`), so a value two passes could claim gets one placeholder, on the unit
-of text `validate` checks: a text body's whole text, and each decoded string of a JSON body (every value and key).
-Reading JSON one decoded string at a time means an escape (`\u003c`, `\/`) hides no markup from either tool, and no
-match can pair a label in one string with a value in the next — on the raw JSON text a structural value could run
-through a closing quote, and its replacement broke the document. Until 0.13.0 only the HTML engine ran pass 2, so a
-`Serial Number: <value>` in a JSON string, a script or a text body was reported by `validate` and left by every sanitize
-run; the fleet holds none outside HTML bodies. The JSON route then parses the text (`parse_json_container()`: nesting
-too deep for the parser counts as not JSON, never a crash) and runs `_sanitize_json_recursive()`. JSON with nothing to
-redact is written back byte-identical. Changed JSON is re-serialized in whichever layout `json.dumps` can write that
-reproduces the original exactly — compact, default spacing, or a 2- or 4-space indent; non-ASCII escaped or as-is; `/`
-escaped as PHP writes it (`\/`) — inside the original's surrounding whitespace. Anything else (another indent, a number
-spelled `1.50`) falls back to default spacing with non-ASCII as written. The text path is `_sanitize_string_patterns()`,
-over the whole body whatever its size. Until 0.13.0 it skipped strings over 1 MB (10,000 characters until 2026-08-19,
-which exempted the CM2500's 33 KB `utility.js`), while `validate` scanned them. Across the cable_modem_monitor fleet,
-dropping the guard redacts 48 MACs and 12 IP addresses in `text/javascript` bodies over 1 MB, all reported by `validate`
-before.
+(`redact_vendor_serials()`, 2e) and structural credentials (`redact_structural_credentials`, pass 7c) — run on every
+other route too (`_sanitize_body_string`), interleaved with the string patterns in the HTML engine's order: MAC (1),
+labeled and vendor serials (2, 2e), IPv6 and IPv4 (6, 4, 5), structural credentials (7c), then email (11) and the rest.
+So a value two passes could claim gets one placeholder on every route — a MAC after a serial label is a MAC, an address
+in a password's element is an address — on the unit of text `validate` checks: a text body's whole text, and each
+decoded string of a JSON body (every value and key). Reading JSON one decoded string at a time means an escape
+(`\u003c`, `\/`) hides no markup from either tool, and no match can pair a label in one string with a value in the next
+— on the raw JSON text a structural value could run through a closing quote, and its replacement broke the document.
+Until 0.13.0 only the HTML engine ran pass 2, so a `Serial Number: <value>` in a JSON string, a script or a text body
+was reported by `validate` and left by every sanitize run; the fleet holds none outside HTML bodies. The JSON route then
+parses the text (`parse_json_container()`: nesting too deep for the parser counts as not JSON, never a crash) and runs
+`_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical. Changed JSON is re-serialized
+in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default spacing, or a 2- or
+4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the original's surrounding
+whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing with non-ASCII as
+written. The text path is `_sanitize_string_patterns()`, over the whole body whatever its size. Until 0.13.0 it skipped
+strings over 1 MB (10,000 characters until 2026-08-19, which exempted the CM2500's 33 KB `utility.js`), while `validate`
+scanned them. Across the cable_modem_monitor fleet, dropping the guard redacts 48 MACs and 12 IP addresses in
+`text/javascript` bodies over 1 MB, all reported by `validate` before.
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
 transport base64 around plain JSON. Before 0.13.0 these were sanitized correctly, by accident — the decoder for bodies
@@ -509,12 +520,13 @@ scanned both.
 
 ### String Pattern Sanitization
 
-`_sanitize_string_patterns()` is the text path, and runs on every JSON string value and JSON object key. Its address
-passes are the HTML engine's passes 1 and 4–6 and 11, with the same regexes (`patterns/redaction.py`), the same validity
-rules and placeholders, and the same order — IPv6 ahead of IPv4, so an IPv4-mapped `::ffff:1.2.3.4` is hashed as one
-address — so whether a value is redacted never depends on which engine its body routes to. The preserved gateway
-addresses are `pii.json`'s plus any the call's `custom_patterns` add, on both routes (a per-call scope, like the field
-patterns'):
+`_sanitize_string_patterns()` is the path for POST text that is not JSON, form data or markup; text bodies and every
+JSON string value and object key take the same patterns with the positional passes between them
+(`_sanitize_body_string`, above). Its address passes are the HTML engine's passes 1 and 4–6 and 11, with the same
+regexes (`patterns/redaction.py`), the same validity rules and placeholders, and the same order — IPv6 ahead of IPv4, so
+an IPv4-mapped `::ffff:1.2.3.4` is hashed as one address — so whether a value is redacted never depends on which engine
+its body routes to. The preserved gateway addresses are `pii.json`'s plus any the call's `custom_patterns` add, on both
+routes (a per-call scope, like the field patterns'):
 
 | Pattern       | Detection                                                                             | Redaction                              |
 | ------------- | ------------------------------------------------------------------------------------- | -------------------------------------- |
@@ -530,7 +542,8 @@ patterns'):
 Until 0.13.0 this path had regexes of its own: no IPv6 pass at all, a private-IP regex that read `10.` plus two octets
 (so a `10.x.x.x` address never matched), and an email regex whose `[A-Z|a-z]` class ran on through a following `|field`.
 A private-range match is an address when every octet is 255 or less: zero-padded as some devices print it
-(`192.168.001.100`) it is redacted, and `192.168.1.999` is not an address on either route.
+(`192.168.001.100`) it is redacted, and `192.168.1.999` is not an address on either route. The same holds inside an
+IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address, hashed whole as IPv6 rather than its tail as IPv4.
 
 **ADR-12 accounting** (IPv6 and `10.x` in JSON and text bodies):
 
@@ -608,7 +621,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial      | `hasher.hash_value(val, "SERIAL")`      |
 | 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value (issue #47)              | `hasher.hash_value(val, "PIN")`         |
 | 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token       | `hasher.hash_value(val, "SERIAL")`      |
-| 3    | Account/subscriber IDs         | `Account\|Subscriber\|Customer\|Device` + value to a tag | `hasher.hash_value(val, "ACCOUNT")`     |
+| 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`     |
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
 | 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
@@ -638,7 +651,7 @@ fullmatch auto-redacts as `SERIAL_<hash>` — in **every** heuristic mode, since
 label at all: the CM2500 round-1 leak was the serial inside `RouterStatus.htm`'s `tagValueList` blob, where FLAG-mode
 review was the only barrier and a skipped review shipped the raw value. The token extraction is the boundary guard: a
 serial-shaped substring of a longer identifier, hex run, or base64 blob is never a candidate. The same helper runs for
-non-HTML text body and each decoded JSON string (`_positional_passes`; Netgear also serves pipe-delimited blobs from
+non-HTML text body and each decoded JSON string (`_sanitize_body_string`; Netgear also serves pipe-delimited blobs from
 `.js` files). `har-capture validate` applies the same detectors to the same token extraction and errors on an unredacted
 match — see [VALIDATION_SPEC](VALIDATION_SPEC.md#check_contentcontent-location-findings-custom_patterns-keywords) and
 [ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware).
@@ -658,12 +671,13 @@ whitespace-tolerant chain is used by the `serial_number` / `wps_pin` patterns in
 — so a labeled serial `validate` reports is one a sanitize run removes. The labels are `Serial Number`, `SerialNum`,
 `Serial No`, `SN` and `S/N` at a word boundary, and a bare `Serial` or `Serial ID` when a separator follows it
 (`Serial:`, so prose about a serial port is not a label); the label's own closing tags may precede its separator
-(`<b>Serial Number</b>: VALUE`); the value must carry a digit, as every real serial does. A table's label cell and value
-cell are one more sibling pair (`</td><td>` is a hop of the tag chain), and the chain hops only tags, so a following
-row's label text stops it. Until 0.13.0 a second pattern, pass 2b, matched label and value cells separately; everything
-it accepts the tag chain accepts too (every separator it allows after the label, and every tag between the cells), so in
-the sanitizer it never saw an unredacted value, and in `validate` it reported each table-cell serial a second time. It
-is removed.
+(`<b>Serial Number</b>: VALUE`); the value must carry a digit, as every real serial does, and is not the local part of a
+whole email after the label (`Serial Number: admin123@example.com` is an email, for the email pass), while a serial
+followed by `@host` (`4131N12345678@cm1`) is still a serial. A table's label cell and value cell are one more sibling
+pair (`</td><td>` is a hop of the tag chain), and the chain hops only tags, so a following row's label text stops it.
+Until 0.13.0 a second pattern, pass 2b, matched label and value cells separately; everything it accepts the tag chain
+accepts too (every separator it allows after the label, and every tag between the cells), so in the sanitizer it never
+saw an unredacted value, and in `validate` it reported each table-cell serial a second time. It is removed.
 
 **ADR-12 accounting** (0.13.0):
 
@@ -734,6 +748,11 @@ flags ~25% of all label/value pairs on the Technicolor captures (`System Uptime`
 `Model`), which would shred diagnostic data in `REDACT` and flood the review UI in `FLAG`. Widening
 `safe_value_patterns` far enough to make that path safe is separate work.
 
+**Pass 3 — account IDs** (`ACCOUNT_LABEL_RE`): the label, its separator and any tags opening the value's element are
+kept as written, and the value runs to the next tag or whitespace, so the markup around it survives
+(`<p>Account ID: <b>ACCOUNT_…</b></p>`). A value `is_redacted()` recognizes is kept. `pii.json`'s `account_id` regex
+carries `ACCOUNT_LABEL_RE` verbatim (a test pins the two), so `check_for_pii` reports exactly what this pass replaces.
+
 ### Idempotency Boundary
 
 Passes that emit a `PREFIX_<hash>` placeholder (serial, WPS PIN, account, password, SSID, token, CSRF, config, vendor JS
@@ -802,7 +821,12 @@ sanitize run clears: a match the sanitizer's own pass keeps — a constant MAC, 
 version string, an IPv6 candidate that is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a
 MAC is not reported a second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields
 checked with `validate`'s predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the
-sanitizer's own placeholders).
+sanitizer's own placeholders), down to `JSON_MAX_DEPTH`.
+
+A JSON fixture is read in one pass over its string literals, in document order, so each finding is reported on the line
+its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,
+PHP's `\/`, an escaped quote). Line numbers come from one index of the newline offsets, so the cost stays linear in the
+fixture's size.
 
 ## Heuristic Engine (heuristics.py)
 

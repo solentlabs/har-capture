@@ -48,7 +48,7 @@ src/har_capture/patterns/
 ```
 
 **Input:** `Customer: CUST-A1B2C3D4` **Output:** `Customer: CUSTID_e5f6a7b8` (salted hash) **Output (no-salt):**
-`Customer: CUSTID_REDACTED`
+`Customer: ***CUSTID***`
 
 ## Pattern Fields
 
@@ -60,8 +60,14 @@ src/har_capture/patterns/
 ### Optional Fields
 
 - **`description`** (string): Human-readable description
-- **`case_sensitive`** (boolean): Case-sensitive matching (default: false)
-- **`flags`** (array): Regex flags (e.g., `["IGNORECASE", "MULTILINE"]`)
+- **`flags`** (array): Python `re` flag names (e.g., `["IGNORECASE", "MULTILINE"]`); `IGNORECASE`, `MULTILINE` and
+  `DOTALL` are honoured by both `sanitize` and `check_for_pii`. Matching is case-sensitive unless `IGNORECASE` is given.
+- **`value_group`** (integer, `check_for_pii` only): the capture group holding the value, which is judged against the
+  allowlist instead of the whole match (so a sanitized `Label: PREFIX_<hash>` is clean). A group the match does not
+  have, or that did not take part, falls back to the whole match.
+- **`require_hex_letter`** (boolean, `check_for_pii` only): report a match only if it contains a hex letter (`a`–`f`)
+
+A pattern whose regex does not compile is skipped with one warning; the rest of the run continues.
 
 ### JSON-vs-Regex Escape Trap
 
@@ -431,7 +437,7 @@ Alternatively, use the Python API which accepts pattern dictionaries that can be
 ### Pattern Not Matching
 
 1. **Check regex syntax**: Test with online regex tools
-1. **Check case sensitivity**: Add `"case_sensitive": false`
+1. **Check case sensitivity**: Add `"flags": ["IGNORECASE"]`
 1. **Check escaping**: Ensure special chars are escaped
 1. **Inspect what was detected**: `har-capture sanitize capture.har --patterns my_patterns.json --report report.json`
    and review the JSON report

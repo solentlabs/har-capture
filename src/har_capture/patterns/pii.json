@@ -7,7 +7,7 @@
       "description": "MAC addresses in colon or dash format (mirrors MAC_RE in redaction.py)"
     },
     "serial_number": {
-      "regex": "\\b(Serial\\s*Number|SerialNum|Serial\\s*No|Serial(?:\\s*ID)?(?=\\s*(?:</\\w+>\\s*)*[.:=])|SN|S/N)\\b(\\s*(?:</\\w+>\\s*)*[.:\\s=]*(?:<[^>]*>\\s*)*)((?=[a-zA-Z0-9\\-_]*\\d)(?![\\w.+-]*@)[a-zA-Z0-9\\-_]{5,})",
+      "regex": "\\b(Serial\\s*Number|SerialNum|Serial\\s*No|Serial(?:\\s*ID)?(?=\\s*(?:</\\w+>\\s*)*[.:=])|SN|S/N)\\b(\\s*(?:</\\w+>\\s*)*[.:\\s=]*(?:<[^>]*>\\s*)*)((?=[a-zA-Z0-9\\-_]*\\d)(?![A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\\.[A-Za-z]{2,}\\b)[a-zA-Z0-9\\-_]{5,})",
       "value_group": 3,
       "replacement_prefix": "SERIAL",
       "flags": ["IGNORECASE"],
@@ -21,11 +21,11 @@
       "description": "WPS / pairing / default PIN labels followed by an 8-digit code (issue #47)"
     },
     "account_id": {
-      "regex": "(Account|Subscriber|Customer|Device)\\s*(ID|Number)\\s*[:\\s=]+([^\\s<]+)",
-      "value_group": 3,
+      "regex": "((?:Account|Subscriber|Customer|Device)\\s*(?:ID|Number)\\s*[:\\s=]+(?:<[^>]*>\\s*)*)([^\\s<]+)",
+      "value_group": 2,
       "replacement_prefix": "ACCOUNT",
       "flags": ["IGNORECASE"],
-      "description": "Account, subscriber, or customer IDs"
+      "description": "Account, subscriber, or customer IDs (mirrors ACCOUNT_LABEL_RE in sanitization/html.py): the label, its separator and any tags, then the value"
     },
     "private_ip": {
       "regex": "\\b(?:10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|172\\.(?:1[6-9]|2[0-9]|3[01])\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3})\\b",

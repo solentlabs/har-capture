@@ -252,6 +252,14 @@ class TestCompilePattern:
         result = compile_pattern(pattern_def)
         assert result is None, f"{desc}: invalid regex should return None"
 
+    def test_invalid_regex_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A bad pattern compiled once per body warns once, not once per body."""
+        pattern_def = {"regex": "([", "replacement_prefix": "WARN_ONCE"}
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                compile_pattern(pattern_def)
+        assert sum("WARN_ONCE" in record.getMessage() for record in caplog.records) == 1
+
     def test_valid_regex_returns_pattern(self) -> None:
         """Test that valid regex patterns compile successfully."""
         result = compile_pattern({"regex": r"\d{3}-\d{2}-\d{4}", "replacement_prefix": "SSN"})

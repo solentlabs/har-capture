@@ -512,20 +512,6 @@ def test_form_field_severity_model(name: str, value: str, expected_severity: str
         assert field_findings[0].severity == expected_severity, f"{desc}"
 
 
-def test_field_tiers_legacy_format_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A legacy patterns file (single `patterns` list) keeps error treatment."""
-    from har_capture.validation import secrets as secrets_mod
-
-    monkeypatch.setattr(
-        secrets_mod,
-        "load_sensitive_patterns",
-        lambda _cp=None: {"fields": {"patterns": ["password"]}},
-    )
-    tiers = secrets_mod._compile_field_tiers()
-    assert len(tiers.auto_redact) == 1
-    assert not tiers.flag
-
-
 def test_xml_field_severity_model() -> None:
     """XML element/attribute findings follow the same tier model as form fields."""
     xml = (

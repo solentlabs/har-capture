@@ -54,14 +54,14 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `patterns` dict**
 
-| Field                | Type       | Required | Description                                                                                       |
-| -------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `regex`              | string     | Yes      | Python regex pattern for matching PII                                                             |
-| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)                                               |
-| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                                                        |
-| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars                                            |
-| `value_group`        | int        | No       | `check_for_pii`: the group holding the value, judged against the allowlist (default: whole match) |
-| `description`        | string     | No       | Human-readable description                                                                        |
+| Field                | Type       | Required | Description                                                                                                    |
+| -------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `regex`              | string     | Yes      | Python regex pattern for matching PII                                                                          |
+| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)                                                            |
+| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                                                                     |
+| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars                                                         |
+| `value_group`        | int        | No       | `check_for_pii`: the group holding the value, judged against the allowlist (default and fallback: whole match) |
+| `description`        | string     | No       | Human-readable description                                                                                     |
 
 **Built-in patterns:**
 
@@ -434,11 +434,12 @@ for header_key in ("full_redact", "cookie_redact", "scheme_redact"):
             custom["headers"][header_key]
         )
 
-# Field-name regex lists extend additively. Both the current-schema keys
-# (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are
-# honored and extend whatever list already exists on builtin.
-for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
-    builtin["fields"].setdefault(key, []).extend(custom["fields"].get(key, []))
+# Field-name regex lists extend additively, tier by tier. The legacy
+# `patterns` key predates the tier split; its names join the auto-redact tier.
+for key, tier in (("auto_redact_patterns", "auto_redact_patterns"),
+                  ("flag_patterns", "flag_patterns"),
+                  ("patterns", "auto_redact_patterns")):
+    builtin["fields"].setdefault(tier, []).extend(custom["fields"].get(key, []))
 
 # Dicts are updated (custom overrides builtin keys)
 builtin["patterns"].update(custom["patterns"])
@@ -509,8 +510,10 @@ def compile_pattern(pattern_dict: dict) -> re.Pattern | None:
     """Compile {regex, flags} dict. Returns None on invalid regex (logged, not fatal)."""
 ```
 
-Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are silently
-skipped to ensure one bad pattern doesn't break the entire system.
+Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are skipped
+with one warning per distinct pattern (compilation is cached), so one bad pattern doesn't break the entire system. The
+HTML engine's pass 0 and `check_for_pii` both compile custom `pii.json` patterns through it, so every flag a pattern
+names (`IGNORECASE`, `MULTILINE`, `DOTALL`) holds in both, and an invalid one crashes neither.
 
 ### Cache
 
@@ -623,9 +626,8 @@ since it cannot be told from a real locally administered one, and whether to ski
 `unredacted_identity(key, value, custom_patterns)` is that decision for the checkers (`validate`'s `check_json_fields`
 and `check_for_pii`): `classify_identity_field()`, less a MAC placeholder in any layout (`is_mac_placeholder()`: one
 uniform layout, lowercase, first octet `02` — trusted only under a MAC-named key), a constant MAC, or an allowlisted
-value. `iter_json_fields(data)` yields every `(key, value)` member of a parsed container at any depth, iteratively.
-`is_ssid_key(key)` is true when one of a key's words is `ssid` (`ssid_24g`, `guestSSID`): the sanitizer offers such a
-value for review rather than redacting it.
+value. `is_ssid_key(key)` is true when one of a key's words is `ssid` (`ssid_24g`, `guestSSID`): the sanitizer offers
+such a value for review rather than redacting it.
 
 ### `PRIVATE_IP_RE`, `PUBLIC_IP_RE`, `IPV6_RE`, `EMAIL_RE` and `is_ipv6_host_address(candidate)`
 
@@ -635,9 +637,10 @@ values, JSON keys and text bodies take — so whether a value is redacted never 
 `check_for_pii` skips what the engines keep: `preserved_gateway_ips`, version strings, and IPv6 candidates that are not
 host addresses. An `IPV6_RE` candidate (colon-terminated hex groups ending in a hex group or, for an IPv4-mapped
 address, a dotted quad; not glued to a word or colon on either side) is an address only when `is_ipv6_host_address()`
-accepts it: `ipaddress` parses it, and it is not the unspecified `::` or loopback `::1` — protocol constants like IPv4's
-`0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of the
-IPv4 passes, so an IPv4-mapped address is hashed as one.
+accepts it: `ipaddress` parses it — after unpadding a dotted-quad tail's zero-padded octets (`::ffff:192.168.001.100`),
+as the IPv4 passes read a padded quad — and it is not the unspecified `::` or loopback `::1` — protocol constants like
+IPv4's `0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of
+the IPv4 passes, so an IPv4-mapped address is hashed as one.
 
 ### `route_body(mime_type, text)`
 
@@ -648,9 +651,9 @@ markup, else text. It returns the route with the parsed JSON, so neither tool pa
 [Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch).
 
 `JSON_MAX_DEPTH` (50) is how deep the key rules reach — the sanitizer's walker, `check_json_fields` and
-`iter_json_fields()` all stop there. `iter_json_strings()` yields every decoded string of a parsed body — values and
-keys, at any depth — the unit of text both tools' text passes read. `ipv6_host_spans()` gives the spans of the IPv6 host
-addresses in a text, so a checker does not report an IPv4-mapped address's tail again as IPv4.
+`check_for_pii`'s identity fields all stop there. `iter_json_strings()` yields every decoded string of a parsed body —
+values and keys, at any depth — the unit of text both tools' text passes read. `ipv6_host_spans()` gives the spans of
+the IPv6 host addresses in a text, so a checker does not report an IPv4-mapped address's tail again as IPv4.
 
 ### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
 
@@ -673,6 +676,11 @@ that repeats a key parses to a `JsonObjectWithDuplicates`: the last value of eac
 the earlier pairs in `shadowed`. `json_members()` gives an object's members with the shadowed ones. `is_constant_mac()`
 is true for a MAC that is one byte repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool
 treats as PII.
+
+`parse_xml(text)` is the one XML parse for the field checks both tools run on an XML body: the root element, or `None`
+when the text is not well-formed. A lone surrogate, which no encoder accepts, is read as U+FFFD, so it does not switch
+off the check of every field in the body. `luhn_valid(number)` is the Luhn checksum every payment card number carries:
+the text path redacts, and `check_for_pii` reports, only a card-shaped number that passes it.
 
 ### `decode_base64_payload(value)` and `find_query_payload(segment)`
 

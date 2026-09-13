@@ -25,12 +25,15 @@ Dependencies:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from har_capture.patterns import load_allowlist, load_pii_patterns
 from har_capture.sanitization.html import (
+    ACCOUNT_LABEL_RE,
+    SERIAL_LABEL_RE,
     check_for_pii,
     is_structural_value_sensitive,
     sanitize_html,
@@ -69,6 +72,7 @@ ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_case
 PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
 PII_JSON_LINE_CASES = _FIXTURE["pii_json_line_cases"]["cases"]
 PII_CUSTOM_PATTERN_CASES = _FIXTURE["pii_custom_pattern_cases"]["cases"]
+CUSTOM_PATTERN_COMPILE_CASES = _FIXTURE["custom_pattern_compile_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -198,10 +202,11 @@ class TestCheckForPii:
         assert found == case["findings"]
 
     @pytest.mark.parametrize("case", PII_JSON_LINE_CASES, ids=[c["id"] for c in PII_JSON_LINE_CASES])
-    def test_json_identity_line(self, case: dict) -> None:
-        """A JSON identity field is reported on its own line, escaped or not."""
-        serials = [f for f in check_for_pii(case["content"]) if f["pattern"] == "serial_number"]
-        assert [f["line"] for f in serials] == [case["line"]]
+    def test_json_finding_line(self, case: dict) -> None:
+        """Each JSON finding is reported on the line its string is written on, escaped or not."""
+        depth = case.get("nest_lists", 0)
+        content = "[" * depth + case["content"] + "]" * depth
+        assert [[f["pattern"], f["line"]] for f in check_for_pii(content)] == case["findings"]
 
     @pytest.mark.parametrize(
         "case", PII_CUSTOM_PATTERN_CASES, ids=[c["id"] for c in PII_CUSTOM_PATTERN_CASES]
@@ -212,6 +217,16 @@ class TestCheckForPii:
             [f["pattern"], f["match"]]
             for f in check_for_pii(case["content"], custom_patterns=case["custom_patterns"])
         ]
+        assert found == case["findings"]
+
+    @pytest.mark.parametrize(
+        "case", CUSTOM_PATTERN_COMPILE_CASES, ids=[c["id"] for c in CUSTOM_PATTERN_COMPILE_CASES]
+    )
+    def test_custom_pattern_compiled_like_loader(self, case: dict) -> None:
+        """Pass 0 and check_for_pii compile a custom pattern as the loader does: flags, invalid regex, value_group."""
+        custom = {"patterns": {"p": case["pattern"]}}
+        assert case["removed"] not in sanitize_html(case["content"], custom_patterns=custom, salt=None)
+        found = [[f["pattern"], f["match"]] for f in check_for_pii(case["content"], custom_patterns=custom)]
         assert found == case["findings"]
 
     def test_returns_line_numbers(self) -> None:
@@ -1096,9 +1111,11 @@ class TestSetItemHeuristicCoverage:
         assert len(collector.flagged) > 0, "should have flagged a value"
 
 
-def test_pii_json_mirrors_serial_label_re() -> None:
-    """check_for_pii reads pii.json; its serial_number regex must be SERIAL_LABEL_RE verbatim."""
+@pytest.mark.parametrize(
+    ("name", "regex"), [("serial_number", SERIAL_LABEL_RE), ("account_id", ACCOUNT_LABEL_RE)]
+)
+def test_pii_json_mirrors_label_regex(name: str, regex: re.Pattern[str]) -> None:
+    """check_for_pii reads pii.json; its labeled patterns must be the sanitizer's regexes verbatim."""
     from har_capture.patterns import load_pii_patterns
-    from har_capture.sanitization.html import SERIAL_LABEL_RE
 
-    assert load_pii_patterns()["patterns"]["serial_number"]["regex"] == SERIAL_LABEL_RE.pattern
+    assert load_pii_patterns()["patterns"][name]["regex"] == regex.pattern

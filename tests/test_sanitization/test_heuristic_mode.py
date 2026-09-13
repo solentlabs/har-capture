@@ -256,7 +256,7 @@ class TestCustomPatternsDict:
                 }
             }
         }
-        content = "Device ID: TEST-1234"
+        content = "Tag: TEST-1234"
         result = sanitize_html(content, custom_patterns=patterns, salt="test")
 
         # Pattern should be applied

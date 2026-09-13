@@ -6,6 +6,7 @@ allowlists, and capture settings from JSON files.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -300,12 +301,16 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
                 builtin["headers"].setdefault("scheme_redact", []).extend(custom["headers"]["scheme_redact"])
         if "fields" in custom and isinstance(custom["fields"], dict):
             custom_fields = custom["fields"]
-            # Extend each known list key. "patterns" is the legacy key; the current
-            # schema uses "auto_redact_patterns" and "flag_patterns".
-            for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
+            # Extend each tier. "patterns" is the legacy key from before the
+            # tier split; its names are auto-redact names.
+            for key, tier in (
+                ("auto_redact_patterns", "auto_redact_patterns"),
+                ("flag_patterns", "flag_patterns"),
+                ("patterns", "auto_redact_patterns"),
+            ):
                 values = custom_fields.get(key)
                 if isinstance(values, list):
-                    builtin["fields"].setdefault(key, []).extend(values)
+                    builtin["fields"].setdefault(tier, []).extend(values)
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
         if "heuristics" in custom:
@@ -725,21 +730,28 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:
     Returns:
         Compiled regex pattern, or None if the regex is invalid
     """
-    regex = pattern_def["regex"]
-    flags = 0
+    return _compile_regex(
+        pattern_def["regex"],
+        tuple(pattern_def.get("flags", ())),
+        pattern_def.get("replacement_prefix", "unknown"),
+    )
 
-    if "flags" in pattern_def:
-        for flag_name in pattern_def["flags"]:
-            # Support all standard regex flags dynamically
-            flag = getattr(re, flag_name, None)
-            if flag is not None and isinstance(flag, re.RegexFlag):
-                flags |= flag
-            else:
-                _LOGGER.warning("Unknown regex flag: %s", flag_name)
+
+# Cached so a pattern compiled once per body (the HTML engine's pass 0) warns
+# about a bad regex or flag once, not once per body.
+@functools.lru_cache(maxsize=512)
+def _compile_regex(regex: str, flag_names: tuple[str, ...], label: str) -> re.Pattern[str] | None:
+    flags = 0
+    for flag_name in flag_names:
+        # Support all standard regex flags dynamically
+        flag = getattr(re, flag_name, None)
+        if flag is not None and isinstance(flag, re.RegexFlag):
+            flags |= flag
+        else:
+            _LOGGER.warning("Unknown regex flag: %s", flag_name)
 
     try:
         return re.compile(regex, flags)
     except re.error:
-        pattern_name = pattern_def.get("replacement_prefix", "unknown")
-        _LOGGER.warning("Skipping invalid regex in pattern '%s'", pattern_name)
+        _LOGGER.warning("Skipping invalid regex in pattern '%s'", label)
         return None

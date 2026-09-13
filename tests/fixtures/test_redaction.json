@@ -367,6 +367,8 @@
       {"id": "ipv6_unspecified_kept",    "regex": "ipv6",       "text": "gw6 :: none",                      "matches": []},
       {"id": "ipv6_prefix_length",       "regex": "ipv6",       "text": "2600:1700:abcd:1234::/64",         "matches": ["2600:1700:abcd:1234::"]},
       {"id": "ipv6_ipv4_mapped",         "regex": "ipv6",       "text": "map ::ffff:192.168.5.4 ok",        "matches": ["::ffff:192.168.5.4"]},
+      {"id": "ipv6_ipv4_mapped_zero_padded", "regex": "ipv6",   "text": "map ::ffff:192.168.001.100 ok",    "matches": ["::ffff:192.168.001.100"]},
+      {"id": "ipv6_ipv4_mapped_bad_octet", "regex": "ipv6",     "text": "map ::ffff:192.168.1.999 ok",      "matches": []},
       {"id": "ipv6_sentence_end",        "regex": "ipv6",       "text": "gateway is fe80::1a.",             "matches": ["fe80::1a"]},
       {"id": "ipv6_all_digits",          "regex": "ipv6",       "text": "wan 2001:470:1::5 up",             "matches": ["2001:470:1::5"]},
       {"id": "ipv6_zone_index",          "regex": "ipv6",       "text": "fe80::1%eth0",                     "matches": ["fe80::1"]},
@@ -385,15 +387,6 @@
       {"id": "public_skips_loopback",    "regex": "public_ip",  "text": "127.0.0.1",                        "matches": []},
       {"id": "email_before_pipe",        "regex": "email",      "text": "a@example.com|next",               "matches": ["a@example.com"]},
       {"id": "email_subdomains",         "regex": "email",      "text": "first.last@mail.example.co.uk",    "matches": ["first.last@mail.example.co.uk"]}
-    ]
-  },
-  "iter_json_fields_cases": {
-    "_comment": "iter_json_fields(parsed) yields the (key, value) members at any depth down to JSON_MAX_DEPTH, outer first; 'nest_lists' wraps the text in that many arrays, and members past the depth are not yielded.",
-    "cases": [
-      {"id": "flat",              "text": "{\"a\": 1, \"b\": 2}",              "keys": ["a", "b"]},
-      {"id": "nested_in_list",    "text": "[{\"a\": {\"b\": 1}}, {\"c\": 2}]",  "keys": ["a", "b", "c"]},
-      {"id": "within_depth",      "text": "{\"a\": 1}", "nest_lists": 50,     "keys": ["a"]},
-      {"id": "past_depth",        "text": "{\"a\": 1}", "nest_lists": 51,     "keys": []}
     ]
   },
   "iter_json_strings_cases": {

@@ -56,7 +56,6 @@ from har_capture.patterns.redaction import (
     is_mac_placeholder,
     is_redacted,
     is_text_mime,
-    iter_json_fields,
     iter_json_strings,
     iter_url_credentials,
     mime_kind,
@@ -86,7 +85,6 @@ URL_PASSWORD_CASES = _FIXTURES["url_password_cases"]["cases"]
 BODY_ROUTE_CASES = _FIXTURES["body_route_cases"]["cases"]
 MAC_PLACEHOLDER_CASES = _FIXTURES["mac_placeholder_cases"]["cases"]
 NETWORK_VALUE_REGEX_CASES = _FIXTURES["network_value_regex_cases"]["cases"]
-ITER_JSON_FIELDS_CASES = _FIXTURES["iter_json_fields_cases"]["cases"]
 ITER_JSON_STRINGS_CASES = _FIXTURES["iter_json_strings_cases"]["cases"]
 
 
@@ -120,16 +118,6 @@ class TestNetworkValueRegexes:
     def test_pii_json_mirrors_shared_regex(self, name: str) -> None:
         """check_for_pii reads pii.json; the pattern file must carry the shared regex verbatim."""
         assert load_pii_patterns()["patterns"][name]["regex"] == self._REGEXES[name].pattern
-
-
-class TestIterJsonFields:
-    """iter_json_fields walks a parsed container down to JSON_MAX_DEPTH."""
-
-    @pytest.mark.parametrize("case", ITER_JSON_FIELDS_CASES, ids=[c["id"] for c in ITER_JSON_FIELDS_CASES])
-    def test_keys(self, case: dict) -> None:
-        depth = case.get("nest_lists", 0)
-        data = parse_json_container("[" * depth + case["text"] + "]" * depth)
-        assert [key for key, _ in iter_json_fields(data)] == case["keys"]
 
 
 class TestIterJsonStrings:

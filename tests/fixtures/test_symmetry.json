@@ -1,5 +1,5 @@
 {
-  "_comment": "ADR-14 symmetry harness. Each row is a raw HAR (its entries) that validate must report (raw_findings: severity + reason substring) and that sanitize must clear: after sanitize_har, in every heuristic mode, validate reports nothing and no leaked string survives. 'patterns' names a built-in domain for both tools; 'pad_chars' prefixes the first entry's response body with that much filler. All values are synthetic.",
+  "_comment": "ADR-14 symmetry harness. Each row is a raw HAR (its entries) that validate must report (raw_findings: severity + reason substring) and that sanitize must clear: after sanitize_har, in every heuristic mode, validate reports nothing and no leaked string survives. 'patterns' names a built-in domain for both tools, or 'custom_patterns' is a patterns dict for both; 'pad_chars' prefixes the first entry's response body with that much filler. All values are synthetic.",
   "symmetry_cases": [
     {
       "id": "authorization_basic_header",
@@ -180,6 +180,47 @@
       ]
     },
     {
+      "id": "custom_legacy_fields_patterns_key",
+      "_note": "A custom file's legacy fields.patterns key is an auto-redact list for both tools",
+      "custom_patterns": {
+        "fields": {
+          "patterns": [
+            "vendorpw"
+          ]
+        }
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"vendorpw\": \"hunter2hunter2\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
       "id": "xml_post_password",
       "entries": [
         {
@@ -191,6 +232,40 @@
             "postData": {
               "mimeType": "text/xml",
               "text": "<Login><Username>admin</Username><Password>hunter2hunter2</Password></Login>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive XML element"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "xml_post_lone_surrogate",
+      "_note": "A lone surrogate elsewhere in an XML body does not switch off its field check",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/xml/setter.xml",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "text/xml",
+              "text": "<Login><Note>\ud800</Note><Password>hunter2hunter2</Password></Login>"
             }
           },
           "response": {
@@ -2403,6 +2478,41 @@
       ]
     },
     {
+      "id": "json_post_shadowed_flag_tier_value",
+      "_note": "A repeated review-tier key's shadowed value is dropped, not written back unreviewed",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": ""
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "bobsmith"
+      ]
+    },
+    {
       "id": "json_markup_across_strings",
       "_note": "Markup split across JSON strings must not pair across them",
       "entries": [
@@ -2603,6 +2713,69 @@
         "3C:7A:8A:12:34:56"
       ],
       "pad_chars": 1100000
+    },
+    {
+      "id": "html_serial_followed_by_at",
+      "_note": "A serial followed by @ and a host is a serial; only a whole email after the label is not",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial Number: 4131N12345678@cm1</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Potential serial number"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "json_ipv4_mapped_zero_padded",
+      "_note": "A zero-padded IPv4-mapped IPv6 address is one address, hashed whole",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"v6\": \"::ffff:192.168.001.100\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "::ffff",
+        "192.168.001.100"
+      ]
     }
   ]
 }

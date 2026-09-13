@@ -26,12 +26,14 @@ CASES: list[dict[str, Any]] = _FIXTURE["symmetry_cases"]
 _IDS = [c["id"] for c in CASES]
 
 
-def _patterns(case: dict[str, Any]) -> str | None:
+def _patterns(case: dict[str, Any]) -> str | dict[str, Any] | None:
+    if "custom_patterns" in case:
+        return dict(case["custom_patterns"])
     name = case.get("patterns")
     return str(resolve_patterns_arg(name)) if name else None
 
 
-def _validate(har: dict[str, Any], path: Path, patterns: str | None) -> list[Finding]:
+def _validate(har: dict[str, Any], path: Path, patterns: str | dict[str, Any] | None) -> list[Finding]:
     path.write_text(json.dumps(har), encoding="utf-8")
     return validate_har(path, patterns)
 
