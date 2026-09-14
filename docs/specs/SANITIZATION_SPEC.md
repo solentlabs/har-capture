@@ -154,8 +154,15 @@ def is_flaggable_field(name: str) -> bool:
     """Lower confidence — flag for review. Matches: username, domain, account_id."""
 ```
 
-Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.flag_patterns`. Fallback patterns
-(hardcoded): `["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]`.
+Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.flag_patterns`; a custom file's legacy
+`fields.patterns` list joins the auto-redact tier. `credential` names a credential only as a field's last word
+(`credentials?$`: `userCredential`, `user_credentials`), so a field naming a kind or encoding of credential
+(`credential_encoding`, `credentialType`) is not one.
+
+**ADR-12 accounting** (`credential` as the last word, 0.13.0): *redacts less.* CMM's catalog holds 24
+`credential_encoding` values (two distinct, encoding names) that the bare `credential` pattern made errors in `validate`
+and would have made `check_for_pii` findings; no key across the 480 fleet HARs or the catalog holds a credential under
+`credential` anywhere but last. *Fidelity:* those values are kept.
 
 Callers can extend these per-call via `sanitize_post_data(..., custom_patterns=...)` or
 `sanitize_html(..., custom_patterns=...)`. The extension is additive (never replacing built-ins) and is applied via a
@@ -821,7 +828,12 @@ sanitize run clears: a match the sanitizer's own pass keeps — a constant MAC, 
 version string, an IPv6 candidate that is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a
 MAC is not reported a second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields
 checked with `validate`'s predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the
-sanitizer's own placeholders), down to `JSON_MAX_DEPTH`.
+sanitizer's own placeholders), and its credential fields with the sanitizer's own field names (`is_sensitive_field()`,
+custom `fields` patterns included): a value that is neither empty nor allowlisted — one the sanitizer replaces and
+`validate` reports — is reported as `credential_field`. Both stop at `JSON_MAX_DEPTH`. Until 0.13.0 `check_for_pii` read
+no JSON field by name, so a plain password under a `password` key passed it; a consumer that taught it one with a `pii`
+regex pairing a key and its value (`"field": "value"`) no longer needs to, and should name the field in `fields` instead
+— a regex cannot pair across the decoded strings a JSON fixture is read as.
 
 A JSON fixture is read in one pass over its string literals, in document order, so each finding is reported on the line
 its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,

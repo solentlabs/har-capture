@@ -113,9 +113,11 @@
   },
 
   "pii_custom_pattern_cases": {
-    "_comment": "check_for_pii with custom pii patterns: an entry that is not a pattern object is skipped, and require_hex_letter drops matches with no a-f letter.",
+    "_comment": "check_for_pii with custom patterns: an entry that is not a pattern object is skipped, require_hex_letter drops matches with no a-f letter, and custom fields patterns (current or legacy key) name credential fields in a JSON fixture.",
     "cases": [
       {"id": "malformed_entry_skipped", "custom_patterns": {"patterns": {"broken": "not-a-pattern"}},                                                 "content": "dns 8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "custom_credential_field", "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorsecret"]}},                             "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
+      {"id": "legacy_custom_credential_field", "custom_patterns": {"fields": {"patterns": ["vendorsecret"]}},                                "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
       {"id": "require_hex_letter",      "custom_patterns": {"patterns": {"hexy": {"regex": "\\b[0-9a-f]{6}\\b", "replacement_prefix": "H", "require_hex_letter": true}}}, "content": "123456 abc123", "findings": [["hexy", "abc123"]]}
     ]
   },
@@ -164,6 +166,11 @@
       {"id": "account_allowlisted",      "content": "Account ID: [REDACTED]",                           "findings": []},
       {"id": "password_input_placeholder", "content": "<input type=\"password\" value=\"PASS_1a2b3c4d\">", "findings": []},
       {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
+      {"id": "json_credential_field",    "content": "{\"Username\": \"admin\", \"Password\": \"hunter2x\"}", "findings": [["credential_field", "hunter2x"]]},
+      {"id": "json_credential_pws",      "content": "{\"pws\": \"s3cr3tpw\"}",                           "findings": [["credential_field", "s3cr3tpw"]]},
+      {"id": "json_credential_kept_values", "content": "{\"password\": \"FIELD_1a2b3c4d\", \"pwd\": \"\", \"token\": \"[REDACTED]\"}", "findings": []},
+      {"id": "json_credential_encoding_kept", "content": "{\"credential_encoding\": \"plain\"}",           "findings": []},
+      {"id": "json_credential_non_string", "content": "{\"auth\": true, \"has_credentials\": false}",  "findings": []},
       {"id": "card_luhn_valid",          "content": "card 4111111111111111",                            "findings": [["credit_card_visa", "4111111111111111"]]},
       {"id": "card_luhn_invalid_kept",   "content": "card 4111111111111112 id 5555555555554444",        "findings": [["credit_card_mastercard", "5555555555554444"]]},
       {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}

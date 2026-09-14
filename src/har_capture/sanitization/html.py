@@ -1348,19 +1348,27 @@ def check_for_pii(
         return findings
 
     # A JSON fixture is read one decoded string at a time, each reported on
-    # the line its literal starts on. Its identity fields — a serial or MAC
-    # under a key naming it, down to the depth the sanitizer's key rules
-    # reach — use the predicate validate reports them by; a value the text
-    # passes already reported is not reported twice.
+    # the line its literal starts on. Its fields, down to the depth the
+    # sanitizer's key rules reach, are judged as the sanitizer judges them: a
+    # value under a credential-named key (the sanitizer's own field names,
+    # custom ones included) that is neither empty nor allowlisted, then a
+    # serial or MAC under a key naming it (validate's identity predicate). A
+    # value the text passes already reported is not reported twice.
+    from har_capture.sanitization.har import _field_patterns_scope, is_sensitive_field
+
     identity_fields: list[tuple[str, str, int]] = []
-    for text, offset, key, depth in _iter_json_literals(content):
-        for pattern, value, _ in _fixture_text_findings(
-            text, patterns, allowlist, preserved_ips, custom_patterns
-        ):
-            report(pattern, value, offset)
-        if key is not None and depth <= JSON_MAX_DEPTH:
-            category = unredacted_identity(key, text, custom_patterns)
-            if category is not None:
+    with _field_patterns_scope(custom_patterns):
+        for text, offset, key, depth in _iter_json_literals(content):
+            for pattern, value, _ in _fixture_text_findings(
+                text, patterns, allowlist, preserved_ips, custom_patterns
+            ):
+                report(pattern, value, offset)
+            if key is None or depth > JSON_MAX_DEPTH:
+                continue
+            if is_sensitive_field(key):
+                if text and not is_allowlisted(text, allowlist):
+                    identity_fields.append(("credential_field", text, offset))
+            elif (category := unredacted_identity(key, text, custom_patterns)) is not None:
                 identity_fields.append((category, text, offset))
 
     reported = {(f["pattern"], f["match"]) for f in findings}

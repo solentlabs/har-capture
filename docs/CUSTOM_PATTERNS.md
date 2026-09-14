@@ -144,6 +144,11 @@ loaded from `sensitive.json`:
   confidence, e.g. `password`, `secret`, `token`).
 - **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
 
+`check_for_pii` reads the same `fields` names: in a JSON fixture, a value under an `auto_redact_patterns` name that is
+neither empty nor already redacted is reported as `credential_field`. Name a credential field there rather than writing
+a `pii` regex that pairs a key with its value — a JSON fixture is read one decoded string at a time, so such a regex
+never matches in one.
+
 To add a field name that the built-ins don't recognize — the way Sercomm/Hitron's `pws` was before it was promoted to a
 built-in, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. The examples
 below use `vendorpw` as a stand-in for such a field, since it is deliberately not a real vendor name: real ones get

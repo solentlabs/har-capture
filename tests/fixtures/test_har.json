@@ -56,6 +56,10 @@
     {"field_name": "session_key",       "expected": false, "id": "session_key_not_detected"},
     {"field_name": "credential",        "expected": true,  "id": "credential"},
     {"field_name": "credentials",       "expected": true,  "id": "credentials"},
+    {"field_name": "userCredential",    "expected": true,  "id": "credential_last_word_camel"},
+    {"field_name": "user_credentials",  "expected": true,  "id": "credentials_last_word_snake"},
+    {"field_name": "credential_encoding", "expected": false, "id": "credential_encoding_names_an_encoding"},
+    {"field_name": "credentialType",    "expected": false, "id": "credential_type_names_a_kind"},
     {"field_name": "private_key",       "expected": true,  "id": "private_key"},
     {"field_name": "privateKey",        "expected": true,  "id": "private_key_camel"},
     {"field_name": "nonce",             "expected": false, "id": "nonce_not_detected"},
@@ -687,7 +691,8 @@
       {"id": "text_serial_followed_by_at", "mime": "text/plain",             "text": "SN: 4131N12345678@cm1",                                     "absent": ["4131N12345678"],             "present": ["SN: SERIAL_", "@cm1"]},
       {"id": "json_shadowed_object_value", "mime": "application/json",       "text": "{\"cfg\": {\"password\": \"hunter2x\", \"n\": [1]}, \"cfg\": {\"a\": 1}}", "absent": ["hunter2x"], "present": ["\"cfg\": {\"a\": 1}"]},
       {"id": "json_shadowed_nested_nothing", "mime": "application/json",     "text": "{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}",                "absent": [],                            "present": ["{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}"]},
-      {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]}
+      {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]},
+      {"id": "json_credential_last_word_only", "mime": "application/json",   "text": "{\"credential_encoding\": \"plain\", \"userCredential\": \"s3cr3tpw99\"}", "absent": ["s3cr3tpw99"], "present": ["{\"credential_encoding\": \"plain\", \"userCredential\": \"FIELD_"]}
     ]
   },
   "custom_preserved_gateway_cases": {
