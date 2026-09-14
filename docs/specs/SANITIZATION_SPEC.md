@@ -132,27 +132,33 @@ Headers are classified into four tiers from `sensitive.json`:
    through to full redaction so a non-standard leading token can't escape. Preserving the scheme lets downstream
    consumers classify the auth mechanism from a single authenticated request without needing a `401 + WWW-Authenticate`
    exchange.
-1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie — cookie names preserved, values redacted. The two
-   header names have different grammars (RFC 6265 sec. 4.1.1 vs sec. 4.2.1) and are handled separately:
+1. **Cookie redact** (`headers.cookie_redact`): Cookie, Set-Cookie, Set-Cookie2 — cookie names preserved, values
+   redacted. The header names have different grammars (RFC 6265 sec. 4.2.1 vs sec. 4.1.1). One function,
+   `cookie_segment_actions()`, classifies each `;`-separated segment for the sanitizer (`_sanitize_cookie_header`) and
+   `validate` alike, so both read the same segments as cookie data:
    - **Request `Cookie`**: a list of cookie pairs. Every `name=value` segment is cookie data, so every value is redacted
      — including a cookie whose name happens to be a reserved attribute word (`path=…` in a request header is a cookie,
-     not an attribute).
-   - **Response `Set-Cookie` / `Set-Cookie2`**: one cookie pair followed by `;`-separated attributes. Only the **first**
-     segment's value is redacted. Reserved attributes (`Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, valueless
-     `Secure` / `HttpOnly`, plus the `Partitioned` / `Priority` extensions — matched case-insensitively per sec. 5.2)
-     survive **verbatim**, spacing included: they scope the cookie, they are not secrets, and a redacted `Path` makes
-     downstream tooling read the cookie's scope wrong. Preserving them reveals nothing new — a cookie's `Domain` is a
-     suffix of the request host and its `Path` a prefix of the request path, both of which the HAR already carries
-     unredacted in the URL and `Host` header; the remaining attributes are dates, flags and enum tokens. An *unreserved*
-     `k=v` segment in the attribute position is still redacted — an unknown key there gets no free pass; a valueless
-     token (a flag, reserved or not) has no value half to redact and is preserved. A value with no leading cookie pair
-     does not have the shape this parse assumes and is redacted whole.
-   - A whole value that is serialized attribute metadata (`HttpOnly: true, Secure: true`) is redacted before either
-     branch — it is a malformed serialization, not a cookie. This check runs first, so it also swallows the degenerate
-     case of a cookie whose *name* is itself a reserved word (`Secure=abc; Path=/` redacts whole, attributes included).
-     That is over-redaction, never a leak, and the input does not occur in real device traffic; the alternative — trust
-     the first segment unconditionally per RFC 6265 sec. 5.2 — would make `Path=/foo; HttpOnly` emit a redacted `Path`,
-     which is the bug this section exists to prevent. Losing attributes on a degenerate header is the better trade.
+     not an attribute). A valueless segment is a nameless cookie and is redacted whole, except a valueless `Secure`,
+     `HttpOnly` or `Partitioned`: the fleet's recorders write those there (7,882 segments in 0.13.0's scan, in raw
+     captures too), and they are not data.
+   - **Response `Set-Cookie` / `Set-Cookie2`**: one cookie pair followed by `;`-separated attributes. A value whose
+     every segment is a valid RFC 6265 attribute (`is_set_cookie_attribute()`: valueless `Secure` / `HttpOnly` /
+     `Partitioned`, a `Path` starting with `/`, a `Max-Age` of digits, a `SameSite` or `Priority` from its enumeration,
+     an `Expires` date, a `Domain` hostname) holds no cookie and is kept whole — `Path=/foo; HttpOnly`,
+     `Secure; HttpOnly`. Otherwise the **first** segment is the cookie, whatever its name (`Secure=abc; Path=/` redacts
+     `abc` and keeps `Path=/`; a first segment with no `=` is a nameless cookie and is redacted whole). Reserved
+     attributes after it (`Path`, `Domain`, `Expires`, `Max-Age`, `SameSite`, `Secure`, `HttpOnly`, `Partitioned`,
+     `Priority` — matched case-insensitively per sec. 5.2) survive **verbatim**, spacing included: they scope the
+     cookie, they are not secrets, and a redacted `Path` makes downstream tooling read the cookie's scope wrong.
+     Preserving them reveals nothing new — a cookie's `Domain` is a suffix of the request host and its `Path` a prefix
+     of the request path, both of which the HAR already carries unredacted in the URL and `Host` header; the remaining
+     attributes are dates, flags and enum tokens. They are kept by name, not checked against the RFC grammar: a reserved
+     attribute after the cookie is never cookie data, and the fleet holds no raw `Expires`, `Max-Age`, `SameSite` or
+     `Domain` value to prove a stricter rule would keep real ones (only 68 raw `Path` values survive earlier releases'
+     sanitizing). An *unreserved* `k=v` segment in the attribute position is still redacted — an unknown key there gets
+     no free pass; a valueless token after the cookie has no value half to redact and is kept.
+   - Serialized attribute metadata (`HttpOnly: true, Secure: true`) is not attribute syntax: as a request segment or a
+     Set-Cookie's first segment it is redacted like any nameless cookie.
 1. **All other headers**: Passed through unmodified — except the URL-valued headers `Referer`, `Location` and
    `Content-Location`, whose URL first gets the [query parameter rules](#url-sanitization) (`_sanitize_headers`).
 

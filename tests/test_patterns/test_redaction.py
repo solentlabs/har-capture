@@ -531,25 +531,28 @@ class TestFormatPreservingInvalidRegex:
         assert not is_allowlisted("random_value", allowlist)
 
 
-class TestCookieAttributeMetadataDetection:
-    """Tests for is_cookie_attribute_metadata helper."""
+SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES = _FIXTURES["set_cookie_attribute_grammar_cases"]["cases"]
+COOKIE_SEGMENT_ACTION_CASES = _FIXTURES["cookie_segment_action_cases"]["cases"]
 
-    @pytest.mark.parametrize(
-        ("value", "expected", "desc"),
-        [
-            ("HttpOnly: true, Secure: true", True, "standard_metadata"),
-            ("SameSite=Lax", True, "samesite_attr"),
-            ("session=abc123", False, "normal_cookie"),
-            ("", False, "empty_string"),
-            ("   ", False, "whitespace_only"),
-        ],
-        ids=lambda x: x if isinstance(x, str) and "_" in x else "",
-    )
-    def test_cookie_attribute_metadata(self, value: str, expected: bool, desc: str) -> None:
-        """Test is_cookie_attribute_metadata with various inputs."""
-        from har_capture.patterns.redaction import is_cookie_attribute_metadata
 
-        assert is_cookie_attribute_metadata(value) == expected, desc
+@pytest.mark.parametrize(
+    "case", SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES, ids=[c["id"] for c in SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES]
+)
+def test_set_cookie_attribute_grammar(case: dict) -> None:
+    """A segment is an attribute only in RFC 6265's grammar."""
+    from har_capture.patterns.redaction import is_set_cookie_attribute
+
+    assert is_set_cookie_attribute(case["segment"]) is case["attribute"]
+
+
+@pytest.mark.parametrize(
+    "case", COOKIE_SEGMENT_ACTION_CASES, ids=[c["id"] for c in COOKIE_SEGMENT_ACTION_CASES]
+)
+def test_cookie_segment_actions(case: dict) -> None:
+    """Each cookie-header segment is kept, or its value or whole token is cookie data."""
+    from har_capture.patterns.redaction import cookie_segment_actions
+
+    assert cookie_segment_actions(case["value"], set_cookie=case["set_cookie"]) == case["actions"]
 
 
 class TestCookieAttributeNameDetection:

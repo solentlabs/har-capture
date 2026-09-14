@@ -2946,6 +2946,251 @@
       "leaked": [
         "0000AC123456"
       ]
+    },
+    {
+      "id": "header_cookie_placeholder_beside_real_cookie",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "a=COOKIE_1a2b3c4d; sid=realsecret99"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "realsecret99"
+      ]
+    },
+    {
+      "id": "header_cookie_named_like_an_attribute",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "path=s3cr3tvalue"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "s3cr3tvalue"
+      ]
+    },
+    {
+      "id": "header_cookie_nameless_segment",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "a=1; namelesssecret9"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "namelesssecret9"
+      ]
+    },
+    {
+      "id": "header_set_cookie_named_like_a_flag",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "Secure=abc123secret; Path=/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "abc123secret"
+      ]
+    },
+    {
+      "id": "header_set_cookie_unreserved_trailing_pair",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "sid=COOKIE_1a2b3c4d; Path=/; foo=barsecret9"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "barsecret9"
+      ]
+    },
+    {
+      "id": "header_authorization_tail_after_placeholder",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer AUTH_1a2b3c4d realsecret99"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "realsecret99"
+      ]
+    },
+    {
+      "id": "header_proxy_authorization",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Proxy-Authorization",
+                "value": "Basic cHJveHk6cGFzcw=="
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "cHJveHk6cGFzcw=="
+      ]
     }
   ]
 }

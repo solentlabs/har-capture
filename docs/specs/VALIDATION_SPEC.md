@@ -158,21 +158,20 @@ constant MAC is not reported, and neither is a self-signed name: the sanitizer o
 
 ### `check_headers(headers, location, findings)`
 
-Checks header names against the sensitive headers list from `sensitive.json`:
+Checks a header whose name (case-insensitive) is **exactly** one of the sanitizer's three sets from `sensitive.json`
+(`headers.full_redact`, `headers.cookie_redact`, `headers.scheme_redact`) — the sanitizer matches names exactly, so a
+header that merely contains one (`X-Cookie-Consent`) is not one it rewrites and is not reported. Each secret part of the
+value is checked on its own with `is_fully_redacted()`, so a placeholder in one part no longer clears the header:
 
-```python
-# Sensitive headers (from sensitive.json: headers.full_redact +
-# headers.cookie_redact + headers.scheme_redact):
-# authorization, cookie, set-cookie, x-auth-token, x-api-key, ...
-```
-
-For each header:
-
-1. Check if header name (case-insensitive) matches sensitive list
-1. If matched, check if value is already redacted via `is_redacted()`
-1. Special handling for Cookie/Set-Cookie: skip if value contains only attributes (`HttpOnly`, `Secure`, `SameSite`,
-   `Path`, `Domain`, `Expires`) via `is_cookie_attribute_metadata()`
-1. Skip empty header values
+1. **Cookie headers**: the segments `cookie_segment_actions()` marks as cookie data — the classification the sanitizer
+   rewrites (see [Sanitization Spec — Header Sanitization](SANITIZATION_SPEC.md#header-sanitization)): every request
+   `Cookie` pair's value and nameless segment, and for a Set-Cookie that is not attributes-only
+   (`is_cookie_attributes_only()`), the first segment and any unreserved pair after it. `a=COOKIE_…; sid=realsecret99`,
+   `path=s3cr3t` and `Secure=abc123; Path=/` are reported; `Secure; HttpOnly` is not.
+1. **Scheme headers** (`Authorization`, `Proxy-Authorization`): the credential after a recognized scheme
+   (`KNOWN_AUTH_SCHEMES`), else the whole value — `Bearer AUTH_… realsecret99` is reported.
+1. **Full-redact headers**: the whole value.
+1. Empty header values are skipped.
 
 Severity: **error**
 

@@ -90,8 +90,8 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
 {
   "headers": {
     "full_redact": ["x-auth-token", "x-api-key"],
-    "cookie_redact": ["cookie", "set-cookie"],
-    "scheme_redact": ["authorization"]
+    "cookie_redact": ["cookie", "set-cookie", "set-cookie2"],
+    "scheme_redact": ["authorization", "proxy-authorization"]
   },
   "fields": {
     "auto_redact_patterns": ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"],
@@ -112,10 +112,13 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
 
 **Schema: `headers`**
 
+Names match exactly (case-insensitive), in the sanitizer and `validate` alike: `cookie` names the `Cookie` header, not
+`X-Cookie-Consent`.
+
 | Field           | Type       | Description                                                                                                                                                                                             |
 | --------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced                                                                                                                                         |
-| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted)                                                                                                                                |
+| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted); `set-cookie` and `set-cookie2` are read with Set-Cookie grammar, any other name as a list of pairs                            |
 | `scheme_redact` | string\[\] | Header names with RFC 7235 `Scheme credentials` syntax. Recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved; unknown schemes fall through to full redact |
 
 **Schema: `fields`**
@@ -722,14 +725,13 @@ not. It never raises, unlike `urlparse`, and gives back the exact bytes it read,
 place. `url_query()` returns the query alone. `iter_url_credentials()` yields every `find_query_credential()` hit in a
 HAR request: URL string segments first, then the `queryString` array's.
 
-### `is_cookie_attribute_metadata(value) -> bool`
+### `cookie_segment_actions(value, *, set_cookie)` and `is_set_cookie_attribute(segment)`
 
-Distinguishes cookie attributes from cookie values:
-
-- Metadata: `HttpOnly: true, Secure: true`, `SameSite=Lax`
-- Not metadata: `session_id=abc123def456`
-
-Used to avoid flagging cookie headers that only contain metadata.
+`cookie_segment_actions()` classifies each `;`-separated segment of a cookie header as `keep`, `value` (a pair whose
+value is cookie data) or `token` (a valueless segment that is a nameless cookie) — the one rule the sanitizer rewrites
+and `validate` checks. `is_set_cookie_attribute()` is RFC 6265's attribute grammar, which decides whether a Set-Cookie
+holds no cookie at all. `SET_COOKIE_HEADERS` names the headers read with Set-Cookie grammar. See
+[Sanitization Spec — Header Sanitization](SANITIZATION_SPEC.md#header-sanitization).
 
 ## Constraints / Invariants
 

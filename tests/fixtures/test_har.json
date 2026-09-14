@@ -102,7 +102,7 @@
     {"header_name": "X-Auth-Token",        "header_value": "token123456",                "expected_contains": "[REDACTED]",              "id": "auth_token"},
     {"header_name": "X-Access-Token",      "header_value": "access123",                  "expected_contains": "access123",               "id": "access_token_not_detected"},
     {"header_name": "X-Session-Token",     "header_value": "session456",                 "expected_contains": "session456",              "id": "session_token_not_detected"},
-    {"header_name": "Proxy-Authorization", "header_value": "Basic cHJveHk6cGFzcw==",     "expected_contains": "Basic cHJveHk6cGFzcw==",  "id": "proxy_auth_not_detected"},
+    {"header_name": "Proxy-Authorization", "header_value": "Basic cHJveHk6cGFzcw==",     "expected_contains": "Basic [REDACTED]",        "id": "proxy_auth_credential_redacted"},
     {"header_name": "X-Hub-Signature",     "header_value": "sha1=abc123def456",          "expected_contains": "sha1=abc123def456",       "id": "hub_signature_not_detected"},
     {"header_name": "X-Signature",         "header_value": "hmac-sha256=xyz789",         "expected_contains": "hmac-sha256=xyz789",      "id": "signature_not_detected"},
     {"header_name": "Cookie",              "header_value": "session=abc123",             "expected_contains": "session=[REDACTED]",      "id": "cookie_session"},
@@ -133,7 +133,17 @@
     {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; Path=/; VendorFlag",                                             "expected": "sid=[REDACTED]; Path=/; VendorFlag",                                   "id": "unknown_valueless_flag_preserved"},
     {"header_name": "Set-Cookie", "header_value": "opaquevaluewithnoequals",                                                    "expected": "[REDACTED]",                                                           "id": "no_cookie_pair_redacts_whole_value"},
     {"header_name": "Cookie",     "header_value": "path=/notanattribute; sid=s3cr3t",                                           "expected": "path=[REDACTED]; sid=[REDACTED]",                                      "id": "request_cookie_named_path_still_redacted"},
-    {"header_name": "Cookie",     "header_value": "sid=s3cr3t; csrf=deadbeef",                                                  "expected": "sid=[REDACTED]; csrf=[REDACTED]",                                      "id": "request_cookie_all_pairs_redacted"}
+    {"header_name": "Cookie",     "header_value": "sid=s3cr3t; csrf=deadbeef",                                                  "expected": "sid=[REDACTED]; csrf=[REDACTED]",                                      "id": "request_cookie_all_pairs_redacted"},
+    {"header_name": "Set-Cookie", "header_value": "Secure=abc123; Path=/", "expected": "Secure=[REDACTED]; Path=/", "id": "first_segment_named_like_a_flag_is_the_cookie"},
+    {"header_name": "Set-Cookie", "header_value": "Path=s3cr3t; HttpOnly", "expected": "Path=[REDACTED]; HttpOnly", "id": "first_segment_named_like_an_attribute_is_the_cookie"},
+    {"header_name": "Set-Cookie", "header_value": "Secure; HttpOnly", "expected": "Secure; HttpOnly", "id": "attributes_only_kept"},
+    {"header_name": "Set-Cookie", "header_value": "Path=/; Max-Age=3600; SameSite=Lax; Expires=Wed, 21-Oct-2026 07:28:00 GMT; Domain=.example.com; Secure", "expected": "Path=/; Max-Age=3600; SameSite=Lax; Expires=Wed, 21-Oct-2026 07:28:00 GMT; Domain=.example.com; Secure", "id": "attributes_only_with_valid_values_kept"},
+    {"header_name": "Set-Cookie", "header_value": "COOKIE_1a2b3c4d; Path=/; HttpOnly", "expected": "[REDACTED]; Path=/; HttpOnly", "id": "nameless_first_segment_redacted_attributes_kept"},
+    {"header_name": "Set-Cookie2", "header_value": "sid=s3cr3t; Path=/", "expected": "sid=[REDACTED]; Path=/", "id": "set_cookie2_is_a_set_cookie"},
+    {"header_name": "Cookie", "header_value": "a=1; nameless", "expected": "a=[REDACTED]; [REDACTED]", "id": "request_cookie_nameless_segment_redacted"},
+    {"header_name": "Cookie", "header_value": "sid=s3cr3t; Secure", "expected": "sid=[REDACTED]; Secure", "id": "request_cookie_flag_kept"},
+    {"header_name": "Cookie", "header_value": "Secure; HttpOnly", "expected": "Secure; HttpOnly", "id": "request_cookie_only_flags_kept"},
+    {"header_name": "Proxy-Authorization", "header_value": "Basic YWxhZGRpbjpvcGVuc2VzYW1l", "expected": "Basic [REDACTED]", "id": "proxy_authorization_scheme_kept_credential_redacted"}
   ],
   "over_matching_cases": [
     {"field_name": "keyboard",      "expected": false, "id": "keyboard_not_matched"},

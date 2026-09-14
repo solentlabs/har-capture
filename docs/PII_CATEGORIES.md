@@ -140,9 +140,9 @@ var pwd = "hunter2"    → var pwd = "PASS_1a2b3c4d"  # pragma: allowlist secret
 **Examples:**
 
 ```yaml
-Cookie: session=abc123      → Cookie: session=TOKEN_a1b2c3d4
-Authorization: Bearer xyz   → Authorization: Bearer TOKEN_e5f6a7b8
-?token=def456               → ?token=TOKEN_1a2b3c4d
+Cookie: session=abc123      → Cookie: session=COOKIE_a1b2c3d4
+Authorization: Bearer xyz   → Authorization: Bearer AUTH_e5f6a7b8
+?token=def456               → ?token=FIELD_1a2b3c4d
 ```
 
 ### API Keys  <!-- pragma: allowlist secret -->
@@ -218,49 +218,44 @@ wpaKey: "hunter2"       → wpaKey: "WIFIPASS_e5f6a7b8"  # pragma: allowlist sec
 
 ### Sensitive Headers
 
-**Always sanitized:**
+**Always sanitized** (`sensitive.json` `headers`, names matched exactly):
 
-- `Authorization`
-- `Cookie`
-- `Set-Cookie`
-- `Proxy-Authorization`
-- `WWW-Authenticate`
-- `X-API-Key`
-- `X-Auth-Token`
+- `Authorization`, `Proxy-Authorization` — a recognized scheme (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`,
+  `OAuth`) is kept, the credential after it redacted; an unknown scheme is redacted whole
+- `Cookie`, `Set-Cookie`, `Set-Cookie2` — cookie names and Set-Cookie attributes kept, cookie values redacted
+- `X-Auth-Token`, `X-API-Key`, `X-Session-ID`, `X-CSRF-Token` — redacted whole
 
 **Examples:**
 
 ```yaml
-Authorization: Bearer abc123  → Authorization: Bearer TOKEN_a1b2c3d4
-Cookie: session=xyz           → Cookie: session=TOKEN_e5f6a7b8
+Authorization: Bearer abc123           → Authorization: Bearer AUTH_a1b2c3d4
+Cookie: session=xyz                    → Cookie: session=COOKIE_e5f6a7b8
+Set-Cookie: sid=xyz; Path=/; HttpOnly  → Set-Cookie: sid=COOKIE_e5f6a7b8; Path=/; HttpOnly
 ```
 
 ### Sensitive Query Parameters
 
-**Pattern:** `token`, `key`, `password`, `secret`, `auth`
+**Pattern:** the sensitive field names listed under [Form Fields](#form-fields)
 
 **Examples:**
 
 ```text
-?api_key=abc123           → ?api_key=TOKEN_a1b2c3d4
-?password=secret          → ?password=PASS_e5f6a7b8
-?oauth_token=xyz          → ?oauth_token=TOKEN_1a2b3c4d
+?api_key=abc123           → ?api_key=FIELD_a1b2c3d4
+?password=secret          → ?password=FIELD_e5f6a7b8
+?oauth_token=xyz          → ?oauth_token=FIELD_1a2b3c4d
 ```
 
 ### Form Fields
 
-**Sensitive field names:**
-
-- `password`, `passwd`, `pwd`
-- `ssn`, `social_security`
-- `credit_card`, `cc_number`
-- `cvv`, `cvc`
+**Sensitive field names** (`sensitive.json` `fields.auto_redact_patterns`): `password`, `passwd`, `pwd`, `pws`, `psk`,
+`passphrase`, a word starting `pass`, `secret`, `token`, API/secret/access/private keys, `auth` names, and a name ending
+in `credential` or `credentials`. Identity names (`username`, `login`, ...) are offered for review instead.
 
 **Examples:**
 
 ```text
-password=hunter2       → password=PASS_a1b2c3d4
-cc_number=4111111111   → cc_number=CCNUM_e5f6a7b8
+password=hunter2       → password=FIELD_a1b2c3d4
+pws=s3cr3t             → pws=FIELD_e5f6a7b8
 ```
 
 ## Heuristic Detection

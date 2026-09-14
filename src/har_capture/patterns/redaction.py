@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from .loader import load_allowlist
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -895,15 +895,6 @@ COOKIE_ATTRIBUTE_NAMES = (
     "Priority",
 )
 _COOKIE_ATTRIBUTE_NAMES_LOWER = frozenset(name.lower() for name in COOKIE_ATTRIBUTE_NAMES)
-_COOKIE_ATTR_ALTERNATION = "|".join(COOKIE_ATTRIBUTE_NAMES)
-
-# Cookie attribute metadata pattern (e.g., "HttpOnly: true, Secure: true")
-_COOKIE_ATTR_METADATA_RE = re.compile(
-    rf"^({_COOKIE_ATTR_ALTERNATION})"
-    r"(\s*[:=]\s*\S+)?"
-    rf"(\s*[,;]\s*({_COOKIE_ATTR_ALTERNATION})(\s*[:=]\s*\S+)?)*\s*$",
-    re.IGNORECASE,
-)
 
 
 def _decode_base64_text(value: str) -> str | None:
@@ -1285,30 +1276,6 @@ def is_base64_decodable_text(value: str) -> bool:
     return decoded.isprintable()
 
 
-def is_cookie_attribute_metadata(value: str) -> bool:
-    """Check if a value is cookie attribute metadata rather than cookie data.
-
-    Detects values like ``"HttpOnly: true, Secure: true"`` that are
-    serialized cookie attributes incorrectly placed where a cookie
-    name=value string should be.
-
-    Args:
-        value: String to check
-
-    Returns:
-        True if the value consists only of cookie attribute names/values
-
-    Examples:
-        >>> is_cookie_attribute_metadata("HttpOnly: true, Secure: true")
-        True
-        >>> is_cookie_attribute_metadata("session=abc123")
-        False
-    """
-    if not value or not value.strip():
-        return False
-    return bool(_COOKIE_ATTR_METADATA_RE.match(value))
-
-
 def is_cookie_attribute_name(name: str) -> bool:
     """Check if a Set-Cookie segment key is a reserved attribute name.
 
@@ -1333,3 +1300,101 @@ def is_cookie_attribute_name(name: str) -> bool:
         False
     """
     return name.strip().lower() in _COOKIE_ATTRIBUTE_NAMES_LOWER
+
+
+# Response cookie headers. RFC 6265 sec. 4.1.1 gives these a different grammar
+# from the request `Cookie` header: one `name=value` cookie pair followed by
+# `;`-separated attributes, rather than a list of cookie pairs. Every other
+# cookie header (request `Cookie`, custom `cookie_redact` names) is a list of
+# pairs. Hardcoded rather than pattern-configured for the same reason as
+# `KNOWN_AUTH_SCHEMES`: it is protocol structure, not a domain pattern.
+SET_COOKIE_HEADERS = frozenset({"set-cookie", "set-cookie2"})
+
+# The valueless attributes. In a request Cookie header one of these is
+# recorder output (the fleet's captures write `Secure` there), not a cookie.
+_COOKIE_FLAGS = frozenset({"secure", "httponly", "partitioned"})
+_MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)"
+# RFC 1123 (`Wed, 21 Oct 2026 07:28:00 GMT`), its Netscape dashed form, RFC 850
+# two-digit years, and asctime (`Wed Oct 21 07:28:00 2026`).
+_COOKIE_DATE_RE = re.compile(
+    rf"(?:[a-z]{{3,9}},?\s*)?(?:\d{{1,2}}[\s-]{_MONTH}[\s-]\d{{2,4}}\s+\d{{1,2}}:\d{{2}}:\d{{2}}(?:\s*(?:gmt|utc))?"
+    rf"|{_MONTH}\s+\d{{1,2}}\s+\d{{1,2}}:\d{{2}}:\d{{2}}\s+\d{{4}})",
+    re.IGNORECASE,
+)
+_COOKIE_DOMAIN_RE = re.compile(
+    r"\.?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.?", re.IGNORECASE
+)
+_COOKIE_ATTRIBUTE_VALUE_RULES: dict[str, Callable[[str], bool]] = {
+    "path": lambda value: value.startswith("/"),
+    "max-age": lambda value: re.fullmatch(r"-?\d+", value) is not None,
+    "samesite": lambda value: value.lower() in {"strict", "lax", "none"},
+    "priority": lambda value: value.lower() in {"low", "medium", "high"},
+    "expires": lambda value: _COOKIE_DATE_RE.fullmatch(value) is not None,
+    "domain": lambda value: _COOKIE_DOMAIN_RE.fullmatch(value) is not None,
+}
+
+
+def is_set_cookie_attribute(segment: str) -> bool:
+    """Check if one ``;``-separated segment is a valid RFC 6265 Set-Cookie attribute.
+
+    A valueless ``Secure``, ``HttpOnly`` or ``Partitioned``; a ``Path``
+    starting with ``/``; a ``Max-Age`` of digits; a ``SameSite`` or
+    ``Priority`` from its enumeration; an ``Expires`` date; a ``Domain``
+    hostname. Names are case-insensitive (sec. 5.2).
+
+    Args:
+        segment: One segment of a Set-Cookie value
+
+    Returns:
+        True if the segment is an attribute a user agent would apply
+    """
+    name, eq, value = segment.partition("=")
+    name, value = name.strip().lower(), value.strip()
+    if not eq:
+        return name in _COOKIE_FLAGS
+    rule = _COOKIE_ATTRIBUTE_VALUE_RULES.get(name)
+    return rule is not None and bool(value) and rule(value)
+
+
+def cookie_segment_actions(value: str, *, set_cookie: bool) -> list[str]:
+    """Classify each ``;``-separated segment of a cookie header: what is cookie data.
+
+    One rule for the sanitizer, which rewrites the data, and ``validate``,
+    which checks it. Each segment is ``"keep"``, ``"value"`` (a
+    ``name=value`` pair whose value is data) or ``"token"`` (a valueless
+    segment that is data whole: a nameless cookie).
+
+    - Request ``Cookie``: every pair is a cookie, an attribute name included
+      (``path=s3cr3t``); a valueless ``Secure``/``HttpOnly``/``Partitioned`` is
+      kept, any other valueless segment is a nameless cookie.
+    - ``Set-Cookie``: when every segment is a valid attribute
+      (``is_set_cookie_attribute``) there is no cookie and all is kept.
+      Otherwise the first segment is the cookie (``Secure=abc123`` included),
+      reserved attributes after it are kept by name, as are valueless
+      tokens, and an unreserved pair after it is data.
+
+    Args:
+        value: The header value
+        set_cookie: The header is a Set-Cookie (``SET_COOKIE_HEADERS``)
+
+    Returns:
+        One action per ``value.split(";")`` segment
+    """
+    segments = value.split(";")
+    filled = [index for index, segment in enumerate(segments) if segment.strip()]
+    if set_cookie and filled and all(is_set_cookie_attribute(segments[index]) for index in filled):
+        return ["keep"] * len(segments)
+    actions = []
+    for index, segment in enumerate(segments):
+        key, eq, _ = segment.partition("=")
+        if not segment.strip():
+            actions.append("keep")
+        elif set_cookie and index != filled[0]:
+            actions.append("value" if eq and not is_cookie_attribute_name(key) else "keep")
+        elif eq:
+            actions.append("value")
+        elif not set_cookie and key.strip().lower() in _COOKIE_FLAGS:
+            actions.append("keep")
+        else:
+            actions.append("token")
+    return actions

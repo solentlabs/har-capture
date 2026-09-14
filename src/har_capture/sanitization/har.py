@@ -33,6 +33,7 @@ from har_capture.patterns import (
     MAC_RE,
     PRIVATE_IP_RE,
     PUBLIC_IP_RE,
+    SET_COOKIE_HEADERS,
     URL_VALUED_HEADERS,
     Hasher,
     JsonObjectWithDuplicates,
@@ -40,6 +41,7 @@ from har_capture.patterns import (
     QueryPayload,
     certificate_name_macs,
     classify_identity_field,
+    cookie_segment_actions,
     credential_value_action,
     decode_base64_payload,
     decode_transport_body,
@@ -50,8 +52,6 @@ from har_capture.patterns import (
     is_base64_decodable_text,
     is_blank_query_value,
     is_constant_mac,
-    is_cookie_attribute_metadata,
-    is_cookie_attribute_name,
     is_fully_redacted,
     is_ipv6_host_address,
     is_mac_placeholder,
@@ -232,14 +232,6 @@ def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] |
 # Load patterns at module level for efficiency
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS, _SCHEME_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
-
-# Response cookie headers. RFC 6265 sec. 4.1.1 gives these a different grammar
-# from the request `Cookie` header: one `name=value` cookie pair followed by
-# `;`-separated attributes, rather than a list of cookie pairs. Only the pair
-# is cookie data, so only it is redacted — see `_sanitize_set_cookie_value`.
-# Hardcoded rather than pattern-configured for the same reason as
-# `KNOWN_AUTH_SCHEMES`: it is protocol structure, not a domain pattern.
-_SET_COOKIE_HEADERS: frozenset[str] = frozenset({"set-cookie", "set-cookie2"})
 
 
 @dataclass(frozen=True)
@@ -622,74 +614,49 @@ def is_flaggable_field(field_name: str) -> bool:
     return _FIELD_PATTERNS_CTX.get().matches_flaggable(field_name)
 
 
-def _redact_cookie_segment(
-    segment: str,
-    hasher: Hasher | None,
-    collector: RedactionCollector | None,
-) -> str:
-    """Redact the value half of one ``name=value`` cookie segment.
-
-    Surrounding whitespace stays with the name half, so a reassembled header
-    keeps its original spacing. A segment with no ``=`` (a valueless
-    attribute like ``Secure``) has no value to redact and is returned as-is.
-
-    Args:
-        segment: One ``;``-separated segment of a cookie header value
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record the redaction
-
-    Returns:
-        The segment with its value replaced by a placeholder
-    """
-    if "=" not in segment:
-        return segment
-    name, _, value = segment.partition("=")
-    return f"{name}={_redact_value(value, hasher, 'COOKIE', collector)}"
-
-
-def _sanitize_set_cookie_value(
+def _sanitize_cookie_header(
     value: str,
     hasher: Hasher | None,
     collector: RedactionCollector | None,
+    *,
+    set_cookie: bool,
 ) -> str:
-    """Redact the cookie value in a Set-Cookie header, preserving attributes.
+    """Redact the cookie data in a Cookie or Set-Cookie value, keeping names and attributes.
 
-    RFC 6265 sec. 4.1.1: a Set-Cookie value is one ``name=value`` cookie pair
-    followed by ``;``-separated attributes. Redacting every ``k=v`` segment
-    destroys the scoping metadata (``Path``, ``Domain``, ``Expires``, …) that
-    downstream tooling reads to reason about cookie scope, and those
-    attributes are not secrets. So: the first segment's value is redacted,
-    reserved attributes survive verbatim, and any *unreserved* trailing pair
-    is redacted — an unknown key in the attribute position is not something
-    to hand a free pass to. A valueless token (a flag, reserved or not) has
-    no value half to redact and is preserved.
+    ``cookie_segment_actions`` (shared with validate) decides, one
+    ``;``-separated segment at a time, what is cookie data: a pair's value,
+    or a valueless segment that is a nameless cookie. Names, reserved
+    Set-Cookie attributes (RFC 6265 sec. 4.1.1: they scope the cookie and are
+    not secrets) and spacing survive, so a reassembled header keeps its shape.
 
     Args:
-        value: Raw Set-Cookie header value
+        value: Raw header value
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
+        set_cookie: The header is a Set-Cookie
 
     Returns:
         Sanitized header value
 
     Example:
-        >>> _sanitize_set_cookie_value("sid=secret; Path=/isp; HttpOnly", None, None)
+        >>> _sanitize_cookie_header(
+        ...     "sid=secret; Path=/isp; HttpOnly", None, None, set_cookie=True
+        ... )
         'sid=[REDACTED]; Path=/isp; HttpOnly'
     """
     segments = value.split(";")
-
-    if "=" not in segments[0]:
-        # No leading cookie pair to anchor on — the value does not have the
-        # shape this parse assumes, so redact it whole rather than guess.
-        return _redact_value(value, hasher, "COOKIE", collector) if value.strip() else value
-
-    sanitized = [_redact_cookie_segment(segments[0], hasher, collector)]
-    for segment in segments[1:]:
-        if is_cookie_attribute_name(segment.partition("=")[0]):
-            sanitized.append(segment)
-        else:
-            sanitized.append(_redact_cookie_segment(segment, hasher, collector))
-    return ";".join(sanitized)
+    for index, action in enumerate(cookie_segment_actions(value, set_cookie=set_cookie)):
+        segment = segments[index]
+        if action == "value":
+            name, _, data = segment.partition("=")
+            if data.strip():
+                segments[index] = f"{name}={_redact_value(data, hasher, 'COOKIE', collector)}"
+        elif action == "token":
+            token = segment.strip()
+            lead = segment[: len(segment) - len(segment.lstrip())]
+            trail = segment[len(segment.rstrip()) :]
+            segments[index] = f"{lead}{_redact_value(token, hasher, 'COOKIE', collector)}{trail}"
+    return ";".join(segments)
 
 
 def sanitize_header_value(
@@ -742,30 +709,7 @@ def sanitize_header_value(
         return _redact_value(value, hasher, "AUTH", collector)
 
     if name_lower in sets.cookie_redact:
-        # Detect cookie attribute metadata (e.g., "HttpOnly: true, Secure: true")
-        # that was incorrectly serialized as the header value
-        if is_cookie_attribute_metadata(value):
-            return _redact_value(value, hasher, "COOKIE", collector)
-
-        if name_lower in _SET_COOKIE_HEADERS:
-            # Response cookie: one cookie pair, then scoping attributes.
-            return _sanitize_set_cookie_value(value, hasher, collector)
-
-        # Request cookie: every segment is a cookie pair.
-        # Preserve cookie names, redact values
-        def redact_cookie(match: re.Match[str]) -> str:
-            cookie_name = match.group(1)
-            cookie_value = match.group(2)
-            hashed = _redact_value(cookie_value, hasher, "COOKIE", collector)
-            return f"{cookie_name}={hashed}"
-
-        result = re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
-
-        # If regex matched nothing (no name=value pairs), redact the whole value
-        if result == value and value.strip():
-            return _redact_value(value, hasher, "COOKIE", collector)
-
-        return result
+        return _sanitize_cookie_header(value, hasher, collector, set_cookie=name_lower in SET_COOKIE_HEADERS)
 
     return value
 

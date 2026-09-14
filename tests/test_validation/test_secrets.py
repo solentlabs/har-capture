@@ -1178,3 +1178,16 @@ def test_validate_reads_certificate_names(case: dict, tmp_path: Path) -> None:
     har_file = tmp_path / "cert.har"
     har_file.write_text(json.dumps({"log": {"entries": [entry]}}))
     assert [[f.severity, f.field, f.value] for f in validate_har(har_file)] == case["findings"]
+
+
+COOKIE_HEADER_VALIDATION_CASES = _DATA["cookie_header_validation_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", COOKIE_HEADER_VALIDATION_CASES, ids=[c["id"] for c in COOKIE_HEADER_VALIDATION_CASES]
+)
+def test_sensitive_header_checked_as_the_sanitizer_rewrites_it(case: dict) -> None:
+    """A cookie header is checked a segment at a time; other headers by their credential token."""
+    findings: list[Finding] = []
+    check_headers([{"name": case["name"], "value": case["value"]}], "request", findings)
+    assert [f.severity for f in findings] == (["error"] if case["error"] else [])

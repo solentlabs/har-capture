@@ -10,10 +10,12 @@
     ],
     "cookie_redact": [
       "cookie",
-      "set-cookie"
+      "set-cookie",
+      "set-cookie2"
     ],
     "scheme_redact": [
-      "authorization"
+      "authorization",
+      "proxy-authorization"
     ]
   },
   "fields": {

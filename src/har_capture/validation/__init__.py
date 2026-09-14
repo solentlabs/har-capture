@@ -27,7 +27,6 @@ from har_capture.validation.completeness import (
     load_har,
 )
 from har_capture.validation.secrets import (
-    COOKIE_ATTRIBUTES_ONLY,
     MAC_PATTERN,
     SENSITIVE_FIELDS,
     SENSITIVE_HEADERS,
@@ -58,7 +57,6 @@ __all__ = [
     "NO_POST_REQUESTS",
     "SINGLE_CREDENTIAL_POST",
     # PII leak detection
-    "COOKIE_ATTRIBUTES_ONLY",
     "MAC_PATTERN",
     "SENSITIVE_FIELDS",
     "SENSITIVE_HEADERS",

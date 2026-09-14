@@ -30,9 +30,12 @@ from har_capture.patterns.loader import (
 from har_capture.patterns.redaction import (
     CERTIFICATE_NAME_FIELDS,
     JSON_MAX_DEPTH,
+    KNOWN_AUTH_SCHEMES,
     MAC_RE,
+    SET_COOKIE_HEADERS,
     URL_VALUED_HEADERS,
     certificate_name_macs,
+    cookie_segment_actions,
     credential_value_action,
     decode_base64_payload,
     decode_transport_body,
@@ -43,7 +46,6 @@ from har_capture.patterns.redaction import (
     is_base64_decodable_text,
     is_blank_query_value,
     is_constant_mac,
-    is_cookie_attribute_metadata,
     is_fully_redacted,
     is_mac_placeholder,
     iter_json_strings,
@@ -72,13 +74,6 @@ from har_capture.sanitization.html import (
 from har_capture.validation.completeness import load_har
 
 # Cookie attribute-only values (not actual session data)
-COOKIE_ATTRIBUTES_ONLY: list[str] = [
-    r"^(Secure\s*;?\s*)+$",
-    r"^(HttpOnly\s*;?\s*)+$",
-    r"^(Secure|HttpOnly)(\s*;\s*(Secure|HttpOnly))*\s*;?\s*$",
-    r"^$",
-]
-
 MAC_PATTERN = MAC_RE
 
 # Labeled serials: the sanitizer's own pattern (pass 2), so every labeled
@@ -97,21 +92,26 @@ IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
 KNOWN_DEFAULT_USERNAMES: frozenset[str] = frozenset({"admin"})
 
 
-def _load_sensitive_headers(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
-    """Load sensitive header names from patterns.
+def _load_header_sets(
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Load the sanitizer's three sensitive-header sets, lowercased: full, cookie and scheme redact.
+
+    Names are matched exactly, as the sanitizer matches them: a header whose
+    name only contains one (``X-Cookie-Consent``) is not one the sanitizer
+    rewrites, so it is not reported.
 
     Args:
         custom_patterns: Optional path to custom patterns file
 
     Returns:
-        List of sensitive header names
+        The ``full_redact``, ``cookie_redact`` and ``scheme_redact`` names
     """
-    sensitive = load_sensitive_patterns(custom_patterns)
-    headers = sensitive.get("headers", {})
-    result = list(headers.get("full_redact", []))
-    result.extend(headers.get("cookie_redact", []))
-    result.extend(headers.get("scheme_redact", []))
-    return result
+    headers = load_sensitive_patterns(custom_patterns).get("headers", {})
+    return tuple(  # type: ignore[return-value]
+        frozenset(str(name).lower() for name in headers.get(key, []))
+        for key in ("full_redact", "cookie_redact", "scheme_redact")
+    )
 
 
 def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
@@ -235,22 +235,51 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
 
 
 def is_cookie_attributes_only(value: str) -> bool:
-    """Check if a cookie value contains only attributes (no actual session data).
+    """Check if a Set-Cookie value holds only attributes (no cookie).
 
-    When HARs are sanitized, cookie values may be stripped leaving just
-    attributes like 'Secure; HttpOnly'. These are safe to commit.
-    Also detects serialized attribute metadata like 'HttpOnly: true, Secure: true'.
+    True when every segment is a valid RFC 6265 attribute
+    (``is_set_cookie_attribute``): ``Secure; HttpOnly``, ``Path=/; Max-Age=0``.
+    ``Path=s3cr3t; HttpOnly`` is a cookie named ``Path``, and serialized
+    metadata (``HttpOnly: true, Secure: true``) is not attribute syntax.
 
     Args:
-        value: Cookie value to check
+        value: Set-Cookie value to check
 
     Returns:
-        True if cookie contains only attributes
+        True if the value carries no cookie data
     """
-    stripped = value.strip()
-    if any(re.match(pattern, stripped, re.IGNORECASE) for pattern in COOKIE_ATTRIBUTES_ONLY):
-        return True
-    return is_cookie_attribute_metadata(stripped)
+    return all(action == "keep" for action in cookie_segment_actions(value, set_cookie=True))
+
+
+def _cookie_header_data(value: str, *, set_cookie: bool) -> list[str]:
+    """The cookie data in a cookie header, one entry per segment ``cookie_segment_actions`` marks as data."""
+    data = []
+    for segment, action in zip(
+        value.split(";"), cookie_segment_actions(value, set_cookie=set_cookie), strict=True
+    ):
+        if action == "value":
+            data.append(segment.partition("=")[2].strip())
+        elif action == "token":
+            data.append(segment.strip())
+    return [item for item in data if item]
+
+
+def _header_secret(name: str, value: str, header_sets: tuple[frozenset[str], ...]) -> list[str] | None:
+    """The secret parts of a sensitive header as the sanitizer rewrites them; None for a header it leaves.
+
+    A cookie header's data segments; for an Authorization-style header the
+    credential after a recognized scheme, else the whole value; for any
+    other sensitive header the whole value.
+    """
+    full, cookie, scheme = header_sets
+    if name in cookie:
+        return _cookie_header_data(value, set_cookie=name in SET_COOKIE_HEADERS)
+    if name in scheme:
+        parts = value.strip().split(None, 1)
+        return [parts[1] if len(parts) == 2 and parts[0].lower() in KNOWN_AUTH_SCHEMES else value]
+    if name in full:
+        return [value]
+    return None
 
 
 def is_private_ip(ip: str) -> bool:
@@ -575,31 +604,26 @@ def check_headers(
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
     """
-    sensitive_headers = _load_sensitive_headers(custom_patterns)
+    header_sets = _load_header_sets(custom_patterns)
 
     for header in headers:
-        name = header.get("name", "").lower()
+        name = str(header.get("name", "")).lower()
         value = header.get("value", "")
-
-        if not value or is_redacted(value, custom_patterns):
+        if not isinstance(value, str) or not value:
             continue
-
-        # Special handling for cookie headers - check if only attributes remain
-        if "cookie" in name and is_cookie_attributes_only(value):
-            continue
-
-        for sensitive in sensitive_headers:
-            if sensitive.lower() in name:
-                findings.append(
-                    Finding(
-                        severity="error",
-                        location=location,
-                        field=header.get("name", ""),
-                        value=truncate(value),
-                        reason=f"Sensitive header '{sensitive}' with non-redacted value",
-                    )
+        # Each secret part is checked on its own, so a placeholder in one
+        # cookie or before a credential's tail no longer clears the header.
+        secrets = _header_secret(name, value, header_sets)
+        if secrets and any(not is_fully_redacted(secret, custom_patterns) for secret in secrets):
+            findings.append(
+                Finding(
+                    severity="error",
+                    location=location,
+                    field=header.get("name", ""),
+                    value=truncate(value),
+                    reason=f"Sensitive header '{name}' with non-redacted value",
                 )
-                break
+            )
 
 
 def _classify_field_finding(
@@ -1301,5 +1325,9 @@ def validate_har(
 
 
 # Legacy exports for backwards compatibility
-SENSITIVE_HEADERS: list[str] = _load_sensitive_headers()
+SENSITIVE_HEADERS: list[str] = [
+    name
+    for key in ("full_redact", "cookie_redact", "scheme_redact")
+    for name in load_sensitive_patterns().get("headers", {}).get(key, [])
+]
 SENSITIVE_FIELDS: list[str] = _load_sensitive_fields()

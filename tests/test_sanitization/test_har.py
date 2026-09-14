@@ -3402,10 +3402,10 @@ class TestCookieHeaderNoNameValuePairs:
 #
 # fmt: off
 COOKIE_ATTR_CASES = [
-    # Attribute metadata (should be redacted as non-cookie data)
+    # Serialized attribute metadata is not attribute syntax: redacted as cookie data
     ("Set-Cookie", "HttpOnly: true, Secure: true",      True,  "attribute_metadata_set_cookie"),
     ("Cookie",     "HttpOnly: true, Secure: true",      True,  "attribute_metadata_cookie"),
-    ("Set-Cookie", "Secure",                            True,  "bare_secure_attribute"),
+    ("Set-Cookie", "Secure",                            False, "bare_secure_is_attributes_only"),
     # Normal cookies (should be redacted as cookie values)
     ("Set-Cookie", "session_id=abc123; HttpOnly; Secure", True,  "normal_set_cookie_with_attrs"),
     ("Cookie",     "session=abc123",                    True,  "normal_cookie"),

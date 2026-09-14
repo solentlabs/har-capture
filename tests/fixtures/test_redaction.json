@@ -436,5 +436,242 @@
       {"id": "escaped_markup",    "text": "{\"h\": \"\\u003cb\\u003e\"}",           "strings": ["h", "<b>"]},
       {"id": "shadowed_duplicate", "text": "{\"p\": \"first\", \"p\": \"last\"}",    "strings": ["p", "last", "p", "first"]}
     ]
+  },
+  "set_cookie_attribute_grammar_cases": {
+    "_comment": "RFC 6265 Set-Cookie attribute grammar (is_set_cookie_attribute): a segment a user agent would apply as an attribute.",
+    "cases": [
+      {
+        "id": "secure_flag",
+        "segment": " Secure",
+        "attribute": true
+      },
+      {
+        "id": "partitioned_flag_lowercase",
+        "segment": "partitioned",
+        "attribute": true
+      },
+      {
+        "id": "flag_with_a_value",
+        "segment": "Secure=abc123",
+        "attribute": false
+      },
+      {
+        "id": "path_from_root",
+        "segment": " Path=/isp",
+        "attribute": true
+      },
+      {
+        "id": "path_not_from_root",
+        "segment": "Path=s3cr3t",
+        "attribute": false
+      },
+      {
+        "id": "max_age_digits",
+        "segment": "Max-Age=3600",
+        "attribute": true
+      },
+      {
+        "id": "max_age_negative",
+        "segment": "max-age=-1",
+        "attribute": true
+      },
+      {
+        "id": "max_age_word",
+        "segment": "Max-Age=forever",
+        "attribute": false
+      },
+      {
+        "id": "samesite_enum",
+        "segment": "SameSite=Lax",
+        "attribute": true
+      },
+      {
+        "id": "samesite_other",
+        "segment": "SameSite=abc",
+        "attribute": false
+      },
+      {
+        "id": "priority_enum",
+        "segment": "Priority=High",
+        "attribute": true
+      },
+      {
+        "id": "expires_rfc1123",
+        "segment": "Expires=Wed, 21 Oct 2026 07:28:00 GMT",
+        "attribute": true
+      },
+      {
+        "id": "expires_netscape_dashes",
+        "segment": "expires=Thu, 01-Jan-1970 00:00:01 GMT",
+        "attribute": true
+      },
+      {
+        "id": "expires_asctime",
+        "segment": "Expires=Wed Oct 21 07:28:00 2026",
+        "attribute": true
+      },
+      {
+        "id": "expires_not_a_date",
+        "segment": "Expires=abc123",
+        "attribute": false
+      },
+      {
+        "id": "domain_with_dot",
+        "segment": "Domain=.example.com",
+        "attribute": true
+      },
+      {
+        "id": "domain_ip",
+        "segment": "Domain=192.168.100.1",
+        "attribute": true
+      },
+      {
+        "id": "domain_not_a_host",
+        "segment": "Domain=a b",
+        "attribute": false
+      },
+      {
+        "id": "empty_value",
+        "segment": "Path=",
+        "attribute": false
+      },
+      {
+        "id": "unknown_name",
+        "segment": "tracking=abc",
+        "attribute": false
+      }
+    ]
+  },
+  "cookie_segment_action_cases": {
+    "_comment": "cookie_segment_actions: per ;-segment of a cookie header, keep / value (the pair's value is cookie data) / token (a nameless cookie). One rule for the sanitizer and validate.",
+    "cases": [
+      {
+        "id": "request_pairs",
+        "value": "sid=abc; csrf=def",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "value"
+        ]
+      },
+      {
+        "id": "request_attribute_named_cookie",
+        "value": "path=s3cr3t",
+        "set_cookie": false,
+        "actions": [
+          "value"
+        ]
+      },
+      {
+        "id": "request_nameless_segment",
+        "value": "a=1; nameless",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "token"
+        ]
+      },
+      {
+        "id": "request_recorder_flags",
+        "value": "Secure; sid=abc; HttpOnly",
+        "set_cookie": false,
+        "actions": [
+          "keep",
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "request_blank_segment",
+        "value": "sid=abc;",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_pair_and_attributes",
+        "value": "sid=abc; Path=/; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_attributes_only",
+        "value": "Secure; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "keep",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_flag_named_cookie",
+        "value": "Secure=abc123; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_invalid_attribute_first",
+        "value": "Path=s3cr3t; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_nameless_first",
+        "value": "COOKIE_1a2b3c4d; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "token",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_unreserved_trailing_pair",
+        "value": "sid=abc; tracking=def; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_reserved_kept_by_name",
+        "value": "sid=abc; Expires=whenever",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_unknown_flag_kept",
+        "value": "sid=abc; VendorFlag",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_metadata_first",
+        "value": "HttpOnly: true, Secure: true",
+        "set_cookie": true,
+        "actions": [
+          "token"
+        ]
+      }
+    ]
   }
 }
