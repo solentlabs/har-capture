@@ -552,3 +552,47 @@ class TestCaptureSettingsCustomMerge:
             assert ".pfb" not in load_capture_settings()["bloat_extensions"]["fonts"]
         finally:
             clear_pattern_cache()
+
+
+# (desc, flags) — any collection of flag names is honoured, as the loader
+# honoured any iterable before; a lone name is a collection of one.
+_FLAG_FORMS = [
+    ("list", ["IGNORECASE"]),
+    ("tuple", ("IGNORECASE",)),
+    ("set", {"IGNORECASE"}),
+    ("lone_name", "IGNORECASE"),
+]
+
+
+@pytest.mark.parametrize(("desc", "flags"), _FLAG_FORMS, ids=[f[0] for f in _FLAG_FORMS])
+def test_compile_pattern_flag_forms(desc: str, flags: Any) -> None:
+    """Flags given as any collection of names (or one name) are honoured."""
+    compiled = compile_pattern({"regex": "abc", "flags": flags, "replacement_prefix": "F"})
+    assert compiled is not None and compiled.fullmatch("ABC"), desc
+
+
+def test_compile_pattern_accepts_compiled_regex() -> None:
+    """A pre-compiled regex keeps its own flags."""
+    import re
+
+    compiled = compile_pattern({"regex": re.compile("abc", re.IGNORECASE), "replacement_prefix": "P"})
+    assert compiled is not None and compiled.fullmatch("ABC")
+
+
+def test_non_string_regex_warns_per_pattern(caplog: pytest.LogCaptureFixture) -> None:
+    """Two different bad patterns with one prefix each warn once."""
+    with caplog.at_level("WARNING"):
+        for regex in (5, 6, 5):
+            compile_pattern({"regex": regex, "replacement_prefix": "SAMEPFX"})
+    assert sum("SAMEPFX" in record.getMessage() for record in caplog.records) == 2
+
+
+def test_dedicated_name_override_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Ignoring a custom definition of a dedicated built-in warns once, however often the patterns load."""
+    from har_capture.patterns import load_pii_patterns
+
+    custom = {"patterns": {"account_id": {"regex": "ACCT-\\d+", "replacement_prefix": "WARNONCE"}}}
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            load_pii_patterns(custom)
+    assert sum("account_id" in record.getMessage() for record in caplog.records) == 1

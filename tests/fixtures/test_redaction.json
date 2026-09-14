@@ -161,6 +161,9 @@
       {"id": "hwaddr_mixed_case",             "key": "HWaddr",                           "value": "AABBCCDDEEFF",      "category": "mac_address"},
       {"id": "macaddress_acronym_prefix",     "key": "MACaddress",                       "value": "aabb.ccdd.eeff",    "category": "mac_address"},
       {"id": "serialnumber_acronym_prefix",   "key": "SERIALnumber",                     "value": "4131N12345678",     "category": "serial_number"},
+      {"id": "hmac_suffix_camel",             "key": "userHMAC",                         "value": "AABBCCDDEEFF",      "category": null},
+      {"id": "hmac_suffix_lower",             "key": "requestHmac",                      "value": "AABBCCDDEEFF",      "category": null},
+      {"id": "hmac_after_digits",             "key": "SHA1HMAC",                         "value": "AABBCCDDEEFF",      "category": null},
       {"id": "all_digit_serial",              "key": "serialnumber",                     "value": "123456789012345",   "category": "serial_number"},
       {"id": "exact_sn",                      "key": "sn",                               "value": "TEST12345",         "category": "serial_number"},
       {"id": "suffix_serial",                 "key": "deviceSerial",                     "value": "X1Y2Z3W4",          "category": "serial_number"},
@@ -409,7 +412,20 @@
       {"id": "basic_credential",   "value": "Basic YWRtaW46aHVudGVyMg==",  "action": "redact"},
       {"id": "digest_lowercase",   "value": "digest username=\"a\", response=\"f00d\"", "action": "redact"},
       {"id": "pem_block",          "value": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----", "action": "redact"},
-      {"id": "prose_naming_scheme", "value": "Basic settings for the admin password", "action": "review"}
+      {"id": "pem_block_without_end_line", "value": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ", "action": "redact"},
+      {"id": "pem_block_headers_before_body", "value": "-----BEGIN CERTIFICATE-----\nComment: device\n\nMIIBszCCAVmgAwIBAgIUQ", "action": "redact"},
+      {"id": "pem_block_flattened",      "value": "-----BEGIN CERTIFICATE----- MIIBszCCAVmgAwIBAgIUQ -----END CERTIFICATE-----", "action": "redact"},
+      {"id": "prose_after_pem_header",   "value": "-----BEGIN CERTIFICATE----- paste the rest here", "action": "review"},
+      {"id": "prose_naming_scheme", "value": "Basic settings for the admin password", "action": "review"},
+      {"id": "scheme_then_word_basic",  "value": "Basic settings",           "action": "review"},
+      {"id": "scheme_then_word_bearer", "value": "Bearer token",             "action": "review"},
+      {"id": "scheme_then_word_oauth",  "value": "OAuth login",              "action": "review"},
+      {"id": "scheme_then_word_digest", "value": "Digest authentication",    "action": "review"},
+      {"id": "scheme_then_version",     "value": "oauth 2.0",                "action": "review"},
+      {"id": "basic_not_a_credential",  "value": "Basic Wi-Fi",              "action": "review"},
+      {"id": "prose_naming_pem",        "value": "Paste your -----BEGIN key here", "action": "review"},
+      {"id": "bearer_short_opaque",     "value": "Bearer 9f8e7d6c5b4a3210", "action": "redact"},
+      {"id": "negotiate_token",         "value": "Negotiate YIIGhgYGKwYBBQUCoIIGejCCBnagMDAu", "action": "redact"}
     ]
   },
   "iter_json_strings_cases": {

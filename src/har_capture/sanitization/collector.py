@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
     from har_capture.patterns.hasher import Hasher
 
+_CONFIDENCE_RANK = {ConfidenceLevel.LOW: 0, ConfidenceLevel.MEDIUM: 1, ConfidenceLevel.HIGH: 2}
+
 
 @dataclass
 class RedactionCollector:
@@ -39,14 +41,19 @@ class RedactionCollector:
         auto_redacted_counts: Counts by category for auto-redacted values
         flagged: List of values flagged for user review
         redacted_values: Original value -> placeholder, for Pass 1b propagation
-        _seen_flagged: Set of values already flagged (for deduplication)
+        _flag_index: Flagged value -> its entry (for deduplication)
+        _flag_created, _flag_touched: Flagged value -> the flag call that
+            created it, and the latest that counted it (see ``flag_mark``)
     """
 
     hasher: Hasher
     auto_redacted_counts: dict[str, int] = field(default_factory=dict)
     flagged: list[FlaggedValue] = field(default_factory=list)
     redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
-    _seen_flagged: set[str] = field(default_factory=set, repr=False)
+    _flag_index: dict[str, FlaggedValue] = field(default_factory=dict, repr=False)
+    _flag_created: dict[str, int] = field(default_factory=dict, repr=False)
+    _flag_touched: dict[str, int] = field(default_factory=dict, repr=False)
+    _flag_calls: int = field(default=0, repr=False)
     _flags_muted: bool = field(default=False, repr=False)
 
     @contextmanager
@@ -68,6 +75,10 @@ class RedactionCollector:
     def accepts_flags(self) -> bool:
         """False inside ``flags_muted``: a value offered for review there would be discarded."""
         return not self._flags_muted
+
+    def flag_mark(self) -> int:
+        """A mark for ``flag_value``'s ``supersede_since``: flags raised after it carry a later call number."""
+        return self._flag_calls
 
     def record_redacted_value(self, original: str, placeholder: str) -> None:
         """Remember which placeholder an auto-redacted value was given.
@@ -97,6 +108,8 @@ class RedactionCollector:
         confidence: ConfidenceLevel,
         context: str,
         reason: str,
+        *,
+        supersede_since: int | None = None,
     ) -> None:
         """Flag a suspicious value for user review.
 
@@ -109,25 +122,39 @@ class RedactionCollector:
             confidence: Confidence level that this is PII
             context: Surrounding text for user review
             reason: Why this value was flagged
+            supersede_since: A ``flag_mark`` taken before a field's value was
+                traversed, for the flag on that whole value. A narrower pass
+                may already have flagged the same text inside it (a username
+                that is exactly a phone number): that is the same occurrence,
+                so it is not counted twice, and a flag the traversal created
+                takes this category, context and reason, its confidence never
+                lowered. A flag from another occurrence keeps its own.
         """
         if self._flags_muted:
             return
-        # Deduplicate - same value might be found multiple times
-        if value in self._seen_flagged:
-            # Increment occurrence count (keep first context seen)
-            next(f for f in self.flagged if f.original_value == value).occurrences += 1
-            return
-
-        self._seen_flagged.add(value)
-        self.flagged.append(
-            FlaggedValue(
+        call = self._flag_calls
+        self._flag_calls += 1
+        existing = self._flag_index.get(value)
+        if existing is None:
+            entry = FlaggedValue(
                 original_value=value,
                 category=category,
                 confidence=confidence,
                 context=context,
                 reason=reason,
             )
-        )
+            self.flagged.append(entry)
+            self._flag_index[value] = entry
+            self._flag_created[value] = call
+        elif supersede_since is not None and self._flag_touched[value] >= supersede_since:
+            if self._flag_created[value] >= supersede_since:
+                existing.category, existing.context, existing.reason = category, context, reason
+                if _CONFIDENCE_RANK[confidence] > _CONFIDENCE_RANK[existing.confidence]:
+                    existing.confidence = confidence
+        else:
+            # The same value found again (keep the first context seen)
+            existing.occurrences += 1
+        self._flag_touched[value] = call
 
     def drop_flagged(self, values: set[str]) -> int:
         """Remove flagged entries for values that no longer occur in the HAR.
@@ -143,7 +170,10 @@ class RedactionCollector:
         """
         before = len(self.flagged)
         self.flagged = [f for f in self.flagged if f.original_value not in values]
-        self._seen_flagged -= values
+        for value in values:
+            self._flag_index.pop(value, None)
+            self._flag_created.pop(value, None)
+            self._flag_touched.pop(value, None)
         return before - len(self.flagged)
 
     def to_report(self, input_file: str, output_file: str, salt: str) -> SanitizationReport:

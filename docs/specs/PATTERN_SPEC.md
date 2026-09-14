@@ -521,8 +521,9 @@ Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group 
 with one warning per distinct pattern (compilation is cached), so one bad pattern doesn't break the entire system. The
 HTML engine's pass 0 and `check_for_pii` both compile custom `pii.json` patterns through it, so every flag a pattern
 names (`IGNORECASE`, `MULTILINE`, `DOTALL`) holds in both, and an invalid one crashes neither. A pattern file is user
-input: `flags` may be one name or a list, an entry that is not a flag name is ignored with a warning, and a `regex` that
-is not a string skips the pattern with a warning.
+input: `flags` may be one name or any collection of names, an entry that is not a flag name is ignored with a warning, a
+pre-compiled `re.Pattern` keeps its own flags, and any other `regex` that is not a string skips the pattern with a
+warning (once per distinct pattern).
 
 ### Cache
 
@@ -626,8 +627,9 @@ Classifies a field whose key names a device identity and whose value has that id
 form must end with the identity (`SERIAL_KEY_RE`, `MAC_KEY_RE`): a serial (`serial`, `serial_number`, `serial_num`,
 `serial_no`, or exactly `sn`) or a MAC (`mac`, `mac_address`, `hwaddr`, ...), optionally numbered (`macaddress_5`). The
 last word may carry a glued prefix (`cmserialnumber`, `wanmacaddr`, `ethmac`) — except a word starting `hmac`, a message
-authentication code. A key whose identity is not last (`serialNumberLabel`, `MacAddressFilterEnabled`, `macaddr.wan`) is
-not an identity key.
+authentication code; a key containing `hmac` is read as words only, since its written form has no word boundary to
+exclude it by (`userHMAC`). A key whose identity is not last (`serialNumberLabel`, `MacAddressFilterEnabled`,
+`macaddr.wan`) is not an identity key.
 
 A serial value is one whitespace-free token of five or more characters carrying a digit that is not wholly a placeholder
 (`is_fully_redacted()`: `SN0000001234` contains a zero run and is still a serial) — the digit rule is what excludes
@@ -738,7 +740,8 @@ Used to avoid flagging cookie headers that only contain metadata.
 1. **Underscore keys are metadata** — Any key starting with `_` in a pattern file is skipped during merge. This is a
    convention for comments and metadata.
 1. **Lists extend, dicts update** — This is the universal merge semantic. Custom lists are appended (never replace),
-   custom dict keys override (but don't delete existing keys).
+   custom dict keys override (but don't delete existing keys) — except a custom `pii.json` pattern named like a built-in
+   with a pass of its own (`DEDICATED_PASS_PATTERNS`), which is ignored with one warning per name.
 1. **Name normalization** — Built-in domain names normalize hyphens to underscores: `network-device` and
    `network_device` resolve to the same file.
 1. **Cache is session-scoped** — Pattern files are not re-read after initial load within a session. File changes require

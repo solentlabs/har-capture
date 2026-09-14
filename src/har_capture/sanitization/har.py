@@ -54,7 +54,9 @@ from har_capture.patterns import (
     is_ipv6_host_address,
     is_redacted,
     is_ssid_key,
+    iter_json_strings,
     iter_url_credentials,
+    json_members,
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
@@ -302,6 +304,13 @@ def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _Cal
 # every route, as they do in the HTML engine. None: the built-in patterns.
 _CALL_PATTERNS_CTX: contextvars.ContextVar[_CallPatterns | None] = contextvars.ContextVar(
     "har_capture_call_patterns", default=None
+)
+
+# The credentials the capture being sanitized submits (_scan_submitted_credentials):
+# a response echoing one under a credential-named key is redacted, whatever its
+# shape. Empty outside sanitize_har.
+_SUBMITTED_CREDENTIALS_CTX: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "har_capture_submitted_credentials", default=frozenset()
 )
 
 
@@ -773,34 +782,34 @@ def _sanitize_form_urlencoded(
     Returns:
         Sanitized text with sensitive field values redacted
     """
-    login_shaped = any(
-        is_sensitive_field(pair.split("=", 1)[0]) or is_flaggable_field(pair.split("=", 1)[0])
-        for pair in text.split("&")
-        if "=" in pair
-    )
+    # A name is judged decoded, as validate judges it: `user%5Bpass%5D` is
+    # the field `user[pass]`.
+    names = [urllib.parse.unquote_plus(pair.split("=", 1)[0]) for pair in text.split("&") if "=" in pair]
+    login_shaped = any(is_sensitive_field(name) or is_flaggable_field(name) for name in names)
 
     pairs = []
     for pair in text.split("&"):
         if "=" in pair:
             key, value = pair.split("=", 1)
+            name = urllib.parse.unquote_plus(key)
             # Hash the percent-decoded value so the placeholder matches the
             # params copy (HAR stores params decoded).
             decoded_value = urllib.parse.unquote_plus(value)
             # Same order as the params copy and the query tree.
-            if is_sensitive_field(key):
+            if is_sensitive_field(name):
                 value = _redact_value(decoded_value, hasher, "FIELD", collector)
             elif is_base64_credential(value) or is_base64_credential(decoded_value):
                 # base64(user:pass) — check the raw and percent-decoded forms.
                 value = _redact_value(decoded_value, hasher, "AUTH", collector)
             elif (payload := _sanitize_payload_field(value, hasher, collector)) is not None:
                 value = payload
-            elif is_flaggable_field(key) and collector and value:
+            elif is_flaggable_field(name) and collector and value:
                 collector.flag_value(
                     decoded_value,
                     "field",
                     ConfidenceLevel.MEDIUM,
-                    f"form field '{key}'",
-                    f"Flaggable field name '{key}' in form data",
+                    f"form field '{name}'",
+                    f"Flaggable field name '{name}' in form data",
                 )
             elif login_shaped and collector and is_base64_decodable_text(decoded_value):
                 # Likely a vendor-encoded credential (Sercomm/Hitron style).
@@ -810,8 +819,8 @@ def _sanitize_form_urlencoded(
                     decoded_value,
                     "credential",
                     ConfidenceLevel.MEDIUM,
-                    f"form field '{key}'",
-                    f"Base64-decodable value in unrecognized field '{key}' of a login-shaped form POST",
+                    f"form field '{name}'",
+                    f"Base64-decodable value in unrecognized field '{name}' of a login-shaped form POST",
                 )
             pairs.append(f"{key}={value}")
         else:
@@ -1097,6 +1106,15 @@ def _sanitize_deep_strings(data: Any, hasher: Hasher | None, collector: Redactio
     return root[0]
 
 
+def _offerable(text: str) -> bool:
+    """False for a field value the text passes turned wholly into a placeholder: nothing is left to review.
+
+    Offering it would also be harmful: in static mode every email becomes
+    `x@x.invalid`, and redacting that in the review would rewrite them all.
+    """
+    return not is_fully_redacted(text, _active_call_patterns().custom_patterns)
+
+
 def _sanitize_credential_value(
     key: str,
     value: str,
@@ -1113,12 +1131,18 @@ def _sanitize_credential_value(
     inside it, anything else is redacted — and so is prose where no review
     can reach it (no collector, or flags muted inside an encoded payload).
     """
+    # A served value equal to a credential the capture submits is that
+    # credential echoed back, whatever its shape, unless it is a status word
+    # (`Yes`, `No`): those are kept wherever they are served.
     action = credential_value_action(value) if served else "redact"
+    if action == "review" and value in _SUBMITTED_CREDENTIALS_CTX.get():
+        action = "redact"
     reviewable = action == "review" and collector is not None and collector.accepts_flags
     if action != "keep" and not reviewable:
         return _redact_value(value, hasher, "FIELD", collector)
+    mark = collector.flag_mark() if collector is not None else 0
     result: str = _sanitize_json_recursive(value, hasher, collector, depth + 1, served=served)
-    if reviewable and collector is not None:
+    if reviewable and collector is not None and _offerable(result):
         # The text as the output holds it, so the review can replace it. LOW:
         # every such value across the fleet is UI text, so the review shows
         # it without pre-selecting it for redaction.
@@ -1128,6 +1152,7 @@ def _sanitize_credential_value(
             ConfidenceLevel.LOW,
             f"JSON key '{key}'",
             f"Text under credential-named key '{key}' in a response: a UI string, or a passphrase with spaces",
+            supersede_since=mark,
         )
     return result
 
@@ -1187,28 +1212,34 @@ def _sanitize_json_recursive(
                 result[out_key] = hasher.hash_generic(str(value), "SERIAL") if hasher else "***SERIAL***"
             elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
                 # Flagged as the output holds it, so the review can replace it.
+                mark = collector.flag_mark()
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
                 )
-                collector.flag_value(
-                    result[out_key],
-                    "field",
-                    ConfidenceLevel.MEDIUM,
-                    f"JSON key '{key}'",
-                    f"Flaggable field name '{key}' in JSON",
-                )
+                if _offerable(result[out_key]):
+                    collector.flag_value(
+                        result[out_key],
+                        "field",
+                        ConfidenceLevel.MEDIUM,
+                        f"JSON key '{key}'",
+                        f"Flaggable field name '{key}' in JSON",
+                        supersede_since=mark,
+                    )
             elif collector and _is_reviewable_ssid(key, value):
                 # Flagged as the output holds it, so the review can replace it.
+                mark = collector.flag_mark()
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
                 )
-                collector.flag_value(
-                    result[out_key],
-                    "wifi_ssid",
-                    ConfidenceLevel.MEDIUM,
-                    f"JSON key '{key}'",
-                    f"Wi-Fi network name under SSID key '{key}' in JSON",
-                )
+                if _offerable(result[out_key]):
+                    collector.flag_value(
+                        result[out_key],
+                        "wifi_ssid",
+                        ConfidenceLevel.MEDIUM,
+                        f"JSON key '{key}'",
+                        f"Wi-Fi network name under SSID key '{key}' in JSON",
+                        supersede_since=mark,
+                    )
             else:
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
@@ -2063,6 +2094,80 @@ def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
     return None
 
 
+def _scan_submitted_credentials(entries: list[Any]) -> frozenset[str]:
+    """Every value the capture's requests submit under a credential-named field.
+
+    POST JSON members (to ``JSON_MAX_DEPTH``), form data (text and params) and
+    the ``queryString`` array, judged by ``is_sensitive_field``. Read before
+    sanitizing, so a response served before the request that submits the same
+    value is matched too. Empty values and this sanitizer's own placeholders
+    are not credentials. XML, multipart and base64-wrapped bodies, and a URL
+    query with no ``queryString`` array, are not read: a served copy of a
+    value submitted only there is judged by its shape alone, which offers
+    prose for review (none of these occurs in the fleet's requests).
+    """
+    found: set[str] = set()
+    for entry in entries:
+        request = entry.get("request") if isinstance(entry, dict) else None
+        if not isinstance(request, dict):
+            continue
+        post = request.get("postData")
+        post = post if isinstance(post, dict) else {}
+        pairs: list[tuple[str, Any]] = []
+        for params in (request.get("queryString"), post.get("params")):
+            for param in params if isinstance(params, list) else ():
+                if isinstance(param, dict):
+                    pairs.append((str(param.get("name", "")), param.get("value")))
+        text = post.get("text")
+        if isinstance(text, str) and text:
+            data = parse_json_container(text)
+            if data is not None:
+                pairs.extend(_json_members_to_depth(data))
+            elif "=" in text:
+                for pair in text.split("&"):
+                    key, _, value = pair.partition("=")
+                    pairs.append((urllib.parse.unquote_plus(key), urllib.parse.unquote_plus(value)))
+        found.update(
+            value
+            for key, value in pairs
+            if isinstance(value, str) and value and not _is_own_placeholder(value) and is_sensitive_field(key)
+        )
+    return frozenset(found)
+
+
+def _json_members_to_depth(data: Any) -> list[tuple[str, Any]]:
+    """Every ``(key, value)`` member of a parsed JSON container, down to ``JSON_MAX_DEPTH``."""
+    members: list[tuple[str, Any]] = []
+    stack: list[tuple[Any, int]] = [(data, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > JSON_MAX_DEPTH:
+            continue
+        children = json_members(node) if isinstance(node, dict) else [("", item) for item in node]
+        if isinstance(node, dict):
+            members.extend(children)
+        stack.extend((value, depth + 1) for _, value in children if isinstance(value, dict | list))
+    return members
+
+
+def _readable_text(har_data: dict[str, Any]) -> str:
+    """Every string in a HAR, with each JSON body's decoded strings: what the review's find-and-replace can reach."""
+    parts: list[str] = []
+    stack: list[Any] = [har_data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, str):
+            parts.append(node)
+            parsed = parse_json_container(node)
+            if parsed is not None:
+                parts.extend(iter_json_strings(parsed))
+    return "\n".join(parts)
+
+
 def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
     """Map entry index to the URL credential its request carries.
 
@@ -2164,9 +2269,7 @@ def _is_propagation_eligible(value: str) -> bool:
     return not is_safe_value(value)
 
 
-def _propagation_search_keys(
-    registry: dict[str, str], known_secrets: frozenset[str] = frozenset()
-) -> list[tuple[str, str]]:
+def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
     """Expand eligible redacted values into the needles to search for.
 
     Each value contributes its literal form plus its percent-encoded form, so a
@@ -2180,16 +2283,13 @@ def _propagation_search_keys(
 
     Args:
         registry: Original value -> placeholder, from RedactionCollector
-        known_secrets: Values searched for whatever their shape: each is both
-            redacted somewhere as a credential and offered for review elsewhere,
-            so every textual match is the same secret
 
     Returns:
         (needle, placeholder) pairs, longest needle first
     """
     needles: dict[str, str] = {}
     for original, placeholder in registry.items():
-        if original not in known_secrets and not _is_propagation_eligible(original):
+        if not _is_propagation_eligible(original):
             continue
         needles.setdefault(original, placeholder)
         encoded = urllib.parse.quote(original, safe="")
@@ -2198,9 +2298,7 @@ def _propagation_search_keys(
     return sorted(needles.items(), key=lambda item: -len(item[0]))
 
 
-def _propagate_redacted_values(
-    har_data: dict[str, Any], registry: dict[str, str], known_secrets: frozenset[str] = frozenset()
-) -> int:
+def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str]) -> int:
     """Replace remaining verbatim occurrences of already-redacted values in-place.
 
     Substitution is one token for one token, so path segment count, query shape,
@@ -2209,13 +2307,11 @@ def _propagate_redacted_values(
     Args:
         har_data: The sanitized HAR data (mutated in place)
         registry: Original value -> placeholder, from RedactionCollector
-        known_secrets: Values propagated whatever their shape (see
-            ``_propagation_search_keys``)
 
     Returns:
         Number of occurrences replaced
     """
-    search_keys = _propagation_search_keys(registry, known_secrets)
+    search_keys = _propagation_search_keys(registry)
     if not search_keys:
         return 0
 
@@ -2316,23 +2412,31 @@ def sanitize_har(
     # is looking for.
     orig_entries = har_data.get("log", {}).get("entries", [])
     url_credentials = _scan_url_credentials(orig_entries) if isinstance(orig_entries, list) else {}
+    with _field_patterns_scope(custom_patterns):
+        submitted = (
+            _scan_submitted_credentials(orig_entries) if isinstance(orig_entries, list) else frozenset()
+        )
 
     # Sanitize all entries using the shared collector, the call's patterns
     # resolved once for all of them.
     if "entries" in log and isinstance(log["entries"], list):
         sanitized_entries = []
-        with _call_patterns_scope(custom_patterns):
-            for i, entry in enumerate(log["entries"]):
-                sanitized_entries.append(
-                    sanitize_entry(
-                        entry,
-                        custom_patterns=custom_patterns,
-                        collector=collector,
-                        heuristics=heuristics,
-                        _skip_copy=True,
-                        _url_credential=url_credentials.get(i),
+        submitted_token = _SUBMITTED_CREDENTIALS_CTX.set(submitted)
+        try:
+            with _call_patterns_scope(custom_patterns):
+                for i, entry in enumerate(log["entries"]):
+                    sanitized_entries.append(
+                        sanitize_entry(
+                            entry,
+                            custom_patterns=custom_patterns,
+                            collector=collector,
+                            heuristics=heuristics,
+                            _skip_copy=True,
+                            _url_credential=url_credentials.get(i),
+                        )
                     )
-                )
+        finally:
+            _SUBMITTED_CREDENTIALS_CTX.reset(submitted_token)
         log["entries"] = sanitized_entries
 
     # Sanitize pages (if present) using the shared collector
@@ -2375,21 +2479,23 @@ def sanitize_har(
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
     # surfaces with no field name to match (most commonly a URL path segment).
-    # A value offered for review as a credential that is redacted as one
-    # elsewhere (a served echo of a submitted passphrase) is a known secret:
-    # it is propagated whatever its shape.
-    known_secrets = frozenset(
-        f.original_value
-        for f in collector.flagged
-        if f.category == "credential" and f.original_value in collector.redacted_values
-    )
-    propagated = _propagate_redacted_values(result, collector.redacted_values, known_secrets)
+    propagated = _propagate_redacted_values(result, collector.redacted_values)
     if propagated:
         collector.auto_redacted_counts["propagated"] = propagated
-        # A propagated value has no surviving occurrence left, so asking the user
-        # to review it is a decision with no effect. Drop it from the review queue.
+        # A value with no surviving occurrence left would give the user a review
+        # decision with no effect, so it leaves the review queue. One that
+        # survives in a form the sweep does not match (`\/` in a PHP body, an
+        # ASCII-escaped JSON string) stays offered.
+        # Only a flagged value can leave the queue, so the flagged values are
+        # the ones searched: searching every redacted value made this
+        # quadratic in a capture whose session cookie rotates per request.
+        readable = _readable_text(result)
         collector.drop_flagged(
-            {v for v in collector.redacted_values if v in known_secrets or _is_propagation_eligible(v)}
+            {
+                v
+                for v in (flagged.original_value for flagged in collector.flagged)
+                if v in collector.redacted_values and _is_propagation_eligible(v) and v not in readable
+            }
         )
 
     # Create report with all collected data
@@ -2566,8 +2672,10 @@ def apply_user_redactions(
     except (TypeError, ValueError) as e:
         raise HarValidationError(f"Failed to serialize HAR data: {e}") from e
 
-    # Apply each redaction
-    for item in redactions_to_apply:
+    # Apply each redaction, longest original first: a value can contain
+    # another offered value (a username holding a phone number), and
+    # replacing the inner one first would leave the outer unmatched.
+    for item in sorted(redactions_to_apply, key=lambda flagged: len(flagged.original_value), reverse=True):
         try:
             # Generate redacted value via the category→prefix map, so
             # user redactions carry the same placeholder prefixes as

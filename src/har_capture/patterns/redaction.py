@@ -328,14 +328,42 @@ _PROSE_RE = re.compile(r"\S\s+\S")
 # credentials may never produce. An unrecognized leading token may be the start
 # of a secret, so the list stays closed.
 KNOWN_AUTH_SCHEMES: frozenset[str] = frozenset({"basic", "bearer", "digest", "ntlm", "negotiate", "oauth"})
-# An RFC 7235 credential: a known scheme, then one token68 or a list of
-# auth-params (Digest's `username="a", response="…"`).
-_AUTH_PARAM = r"""[\w-]+=(?:"[^"]*"|[^\s,]*)"""
-_AUTH_CREDENTIALS_RE = re.compile(
-    r"(?:" + "|".join(sorted(KNOWN_AUTH_SCHEMES)) + r")\s+"
-    r"(?:[A-Za-z0-9._~+/-]+=*|" + _AUTH_PARAM + r"(?:\s*,\s*" + _AUTH_PARAM + r")*)",
-    re.IGNORECASE,
+# An RFC 7235 credential value: a known scheme, then its credentials — one
+# token68 or a list of auth-params (Digest's `username="a", response="…"`).
+_SCHEME_CREDENTIALS_RE = re.compile(
+    r"(" + "|".join(sorted(KNOWN_AUTH_SCHEMES)) + r")\s+(\S.*)", re.IGNORECASE | re.DOTALL
 )
+_AUTH_PARAM = r"""[\w-]+=(?:"[^"]*"|[^\s,]*)"""
+_AUTH_PARAMS_RE = re.compile(_AUTH_PARAM + r"(?:\s*,\s*" + _AUTH_PARAM + r")*")
+_TOKEN68_RE = re.compile(r"[A-Za-z0-9._~+/-]{16,}=*")
+# A PEM block: its BEGIN line, any `Name: value` headers, then base64 body
+# text (lines flattened to spaces too). The END line is not required: a
+# truncated block is still key material.
+_PEM_BLOCK_RE = re.compile(r"-----BEGIN [A-Z0-9 ]+-----\s+(?:[\w-]+:[^\n]*\n\s*)*[A-Za-z0-9+/]{16,}")
+
+
+def _is_format_credential(value: str) -> bool:
+    """True for a value whose format proves it a credential, whatever words it holds.
+
+    A PEM block (its END line not required), or a known auth scheme followed by credentials: for Basic,
+    base64 of ``user:pass``; for the others, auth-params or a token68 of 16 or
+    more characters that holds a digit or symbol, or mixes case at least twice
+    each way. A scheme word followed by prose (``Basic settings``, ``Bearer
+    token``, ``OAuth 2.0``) is not a credential.
+    """
+    if _PEM_BLOCK_RE.search(value):
+        return True
+    match = _SCHEME_CREDENTIALS_RE.fullmatch(value)
+    if match is None:
+        return False
+    scheme, rest = match.group(1).lower(), match.group(2).strip()
+    if scheme == "basic":
+        return is_base64_credential(rest)
+    if _AUTH_PARAMS_RE.fullmatch(rest):
+        return True
+    return bool(_TOKEN68_RE.fullmatch(rest)) and (
+        not rest.isalpha() or (sum(c.isupper() for c in rest) >= 2 and sum(c.islower() for c in rest) >= 2)
+    )
 
 
 def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
@@ -345,10 +373,10 @@ def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
     table's label for UI text about credentials (`PAGE_GENERAL_SET_PASSWORD`,
     even a bare `password`), so its name does not make the value certain.
     A button word is kept; prose is offered for the user's review, since a
-    passphrase can hold spaces — unless its format proves a credential (an
-    RFC 7235 ``Scheme credentials`` value, a PEM block); anything else is
-    redacted. A value a client
-    submits is always redacted — the caller decides which one it holds.
+    passphrase can hold spaces — unless its format proves a credential
+    (``_is_format_credential``: an Authorization-style value, a PEM block);
+    anything else is redacted. A value a client submits is always redacted —
+    the caller decides which one it holds.
 
     Args:
         value: A non-empty value the caller has not recognized as redacted
@@ -359,9 +387,7 @@ def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
     stripped = value.strip()
     if stripped.lower() in _CREDENTIAL_STATUS_WORDS:
         return "keep"
-    # Words a format proves are a credential: an Authorization-style value, a
-    # PEM key or certificate block.
-    if _AUTH_CREDENTIALS_RE.fullmatch(stripped) or "-----BEGIN " in stripped:
+    if _is_format_credential(stripped):
         return "redact"
     if _PROSE_RE.search(value):
         return "review"
@@ -409,14 +435,18 @@ def classify_identity_field(key: str, value: object) -> str | None:
     # Read as words (`CmMacAddress` → `cm_mac_address`) and as written: an
     # acronym run into a word (`HWaddr`, `MACaddress`, `SERIALnumber`) splits
     # at the wrong letter, but its lowercase spelling still names the field.
-    forms = (_key_words(key), key.lower())
+    # The written form holds no word boundary to exclude `hmac` by, so a key
+    # containing it is read as words only (`userHMAC` is a message
+    # authentication code; `ethmac` still reads as `eth` + `mac`).
+    words, written = _key_words(key), key.lower()
     if (
-        any(SERIAL_KEY_RE.search(form) for form in forms)
+        any(SERIAL_KEY_RE.search(form) for form in (words, written))
         and _SERIAL_VALUE_RE.fullmatch(value)
         and not is_fully_redacted(value)
     ):
         return "serial_number"
-    if any(MAC_KEY_RE.search(form) for form in forms) and is_mac_value(value):
+    mac_forms = (words,) if "hmac" in written else (words, written)
+    if any(MAC_KEY_RE.search(form) for form in mac_forms) and is_mac_value(value):
         return "mac_address"
     return None
 

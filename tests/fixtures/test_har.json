@@ -726,6 +726,7 @@
       {"id": "xml_lone_surrogate",  "mime": "text/xml",                 "text": "<a><password>\ud800x</password></a>",                            "absent": ["\ud800x"],                  "present": ["<a><password>FIELD_"]},
       {"id": "plain_text_mac",      "mime": "text/plain",               "text": "mac=3C:7A:8A:12:34:56 wan 73.12.34.56",                          "absent": ["3C:7A:8A:12:34:56", "73.12.34.56"], "present": ["mac=02:"]},
       {"id": "json_shadowed_flag_tier", "mime": "application/json",       "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}",            "absent": ["bobsmith"],                  "present": ["{\"username\": \"admin\"}"]},
+      {"id": "form_percent_encoded_name", "mime": "application/x-www-form-urlencoded", "text": "user%5Bpass%5D=s3cretValue9&p%61ssword=hunter2x&x=1", "absent": ["s3cretValue9", "hunter2x"], "present": ["user%5Bpass%5D=FIELD_", "p%61ssword=FIELD_", "&x=1"]},
       {"id": "labeled_values_hasher_only", "mime": "text/plain",           "text": "Serial Number: 4131N12345678 <span>Password:</span><span>hunter2x</span>", "absent": ["4131N12345678", "hunter2x"], "present": ["Serial Number: SERIAL_", "<span>Password:</span><span>PASS_"]}
     ]
   },
@@ -778,19 +779,39 @@
     ]
   },
   "echoed_credential_cases": {
-    "_comment": "A value the sanitizer redacts as a credential somewhere in a capture is redacted wherever else it is served, even as prose that alone would only be offered for review: the tool already knows it is a secret. entries: [via, JSON body] in capture order; the secret must not survive and must not be offered for review.",
+    "_comment": "Credentials a capture submits and echoes. A served value under a credential-named key that equals a credential some request submits (POST JSON, form data, params, query) is redacted in place, whatever its shape and however its body escapes it; nothing is replaced by substring beyond Pass 1b's eligibility bar, and a review item is withdrawn only when its value no longer survives anywhere readable. entries: [via, mime, body] in capture order (via post | response | url, where body is the request URL); gone: must survive in no readable string; present: must remain in the output; offered: must still be flagged for review.",
     "cases": [
-      {"id": "post_then_served_echo", "entries": [["post", "{\"wifi_password\": \"correct horse battery staple\"}"], ["response", "{\"wifi_password\": \"correct horse battery staple\"}"]], "secret": "correct horse battery staple"},
-      {"id": "served_echo_then_post", "entries": [["response", "{\"wifi_password\": \"correct horse battery staple\"}"], ["post", "{\"wifi_password\": \"correct horse battery staple\"}"]], "secret": "correct horse battery staple"},
-      {"id": "served_prose_alone_offered", "entries": [["response", "{\"PAGE_SET_PASSWORD\": \"Set a new password\"}"]], "secret": null}
+      {"id": "post_then_served_echo", "entries": [["post", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"], ["response", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"]], "gone": ["correct horse battery staple"], "present": [], "offered": []},
+      {"id": "served_echo_then_post", "entries": [["response", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"], ["post", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"]], "gone": ["correct horse battery staple"], "present": [], "offered": []},
+      {"id": "php_escaped_echo", "entries": [["post", "application/json", "{\"wifi_password\": \"my/home net 7\"}"], ["response", "application/json", "{\"wifi_password\": \"my\\/home net 7\"}"]], "gone": ["my/home net 7"], "present": [], "offered": []},
+      {"id": "form_submitted_echo", "entries": [["post", "application/x-www-form-urlencoded", "wifi_password=my+home+net+7"], ["response", "application/json", "{\"wifi_password\": \"my home net 7\"}"]], "gone": ["my home net 7"], "present": [], "offered": []},
+      {"id": "echo_rewritten_by_text_passes", "entries": [["post", "application/json", "{\"wifi_password\": \"me@home.net rocks 42\"}"], ["response", "application/json", "{\"wifi_password\": \"me@home.net rocks 42\"}"]], "gone": ["rocks 42"], "present": [], "offered": []},
+      {"id": "short_password_not_replaced_elsewhere", "entries": [["post", "application/json", "{\"password\": \"my home\"}"], ["response", "application/json", "{\"wifi_password\": \"my home\"}"], ["response", "text/html", "<p>Welcome to my home network</p>"]], "gone": [], "present": ["Welcome to my home network"], "offered": []},
+      {"id": "escaped_copy_keeps_review_item", "entries": [["post", "application/json", "{\"password\": \"abc/def1234567890xyz\", \"token\": \"tok1234567890abcdef\"}"], ["url", "", "http://192.168.0.1/session/tok1234567890abcdef"], ["response", "application/json", "{\"username\": \"abc\\/def1234567890xyz\"}"]], "gone": [], "present": [], "offered": ["abc/def1234567890xyz"]},
+      {"id": "served_prose_alone_offered", "entries": [["response", "application/json", "{\"PAGE_SET_PASSWORD\": \"Set a new password\"}"]], "gone": [], "present": ["Set a new password"], "offered": ["Set a new password"]},
+      {"id": "status_word_echo_kept", "entries": [["post", "application/json", "{\"PasswordEnable\": \"Yes\"}"], ["response", "application/json", "{\"PasswordEnable\": \"Yes\"}"]], "gone": [], "present": ["Yes"], "offered": []},
+      {"id": "form_status_word_echo_kept", "entries": [["post", "application/x-www-form-urlencoded", "token_required=No"], ["response", "application/json", "{\"PasswordRequired\": \"No\"}"]], "gone": [], "present": ["No"], "offered": []}
+    ]
+  },
+  "flag_label_cases": {
+    "_comment": "The review item for a value keeps the label (category, confidence) its first occurrence gave it, and counts each occurrence once. A field's flag on its whole value takes over only a flag raised inside that same value (a username that is exactly a phone number), never one from another occurrence. entries: [via, mime, body] as in echoed_credential_cases; flagged: [value, category, confidence, occurrences] per item.",
+    "cases": [
+      {"id": "other_occurrence_keeps_its_label", "entries": [["url", "", "http://192.168.0.1/api/sk-abcdefghijklmnop1234/status"], ["response", "application/json", "{\"username\": \"sk-abcdefghijklmnop1234\"}"]], "flagged": [["sk-abcdefghijklmnop1234", "api_key", "high", 2]]},
+      {"id": "first_occurrence_labels_field_first", "entries": [["response", "application/json", "{\"username\": \"John Smith\"}"], ["response", "application/json", "{\"wifi_passphrase\": \"John Smith\"}"]], "flagged": [["John Smith", "field", "medium", 2]]},
+      {"id": "first_occurrence_labels_credential_first", "entries": [["response", "application/json", "{\"wifi_passphrase\": \"John Smith\"}"], ["response", "application/json", "{\"username\": \"John Smith\"}"]], "flagged": [["John Smith", "credential", "low", 2]]},
+      {"id": "whole_value_phone_counted_once", "entries": [["response", "application/json", "{\"username\": \"555-123-4567\"}"]], "flagged": [["555-123-4567", "field", "medium", 1]]},
+      {"id": "whole_value_phone_twice", "entries": [["response", "application/json", "{\"username\": \"555-123-4567\"}"], ["response", "application/json", "{\"username\": \"555-123-4567\"}"]], "flagged": [["555-123-4567", "field", "medium", 2]]}
     ]
   },
   "flag_reachability_cases": {
-    "_comment": "Every value the JSON walker offers for review is flagged as the output holds it (after the string patterns), so choosing to redact it in the review removes it. text: a response JSON body; flagged: [category, regex] per value offered.",
+    "_comment": "Every value the JSON walker offers for review is flagged as the output holds it (after the string patterns), so choosing to redact it in the review removes it. text: a response JSON body; flagged: [category, regex] per value offered. gone_after_review: text that must not survive once every offered value is redacted \u2014 an outer value is replaced before the inner one it contains.",
     "cases": [
       {"id": "flag_tier_field_with_address", "text": "{\"username\": \"bob at 192.168.1.5\"}", "flagged": [["field", "^bob at 10\\.255\\.\\d{1,3}\\.\\d{1,3}$"]]},
       {"id": "ssid_with_email", "text": "{\"ssid\": \"Net of bob@example.com\"}", "flagged": [["wifi_ssid", "^Net of user_[0-9a-f]+@redacted\\.invalid$"]]},
-      {"id": "served_prose_with_email", "text": "{\"wifi_passphrase\": \"admin@home.net rocks 42\"}", "flagged": [["credential", "^user_[0-9a-f]+@redacted\\.invalid rocks 42$"]]}
+      {"id": "served_prose_with_email", "text": "{\"wifi_passphrase\": \"admin@home.net rocks 42\"}", "flagged": [["credential", "^user_[0-9a-f]+@redacted\\.invalid rocks 42$"]]},
+      {"id": "flag_tier_field_holding_phone", "text": "{\"username\": \"bob 555-123-4567\"}", "flagged": [["phone", "^555-123-4567$"], ["field", "^bob 555-123-4567$"]], "gone_after_review": ["bob"]},
+      {"id": "flag_tier_value_wholly_our_placeholder", "text": "{\"username\": \"bob@example.com\"}", "flagged": []},
+      {"id": "flag_tier_value_is_a_phone", "text": "{\"username\": \"555-123-4567\"}", "flagged": [["field", "^555-123-4567$"]]}
     ]
   },
   "ssid_safe_value_cases": {

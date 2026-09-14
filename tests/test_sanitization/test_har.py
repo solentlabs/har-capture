@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from har_capture.patterns import Hasher, decode_base64_payload, query_param_segment
+from har_capture.patterns import Hasher, decode_base64_payload, parse_json_container, query_param_segment
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
@@ -4669,6 +4669,7 @@ SERVED_CREDENTIAL_CASES = _HAR_FIXTURE["served_credential_cases"]["cases"]
 PATTERN_FILE_ROUTE_CASES = _HAR_FIXTURE["pattern_file_route_cases"]["cases"]
 ECHOED_CREDENTIAL_CASES = _HAR_FIXTURE["echoed_credential_cases"]["cases"]
 FLAG_REACHABILITY_CASES = _HAR_FIXTURE["flag_reachability_cases"]["cases"]
+FLAG_LABEL_CASES = _HAR_FIXTURE["flag_label_cases"]["cases"]
 SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
 
 
@@ -4867,42 +4868,83 @@ class TestPatternFilePassOnEveryRoute:
             assert kept in out
 
 
+def _readable_strings(node: Any) -> list[str]:
+    """Every string in a HAR, and every decoded string of a body that is JSON."""
+    found: list[str] = []
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            found.append(item)
+            parsed = parse_json_container(item)
+            if parsed is not None:
+                stack.append(parsed)
+    return found
+
+
+def _entries_from_rows(rows: list[list[str]]) -> list[dict[str, Any]]:
+    """HAR entries from fixture rows ``[via, mime, body]``: via is post, url (body is the URL) or response."""
+    entries = []
+    for via, mime, body in rows:
+        if via == "post":
+            entries.append(
+                {
+                    "request": {
+                        "method": "POST",
+                        "url": "http://192.168.0.1/api",
+                        "headers": [],
+                        "postData": {"mimeType": mime, "text": body},
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {"text": "", "mimeType": "text/plain"},
+                    },
+                }
+            )
+        elif via == "url":
+            entry = _entry_with_response_body("")
+            entry["request"]["url"] = body
+            entries.append(entry)
+        else:
+            entry = _entry_with_response_body(body)
+            entry["response"]["content"]["mimeType"] = mime
+            entries.append(entry)
+    return entries
+
+
 class TestEchoedCredentials:
-    """A value redacted as a credential anywhere is redacted wherever else it is served."""
+    """A submitted credential is redacted where a response echoes it, and only there."""
 
     @pytest.mark.parametrize("case", ECHOED_CREDENTIAL_CASES, ids=[c["id"] for c in ECHOED_CREDENTIAL_CASES])
     def test_echo(self, case: dict) -> None:
-        entries = []
-        for via, body in case["entries"]:
-            if via == "post":
-                entries.append(
-                    {
-                        "request": {
-                            "method": "POST",
-                            "url": "http://192.168.0.1/api",
-                            "headers": [],
-                            "postData": {"mimeType": "application/json", "text": body},
-                        },
-                        "response": {
-                            "status": 200,
-                            "headers": [],
-                            "content": {"text": "", "mimeType": "text/plain"},
-                        },
-                    }
-                )
-            else:
-                entry = _entry_with_response_body(body)
-                entry["response"]["content"]["mimeType"] = "application/json"
-                entries.append(entry)
+        entries = _entries_from_rows(case["entries"])
         sanitized, report = sanitize_har(
             {"log": {"entries": entries}}, salt="echo", heuristics=HeuristicMode.FLAG
         )
-        dumped = json.dumps(sanitized["log"]["entries"])
-        if case["secret"] is None:
-            assert [f.category for f in report.flagged] == ["credential"]
-        else:
-            assert case["secret"] not in dumped
-            assert case["secret"] not in [f.original_value for f in report.flagged]
+        readable = _readable_strings(sanitized["log"]["entries"])
+        offered = [f.original_value for f in report.flagged]
+        for secret in case["gone"]:
+            assert not any(secret in text for text in readable)
+            assert secret not in offered
+        for kept in case["present"]:
+            assert any(kept in text for text in readable)
+        for value in case["offered"]:
+            assert value in offered
+
+
+@pytest.mark.parametrize("case", FLAG_LABEL_CASES, ids=[c["id"] for c in FLAG_LABEL_CASES])
+def test_review_item_label_and_count(case: dict) -> None:
+    """A review item keeps the label its first occurrence gave it, and counts each occurrence once."""
+    _, report = sanitize_har(
+        {"log": {"entries": _entries_from_rows(case["entries"])}}, salt="label", heuristics=HeuristicMode.FLAG
+    )
+    found = [[f.original_value, f.category, f.confidence.value, f.occurrences] for f in report.flagged]
+    assert found == case["flagged"]
 
 
 @pytest.mark.parametrize("case", FLAG_REACHABILITY_CASES, ids=[c["id"] for c in FLAG_REACHABILITY_CASES])
@@ -4920,6 +4962,7 @@ def test_flagged_json_value_is_reachable_by_review(case: dict) -> None:
         item.status = RedactionStatus.USER_REDACTED
     redacted = json.dumps(apply_user_redactions(sanitized, report))
     assert all(json.dumps(item.original_value)[1:-1] not in redacted for item in report.flagged)
+    assert all(text not in redacted for text in case.get("gone_after_review", []))
 
 
 @pytest.mark.parametrize("case", SSID_SAFE_VALUE_CASES, ids=[c["id"] for c in SSID_SAFE_VALUE_CASES])

@@ -33,7 +33,12 @@ import pytest
 from har_capture.patterns import load_allowlist, load_pii_patterns
 from har_capture.sanitization.html import (
     ACCOUNT_LABEL_RE,
+    CSRF_META_RE,
+    PASSWORD_FIELD_RE,
+    PASSWORD_INPUT_RE,
     SERIAL_LABEL_RE,
+    SESSION_TOKEN_RE,
+    WPS_PIN_LABEL_RE,
     check_for_pii,
     is_structural_value_sensitive,
     sanitize_html,
@@ -1113,13 +1118,24 @@ class TestSetItemHeuristicCoverage:
 
 
 @pytest.mark.parametrize(
-    ("name", "regex"), [("serial_number", SERIAL_LABEL_RE), ("account_id", ACCOUNT_LABEL_RE)]
+    ("name", "regex", "value_group"),
+    [
+        ("serial_number", SERIAL_LABEL_RE, 3),
+        ("account_id", ACCOUNT_LABEL_RE, 2),
+        ("wps_pin", WPS_PIN_LABEL_RE, 3),
+        ("password_input", PASSWORD_INPUT_RE, 2),
+        ("csrf_token", CSRF_META_RE, 2),
+        ("password_field", PASSWORD_FIELD_RE, 3),
+        ("session_token", SESSION_TOKEN_RE, 3),
+    ],
 )
-def test_pii_json_mirrors_label_regex(name: str, regex: re.Pattern[str]) -> None:
+def test_pii_json_mirrors_label_regex(name: str, regex: re.Pattern[str], value_group: int) -> None:
     """check_for_pii reads pii.json; its labeled patterns must be the sanitizer's regexes verbatim."""
     from har_capture.patterns import load_pii_patterns
 
-    assert load_pii_patterns()["patterns"][name]["regex"] == regex.pattern
+    definition = load_pii_patterns()["patterns"][name]
+    assert definition["regex"] == regex.pattern
+    assert definition.get("value_group") == value_group
 
 
 @pytest.mark.parametrize("case", PASS0_NUMBER_CASES, ids=[c["id"] for c in PASS0_NUMBER_CASES])
@@ -1137,15 +1153,29 @@ def test_pass0_numbers_match_text_path(case: dict) -> None:
     assert [f.original_value for f in collector.flagged] == case["flagged"]
 
 
-def test_tag_runs_stop_at_the_next_tag() -> None:
-    """No tag regex lets an attribute run cross a `<`.
+def test_tag_runs_are_quote_aware_and_bounded() -> None:
+    """No tag regex scans an attribute run with `[^>]*`.
 
-    `[^>]*` inside a tag makes a run of `<input ` or `<a ` with no closing `>`
-    quadratic, or cubic with two such runs (password inputs, CSRF meta tags:
-    minutes for 40 KB); `[^<>]*` stops each attempt at the next tag.
+    That run makes a series of unclosed `<input` or `<a` tags quadratic, or
+    cubic with two such runs (password inputs, CSRF meta tags: minutes for
+    40 KB). Tag regexes use the quote-aware `_TAG_RUN` instead, which stops at
+    `<` or `>` outside a quoted value.
     """
     import har_capture.sanitization.html as html_module
     from har_capture.patterns import load_pii_patterns
 
     assert "[^>]*" not in Path(html_module.__file__).read_text(encoding="utf-8")
     assert all("[^>]*" not in d["regex"] for d in load_pii_patterns()["patterns"].values())
+
+
+def test_word_runs_start_at_a_word_boundary() -> None:
+    r"""A group opening with `\w*` or `\w+` is anchored by `\b`.
+
+    Unanchored, `(\w*password\w*)` is retried from every letter of a long
+    word: 16 KB of letters took five seconds in sanitize_html. The anchor
+    changes no match, since a leftmost match already starts at the word start.
+    """
+    import har_capture.sanitization.html as html_module
+
+    source = Path(html_module.__file__).read_text(encoding="utf-8")
+    assert not re.search(r"(?<!\\b)\(\\w[*+]", source)

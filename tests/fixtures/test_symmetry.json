@@ -147,6 +147,40 @@
       ]
     },
     {
+      "id": "form_percent_encoded_field_name",
+      "_note": "A form field name is judged decoded, as validate decodes it",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "user%5Bpass%5D=hunter2hunter2&x=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive form field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
       "id": "json_post_password",
       "entries": [
         {

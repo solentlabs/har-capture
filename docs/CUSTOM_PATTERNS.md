@@ -71,7 +71,8 @@ A custom pattern may replace a built-in by name (`ssn`, `credit_card_visa`), exc
 pass of its own (`mac_address`, `serial_number`, `account_id`, the address and email patterns, the HTML engine's labeled
 patterns): that definition is ignored with a warning. A pattern whose regex does not compile, or is not a string, is
 skipped with one warning, and a `flags` entry that is not a flag name is ignored with a warning; the rest of the run
-continues. `flags` may also be a single name (`"IGNORECASE"`).
+continues. `flags` may also be a single name (`"IGNORECASE"`) or, from Python, any collection of names; a pre-compiled
+`re.Pattern` keeps its own flags.
 
 ### JSON-vs-Regex Escape Trap
 

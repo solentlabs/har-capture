@@ -11,6 +11,7 @@ import json
 import logging
 import re
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -279,7 +280,7 @@ def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) ->
                 # regex, not the file's: a custom definition would change what
                 # check_for_pii reports and nothing the sanitizer removes.
                 if name in DEDICATED_PASS_PATTERNS:
-                    _LOGGER.warning("Ignoring custom pattern '%s': a built-in pass owns that name", name)
+                    _warn_dedicated_override(name)
                     continue
                 builtin["patterns"][name] = definition
         if "preserved_gateway_ips" in custom and isinstance(custom["preserved_gateway_ips"], list):
@@ -762,29 +763,41 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:
     """
     label = str(pattern_def.get("replacement_prefix", "unknown"))
     regex = pattern_def["regex"]
+    base_flags = 0
+    if isinstance(regex, re.Pattern):
+        regex, base_flags = regex.pattern, regex.flags
     if not isinstance(regex, str):
-        _warn_regex_not_a_string(label)
+        _warn_regex_not_a_string(label, repr(regex))
         return None
-    # A pattern file is user input: a lone flag name counts as a list of one,
-    # and an entry that is not a name is ignored (with the warning an unknown
-    # name gets) rather than failing the run.
+    # A pattern file is user input: a lone flag name counts as a collection of
+    # one, and an entry that is not a name is ignored (with the warning an
+    # unknown name gets) rather than failing the run.
     flags = pattern_def.get("flags", ())
-    names = [flags] if isinstance(flags, str) else flags if isinstance(flags, list) else []
+    names: list[Any] = (
+        [flags] if isinstance(flags, str) else list(flags) if isinstance(flags, Iterable) else [flags]
+    )
     return _compile_regex(
-        regex, tuple(name if isinstance(name, str) else repr(name) for name in names), label
+        regex, tuple(name if isinstance(name, str) else repr(name) for name in names), label, base_flags
     )
 
 
 @functools.lru_cache(maxsize=64)
-def _warn_regex_not_a_string(label: str) -> None:
-    _LOGGER.warning("Skipping pattern '%s': its regex is not a string", label)
+def _warn_regex_not_a_string(label: str, regex: str) -> None:
+    _LOGGER.warning("Skipping pattern '%s': its regex %s is not a string", label, regex)
+
+
+@functools.lru_cache(maxsize=64)
+def _warn_dedicated_override(name: str) -> None:
+    _LOGGER.warning("Ignoring custom pattern '%s': a built-in pass owns that name", name)
 
 
 # Cached so a pattern compiled once per body (the HTML engine's pass 0) warns
 # about a bad regex or flag once, not once per body.
 @functools.lru_cache(maxsize=512)
-def _compile_regex(regex: str, flag_names: tuple[str, ...], label: str) -> re.Pattern[str] | None:
-    flags = 0
+def _compile_regex(
+    regex: str, flag_names: tuple[str, ...], label: str, base_flags: int = 0
+) -> re.Pattern[str] | None:
+    flags = base_flags
     for flag_name in flag_names:
         # Support all standard regex flags dynamically
         flag = getattr(re, flag_name, None)
