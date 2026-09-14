@@ -103,6 +103,7 @@ def validate_har(
    - `check_url(header.value)` for each `Referer` / `Location` / `Content-Location`, and
      `check_url(response.redirectURL)` → the same query checks
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
+   - `check_security_details(entry._securityDetails)` → a MAC in a TLS certificate name
    - `check_content(entry.response.content)` → bare base64 credentials, JSON fields, MAC, serial, IPv4, IPv6 in text
      content. The body is read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is
      checked as the text it carries, and a binary body is not checked — the sanitizer leaves it untouched too
@@ -145,6 +146,15 @@ checks for.
 The URL string and the `queryString` array are one query recorded twice, so `validate_har` passes both the same `seen`
 set and a finding present in both is reported once. A URL-valued header is a different place the value leaked to and is
 reported on its own.
+
+### `check_security_details(details, location, findings, custom_patterns)`
+
+Reads `_securityDetails.subjectName` and `issuer` as a device identity field
+([ADR-17](../ARCHITECTURE_DECISIONS.md#adr-17-a-device-cas-certificate-name-is-a-device-identity)): each MAC
+`certificate_name_macs()` finds there — the whole name in any MAC layout, bare 12-hex included, or a colon or hyphen MAC
+inside it — is an **error** (`MAC address in a TLS certificate name`, field `_securityDetails.<name>`) unless it is a
+MAC placeholder (`is_mac_placeholder()`, recognized here because the value is known to be a MAC) or allowlisted. A
+constant MAC is not reported, and neither is a self-signed name: the sanitizer only offers it for review.
 
 ### `check_headers(headers, location, findings)`
 
@@ -636,6 +646,8 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
   (`check_json_fields`) and `check_for_pii`.
 - `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization
   (`_sanitize_headers`).
+- `certificate_name_macs()` with `CERTIFICATE_NAME_FIELDS` — the MACs in an entry's TLS certificate names. Used by
+  sanitization (`_sanitize_security_details`) and validation (`check_security_details`).
 
 ### Validation-Only Patterns
 

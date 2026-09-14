@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
+    CERTIFICATE_NAME_FIELDS,
     EMAIL_RE,
     IPV6_RE,
     JSON_MAX_DEPTH,
@@ -37,6 +38,7 @@ from har_capture.patterns import (
     JsonObjectWithDuplicates,
     QueryCredential,
     QueryPayload,
+    certificate_name_macs,
     classify_identity_field,
     credential_value_action,
     decode_base64_payload,
@@ -52,6 +54,7 @@ from har_capture.patterns import (
     is_cookie_attribute_name,
     is_fully_redacted,
     is_ipv6_host_address,
+    is_mac_placeholder,
     is_redacted,
     is_ssid_key,
     iter_json_strings,
@@ -2031,7 +2034,52 @@ def sanitize_entry(
         if "response" in result:
             _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_credential)
 
+        _sanitize_security_details(result, collector)
+
     return result
+
+
+# Names a self-signed certificate is issued to by default, not by an owner.
+_LOOPBACK_CERTIFICATE_NAMES = frozenset({"localhost", "localhost.localdomain"})
+
+
+def _sanitize_security_details(entry: dict[str, Any], collector: RedactionCollector) -> None:
+    """Redact the device identities in an entry's TLS certificate names (ADR-17).
+
+    A MAC in ``_securityDetails.subjectName`` or ``issuer`` is hashed in
+    place, in its own layout, so it correlates with the same MAC elsewhere
+    (``certificate_name_macs``, shared with validate). A self-signed name with
+    no MAC — a model name, a vendor hostname, or a name its owner set — is
+    offered for review. ``protocol``, ``validFrom`` and ``validTo`` are kept.
+    """
+    details = entry.get("_securityDetails")
+    if not isinstance(details, dict):
+        return
+    subject, issuer = details.get("subjectName"), details.get("issuer")
+    for field in CERTIFICATE_NAME_FIELDS:
+        name = details.get(field)
+        if not isinstance(name, str):
+            continue
+        for mac in dict.fromkeys(certificate_name_macs(name)):
+            if not is_mac_placeholder(mac):
+                collector.record_auto_redaction("mac_address")
+                name = name.replace(mac, collector.hasher.hash_mac(mac))
+        details[field] = name
+    if (
+        isinstance(subject, str)
+        and subject
+        and subject == issuer
+        and details["subjectName"] == subject
+        and subject not in _LOOPBACK_CERTIFICATE_NAMES
+        and not is_redacted(subject, _active_call_patterns().custom_patterns)
+    ):
+        collector.flag_value(
+            subject,
+            "device_name",
+            ConfidenceLevel.LOW,
+            "TLS certificate subject",
+            "Self-signed certificate name: a model or vendor hostname, or a name the device's owner set",
+        )
 
 
 def _embed_sanitization_metadata(

@@ -2872,6 +2872,80 @@
         "::ffff",
         "192.168.001.100"
       ]
+    },
+    {
+      "id": "certificate_colon_mac_subject",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          },
+          "_securityDetails": {
+            "protocol": "TLS 1.2",
+            "subjectName": "A4:56:30:12:34:56",
+            "issuer": "CableLabs Device Certification Authority",
+            "validFrom": 1500000000,
+            "validTo": 2000000000
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "TLS certificate name"
+        }
+      ],
+      "leaked": [
+        "A4:56:30:12:34:56"
+      ]
+    },
+    {
+      "id": "certificate_bare_hex_subject",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          },
+          "_securityDetails": {
+            "protocol": "TLS 1.2",
+            "subjectName": "0000AC123456",
+            "issuer": "HWROB Device Sub-CA 01",
+            "validFrom": 1500000000,
+            "validTo": 2000000000
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "TLS certificate name"
+        }
+      ],
+      "leaked": [
+        "0000AC123456"
+      ]
     }
   ]
 }

@@ -492,3 +492,39 @@ encoding it as latin-1), with #213's fragments no longer destroyed; the engines'
 **Consequence.** A sanitized HAR carries `encoding` only on binary bodies. The one behavior given up: a
 transport-encoded body whose text is literally `user:pass` is no longer replaced, since the base64 that matched was the
 recorder's — the same text served as plain text was never replaced either.
+
+## ADR-17: A Device CA's Certificate Name Is a Device Identity
+
+**Date:** 2026-09-14 · **Status:** Accepted
+
+**Context.** A HAR recorded by Chromium or Playwright carries `_securityDetails` on each TLS entry: `protocol`,
+`subjectName`, `issuer`, `validFrom`, `validTo`. No release read it, so neither tool redacted or reported anything
+there. Across the CMM fleet (0.13.0), 8,391 entries name the device in `subjectName`: 5,913 by a colon MAC under a
+CableLabs device or cable-modem CA (four distinct MACs, all with vendor-assigned prefixes), and 2,478 by a bare 12-hex
+ID under an HWROB or SWROB device sub-CA (six distinct values, all prefixed `0000`, none appearing as a MAC anywhere in
+its capture, so possibly an ID rather than a MAC). A further 13,444 entries are self-signed: 7,568 with an empty name,
+the rest under nine distinct names — model names, vendor hostnames, `localhost.localdomain`, one already a placeholder —
+each seen in two to six model directories.
+
+**Decision.**
+
+1. **`subjectName` and `issuer` are a device identity field.** A name that is wholly a MAC in any layout — separated,
+   bare or dotted, as under a MAC-named JSON key — and a colon or hyphen MAC inside a name, is hashed in place with
+   `hash_mac`, in its own layout, so it correlates with the same MAC elsewhere in the capture. The bare-hex IDs are
+   hashed whatever they turn out to be: a device CA issues a certificate to one device, and its name identifies that
+   device either way. One predicate, `certificate_name_macs()`, decides for both tools; `validate` reports an unredacted
+   one as an error and recognizes a MAC placeholder in these fields only.
+1. **A self-signed name without a MAC is offered for review** (`device_name`, LOW, once per distinct value), not
+   redacted. Every such name in the fleet is firmware text, but nothing distinguishes it from a name a device's owner
+   set, so ADR-12 sends it to review. `localhost` and `localhost.localdomain` are kept unoffered. `validate` does not
+   report these names: sanitize does not clear them.
+1. **`protocol`, `validFrom`, `validTo` and the entry's `serverIPAddress` are kept.** Across the fleet `serverIPAddress`
+   holds the device's LAN address (25,592 of 25,610 private addresses equal the URL's host) or a public server reached
+   by hostname (19); none is the owner's own public address, so redacting it would cost fidelity and close no leak.
+
+**ADR-12 accounting.** The leak closed is the device MAC or device-CA ID in 8,391 certificate names, present in every
+earlier release's output and never reported. The fidelity cost is the certificate's subject text; the certificate's
+issuer, protocol and validity survive, and a hashed MAC keeps its layout.
+
+**Consequence.** Only `_securityDetails` on the entry is read; the fleet holds it nowhere else. A certificate name the
+user chooses to redact in the review is replaced by Pass 2 everywhere it occurs, a model name in page text included.

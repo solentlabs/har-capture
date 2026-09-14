@@ -1160,3 +1160,21 @@ def test_served_credential_values(case: dict) -> None:
     else:
         check_content(case["text"], "response.body", findings)
     assert [[f.severity, f.field] for f in findings] == case["findings"]
+
+
+SECURITY_DETAILS_VALIDATE_CASES = _DATA["security_details_validate_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", SECURITY_DETAILS_VALIDATE_CASES, ids=[c["id"] for c in SECURITY_DETAILS_VALIDATE_CASES]
+)
+def test_validate_reads_certificate_names(case: dict, tmp_path: Path) -> None:
+    """A MAC in a TLS certificate name is an error; its placeholder, a constant and a self-signed name are not."""
+    entry = {
+        "request": {"method": "GET", "url": "https://192.168.100.1/", "headers": []},
+        "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/html"}},
+        "_securityDetails": case["details"],
+    }
+    har_file = tmp_path / "cert.har"
+    har_file.write_text(json.dumps({"log": {"entries": [entry]}}))
+    assert [[f.severity, f.field, f.value] for f in validate_har(har_file)] == case["findings"]

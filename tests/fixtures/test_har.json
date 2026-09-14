@@ -793,6 +793,174 @@
       {"id": "form_status_word_echo_kept", "entries": [["post", "application/x-www-form-urlencoded", "token_required=No"], ["response", "application/json", "{\"PasswordRequired\": \"No\"}"]], "gone": [], "present": ["No"], "offered": []}
     ]
   },
+  "entry_security_details_cases": {
+    "_comment": "ADR-17: TLS certificate names on a HAR entry (_securityDetails.subjectName and issuer). A name that is a MAC in any layout (a CableLabs modem certificate's colon MAC, an HWROB device CA's bare 12-hex ID), or a colon/hyphen MAC inside a name, is hashed in place in its own layout with hash_mac, so it correlates with the same MAC elsewhere. A non-empty self-signed name holding no MAC is offered for review (device_name, LOW), once per distinct value. protocol, validFrom, validTo and the entry's serverIPAddress are kept. details: the _securityDetails object; expect: field -> regex its output must fully match; flagged: [value, category, confidence]; macs: the mac_address count. All values are synthetic.",
+    "cases": [
+      {
+        "id": "cablelabs_colon_subject",
+        "details": {
+          "protocol": "TLS 1.2",
+          "subjectName": "A4:56:30:12:34:56",
+          "issuer": "CableLabs Device Certification Authority",
+          "validFrom": 1500000000,
+          "validTo": 2000000000
+        },
+        "expect": {
+          "protocol": "^TLS 1\\.2$",
+          "subjectName": "^02(:[0-9a-f]{2}){5}$",
+          "issuer": "^CableLabs Device Certification Authority$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "hwrob_bare_hex_subject",
+        "details": {
+          "subjectName": "0000AC123456",
+          "issuer": "HWROB Device Sub-CA 01"
+        },
+        "expect": {
+          "subjectName": "^02[0-9a-f]{10}$",
+          "issuer": "^HWROB Device Sub-CA 01$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "hyphen_mac_inside_name",
+        "details": {
+          "subjectName": "CM a4-56-30-12-34-56",
+          "issuer": "Vendor CA"
+        },
+        "expect": {
+          "subjectName": "^CM 02(-[0-9a-f]{2}){5}$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "self_signed_mac_subject",
+        "details": {
+          "subjectName": "A4:56:30:12:34:56",
+          "issuer": "A4:56:30:12:34:56"
+        },
+        "expect": {
+          "subjectName": "^02(:[0-9a-f]{2}){5}$",
+          "issuer": "^02(:[0-9a-f]{2}){5}$"
+        },
+        "flagged": [],
+        "macs": 2
+      },
+      {
+        "id": "self_signed_model_name_offered",
+        "details": {
+          "subjectName": "CM1234",
+          "issuer": "CM1234"
+        },
+        "expect": {
+          "subjectName": "^CM1234$",
+          "issuer": "^CM1234$"
+        },
+        "flagged": [
+          [
+            "CM1234",
+            "device_name",
+            "low"
+          ]
+        ],
+        "macs": 0
+      },
+      {
+        "id": "localhost_localdomain_kept",
+        "details": {
+          "subjectName": "localhost.localdomain",
+          "issuer": "localhost.localdomain"
+        },
+        "expect": {
+          "subjectName": "^localhost\\.localdomain$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "empty_names_kept",
+        "details": {
+          "subjectName": "",
+          "issuer": ""
+        },
+        "expect": {
+          "subjectName": "^$",
+          "issuer": "^$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "ca_issued_hostname_kept",
+        "details": {
+          "subjectName": "www.example.com",
+          "issuer": "Example Issuing CA"
+        },
+        "expect": {
+          "subjectName": "^www\\.example\\.com$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "self_signed_redacted_value_not_offered",
+        "details": {
+          "subjectName": "***REDACTED***",
+          "issuer": "***REDACTED***"
+        },
+        "expect": {
+          "subjectName": "^\\*\\*\\*REDACTED\\*\\*\\*$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "own_placeholder_kept",
+        "details": {
+          "subjectName": "02a1b2c3d4e5",
+          "issuer": "HWROB Device Sub-CA 01"
+        },
+        "expect": {
+          "subjectName": "^02a1b2c3d4e5$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "constant_mac_kept",
+        "details": {
+          "subjectName": "00:00:00:00:00:00",
+          "issuer": "Vendor CA"
+        },
+        "expect": {
+          "subjectName": "^00:00:00:00:00:00$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "validity_and_server_ip_kept",
+        "details": {
+          "protocol": "TLS 1.3",
+          "subjectName": "www.example.com",
+          "issuer": "Example Issuing CA",
+          "validFrom": 1700000000,
+          "validTo": 1800000000
+        },
+        "server_ip": "192.168.100.1",
+        "expect": {
+          "protocol": "^TLS 1\\.3$"
+        },
+        "flagged": [],
+        "macs": 0
+      }
+    ]
+  },
   "flag_label_cases": {
     "_comment": "The review item for a value keeps the label (category, confidence) its first occurrence gave it, and counts each occurrence once. A field's flag on its whole value takes over only a flag raised inside that same value (a username that is exactly a phone number), never one from another occurrence. entries: [via, mime, body] as in echoed_credential_cases; flagged: [value, category, confidence, occurrences] per item.",
     "cases": [

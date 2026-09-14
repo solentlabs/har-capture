@@ -111,6 +111,16 @@ def sanitize_entry(
     """Sanitize one HAR entry (request + response)."""
 ```
 
+### TLS Certificate Names
+
+After the request and response, `sanitize_entry` reads the entry's `_securityDetails` (`_sanitize_security_details`,
+[ADR-17](../ARCHITECTURE_DECISIONS.md#adr-17-a-device-cas-certificate-name-is-a-device-identity)). In `subjectName` and
+`issuer`, a name that is wholly a MAC in any layout, and a colon or hyphen MAC inside a name (`certificate_name_macs()`,
+shared with `validate`), is hashed in place with `hash_mac` in its own layout and counted under `mac_address`; a MAC
+placeholder and a constant MAC are kept. A non-empty self-signed name (`subjectName` equal to `issuer`) holding no MAC,
+other than `localhost` and `localhost.localdomain`, is offered for review as `device_name` at LOW confidence.
+`protocol`, `validFrom`, `validTo` and the entry's `serverIPAddress` are kept.
+
 ### Header Sanitization
 
 Headers are classified into four tiers from `sensitive.json`:

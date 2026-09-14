@@ -28,9 +28,11 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
+    CERTIFICATE_NAME_FIELDS,
     JSON_MAX_DEPTH,
     MAC_RE,
     URL_VALUED_HEADERS,
+    certificate_name_macs,
     credential_value_action,
     decode_base64_payload,
     decode_transport_body,
@@ -43,6 +45,7 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_cookie_attribute_metadata,
     is_fully_redacted,
+    is_mac_placeholder,
     iter_json_strings,
     json_members,
     mime_kind,
@@ -517,6 +520,45 @@ def check_query_string(
             _check_query_param(
                 query_param_segment(param), name, value, location, findings, custom_patterns, tiers, reported
             )
+
+
+def check_security_details(
+    details: Any,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> None:
+    """Check an entry's TLS certificate names for a MAC (ADR-17).
+
+    ``_securityDetails.subjectName`` and ``issuer`` are a device identity
+    field: a MAC there in any layout (``certificate_name_macs``, shared with
+    the sanitizer) is an error unless it is a MAC placeholder — recognized
+    here, where the value is known to be a MAC — or allowlisted. A self-signed
+    name is not reported: the sanitizer only offers it for review.
+
+    Args:
+        details: The entry's ``_securityDetails`` value
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional custom patterns for the allowlist check
+    """
+    if not isinstance(details, dict):
+        return
+    for field in CERTIFICATE_NAME_FIELDS:
+        name = details.get(field)
+        if not isinstance(name, str):
+            continue
+        for mac in dict.fromkeys(certificate_name_macs(name)):
+            if not (is_mac_placeholder(mac) or check_if_redacted(mac, custom_patterns)):
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field=f"_securityDetails.{field}",
+                        value=mac,
+                        reason="MAC address in a TLS certificate name",
+                    )
+                )
 
 
 def check_headers(
@@ -1227,6 +1269,10 @@ def validate_har(
 
         # Check POST data
         check_post_data(request.get("postData"), f"{location} (request)", findings, custom_patterns)
+
+        check_security_details(
+            entry.get("_securityDetails"), f"{location} (certificate)", findings, custom_patterns
+        )
 
         # Check response content
         content_data = response.get("content", {})

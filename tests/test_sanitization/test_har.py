@@ -4670,6 +4670,7 @@ PATTERN_FILE_ROUTE_CASES = _HAR_FIXTURE["pattern_file_route_cases"]["cases"]
 ECHOED_CREDENTIAL_CASES = _HAR_FIXTURE["echoed_credential_cases"]["cases"]
 FLAG_REACHABILITY_CASES = _HAR_FIXTURE["flag_reachability_cases"]["cases"]
 FLAG_LABEL_CASES = _HAR_FIXTURE["flag_label_cases"]["cases"]
+ENTRY_SECURITY_DETAILS_CASES = _HAR_FIXTURE["entry_security_details_cases"]["cases"]
 SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
 
 
@@ -4935,6 +4936,40 @@ class TestEchoedCredentials:
             assert any(kept in text for text in readable)
         for value in case["offered"]:
             assert value in offered
+
+
+@pytest.mark.parametrize(
+    "case", ENTRY_SECURITY_DETAILS_CASES, ids=[c["id"] for c in ENTRY_SECURITY_DETAILS_CASES]
+)
+def test_certificate_names(case: dict) -> None:
+    """A MAC in a TLS certificate name is hashed in its layout; a self-signed name is offered; the rest is kept."""
+    entry = _entry_with_response_body("")
+    entry["_securityDetails"] = dict(case["details"])
+    if "server_ip" in case:
+        entry["serverIPAddress"] = case["server_ip"]
+    sanitized, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="cert", heuristics=HeuristicMode.FLAG
+    )
+    out = sanitized["log"]["entries"][0]
+    details = out["_securityDetails"]
+    for field, pattern in case["expect"].items():
+        assert re.fullmatch(pattern, details[field]), field
+    for field in ("validFrom", "validTo"):
+        assert details.get(field) == case["details"].get(field)
+    assert [[f.original_value, f.category, f.confidence.value] for f in report.flagged] == case["flagged"]
+    assert report.auto_redacted_counts.get("mac_address", 0) == case["macs"]
+    assert out.get("serverIPAddress") == case.get("server_ip")
+
+
+def test_certificate_name_mac_correlates_with_body_mac() -> None:
+    """A certificate's bare-hex MAC gets the digits the same MAC gets in a body, in its own layout."""
+    entry = _entry_with_response_body("CM MAC: A4:56:30:12:34:56")
+    entry["_securityDetails"] = {"subjectName": "A45630123456", "issuer": "Vendor Device CA"}
+    sanitized, _ = sanitize_har({"log": {"entries": [entry]}}, salt="cert")
+    out = sanitized["log"]["entries"][0]
+    body_mac = re.search(r"02(?::[0-9a-f]{2}){5}", out["response"]["content"]["text"])
+    assert body_mac is not None
+    assert out["_securityDetails"]["subjectName"] == body_mac.group(0).replace(":", "")
 
 
 @pytest.mark.parametrize("case", FLAG_LABEL_CASES, ids=[c["id"] for c in FLAG_LABEL_CASES])

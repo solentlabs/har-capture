@@ -22,6 +22,7 @@ from har_capture.patterns.loader import (
     load_sensitive_patterns,
 )
 from har_capture.patterns.redaction import (
+    CERTIFICATE_NAME_FIELDS,
     EMAIL_RE,
     IPV6_RE,
     JSON_MAX_DEPTH,
@@ -34,6 +35,7 @@ from har_capture.patterns.redaction import (
     JsonObjectWithDuplicates,
     QueryCredential,
     QueryPayload,
+    certificate_name_macs,
     classify_identity_field,
     credential_value_action,
     decode_base64_payload,
@@ -84,6 +86,7 @@ __all__ = [
     "compile_pattern",
     "PatternLoadError",
     # Redaction checking and shared detection primitives
+    "CERTIFICATE_NAME_FIELDS",
     "EMAIL_RE",
     "IPV6_RE",
     "JSON_MAX_DEPTH",
@@ -95,6 +98,7 @@ __all__ = [
     "PUBLIC_IP_RE",
     "QueryCredential",
     "QueryPayload",
+    "certificate_name_macs",
     "classify_identity_field",
     "credential_value_action",
     "decode_base64_payload",

@@ -276,6 +276,30 @@ def is_constant_mac(mac: str) -> bool:
     return len(digits) == 12 and digits == digits[:2] * 6
 
 
+# TLS certificate names on a HAR entry (ADR-17). A device CA names the device
+# its certificate is issued to — a CableLabs modem certificate by the modem's
+# MAC (`A4:56:30:…`), an HWROB/SWROB device CA by a bare 12-hex ID — so these
+# fields are a device identity field: a whole name in any MAC layout is a MAC,
+# as under a MAC-named JSON key, and so is a separated MAC inside a name.
+CERTIFICATE_NAME_FIELDS = ("subjectName", "issuer")
+
+
+def certificate_name_macs(name: str) -> list[str]:
+    """The MACs a certificate name carries: the whole name in any MAC layout, else each separated MAC in it.
+
+    Constants (one byte repeated) are left out, as everywhere else.
+
+    Args:
+        name: A ``_securityDetails`` subject or issuer name
+
+    Returns:
+        The MAC texts as written in the name, in order
+    """
+    if is_mac_value(name):
+        return [] if is_constant_mac(name) else [name]
+    return [match.group(0) for match in MAC_RE.finditer(name) if not is_constant_mac(match.group(0))]
+
+
 # A key is read as its words — camelCase humps, acronyms, digit runs —
 # lowercased and joined with '_' (`StatusSoftwareSerialNum` →
 # `status_software_serial_num`, `CMMACAddress` → `cmmac_address`). The

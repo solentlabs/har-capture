@@ -9,8 +9,9 @@ har-capture sanitizes the following categories of personally identifiable inform
 ### MAC Addresses
 
 **Pattern:** `XX:XX:XX:XX:XX:XX` or `XX-XX-XX-XX-XX-XX` anywhere; under a JSON key naming a MAC (`CmMacAddress`,
-`hw_addr`), bare `XXXXXXXXXXXX` and dotted `xxxx.xxxx.xxxx` too. The broadcast and zero MACs are protocol constants and
-stay.
+`hw_addr`), bare `XXXXXXXXXXXX` and dotted `xxxx.xxxx.xxxx` too, and likewise in a TLS certificate's subject or issuer
+name (`_securityDetails`: a cable modem certificate names the modem by its MAC). The broadcast and zero MACs are
+protocol constants and stay.
 
 **Examples:**
 
@@ -174,7 +175,8 @@ placeholders (`Serial Number`, `-`) under such a key stay.
 
 ### Device Names
 
-**Pattern:** Common naming patterns
+**Pattern:** Common naming patterns; a self-signed TLS certificate's name (`_securityDetails.subjectName`) is offered
+for review at LOW confidence.
 
 **Examples:**
 
