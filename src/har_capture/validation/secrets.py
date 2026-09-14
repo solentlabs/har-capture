@@ -31,6 +31,7 @@ from har_capture.patterns.redaction import (
     JSON_MAX_DEPTH,
     MAC_RE,
     URL_VALUED_HEADERS,
+    credential_value_action,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
@@ -778,6 +779,7 @@ def check_json_fields(
     custom_patterns: str | dict[str, Any] | None = None,
     _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
+    _served: bool = False,
 ) -> None:
     """Recursively check JSON for sensitive fields.
 
@@ -789,6 +791,9 @@ def check_json_fields(
         custom_patterns: Optional path to custom patterns file
         _field_tiers: Pre-compiled field patterns split by tier. Internal use only.
         _depth: Current recursion depth. Internal use only.
+        _served: The JSON is a response body, where a credential-named value
+            the sanitizer keeps or offers for review (``credential_value_action``)
+            is not reported. Internal use only.
     """
     if _depth > JSON_MAX_DEPTH:
         return
@@ -820,6 +825,7 @@ def check_json_fields(
                 and value
                 and (classified := _classify_field_finding(key, value, _field_tiers)) is not None
                 and not is_redacted(value, custom_patterns)
+                and not (_served and classified[0] == "error" and credential_value_action(value) != "redact")
             ):
                 severity, pattern = classified
                 findings.append(
@@ -842,6 +848,7 @@ def check_json_fields(
                     custom_patterns,
                     _field_tiers=_field_tiers,
                     _depth=_depth + 1,
+                    _served=_served,
                 )
 
     elif isinstance(data, list):
@@ -855,6 +862,7 @@ def check_json_fields(
                     custom_patterns,
                     _field_tiers=_field_tiers,
                     _depth=_depth + 1,
+                    _served=_served,
                 )
 
 
@@ -931,7 +939,9 @@ def check_content(
     if data is not None:
         tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
         start = len(findings)
-        check_json_fields(data, location, findings, "", custom_patterns, _field_tiers=replace(tiers, flag=()))
+        check_json_fields(
+            data, location, findings, "", custom_patterns, _field_tiers=replace(tiers, flag=()), _served=True
+        )
         field_macs = {f.value for f in findings[start:] if f.reason == _IDENTITY_REASONS["mac_address"]}
 
     if serial_detectors is None:

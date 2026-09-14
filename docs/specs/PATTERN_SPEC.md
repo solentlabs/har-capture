@@ -626,8 +626,11 @@ since it cannot be told from a real locally administered one, and whether to ski
 `unredacted_identity(key, value, custom_patterns)` is that decision for the checkers (`validate`'s `check_json_fields`
 and `check_for_pii`): `classify_identity_field()`, less a MAC placeholder in any layout (`is_mac_placeholder()`: one
 uniform layout, lowercase, first octet `02` — trusted only under a MAC-named key), a constant MAC, or an allowlisted
-value. `is_ssid_key(key)` is true when one of a key's words is `ssid` (`ssid_24g`, `guestSSID`): the sanitizer offers
-such a value for review rather than redacting it.
+value. `credential_value_action(value)` decides a value a response serves under a credential-named key: `"keep"` for a
+button word (`Yes`, `No` — the only words the fleet's translation tables hold there), `"review"` for prose (words on
+both sides of a space), `"redact"` otherwise. The sanitizer, `validate`'s response JSON check and `check_for_pii` share
+it; a value a client submits is always redacted. `is_ssid_key(key)` is true when one of a key's words is `ssid`
+(`ssid_24g`, `guestSSID`): the sanitizer offers such a value for review rather than redacting it.
 
 ### `PRIVATE_IP_RE`, `PUBLIC_IP_RE`, `IPV6_RE`, `EMAIL_RE` and `is_ipv6_host_address(candidate)`
 

@@ -44,6 +44,7 @@ from har_capture.patterns.redaction import (
     MAC_RE,
     PRIVATE_IP_RE,
     PUBLIC_IP_RE,
+    credential_value_action,
     ipv6_host_spans,
     is_constant_mac,
     is_ipv6_host_address,
@@ -1366,7 +1367,8 @@ def check_for_pii(
             if key is None or depth > JSON_MAX_DEPTH:
                 continue
             if is_sensitive_field(key):
-                if text and not is_allowlisted(text, allowlist):
+                # A fixture is served content: judged as a response's value.
+                if text and not is_allowlisted(text, allowlist) and credential_value_action(text) == "redact":
                     identity_fields.append(("credential_field", text, offset))
             elif (category := unredacted_identity(key, text, custom_patterns)) is not None:
                 identity_fields.append((category, text, offset))

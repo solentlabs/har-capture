@@ -37,6 +37,7 @@ from har_capture.patterns import (
     QueryCredential,
     QueryPayload,
     classify_identity_field,
+    credential_value_action,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
@@ -827,6 +828,8 @@ def _rewrite_json(
     data: dict[str, Any] | list[Any],
     hasher: Hasher | None,
     collector: RedactionCollector | None,
+    *,
+    served: bool = False,
 ) -> str:
     """Sanitize parsed JSON and write it back as its text was written.
 
@@ -838,13 +841,13 @@ def _rewrite_json(
     shadowed secret never passes through; text that repeats a key cannot be
     reproduced, so such a body takes the default layout.
     """
-    cleaned = _sanitize_json_recursive(data, hasher, collector)
-    if cleaned == data and not _shadowed_values_change(data, hasher):
+    cleaned = _sanitize_json_recursive(data, hasher, collector, served=served)
+    if cleaned == data and not _shadowed_values_change(data, hasher, served=served):
         return text
     return _dump_json_like(cleaned, data, text)
 
 
-def _shadowed_values_change(data: Any, hasher: Hasher | None) -> bool:
+def _shadowed_values_change(data: Any, hasher: Hasher | None, *, served: bool = False) -> bool:
     """True when a repeated key's earlier value would be redacted or offered for review.
 
     Probed with a throwaway collector: the shadowed members are dropped from
@@ -859,7 +862,7 @@ def _shadowed_values_change(data: Any, hasher: Hasher | None) -> bool:
         if isinstance(node, JsonObjectWithDuplicates):
             for key, value in node.shadowed:
                 member = {key: value}
-                if _sanitize_json_recursive(member, hasher, probe) != member or probe.flagged:
+                if _sanitize_json_recursive(member, hasher, probe, served=served) != member or probe.flagged:
                     return True
                 if isinstance(value, dict | list):
                     stack.append(value)
@@ -1095,11 +1098,46 @@ def _sanitize_deep_strings(data: Any, hasher: Hasher | None, collector: Redactio
     return root[0]
 
 
+def _sanitize_credential_value(
+    key: str,
+    value: str,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+    depth: int,
+    served: bool,
+) -> str:
+    """A non-empty value under a credential-named JSON key, not a placeholder of ours.
+
+    Submitted, it is redacted. Served, it is judged by its shape
+    (``credential_value_action``, shared with validate): a button word is
+    kept, prose is offered for review with the string patterns still applied
+    inside it, anything else is redacted — and so is prose where no review
+    can reach it (no collector, or flags muted inside an encoded payload).
+    """
+    action = credential_value_action(value) if served else "redact"
+    if action == "review" and collector is not None and collector.accepts_flags:
+        # LOW: every such value across the fleet is UI text, so the review
+        # shows it without pre-selecting it for redaction.
+        collector.flag_value(
+            value,
+            "credential",
+            ConfidenceLevel.LOW,
+            f"JSON key '{key}'",
+            f"Text under credential-named key '{key}' in a response: a UI string, or a passphrase with spaces",
+        )
+    elif action != "keep":
+        return _redact_value(value, hasher, "FIELD", collector)
+    result: str = _sanitize_json_recursive(value, hasher, collector, depth + 1, served=served)
+    return result
+
+
 def _sanitize_json_recursive(
     data: Any,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
     _depth: int = 0,
+    *,
+    served: bool = False,
 ) -> Any:
     """Recursively sanitize JSON data.
 
@@ -1108,6 +1146,9 @@ def _sanitize_json_recursive(
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
         _depth: Current recursion depth (internal use)
+        served: The JSON is a response body: a value under a credential-named
+            key is judged by its shape (``credential_value_action``). A
+            submitted body's credential-named values are all redacted.
 
     Returns:
         Sanitized data
@@ -1132,7 +1173,9 @@ def _sanitize_json_recursive(
                 if not value or _is_own_placeholder(value):
                     result[out_key] = value
                 else:
-                    result[out_key] = _redact_value(value, hasher, "FIELD", collector)
+                    result[out_key] = _sanitize_credential_value(
+                        key, value, hasher, collector, _depth, served
+                    )
             elif identity == "mac_address" and not is_constant_mac(str(value)):
                 if collector:
                     collector.record_auto_redaction("mac_address")
@@ -1149,7 +1192,9 @@ def _sanitize_json_recursive(
                     f"JSON key '{key}'",
                     f"Flaggable field name '{key}' in JSON",
                 )
-                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
             elif collector and _is_reviewable_ssid(key, value):
                 collector.flag_value(
                     str(value),
@@ -1158,12 +1203,16 @@ def _sanitize_json_recursive(
                     f"JSON key '{key}'",
                     f"Wi-Fi network name under SSID key '{key}' in JSON",
                 )
-                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
             else:
-                result[out_key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
         return result
     if isinstance(data, list):
-        return [_sanitize_json_recursive(item, hasher, collector, _depth + 1) for item in data]
+        return [_sanitize_json_recursive(item, hasher, collector, _depth + 1, served=served) for item in data]
     # Apply the text passes to string values
     if isinstance(data, str):
         return _sanitize_json_string(data, hasher, collector)
@@ -1892,7 +1941,7 @@ def _sanitize_body_text(
         )
 
     if route == "json" and data is not None:
-        return _rewrite_json(text, data, hasher, collector)
+        return _rewrite_json(text, data, hasher, collector, served=True)
 
     return _sanitize_body_string(
         text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)

@@ -4665,6 +4665,7 @@ CUSTOM_GATEWAY = _HAR_FIXTURE["custom_preserved_gateway_cases"]
 NO_COLLECTOR_BODY_CASES = _HAR_FIXTURE["no_collector_body_cases"]["cases"]
 POST_TEXT_CASES = _HAR_FIXTURE["post_text_cases"]["cases"]
 CORRELATION = _HAR_FIXTURE["cross_route_correlation_cases"]
+SERVED_CREDENTIAL_CASES = _HAR_FIXTURE["served_credential_cases"]["cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4775,3 +4776,42 @@ class TestValuePassBodies:
             assert leaked not in out
         for kept in case["present"]:
             assert kept in out
+
+
+class TestServedCredentialValues:
+    """A value a response serves under a credential-named key is judged by its shape; a submitted one is not."""
+
+    @pytest.mark.parametrize("case", SERVED_CREDENTIAL_CASES, ids=[c["id"] for c in SERVED_CREDENTIAL_CASES])
+    def test_value(self, case: dict) -> None:
+        if case["via"] == "post":
+            entry = {
+                "request": {
+                    "method": "POST",
+                    "url": "http://192.168.0.1/api",
+                    "headers": [],
+                    "postData": {"mimeType": case["mime"], "text": case["text"]},
+                },
+                "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/plain"}},
+            }
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+        sanitized, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="served", heuristics=HeuristicMode.FLAG
+        )
+        out_entry = sanitized["log"]["entries"][0]
+        out = (
+            out_entry["request"]["postData"]["text"]
+            if case["via"] == "post"
+            else out_entry["response"]["content"]["text"]
+        )
+        if case.get("decode_base64"):
+            out = base64.b64decode(out).decode("utf-8")
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+        assert sorted(f.original_value for f in report.flagged) == sorted(case["flagged"])
+        # Offered, not pre-selected: the review pre-selects medium-confidence credentials.
+        assert all((f.category, f.confidence.value) == ("credential", "low") for f in report.flagged)

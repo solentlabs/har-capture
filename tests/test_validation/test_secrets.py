@@ -1144,3 +1144,19 @@ def test_serial_patterns_are_the_sanitizers() -> None:
     from har_capture.validation.secrets import SERIAL_PATTERNS
 
     assert SERIAL_PATTERNS == [SERIAL_LABEL_RE]
+
+
+SERVED_CREDENTIAL_VALIDATE_CASES = _DATA["served_credential_validate_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", SERVED_CREDENTIAL_VALIDATE_CASES, ids=[c["id"] for c in SERVED_CREDENTIAL_VALIDATE_CASES]
+)
+def test_served_credential_values(case: dict) -> None:
+    """A served credential-named value is reported as the sanitizer treats it; a submitted one always."""
+    findings: list[Finding] = []
+    if case["where"] == "post":
+        check_post_data({"mimeType": "application/json", "text": case["text"]}, "request", findings)
+    else:
+        check_content(case["text"], "response.body", findings)
+    assert [[f.severity, f.field] for f in findings] == case["findings"]

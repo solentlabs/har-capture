@@ -18,7 +18,7 @@ import logging
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from .loader import load_allowlist
 
@@ -311,6 +311,38 @@ _IDENTITY_KEY_HINT_RE = re.compile(r"serial|sn|mac|hw", re.IGNORECASE)
 @functools.lru_cache(maxsize=4096)
 def _key_words(key: str) -> str:
     return "_".join(word.lower() for word in _KEY_WORD_RE.findall(key))
+
+
+# The words a response serves under a credential-named key when the key
+# labels a button rather than holding a credential: the fleet's firmware
+# translation tables hold "Yes" and "No" there, and no other word, and no
+# credential it submits is one.
+_CREDENTIAL_STATUS_WORDS = frozenset({"yes", "no"})
+# Text with words on both sides of a space: a UI string, or a passphrase.
+_PROSE_RE = re.compile(r"\S\s+\S")
+
+
+def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
+    """Decide what both tools do with a value a response serves under a credential-named key.
+
+    A credential-named key in a response is often a firmware translation
+    table's label for UI text about credentials (`PAGE_GENERAL_SET_PASSWORD`,
+    even a bare `password`), so its name does not make the value certain.
+    A button word is kept; prose is offered for the user's review, since a
+    passphrase can hold spaces; anything else is redacted. A value a client
+    submits is always redacted — the caller decides which one it holds.
+
+    Args:
+        value: A non-empty value the caller has not recognized as redacted
+
+    Returns:
+        ``"keep"``, ``"review"`` or ``"redact"``
+    """
+    if value.strip().lower() in _CREDENTIAL_STATUS_WORDS:
+        return "keep"
+    if _PROSE_RE.search(value):
+        return "review"
+    return "redact"
 
 
 def is_ssid_key(key: str) -> bool:

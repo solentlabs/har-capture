@@ -389,6 +389,21 @@
       {"id": "email_subdomains",         "regex": "email",      "text": "first.last@mail.example.co.uk",    "matches": ["first.last@mail.example.co.uk"]}
     ]
   },
+  "credential_value_action_cases": {
+    "_comment": "credential_value_action(value): what both tools do with a non-empty, unredacted value a response serves under a credential-named key. The fleet's firmware translation tables hold Yes/No buttons (kept) and prose UI strings (offered for review: a passphrase can hold spaces); anything else is redacted.",
+    "cases": [
+      {"id": "secret_token",       "value": "hunter2x",                    "action": "redact"},
+      {"id": "one_word_label",     "value": "Password",                    "action": "redact"},
+      {"id": "allcaps_label",      "value": "PASSWORD",                    "action": "redact"},
+      {"id": "yes_button",         "value": "Yes",                         "action": "keep"},
+      {"id": "no_button_lower",    "value": "no",                          "action": "keep"},
+      {"id": "status_padded",      "value": " No ",                        "action": "keep"},
+      {"id": "true_not_in_data",   "value": "true",                        "action": "redact"},
+      {"id": "prose_ui_string",    "value": "Enter the current password",  "action": "review"},
+      {"id": "two_words",          "value": "p w",                         "action": "review"},
+      {"id": "padded_token",       "value": " hunter2x ",                  "action": "redact"}
+    ]
+  },
   "iter_json_strings_cases": {
     "_comment": "iter_json_strings(parsed) yields every decoded string — object keys and string values, in arrays too, shadowed duplicates included — at any depth; numbers, booleans and null are not strings.",
     "cases": [

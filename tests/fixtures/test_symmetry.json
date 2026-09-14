@@ -2509,6 +2509,37 @@
       ]
     },
     {
+      "id": "json_response_translation_table",
+      "_note": "A served UI string under a credential-named key is offered for review, not reported; a served token is redacted",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"wifi_password\": \"hunter2hunter2\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
       "id": "json_post_shadowed_flag_tier_value",
       "_note": "A repeated review-tier key's shadowed value is dropped, not written back unreviewed",
       "entries": [

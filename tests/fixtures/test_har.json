@@ -752,5 +752,15 @@
       {"mime": "application/json", "template": "{\"v\": \"{v}\"}"},
       {"mime": "text/plain",       "template": "v {v} end"}
     ]
+  },
+  "served_credential_cases": {
+    "_comment": "A value served under a credential-named key in a response's JSON (credential_value_action): Yes/No kept, prose offered for review (flagged, kept) with the string patterns still applied inside, anything else redacted. A submitted value (a POST) is redacted whatever its shape, and so is served prose the review cannot reach (inside a base64-wrapped body). via: response | post; decode_base64 decodes the sanitized body before the checks; flagged: the values offered for review.",
+    "cases": [
+      {"id": "response_translation_table", "via": "response", "mime": "application/json", "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\", \"wifi_password\": \"hunter2x\"}", "absent": ["hunter2x"], "present": ["\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\"", "\"ADM_SHOW_PASSWORD\": \"Yes\"", "\"PAGE_DEVICE_PASSWORD_TITLE\": \"FIELD_", "\"wifi_password\": \"FIELD_"], "flagged": ["Set a new password"]},
+      {"id": "response_prose_keeps_string_patterns", "via": "response", "mime": "application/json", "text": "{\"password_hint\": \"Open 192.168.1.50 to reset it\"}", "absent": ["192.168.1.50"], "present": ["\"password_hint\": \"Open 10.255."], "flagged": ["Open 192.168.1.50 to reset it"]},
+      {"id": "post_prose_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"correct horse battery staple\"}", "absent": ["correct horse"], "present": ["\"password\": \"FIELD_"], "flagged": []},
+      {"id": "post_yes_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"Yes\"}", "absent": ["\"Yes\""], "present": ["\"password\": \"FIELD_"], "flagged": []},
+      {"id": "response_base64_prose_redacted", "via": "response", "mime": "text/plain", "decode_base64": true, "text": "eyJwYXNzd29yZCI6ICJTZXQgYSBuZXcgcGFzc3dvcmQifQ==", "absent": ["Set a new password"], "present": ["\"password\": \"FIELD_"], "flagged": []}
+    ]
   }
 }

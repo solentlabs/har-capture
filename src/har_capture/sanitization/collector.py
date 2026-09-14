@@ -64,6 +64,11 @@ class RedactionCollector:
         finally:
             self._flags_muted = previous
 
+    @property
+    def accepts_flags(self) -> bool:
+        """False inside ``flags_muted``: a value offered for review there would be discarded."""
+        return not self._flags_muted
+
     def record_redacted_value(self, original: str, placeholder: str) -> None:
         """Remember which placeholder an auto-redacted value was given.
 

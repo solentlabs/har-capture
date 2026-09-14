@@ -378,6 +378,30 @@ looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fle
 stops 480 of the sanitizer's own placeholders being hashed again (46 in POST JSON, 434 in responses), 27 empty passwords
 in POST JSON stay empty, and 4 look-alike values under a credential key are replaced (measured with this rule, 0.13.0).
 
+A value a **response** serves under a credential-named key is judged by its shape too (`credential_value_action()`,
+shared with `validate` and `check_for_pii`), because there the key is often a firmware translation table's label for UI
+text about credentials — `PAGE_GENERAL_SET_PASSWORD`, and in one table a bare `password` or `passphrase`. A button word
+(`Yes`, `No`) is kept; prose (words on both sides of a space) is offered for review as `credential` at LOW confidence
+(shown, not pre-selected for redaction), with the string patterns still applied inside it; anything else is replaced.
+Prose the review cannot reach — inside a base64-wrapped body, where flags are muted — is replaced. A value a client
+**submits** (a POST body) is replaced whatever its shape: there the key names the field the credential is typed into.
+
+**ADR-12 accounting** (served credential-named values by shape, 0.13.0; Ken, 2026-09-14: "auto redaction should not
+overextend otherwise we end up with bad data"):
+
+- *Evidence:* across the 480 fleet HARs and CMM's catalog, 107 credential-named keys hold 3,027 values. Every
+  non-placeholder value a response serves under one sits in one of three translation tables (923, 1,149 and 1,331
+  members), byte-identical across the capture folders that hold it — firmware text, not a user's secret: 1,220 prose
+  strings, 442 single-word labels, 48 `Yes`/`No`. Of the credentials clients submit, none is prose or a button word.
+- *Fidelity regained:* the 48 button words are kept, and the 1,220 prose strings reach the review (10–26 distinct per
+  affected capture, median 13) instead of becoming `FIELD_<hash>`. Single-word labels are still replaced: by shape they
+  cannot be told from a password.
+- *Leak stance:* no raw credential served in a response exists in the fleet to test prose against (every one is already
+  a placeholder), and a WPA passphrase may contain spaces, so prose is offered for review, not kept. Until 0.13.0 this
+  spec rejected exempting whitespace values on that ground; review, not exemption, is what answers it.
+- *Rejected:* "the credential word ends the key" — it would stop redacting real submitted passwords under
+  `password_login`, and still redact the tables' `password` and `passphrase` labels.
+
 Every string — each value, and each object key — is the unit of text: it gets the positional passes the HTML engine runs
 (labeled serials, vendor serials, structural credentials) interleaved with the
 [string patterns](#string-pattern-sanitization) in the HTML engine's order (see
@@ -514,11 +538,10 @@ scanned both.
   `StatusSoftwareSerialNum` survived every sanitize run (54 across the fleet) while `validate`, which parses the body,
   now reports it as an error.
 - *Fidelity cost:* the JSON key rules now apply to these bodies, and they include the credential-name rule. Its values
-  under a credential-named key become `FIELD_<hash>` — across the fleet, 220 strings in HNAP `text/html` JSON, all UI
+  under a credential-named key became `FIELD_<hash>` — across the fleet, 220 strings in HNAP `text/html` JSON, all UI
   copy from translation bundles (132 phrases, 88 single words; none a token with a digit). The key survives, so the
-  structure a consumer reads is intact; the copy is lost. A declared `application/json` body has always been treated
-  this way. Exempting values with whitespace was rejected: the rule is driven by the key's label, and it names the leak
-  it closes — a WPA passphrase may contain spaces — which is the justification ADR-12 asks of a redaction.
+  structure a consumer reads is intact. Since the served-value rule above, the phrases reach the review and button words
+  are kept; single words are still replaced.
 - *Cannot-be-structure proof:* only text that parses as a JSON object or array is rerouted, and the rules that then
   apply are the JSON engine's. The HTML engine's passes `validate` checks for all run on this route too — address and
   MAC passes through the same regexes ([String Pattern Sanitization](#string-pattern-sanitization)), labeled serials,

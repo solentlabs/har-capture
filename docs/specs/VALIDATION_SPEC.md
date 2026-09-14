@@ -240,7 +240,9 @@ Severity: **error**
   HNAP answers JSON as `text/html`) has its fields checked by `check_json_fields()`, with the rules the sanitizer
   redacts by: identity fields and credential-named keys. Flag-tier names (`username`, `login`) are not reported here —
   in responses they are mostly translation-bundle keys, and the sanitizer only offers them for review, so a warning
-  would have no sanitize remedy
+  would have no sanitize remedy. Likewise a credential-named value the sanitizer keeps or offers for review
+  (`credential_value_action()`: a button word, or prose) is not reported in a response; in a POST body every unredacted
+  credential-named value is an error
 - A MAC reported as an identity field is not reported again by the MAC scan below
 - An object that repeats a key is checked member by member, the shadowed earlier values included (`json_members()`): the
   parser keeps only the last, and the sanitizer drops the others by re-serializing

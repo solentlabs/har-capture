@@ -170,6 +170,7 @@
       {"id": "json_credential_pws",      "content": "{\"pws\": \"s3cr3tpw\"}",                           "findings": [["credential_field", "s3cr3tpw"]]},
       {"id": "json_credential_kept_values", "content": "{\"password\": \"FIELD_1a2b3c4d\", \"pwd\": \"\", \"token\": \"[REDACTED]\"}", "findings": []},
       {"id": "json_credential_encoding_kept", "content": "{\"credential_encoding\": \"plain\"}",           "findings": []},
+      {"id": "json_credential_ui_strings", "content": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\"}", "findings": [["credential_field", "Password"]]},
       {"id": "json_credential_non_string", "content": "{\"auth\": true, \"has_credentials\": false}",  "findings": []},
       {"id": "card_luhn_valid",          "content": "card 4111111111111111",                            "findings": [["credit_card_visa", "4111111111111111"]]},
       {"id": "card_luhn_invalid_kept",   "content": "card 4111111111111112 id 5555555555554444",        "findings": [["credit_card_mastercard", "5555555555554444"]]},

@@ -44,6 +44,7 @@ from har_capture.patterns.redaction import (
     QueryCredential,
     QueryPayload,
     classify_identity_field,
+    credential_value_action,
     decode_base64_payload,
     decode_transport_body,
     find_query_credential,
@@ -86,6 +87,7 @@ BODY_ROUTE_CASES = _FIXTURES["body_route_cases"]["cases"]
 MAC_PLACEHOLDER_CASES = _FIXTURES["mac_placeholder_cases"]["cases"]
 NETWORK_VALUE_REGEX_CASES = _FIXTURES["network_value_regex_cases"]["cases"]
 ITER_JSON_STRINGS_CASES = _FIXTURES["iter_json_strings_cases"]["cases"]
+CREDENTIAL_VALUE_ACTION_CASES = _FIXTURES["credential_value_action_cases"]["cases"]
 
 
 class TestMacRegex:
@@ -118,6 +120,16 @@ class TestNetworkValueRegexes:
     def test_pii_json_mirrors_shared_regex(self, name: str) -> None:
         """check_for_pii reads pii.json; the pattern file must carry the shared regex verbatim."""
         assert load_pii_patterns()["patterns"][name]["regex"] == self._REGEXES[name].pattern
+
+
+class TestCredentialValueAction:
+    """credential_value_action: keep, review or redact a value served under a credential-named key."""
+
+    @pytest.mark.parametrize(
+        "case", CREDENTIAL_VALUE_ACTION_CASES, ids=[c["id"] for c in CREDENTIAL_VALUE_ACTION_CASES]
+    )
+    def test_action(self, case: dict) -> None:
+        assert credential_value_action(case["value"]) == case["action"]
 
 
 class TestIterJsonStrings:
