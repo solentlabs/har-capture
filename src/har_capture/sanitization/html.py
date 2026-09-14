@@ -24,7 +24,7 @@ import bisect
 import ipaddress
 import json
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from har_capture.patterns import (
@@ -50,7 +50,7 @@ from har_capture.patterns.redaction import (
     is_ipv6_host_address,
     is_redacted,
     luhn_valid,
-    parse_json_container,
+    route_body,
     unredacted_identity,
 )
 
@@ -58,10 +58,10 @@ if TYPE_CHECKING:
     from typing import Any
 
     from har_capture.sanitization.collector import RedactionCollector
-    from har_capture.sanitization.report import HeuristicMode
+    from har_capture.sanitization.report import ConfidenceLevel, HeuristicMode
 else:
     from har_capture.sanitization.collector import RedactionCollector
-    from har_capture.sanitization.report import HeuristicMode
+    from har_capture.sanitization.report import ConfidenceLevel, HeuristicMode
 
 
 # Serial number pattern for pipe-delimited values (SN-XXXXX, S/N-XXXXX)
@@ -223,6 +223,113 @@ ACCOUNT_LABEL_RE = re.compile(
     r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+(?:<[^>]*>\s*)*)([^\s<]+)",
     re.IGNORECASE,
 )
+
+
+# pii.json patterns with a pass of their own in the HTML engine; pass 0
+# (redact_pattern_file_matches) applies every other pattern — the number
+# patterns and any custom one.
+DEDICATED_PASS_PATTERNS = frozenset(
+    {
+        "mac_address",
+        "serial_number",
+        "wps_pin",
+        "account_id",
+        "private_ip",
+        "public_ip",
+        "ipv6",
+        "email",
+        "password_field",
+        "password_input",
+        "session_token",
+        "csrf_token",
+        "config_path",
+        "motorola_password",
+    }
+)
+# Of those, the ones whose pass only the HTML engine runs. On a JSON or text
+# route their regexes match source code (`key:!0`, `auth = sign(...)`) far more
+# than values, so check_for_pii reports them only in content the sanitizer
+# routes to the HTML engine.
+HTML_ONLY_PATTERNS = frozenset(
+    {
+        "wps_pin",
+        "account_id",
+        "password_field",
+        "password_input",
+        "session_token",
+        "csrf_token",
+        "config_path",
+        "motorola_password",
+    }
+)
+
+
+def pattern_file_patterns(
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> list[tuple[str, re.Pattern[str], str]]:
+    """The pattern file's patterns pass 0 applies, as ``(name, regex, prefix)``.
+
+    Every pattern without a pass of its own (``DEDICATED_PASS_PATTERNS``) —
+    the number patterns and any custom one — compiled by ``compile_pattern``;
+    a domain's include_patterns holds. Resolve once per call and pass the
+    list to ``redact_pattern_file_matches`` for each text.
+    """
+    return [
+        (name, regex, definition.get("replacement_prefix", "CUSTOM"))
+        for name, regex, definition in _compiled_pii_patterns(load_pii_patterns(custom_patterns))
+        if name not in DEDICATED_PASS_PATTERNS
+    ]
+
+
+def redact_pattern_file_matches(
+    text: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    patterns: Sequence[tuple[str, re.Pattern[str], str]],
+) -> str:
+    """Apply the pattern file's patterns that have no pass of their own (pass 0).
+
+    Every route runs it — the HTML engine first of all its passes, and the
+    JSON and text routes on each text they sanitize — so a custom pattern
+    matches anywhere in content. A match is hashed with its pattern's
+    prefix, except the built-in number patterns, which keep one rule on every
+    route: a card-shaped number (``credit_card_*``) only when it passes the
+    Luhn check, and an SSN-shaped one is offered for review, never hashed.
+
+    Args:
+        text: Text to sanitize
+        hasher: Hasher for placeholder generation
+        collector: Collector for redaction counts and review flags
+        patterns: ``pattern_file_patterns()`` for the call's custom patterns
+
+    Returns:
+        The text with pattern matches replaced
+    """
+    for name, regex, prefix in patterns:
+        text = regex.sub(_pattern_file_replacer(name, prefix, hasher, collector), text)
+    return text
+
+
+def _pattern_file_replacer(
+    name: str, prefix: str, hasher: Hasher, collector: RedactionCollector
+) -> Callable[[re.Match[str]], str]:
+    def replace(match: re.Match[str]) -> str:
+        value = match.group(0)
+        if name.startswith("credit_card_") and not luhn_valid(value):
+            return value
+        if name == "ssn":
+            collector.flag_value(
+                value,
+                "ssn",
+                ConfidenceLevel.MEDIUM,
+                match.string[max(0, match.start() - 20) : match.end() + 20],
+                "Possible SSN pattern (###-##-####)",
+            )
+            return value
+        collector.record_auto_redaction(name)
+        return hasher.hash_generic(value, prefix)
+
+    return replace
 
 
 def is_structural_value_sensitive(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
@@ -658,47 +765,9 @@ def _sanitize_html_impl(
     from har_capture.sanitization.har import is_sensitive_field
     from har_capture.sanitization.heuristics import analyze_value
 
-    # 0. Custom patterns (apply first so they take precedence over built-in patterns)
-    # Skip built-in patterns that have dedicated replacement logic below
-    BUILTIN_PATTERNS = {
-        "mac_address",
-        "serial_number",
-        "wps_pin",
-        "account_id",
-        "private_ip",
-        "public_ip",
-        "ipv6",
-        "email",
-        "password_field",
-        "password_input",
-        "session_token",
-        "csrf_token",
-        "config_path",
-        "motorola_password",
-    }
-
-    for pattern_name, pattern_def in pii.get("patterns", {}).items():
-        # Skip built-in patterns with special handling
-        if pattern_name in BUILTIN_PATTERNS:
-            continue
-
-        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
-            continue
-        # Compiled as check_for_pii compiles it: every named flag, and an
-        # invalid regex skipped (logged) rather than failing the run.
-        regex = compile_pattern(pattern_def)
-        if regex is None:
-            continue
-        prefix = pattern_def.get("replacement_prefix", "CUSTOM")
-
-        def make_replacer(prefix: str, pname: str) -> Any:
-            def replace_custom(match: re.Match[str]) -> str:
-                collector.record_auto_redaction(pname)
-                return hasher.hash_generic(match.group(0), prefix)
-
-            return replace_custom
-
-        html = regex.sub(make_replacer(prefix, pattern_name), html)
+    # 0. The pattern file's other patterns, custom ones included (apply first
+    # so they take precedence over the built-in passes).
+    html = redact_pattern_file_matches(html, hasher, collector, pattern_file_patterns(custom_patterns))
 
     # 0b. Web Storage setItem() calls in inline <script> blocks
     # Catches: localStorage.setItem("key", "value") and sessionStorage.setItem("key", "value")
@@ -1258,7 +1327,11 @@ def _fixture_text_findings(
     preserved_ips: frozenset[str],
     custom_patterns: str | dict[str, Any] | None,
 ) -> Iterator[tuple[str, str, int]]:
-    """Yield ``(pattern, match, offset)`` for each finding ``check_for_pii`` reports in one text."""
+    """Yield ``(pattern, match, offset)`` for each finding ``check_for_pii`` reports in one text.
+
+    ``patterns`` holds only the patterns the text's route runs (see
+    ``HTML_ONLY_PATTERNS``).
+    """
     # Labeled default credentials in sibling-element label/value pairs. These
     # live as compiled patterns rather than pii.json entries because the pass-0
     # generic replacer substitutes the whole match, which would flatten the
@@ -1332,7 +1405,15 @@ def check_for_pii(
         'mac_address'
     """
     pii = load_pii_patterns(custom_patterns)
-    patterns = _compiled_pii_patterns(pii)
+    # Read as the sanitizer reads a body with no type: JSON by content, `<`
+    # opens markup, anything else is text; the HTML engine's own patterns
+    # count only where it would run.
+    route = route_body("", content)[0]
+    patterns = [
+        entry
+        for entry in _compiled_pii_patterns(pii)
+        if route == "html" or entry[0] not in HTML_ONLY_PATTERNS
+    ]
     allowlist = load_allowlist(custom_patterns)
     preserved_ips = frozenset(pii.get("preserved_gateway_ips", []))
     line_of = _line_numbers(content)
@@ -1341,7 +1422,7 @@ def check_for_pii(
     def report(pattern: str, value: str, offset: int) -> None:
         findings.append({"pattern": pattern, "match": value, "line": line_of(offset), "filename": filename})
 
-    if parse_json_container(content) is None:
+    if route != "json":
         for pattern, value, offset in _fixture_text_findings(
             content, patterns, allowlist, preserved_ips, custom_patterns
         ):

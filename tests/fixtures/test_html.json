@@ -134,6 +134,15 @@
     ]
   },
 
+  "pass0_number_cases": {
+    "_comment": "The HTML engine's pass 0 treats card- and SSN-shaped numbers as the text path does: a card-shaped number is hashed only when it passes the Luhn check, and an SSN-shaped one is offered for review (category ssn), not hashed. removed must not survive; kept must; flagged lists the values offered for review.",
+    "cases": [
+      {"id": "card_luhn_valid_hashed",   "html": "<td>4111111111111111</td>",  "removed": ["4111111111111111"], "kept": ["<td>CC_"],              "flagged": []},
+      {"id": "card_luhn_failing_kept",   "html": "<td>4111111111111112</td>",  "removed": [],                   "kept": ["<td>4111111111111112</td>"], "flagged": []},
+      {"id": "ssn_offered_for_review",   "html": "<td>123-45-6789</td>",       "removed": [],                   "kept": ["<td>123-45-6789</td>"],      "flagged": ["123-45-6789"]}
+    ]
+  },
+
   "pii_exact_findings_cases": {
     "_comment": "check_for_pii(content) must report exactly these (pattern, match) pairs. It shares the sanitizer's rules: a JSON fixture's identity fields are reported with validate's predicate (unredacted_identity), a MAC is reported once (not again as an IPv6 candidate), and a match the sanitizer keeps — a constant MAC, a dotted-quad version string — is not reported, since no sanitize run clears it.",
     "cases": [
@@ -162,10 +171,13 @@
       {"id": "email_after_serial_label", "content": "Serial Number: admin123@example.com",              "findings": [["email", "admin123@example.com"]]},
       {"id": "account_tag_wrapped",      "content": "<p>Account ID: <b>998877</b></p>",                 "findings": [["account_id", "Account ID: <b>998877"]]},
       {"id": "account_tag_wrapped_placeholder", "content": "<p>Account ID: <b>ACCOUNT_1a2b3c4d</b></p>", "findings": []},
-      {"id": "account_prefix_shaped",    "content": "Customer Number: DEV_abc123",                      "findings": [["account_id", "Customer Number: DEV_abc123"]]},
+      {"id": "account_prefix_shaped",    "content": "<p>Customer Number: DEV_abc123</p>",               "findings": [["account_id", "Customer Number: DEV_abc123"]]},
       {"id": "account_allowlisted",      "content": "Account ID: [REDACTED]",                           "findings": []},
       {"id": "password_input_placeholder", "content": "<input type=\"password\" value=\"PASS_1a2b3c4d\">", "findings": []},
       {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
+      {"id": "html_only_pattern_in_markup", "content": "<p>password: hunter2x</p>",                    "findings": [["password_field", "password: hunter2x"]]},
+      {"id": "html_only_pattern_in_script", "content": "config={key:!0,token:a};",                     "findings": []},
+      {"id": "html_only_pattern_in_json_string", "content": "{\"note\": \"WPS PIN: 12345670\"}",       "findings": []},
       {"id": "json_credential_field",    "content": "{\"Username\": \"admin\", \"Password\": \"hunter2x\"}", "findings": [["credential_field", "hunter2x"]]},
       {"id": "json_credential_pws",      "content": "{\"pws\": \"s3cr3tpw\"}",                           "findings": [["credential_field", "s3cr3tpw"]]},
       {"id": "json_credential_kept_values", "content": "{\"password\": \"FIELD_1a2b3c4d\", \"pwd\": \"\", \"token\": \"[REDACTED]\"}", "findings": []},

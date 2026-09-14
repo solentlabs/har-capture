@@ -212,7 +212,8 @@ def sanitize_post_data(
    changed body is re-serialized with U+FFFD in its place). The body is then delegated to the HTML content engine, which
    runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are
    sanitized identically to XML response content.
-1. **Raw text**: Falls through to string pattern matching.
+1. **Raw text**: sanitized as a text response body is (`_sanitize_body_string`): the pattern-file pass, the string
+   patterns and the positional passes, labeled serials among them. Until 0.13.0 it took the string patterns alone.
 
 **Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON,
 XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
@@ -367,9 +368,17 @@ Traverses objects and arrays recursively. Every string leaf goes through the
 
 1. **SSID key** (`is_ssid_key()`: one of the key's words is `ssid` — `ssid`, `ssid_24g`, `guestSSID`) holding a network
    name that is not a safe value or a placeholder → flagged for review (`wifi_ssid`, MEDIUM), never auto-redacted: the
-   name identifies a network rather than authenticating to it.
+   name identifies a network rather than authenticating to it. The HTML engine auto-redacts a *labeled* SSID on a page
+   (passes 7a, 7c, 16), so one network name could be `WIFI_<hash>` there and raw under a JSON key; measured across the
+   fleet (0.13.0), 307 distinct raw names sit under JSON SSID keys in 29 captures, every one offered for review, and
+   none is also redacted on a page of the same capture. Auto-redacting JSON SSID keys would name no leak and cost those
+   307 names, so the rule stays review-only (ADR-12).
 
 1. Anything else → traversed.
+
+The key rules judge string values only; a number, boolean, null or container under a credential- or identity-named key
+is traversed, not redacted, and `validate` reports none. Across the fleet (0.13.0) such values are 54 booleans (`auth`,
+`has_credentials`) and nothing else.
 
 A sensitive key holding an empty string, or exactly the placeholder this rule writes (`FIELD_<hex>`, `***FIELD***`,
 `[REDACTED]`) that `validate` also accepts, is left as it is: there is no secret to replace, so HNAP's `"Password": ""`
@@ -497,7 +506,7 @@ parses the text (`parse_json_container()`: nesting too deep for the parser count
 in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default spacing, or a 2- or
 4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the original's surrounding
 whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing with non-ASCII as
-written. The text path is `_sanitize_string_patterns()`, over the whole body whatever its size. Until 0.13.0 it skipped
+written. The text path is `_sanitize_body_string()`, over the whole body whatever its size. Until 0.13.0 it skipped
 strings over 1 MB (10,000 characters until 2026-08-19, which exempted the CM2500's 33 KB `utility.js`), while `validate`
 scanned them. Across the cable_modem_monitor fleet, dropping the guard redacts 48 MACs and 12 IP addresses in
 `text/javascript` bodies over 1 MB, all reported by `validate` before.
@@ -550,9 +559,10 @@ scanned both.
 
 ### String Pattern Sanitization
 
-`_sanitize_string_patterns()` is the path for POST text that is not JSON, form data or markup; text bodies and every
-JSON string value and object key take the same patterns with the positional passes between them
-(`_sanitize_body_string`, above). Its address passes are the HTML engine's passes 1 and 4–6 and 11, with the same
+Every text outside the HTML engine — a text body, each JSON string value and object key, and POST text that is not JSON,
+form data or markup — takes one path, `_sanitize_body_string()` (above): the pattern-file pass (`pii.json`'s patterns
+with no pass of their own, custom ones included; see [Pass 0](#html-content-engine-htmlpy)), the string patterns below,
+and the positional passes between them. Its address passes are the HTML engine's passes 1 and 4–6 and 11, with the same
 regexes (`patterns/redaction.py`), the same validity rules and placeholders, and the same order — IPv6 ahead of IPv4, so
 an IPv4-mapped `::ffff:1.2.3.4` is hashed as one address — so whether a value is redacted never depends on which engine
 its body routes to. The preserved gateway addresses are `pii.json`'s plus any the call's `custom_patterns` add, on both
@@ -565,15 +575,16 @@ routes (a per-call scope, like the field patterns'):
 | Public IPs    | `PUBLIC_IP_RE`, less version strings (`is_valid_ip_address()`)                        | `hasher.hash_ip(ip, is_private=False)` |
 | IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (`::`, `::1` kept)              | `hasher.hash_ipv6()`                   |
 | Emails        | `EMAIL_RE` (RFC 5321 simplified)                                                      | `hasher.hash_email()`                  |
-| SSN           | `\d{3}-\d{2}-\d{4}`                                                                   | Flagged, not auto-redacted             |
-| Credit cards  | Visa/MC/Amex with Luhn check                                                          | `hasher.hash_value()`                  |
 | Phone numbers | US/CA formats **with a separator, parens, or leading +**                              | Flagged, not auto-redacted             |
 
-Until 0.13.0 this path had regexes of its own: no IPv6 pass at all, a private-IP regex that read `10.` plus two octets
-(so a `10.x.x.x` address never matched), and an email regex whose `[A-Z|a-z]` class ran on through a following `|field`.
-A private-range match is an address when every octet is 255 or less: zero-padded as some devices print it
-(`192.168.001.100`) it is redacted, and `192.168.1.999` is not an address on either route. The same holds inside an
-IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address, hashed whole as IPv6 rather than its tail as IPv4.
+Card- and SSN-shaped numbers are the pattern file's (`credit_card_*`, `ssn`), handled by the pattern-file pass with the
+HTML engine's rules, so a domain that leaves them out of `include_patterns` leaves them out on every route. Until 0.13.0
+this path had its own card and SSN regexes, applied whatever the domain; and it had other regexes of its own: no IPv6
+pass at all, a private-IP regex that read `10.` plus two octets (so a `10.x.x.x` address never matched), and an email
+regex whose `[A-Z|a-z]` class ran on through a following `|field`. A private-range match is an address when every octet
+is 255 or less: zero-padded as some devices print it (`192.168.001.100`) it is redacted, and `192.168.1.999` is not an
+address on either route. The same holds inside an IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address,
+hashed whole as IPv6 rather than its tail as IPv4.
 
 **ADR-12 accounting** (IPv6 and `10.x` in JSON and text bodies):
 
@@ -599,7 +610,7 @@ counters, or frequencies far more often than phone numbers (the CM2500 firmware'
 
 ### MAC Addresses
 
-One definition, `MAC_RE` in `patterns/redaction.py`, serves `_sanitize_string_patterns`, the HTML engine's pass 1 and
+One definition, `MAC_RE` in `patterns/redaction.py`, serves `_sanitize_body_string`, the HTML engine's pass 1 and
 pipe-delimited scanner, `har-capture validate` and `check_for_pii` (whose `pii.json` `mac_address` regex carries it
 verbatim; a test pins the two): six hex pairs joined by `:` or `-`, wherever they occur. No boundary is required on
 either side — `wanmac3C:7A:8A:12:34:56` and `3C:7A:8A:12:34:56Enabled` are MACs glued to identifiers. A longer separated
@@ -610,10 +621,16 @@ identity, and is left alone by both tools (`is_constant_mac()`; see
 [Response Content Dispatch](#response-content-dispatch)).
 
 Until 0.13.0 the sanitizer required `\b` on both sides and the validator required nothing, so a MAC glued to an
-identifier was reported by `validate` and left by every sanitize run. One constructed shape stays open: five MAC groups
-glued to an IPv4 address (`3C:11:22:33:44:8.8.8.8`), where the address's placeholder completes a sixth group that
-`validate` then reports. Closing it would mean bounding the MAC run, which the glued-identifier rule keeps open on
-purpose; no fleet capture holds the shape.
+identifier was reported by `validate` and left by every sanitize run.
+
+**Known limit — glued placeholders (0.13.0 decision).** A placeholder glued to a neighbour can complete a new match that
+`validate` and `check_for_pii` then report and no sanitize run clears (ADR-14): five MAC groups glued to an IPv4 address
+(`3C:11:22:33:44:8.8.8.8`, whose address placeholder completes a sixth group), a hex pair glued to a MAC placeholder
+(`ff-02:da:…`), an email placeholder followed by more text under a serial-named key. The fuzz harness builds these from
+its vocabulary; the fleet holds none — after sanitize, neither tool finds a MAC, IP address or IPv6 address anywhere in
+the 480 fleet captures. The general fix — both checkers skip any match overlapping a placeholder the sanitizer wrote —
+would touch every check in both tools, and bounding the MAC run would reopen the glued-identifier leak above, so neither
+is built. A capture that holds such a shape is reported by `validate` and fixed by hand.
 
 **ADR-12 accounting** (redacts MACs the `\b` form missed):
 
@@ -669,6 +686,16 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 14   | Pipe-delimited (tagValueList)  | `var name = "val1\|val2\|val3"`                          | Per-value heuristic analysis            |
 | 15   | Pipe-delimited (other)         | Other pipe-delimited variables                           | Per-value heuristic analysis            |
 | 16   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
+
+**Pass 0 — pattern-file regexes** (`redact_pattern_file_matches()`: every `pii.json` pattern without a dedicated pass,
+and custom ones): each match is hashed with the pattern's prefix, except the built-in number patterns, which keep one
+rule so a value is treated alike on every route: a card-shaped number (`credit_card_*`) is hashed only when it passes
+the Luhn check (`luhn_valid()`), and an SSN-shaped one (`ssn`) is offered for review as `ssn`, never hashed. Under
+`--patterns base` this keeps the fleet's 8 card-shaped numbers in HTML bodies, all of which fail the Luhn check
+(0.13.0); the fleet holds no SSN-shaped value. The `network-device` domain does not include these patterns. The same
+pass runs on every other route (`_sanitize_body_string`), so a custom pattern matches anywhere in content, as
+[CUSTOM_PATTERNS.md](../CUSTOM_PATTERNS.md) says; until 0.13.0 it ran only in the HTML engine, and a custom customer-ID
+pattern left the same value raw in a JSON, script or POST body.
 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
@@ -857,6 +884,14 @@ custom `fields` patterns included): a value that is neither empty nor allowliste
 no JSON field by name, so a plain password under a `password` key passed it; a consumer that taught it one with a `pii`
 regex pairing a key and its value (`"field": "value"`) no longer needs to, and should name the field in `fields` instead
 — a regex cannot pair across the decoded strings a JSON fixture is read as.
+
+The HTML engine's own patterns — passwords after a label (`password_field`), password inputs, session and CSRF tokens,
+account IDs, WPS PINs, config paths, Motorola password variables (`HTML_ONLY_PATTERNS`) — are reported only in content
+the sanitizer routes to that engine, read as it reads a body with no type (`route_body()`: JSON by content, `<` opens
+markup, else text). Elsewhere their regexes match source code: across the sanitized fleet (0.13.0) they reported 21,287
+`password_field`, 3,061 `session_token` and 22 `account_id` matches, every one in a JavaScript or CSS body (`key:!0`,
+`auth = crc_sign(…)`), and none in a JSON or POST body. Running those passes on the text route would have hashed about
+24,000 code tokens (ADR-12: no leak named, fidelity lost), so they stay the HTML engine's.
 
 A JSON fixture is read in one pass over its string literals, in document order, so each finding is reported on the line
 its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,

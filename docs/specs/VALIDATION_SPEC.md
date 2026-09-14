@@ -243,6 +243,8 @@ Severity: **error**
   would have no sanitize remedy. Likewise a credential-named value the sanitizer keeps or offers for review
   (`credential_value_action()`: a button word, or prose) is not reported in a response; in a POST body every unredacted
   credential-named value is an error
+- Only string values are judged, as the sanitizer judges them: a boolean, number or container under a credential- or
+  identity-named key is not reported (the fleet holds 54 booleans there and nothing else)
 - A MAC reported as an identity field is not reported again by the MAC scan below
 - An object that repeats a key is checked member by member, the shadowed earlier values included (`json_members()`): the
   parser keeps only the last, and the sanitizer drops the others by re-serializing
@@ -607,13 +609,13 @@ Code-level detectors shared through `patterns/redaction.py` rather than a JSON f
   sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
 - `SERIAL_LABEL_RE` (from `sanitization/html.py`) — labeled serials. Used by validation (`check_content`), sanitization
   (pass 2) and `check_for_pii` (through `pii.json`'s mirrored `serial_number` regex).
-- `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_string_patterns`,
-  HTML engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
+- `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_body_string`, HTML
+  engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
   `is_constant_mac()` — the broadcast and zero MACs neither tool treats as PII — is shared the same way.
 - `IPV6_RE` with `is_ipv6_host_address()`, `PUBLIC_IP_RE`, `PRIVATE_IP_RE`, `EMAIL_RE` — addresses in text. Used by
-  sanitization (HTML engine passes 4–6 and 11, and `_sanitize_string_patterns` for JSON values, JSON keys and text
-  bodies), validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `private_ip`,
-  `public_ip`, `ipv6` and `email` regexes, skipping what the engines keep).
+  sanitization (HTML engine passes 4–6 and 11, and `_sanitize_body_string` for JSON values, JSON keys and text bodies),
+  validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `private_ip`, `public_ip`,
+  `ipv6` and `email` regexes, skipping what the engines keep).
 - `route_body()` / `parse_json_container()` — which engine a response body's text goes to, and whether text is JSON.
   Used by sanitization (`_sanitize_body_text`, `sanitize_post_data`) and validation (`check_content`, to check a
   JSON-routed body's fields; `check_post_data`). `JSON_MAX_DEPTH` bounds the key rules in both tools and in

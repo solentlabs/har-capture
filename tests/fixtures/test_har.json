@@ -762,5 +762,18 @@
       {"id": "post_yes_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"Yes\"}", "absent": ["\"Yes\""], "present": ["\"password\": \"FIELD_"], "flagged": []},
       {"id": "response_base64_prose_redacted", "via": "response", "mime": "text/plain", "decode_base64": true, "text": "eyJwYXNzd29yZCI6ICJTZXQgYSBuZXcgcGFzc3dvcmQifQ==", "absent": ["Set a new password"], "present": ["\"password\": \"FIELD_"], "flagged": []}
     ]
+  },
+  "pattern_file_route_cases": {
+    "_comment": "The pattern-file pass (the HTML engine's pass 0: every pii.json pattern without a pass of its own, custom ones included) runs on every route \u2014 text bodies, each decoded JSON string and key, and POST text \u2014 as CUSTOM_PATTERNS.md promises, and a domain's include_patterns holds on every route. POST text takes the text-body passes (labeled serials among them). via: response | post; custom_patterns applies to the call.",
+    "cases": [
+      {"id": "custom_in_json_value", "via": "response", "mime": "application/json", "text": "{\"c\": \"CUST-A1B2C3D4\"}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"c\": \"CUSTID_"]},
+      {"id": "custom_in_json_key", "via": "response", "mime": "application/json", "text": "{\"CUST-A1B2C3D4\": 1}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"CUSTID_"]},
+      {"id": "custom_in_script", "via": "response", "mime": "text/javascript", "text": "var c = 'CUST-A1B2C3D4';", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["var c = 'CUSTID_"]},
+      {"id": "custom_in_post_json", "via": "post", "mime": "application/json", "text": "{\"c\": \"CUST-A1B2C3D4\"}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"c\": \"CUSTID_"]},
+      {"id": "custom_in_post_text", "via": "post", "mime": "text/plain", "text": "customer CUST-A1B2C3D4", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["customer CUSTID_"]},
+      {"id": "card_excluded_by_domain", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "custom_patterns": {"include_patterns": ["mac_address"]}, "absent": [], "present": ["card 4111111111111111"]},
+      {"id": "card_in_text_body", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "absent": ["4111111111111111"], "present": ["card CC_"]},
+      {"id": "labeled_serial_in_post_text", "via": "post", "mime": "text/plain", "text": "Serial Number: 4131N12345678", "absent": ["4131N12345678"], "present": ["Serial Number: SERIAL_"]}
+    ]
   }
 }

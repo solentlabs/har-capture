@@ -41,10 +41,10 @@ from har_capture.sanitization.har import (
     _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
+    _sanitize_body_string,
     _sanitize_form_urlencoded,
     _sanitize_headers,
     _sanitize_json_recursive,
-    _sanitize_string_patterns,
     _scan_url_credentials,
     apply_user_redactions,
     is_flaggable_field,
@@ -1279,9 +1279,9 @@ class TestIPValidation:
         self, input_text: str, should_contain: str | None, desc: str
     ) -> None:
         """Test IP validation rejects invalid octets in string patterns."""
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
-        result = _sanitize_string_patterns(input_text)
+        result = _sanitize_body_string(input_text)
         if should_contain:
             assert should_contain in result, f"{desc}: invalid IP should be preserved"
         else:
@@ -1322,9 +1322,9 @@ class TestSSNAndCreditCardPatterns:
     )
     def test_financial_pii_detection(self, input_text: str, should_redact: bool, desc: str) -> None:
         """Test credit card auto-redaction and SSN preservation (flagged only)."""
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
-        result = _sanitize_string_patterns(input_text)
+        result = _sanitize_body_string(input_text)
         if should_redact:
             # Extract the value that should be redacted
             original_numbers = [w for w in input_text.split() if any(c.isdigit() for c in w)]
@@ -1363,11 +1363,11 @@ class TestFlaggingBehavior:
         """Test SSN patterns are flagged for review, not auto-redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("SSN: 123-45-6789", collector=collector)
+        result = _sanitize_body_string("SSN: 123-45-6789", collector=collector)
         assert "123-45-6789" in result, "SSN should be preserved in output"
         assert any(f.category == "ssn" for f in collector.flagged), "SSN should be in flagged list"
 
@@ -1533,11 +1533,11 @@ class TestPhoneNumberPatterns:
         """Test phone number patterns are flagged for review, not auto-redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert expected_phone in result, f"{desc}: phone number should be preserved in output"
         assert any(f.category == "phone" for f in collector.flagged), f"{desc}: phone should be flagged"
 
@@ -1565,11 +1565,11 @@ class TestPhoneNumberPatterns:
         """Test non-phone patterns are not flagged."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        _sanitize_string_patterns(input_text, collector=collector)
+        _sanitize_body_string(input_text, collector=collector)
         assert not any(f.category == "phone" for f in collector.flagged), f"{desc}: should not flag as phone"
 
 
@@ -1604,11 +1604,11 @@ class TestPublicIpSanitization:
         """Test public IPs are redacted in string patterns."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         # Extract the IP from input to verify it's gone
         import re
 
@@ -1639,11 +1639,11 @@ class TestPublicIpSanitization:
         """Test non-gateway private IPs are redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert input_text not in result, f"{desc}: private IP should be redacted"
 
     @pytest.mark.parametrize(
@@ -1655,11 +1655,11 @@ class TestPublicIpSanitization:
         """Test common gateway IPs are preserved (not redacted)."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert input_text in result, f"{desc}: gateway IP should be preserved"
 
     def test_public_ip_in_json_response(self) -> None:
@@ -1688,11 +1688,11 @@ class TestPublicIpSanitization:
         """Test that public IP redactions are recorded in collector."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        _sanitize_string_patterns("WAN: 73.158.42.197", collector=collector)
+        _sanitize_body_string("WAN: 73.158.42.197", collector=collector)
         assert collector.auto_redacted_counts.get("public_ip", 0) > 0, "Should record public_ip redaction"
 
 
@@ -3573,15 +3573,15 @@ class TestJsonRecursiveSanitization:
 
 
 class TestStringPatternSanitization:
-    """Tests for _sanitize_string_patterns edge cases."""
+    """Tests for _sanitize_body_string edge cases (the string patterns)."""
 
     def test_empty_string_returns_empty(self) -> None:
         """Test empty string is returned unchanged."""
-        assert _sanitize_string_patterns("") == ""
+        assert _sanitize_body_string("") == ""
 
     def test_mac_without_hasher(self) -> None:
         """Test MAC replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF")
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF")
         assert "AA:BB:CC:DD:EE:FF" not in result
         assert "***MAC***" in result
 
@@ -3590,12 +3590,12 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, None)
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF", hasher, None)
         assert "AA:BB:CC:DD:EE:FF" not in result
 
     def test_public_ip_without_hasher(self) -> None:
         """Test public IP replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("DNS: 8.8.8.8")
+        result = _sanitize_body_string("DNS: 8.8.8.8")
         assert "8.8.8.8" not in result
         assert "***IP***" in result
 
@@ -3604,12 +3604,12 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, None)
+        result = _sanitize_body_string("DNS: 8.8.8.8", hasher, None)
         assert "8.8.8.8" not in result
 
     def test_email_without_hasher(self) -> None:
         """Test email replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("Contact: admin@example.com")
+        result = _sanitize_body_string("Contact: admin@example.com")
         assert "admin@example.com" not in result
         assert "***EMAIL***" in result
 
@@ -3618,7 +3618,7 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, None)
+        result = _sanitize_body_string("Contact: admin@example.com", hasher, None)
         assert "admin@example.com" not in result
 
     def test_credit_card_luhn_valid(self) -> None:
@@ -3629,13 +3629,13 @@ class TestStringPatternSanitization:
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
         # Visa test number that passes Luhn
-        result = _sanitize_string_patterns("Card: 4111111111111111", hasher, collector)
+        result = _sanitize_body_string("Card: 4111111111111111", hasher, collector)
         assert "4111111111111111" not in result
 
     def test_credit_card_luhn_invalid(self) -> None:
         """Test invalid credit card number (fails Luhn) is preserved."""
         # Visa-format but fails Luhn check
-        result = _sanitize_string_patterns("Number: 4111111111111112", None, None)
+        result = _sanitize_body_string("Number: 4111111111111112", None, None)
         assert "4111111111111112" in result
 
     def test_string_patterns_with_collector_records_mac(self) -> None:
@@ -3645,7 +3645,7 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, collector)
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF", hasher, collector)
         assert "AA:BB:CC:DD:EE:FF" not in result
         assert collector.auto_redacted_counts.get("mac_address", 0) > 0
 
@@ -3656,13 +3656,13 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, collector)
+        result = _sanitize_body_string("DNS: 8.8.8.8", hasher, collector)
         assert "8.8.8.8" not in result
         assert collector.auto_redacted_counts.get("public_ip", 0) > 0
 
     def test_string_patterns_version_string_not_treated_as_public_ip(self) -> None:
         """Test version-like string matching public IP regex is preserved."""
-        result = _sanitize_string_patterns("Version: 5.7.1.5", None, None)
+        result = _sanitize_body_string("Version: 5.7.1.5", None, None)
         assert "5.7.1.5" in result, "Version string should not be treated as a public IP"
 
     def test_string_patterns_with_collector_records_email(self) -> None:
@@ -3672,7 +3672,7 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, collector)
+        result = _sanitize_body_string("Contact: admin@example.com", hasher, collector)
         assert "admin@example.com" not in result
         assert collector.auto_redacted_counts.get("email", 0) > 0
 
@@ -4092,7 +4092,7 @@ class TestStringPatternsAnySize:
     @pytest.mark.parametrize("filler", [30_000, 1_000_001], ids=["firmware_sized", "over_one_megabyte"])
     def test_macs_redacted(self, filler: int) -> None:
         text = "x" * filler + " device 3C:E4:B0:11:22:33 online"
-        assert "3C:E4:B0:11:22:33" not in _sanitize_string_patterns(text)
+        assert "3C:E4:B0:11:22:33" not in _sanitize_body_string(text)
 
 
 class TestSerialDetectorResolverCache:
@@ -4666,6 +4666,7 @@ NO_COLLECTOR_BODY_CASES = _HAR_FIXTURE["no_collector_body_cases"]["cases"]
 POST_TEXT_CASES = _HAR_FIXTURE["post_text_cases"]["cases"]
 CORRELATION = _HAR_FIXTURE["cross_route_correlation_cases"]
 SERVED_CREDENTIAL_CASES = _HAR_FIXTURE["served_credential_cases"]["cases"]
+PATTERN_FILE_ROUTE_CASES = _HAR_FIXTURE["pattern_file_route_cases"]["cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4815,3 +4816,38 @@ class TestServedCredentialValues:
         assert sorted(f.original_value for f in report.flagged) == sorted(case["flagged"])
         # Offered, not pre-selected: the review pre-selects medium-confidence credentials.
         assert all((f.category, f.confidence.value) == ("credential", "low") for f in report.flagged)
+
+
+class TestPatternFilePassOnEveryRoute:
+    """The pattern-file pass and the text-body passes reach every route, POST text included."""
+
+    @pytest.mark.parametrize(
+        "case", PATTERN_FILE_ROUTE_CASES, ids=[c["id"] for c in PATTERN_FILE_ROUTE_CASES]
+    )
+    def test_route(self, case: dict) -> None:
+        if case["via"] == "post":
+            entry = {
+                "request": {
+                    "method": "POST",
+                    "url": "http://192.168.0.1/api",
+                    "headers": [],
+                    "postData": {"mimeType": case["mime"], "text": case["text"]},
+                },
+                "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/plain"}},
+            }
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+        sanitized, _ = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="routes", custom_patterns=case.get("custom_patterns")
+        )
+        out_entry = sanitized["log"]["entries"][0]
+        out = (
+            out_entry["request"]["postData"]["text"]
+            if case["via"] == "post"
+            else out_entry["response"]["content"]["text"]
+        )
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out

@@ -73,6 +73,7 @@ PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
 PII_JSON_LINE_CASES = _FIXTURE["pii_json_line_cases"]["cases"]
 PII_CUSTOM_PATTERN_CASES = _FIXTURE["pii_custom_pattern_cases"]["cases"]
 CUSTOM_PATTERN_COMPILE_CASES = _FIXTURE["custom_pattern_compile_cases"]["cases"]
+PASS0_NUMBER_CASES = _FIXTURE["pass0_number_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -1119,3 +1120,18 @@ def test_pii_json_mirrors_label_regex(name: str, regex: re.Pattern[str]) -> None
     from har_capture.patterns import load_pii_patterns
 
     assert load_pii_patterns()["patterns"][name]["regex"] == regex.pattern
+
+
+@pytest.mark.parametrize("case", PASS0_NUMBER_CASES, ids=[c["id"] for c in PASS0_NUMBER_CASES])
+def test_pass0_numbers_match_text_path(case: dict) -> None:
+    """Pass 0 hashes Luhn-valid cards only and offers SSN-shaped numbers for review, as the text path does."""
+    from har_capture.patterns import Hasher
+    from har_capture.sanitization.collector import RedactionCollector
+
+    collector = RedactionCollector(hasher=Hasher.create("pass0"))
+    out = sanitize_html(case["html"], collector=collector)
+    for leaked in case["removed"]:
+        assert leaked not in out
+    for kept in case["kept"]:
+        assert kept in out
+    assert [f.original_value for f in collector.flagged] == case["flagged"]

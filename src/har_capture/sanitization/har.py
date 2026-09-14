@@ -57,7 +57,6 @@ from har_capture.patterns import (
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
-    luhn_valid,
     mime_kind,
     parse_json_container,
     parse_xml,
@@ -70,7 +69,9 @@ from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
     is_private_ip_in_range,
     is_valid_ip_address,
+    pattern_file_patterns,
     redact_labeled_serials,
+    redact_pattern_file_matches,
     redact_structural_credentials,
     redact_vendor_serials,
     sanitize_html,
@@ -297,6 +298,7 @@ class _CallPatterns:
     preserved_ips: frozenset[str]
     allowlist: dict[str, Any]
     serial_detectors: tuple[Any, ...]
+    pattern_file: tuple[tuple[str, re.Pattern[str], str], ...]
 
 
 def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _CallPatterns:
@@ -305,6 +307,7 @@ def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _Cal
         frozenset(load_pii_patterns(custom_patterns).get("preserved_gateway_ips", [])),
         load_allowlist(custom_patterns),
         tuple(_resolve_serial_detectors(custom_patterns)),
+        tuple(pattern_file_patterns(custom_patterns)),
     )
 
 
@@ -970,8 +973,10 @@ def sanitize_post_data(
                     heuristics=heuristics,
                 )
             else:
-                # Any other text: the string patterns (no positional passes).
-                result["text"] = _sanitize_string_patterns(text, hasher, collector)
+                # Any other text: as a text response body is.
+                result["text"] = _sanitize_body_string(
+                    text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)
+                )
 
     return result
 
@@ -1228,11 +1233,7 @@ _DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
 # Regex patterns for value-based sanitization. The IP, IPv6 and email
 # regexes are the shared ones in patterns/redaction.py, so a value is
 # redacted the same whether its body routes to the HTML engine or here.
-_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _DIGIT_RUN_RE = re.compile(r"\d{3}")
-_CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
-_CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
-_CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
 _PHONE_PATTERN = re.compile(
     # At least one separator (or parens / leading +) is required. A bare
     # 10-11 digit run is far more often a constant, counter, or frequency
@@ -1251,31 +1252,6 @@ _PHONE_PATTERN = re.compile(
     r")"
     r"(?!\w)"  # Not followed by a word character (prevents matching inside tokens)
 )
-
-
-def _sanitize_string_patterns(
-    value: str,
-    hasher: Hasher | None = None,
-    collector: RedactionCollector | None = None,
-) -> str:
-    """Apply pattern-based sanitization to a string value.
-
-    Redacts MAC addresses, private and public IPv4, IPv6 and email addresses
-    found in string values, with the HTML engine's regexes and placeholders.
-
-    Args:
-        value: String value to sanitize
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record redactions
-
-    Returns:
-        Sanitized string
-    """
-    if not value:
-        return value
-    value = _redact_macs(value, hasher, collector)
-    value = _redact_ip_addresses(value, hasher, collector)
-    return _redact_emails_and_numbers(value, hasher, collector)
 
 
 def _redact_macs(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
@@ -1338,10 +1314,13 @@ def _redact_ip_addresses(value: str, hasher: Hasher | None, collector: Redaction
     return value
 
 
-def _redact_emails_and_numbers(
+def _redact_emails_and_flag_phones(
     value: str, hasher: Hasher | None, collector: RedactionCollector | None
 ) -> str:
-    """The string patterns' email pass (the HTML engine's 11), then SSNs and phones (flagged) and cards."""
+    """The string patterns' email pass (the HTML engine's 11), then phone numbers offered for review.
+
+    Card- and SSN-shaped numbers are the pattern-file pass's (``redact_pattern_file_matches``).
+    """
 
     def replace_email(match: re.Match[str]) -> str:
         if collector:
@@ -1351,20 +1330,9 @@ def _redact_emails_and_numbers(
     if "@" in value:
         value = EMAIL_RE.sub(replace_email, value)
 
-    # Every remaining pattern needs a run of three digits.
+    # A phone number holds a run of three digits.
     if not _DIGIT_RUN_RE.search(value):
         return value
-
-    # SSN — flag for review instead of auto-redacting
-    if collector and "-" in value:
-        for match in _SSN_PATTERN.finditer(value):
-            collector.flag_value(
-                match.group(0),
-                "ssn",
-                ConfidenceLevel.MEDIUM,
-                value[max(0, match.start() - 20) : match.end() + 20],
-                "Possible SSN pattern (###-##-####)",
-            )
 
     # Phone numbers — flag for review instead of auto-redacting
     if collector:
@@ -1376,19 +1344,6 @@ def _redact_emails_and_numbers(
                 value[max(0, match.start() - 20) : match.end() + 20],
                 "Possible phone number pattern",
             )
-
-    # Credit cards (with Luhn validation to reduce false positives)
-    def replace_cc(match: re.Match[str]) -> str:
-        number = match.group(0)
-        if not luhn_valid(number):
-            return number
-        if collector:
-            collector.record_auto_redaction("credit_card")
-        return _redact_value(number, hasher, "CC", None)
-
-    value = _CC_VISA_PATTERN.sub(replace_cc, value)
-    value = _CC_MC_PATTERN.sub(replace_cc, value)
-    value = _CC_AMEX_PATTERN.sub(replace_cc, value)
 
     return value
 
@@ -1796,10 +1751,11 @@ _SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
 
 def _sanitize_body_string(
     text: str,
-    hasher: Hasher | None,
-    collector: RedactionCollector | None,
-    custom_patterns: str | dict[str, Any] | None,
-    serial_detectors: Sequence[Any],
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
+    serial_detectors: Sequence[Any] = (),
+    pattern_file: Sequence[tuple[str, re.Pattern[str], str]] | None = None,
 ) -> str:
     """Sanitize a text outside the HTML engine in that engine's pass order.
 
@@ -1822,12 +1778,22 @@ def _sanitize_body_string(
             nothing to hash with, so they are skipped)
         custom_patterns: Optional custom patterns for the allowlist checks
         serial_detectors: Compiled high-confidence vendor serial detectors
+        pattern_file: ``pattern_file_patterns()`` resolved for the call (None:
+            resolved here from ``custom_patterns``)
 
     Returns:
         The sanitized text
     """
     if not text:
         return text
+    # With no collector the pattern file's matches still take static
+    # placeholders, as the string patterns do; review flags are discarded.
+    patterns_collector = (
+        collector if collector is not None else RedactionCollector(hasher=hasher or Hasher(salt=None))
+    )
+    if pattern_file is None:
+        pattern_file = pattern_file_patterns(custom_patterns)
+    text = redact_pattern_file_matches(text, patterns_collector.hasher, patterns_collector, pattern_file)
     text = _redact_macs(text, hasher, collector)
     if collector is not None:
         if _SERIAL_LABEL_HINT_RE.search(text):
@@ -1837,13 +1803,15 @@ def _sanitize_body_string(
     text = _redact_ip_addresses(text, hasher, collector)
     if collector is not None and "<" in text:
         text = redact_structural_credentials(text, collector.hasher, collector, custom_patterns)
-    return _redact_emails_and_numbers(text, hasher, collector)
+    return _redact_emails_and_flag_phones(text, hasher, collector)
 
 
 def _sanitize_json_string(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
     """A decoded JSON string (value or key), as any text outside the HTML engine."""
     active = _active_call_patterns()
-    return _sanitize_body_string(value, hasher, collector, active.custom_patterns, active.serial_detectors)
+    return _sanitize_body_string(
+        value, hasher, collector, active.custom_patterns, active.serial_detectors, active.pattern_file
+    )
 
 
 def _sanitize_response_content(
