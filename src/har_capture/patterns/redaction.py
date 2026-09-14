@@ -321,6 +321,22 @@ _CREDENTIAL_STATUS_WORDS = frozenset({"yes", "no"})
 # Text with words on both sides of a space: a UI string, or a passphrase.
 _PROSE_RE = re.compile(r"\S\s+\S")
 
+# Auth schemes of the IANA HTTP Authentication Scheme Registry that the
+# sanitizer keeps in an Authorization-style header while redacting the
+# credential after them: a downstream tool can then classify the auth
+# mechanism from one authenticated request, without a 401 exchange that cached
+# credentials may never produce. An unrecognized leading token may be the start
+# of a secret, so the list stays closed.
+KNOWN_AUTH_SCHEMES: frozenset[str] = frozenset({"basic", "bearer", "digest", "ntlm", "negotiate", "oauth"})
+# An RFC 7235 credential: a known scheme, then one token68 or a list of
+# auth-params (Digest's `username="a", response="…"`).
+_AUTH_PARAM = r"""[\w-]+=(?:"[^"]*"|[^\s,]*)"""
+_AUTH_CREDENTIALS_RE = re.compile(
+    r"(?:" + "|".join(sorted(KNOWN_AUTH_SCHEMES)) + r")\s+"
+    r"(?:[A-Za-z0-9._~+/-]+=*|" + _AUTH_PARAM + r"(?:\s*,\s*" + _AUTH_PARAM + r")*)",
+    re.IGNORECASE,
+)
+
 
 def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
     """Decide what both tools do with a value a response serves under a credential-named key.
@@ -329,7 +345,9 @@ def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
     table's label for UI text about credentials (`PAGE_GENERAL_SET_PASSWORD`,
     even a bare `password`), so its name does not make the value certain.
     A button word is kept; prose is offered for the user's review, since a
-    passphrase can hold spaces; anything else is redacted. A value a client
+    passphrase can hold spaces — unless its format proves a credential (an
+    RFC 7235 ``Scheme credentials`` value, a PEM block); anything else is
+    redacted. A value a client
     submits is always redacted — the caller decides which one it holds.
 
     Args:
@@ -338,8 +356,13 @@ def credential_value_action(value: str) -> Literal["keep", "review", "redact"]:
     Returns:
         ``"keep"``, ``"review"`` or ``"redact"``
     """
-    if value.strip().lower() in _CREDENTIAL_STATUS_WORDS:
+    stripped = value.strip()
+    if stripped.lower() in _CREDENTIAL_STATUS_WORDS:
         return "keep"
+    # Words a format proves are a credential: an Authorization-style value, a
+    # PEM key or certificate block.
+    if _AUTH_CREDENTIALS_RE.fullmatch(stripped) or "-----BEGIN " in stripped:
+        return "redact"
     if _PROSE_RE.search(value):
         return "review"
     return "redact"
@@ -383,10 +406,17 @@ def classify_identity_field(key: str, value: object) -> str | None:
     """
     if not isinstance(value, str) or not _IDENTITY_KEY_HINT_RE.search(key):
         return None
-    words = _key_words(key)
-    if SERIAL_KEY_RE.search(words) and _SERIAL_VALUE_RE.fullmatch(value) and not is_fully_redacted(value):
+    # Read as words (`CmMacAddress` → `cm_mac_address`) and as written: an
+    # acronym run into a word (`HWaddr`, `MACaddress`, `SERIALnumber`) splits
+    # at the wrong letter, but its lowercase spelling still names the field.
+    forms = (_key_words(key), key.lower())
+    if (
+        any(SERIAL_KEY_RE.search(form) for form in forms)
+        and _SERIAL_VALUE_RE.fullmatch(value)
+        and not is_fully_redacted(value)
+    ):
         return "serial_number"
-    if MAC_KEY_RE.search(words) and is_mac_value(value):
+    if any(MAC_KEY_RE.search(form) for form in forms) and is_mac_value(value):
         return "mac_address"
     return None
 

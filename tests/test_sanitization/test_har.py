@@ -4071,15 +4071,15 @@ class TestVendorSerialTextContentRouting:
         result = sanitize_entry(entry, salt="test")
         assert "7ZZ0000FAKE00" in result["response"]["content"]["text"]
 
-    def test_no_collector_skips_serial_scan(self) -> None:
-        """Without a collector/hasher the scan is skipped, not crashed."""
+    def test_no_collector_redacts_with_static_placeholder(self) -> None:
+        """Without a collector or hasher the scan still runs, with a static placeholder."""
         from har_capture.patterns.loader import resolve_patterns_arg
         from har_capture.sanitization.har import _sanitize_response_content
 
         patterns = str(resolve_patterns_arg("network-device"))
         content = {"mimeType": "text/javascript", "text": "var x = '7ZZ0000FAKE00';"}
         _sanitize_response_content(content, collector=None, custom_patterns=patterns)
-        assert "7ZZ0000FAKE00" in content["text"]
+        assert content["text"] == "var x = '***SERIAL***';"
 
 
 class TestStringPatternsAnySize:
@@ -4667,6 +4667,9 @@ POST_TEXT_CASES = _HAR_FIXTURE["post_text_cases"]["cases"]
 CORRELATION = _HAR_FIXTURE["cross_route_correlation_cases"]
 SERVED_CREDENTIAL_CASES = _HAR_FIXTURE["served_credential_cases"]["cases"]
 PATTERN_FILE_ROUTE_CASES = _HAR_FIXTURE["pattern_file_route_cases"]["cases"]
+ECHOED_CREDENTIAL_CASES = _HAR_FIXTURE["echoed_credential_cases"]["cases"]
+FLAG_REACHABILITY_CASES = _HAR_FIXTURE["flag_reachability_cases"]["cases"]
+SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4813,9 +4816,20 @@ class TestServedCredentialValues:
             assert leaked not in out
         for kept in case["present"]:
             assert kept in out
-        assert sorted(f.original_value for f in report.flagged) == sorted(case["flagged"])
+        # Each flagged value is the text as written to the output, so the
+        # review's find-and-replace can reach it.
+        flagged = sorted(f.original_value for f in report.flagged)
+        assert len(flagged) == len(case["flagged"])
+        assert all(
+            re.fullmatch(pattern, value)
+            for pattern, value in zip(sorted(case["flagged"]), flagged, strict=True)
+        )
         # Offered, not pre-selected: the review pre-selects medium-confidence credentials.
         assert all((f.category, f.confidence.value) == ("credential", "low") for f in report.flagged)
+        for item in report.flagged:
+            item.status = RedactionStatus.USER_REDACTED
+        redacted = json.dumps(apply_user_redactions(sanitized, report))
+        assert all(json.dumps(value)[1:-1] not in redacted for value in flagged)
 
 
 class TestPatternFilePassOnEveryRoute:
@@ -4851,3 +4865,86 @@ class TestPatternFilePassOnEveryRoute:
             assert leaked not in out
         for kept in case["present"]:
             assert kept in out
+
+
+class TestEchoedCredentials:
+    """A value redacted as a credential anywhere is redacted wherever else it is served."""
+
+    @pytest.mark.parametrize("case", ECHOED_CREDENTIAL_CASES, ids=[c["id"] for c in ECHOED_CREDENTIAL_CASES])
+    def test_echo(self, case: dict) -> None:
+        entries = []
+        for via, body in case["entries"]:
+            if via == "post":
+                entries.append(
+                    {
+                        "request": {
+                            "method": "POST",
+                            "url": "http://192.168.0.1/api",
+                            "headers": [],
+                            "postData": {"mimeType": "application/json", "text": body},
+                        },
+                        "response": {
+                            "status": 200,
+                            "headers": [],
+                            "content": {"text": "", "mimeType": "text/plain"},
+                        },
+                    }
+                )
+            else:
+                entry = _entry_with_response_body(body)
+                entry["response"]["content"]["mimeType"] = "application/json"
+                entries.append(entry)
+        sanitized, report = sanitize_har(
+            {"log": {"entries": entries}}, salt="echo", heuristics=HeuristicMode.FLAG
+        )
+        dumped = json.dumps(sanitized["log"]["entries"])
+        if case["secret"] is None:
+            assert [f.category for f in report.flagged] == ["credential"]
+        else:
+            assert case["secret"] not in dumped
+            assert case["secret"] not in [f.original_value for f in report.flagged]
+
+
+@pytest.mark.parametrize("case", FLAG_REACHABILITY_CASES, ids=[c["id"] for c in FLAG_REACHABILITY_CASES])
+def test_flagged_json_value_is_reachable_by_review(case: dict) -> None:
+    """A JSON value offered for review is the output's text, so a user redaction removes it."""
+    entry = _entry_with_response_body(case["text"])
+    entry["response"]["content"]["mimeType"] = "application/json"
+    sanitized, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="reach", heuristics=HeuristicMode.FLAG
+    )
+    assert len(report.flagged) == len(case["flagged"])
+    for (category, pattern), item in zip(case["flagged"], report.flagged, strict=True):
+        assert item.category == category
+        assert re.fullmatch(pattern, item.original_value)
+        item.status = RedactionStatus.USER_REDACTED
+    redacted = json.dumps(apply_user_redactions(sanitized, report))
+    assert all(json.dumps(item.original_value)[1:-1] not in redacted for item in report.flagged)
+
+
+@pytest.mark.parametrize("case", SSID_SAFE_VALUE_CASES, ids=[c["id"] for c in SSID_SAFE_VALUE_CASES])
+def test_json_ssid_review_honors_safe_values(case: dict) -> None:
+    """A JSON SSID-key value a safe-value pattern recognizes is not offered for review."""
+    from har_capture.patterns.loader import resolve_patterns_arg
+
+    patterns = case["patterns"]
+    custom = str(resolve_patterns_arg(patterns)) if isinstance(patterns, str) else patterns
+    entry = _entry_with_response_body(case["text"])
+    entry["response"]["content"]["mimeType"] = "application/json"
+    _, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="ssid", custom_patterns=custom, heuristics=HeuristicMode.FLAG
+    )
+    assert [f.original_value for f in report.flagged] == case["flagged"]
+
+
+def test_call_patterns_resolved_once_per_har(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sanitize_har call resolves its custom patterns once, not once per entry."""
+    import har_capture.sanitization.har as har_module
+
+    calls = []
+    resolve = har_module._resolve_call_patterns
+    monkeypatch.setattr(har_module, "_resolve_call_patterns", lambda cp: calls.append(cp) or resolve(cp))
+    custom = {"patterns": {"c": {"regex": "CUST-[0-9]{4}", "replacement_prefix": "C"}}}
+    entries = [_entry_with_response_body('{"a": "CUST-1234"}') for _ in range(3)]
+    sanitize_har({"log": {"entries": entries}}, salt="once", custom_patterns=custom)
+    assert len(calls) == 1

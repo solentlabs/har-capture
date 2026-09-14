@@ -441,8 +441,15 @@ for key, tier in (("auto_redact_patterns", "auto_redact_patterns"),
                   ("patterns", "auto_redact_patterns")):
     builtin["fields"].setdefault(tier, []).extend(custom["fields"].get(key, []))
 
-# Dicts are updated (custom overrides builtin keys)
-builtin["patterns"].update(custom["patterns"])
+# Custom patterns add to the built-ins or replace them by name — except a
+# built-in the sanitizer applies with a pass of its own (DEDICATED_PASS_PATTERNS:
+# mac_address, serial_number, account_id, the address and email patterns, the
+# HTML engine's labeled patterns), which is ignored with a warning: its pass
+# does not read the file's regex, so a custom one would change what
+# check_for_pii reports and nothing the sanitizer removes.
+for name, definition in custom["patterns"].items():
+    if name not in DEDICATED_PASS_PATTERNS:
+        builtin["patterns"][name] = definition
 
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})
@@ -513,7 +520,9 @@ def compile_pattern(pattern_dict: dict) -> re.Pattern | None:
 Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are skipped
 with one warning per distinct pattern (compilation is cached), so one bad pattern doesn't break the entire system. The
 HTML engine's pass 0 and `check_for_pii` both compile custom `pii.json` patterns through it, so every flag a pattern
-names (`IGNORECASE`, `MULTILINE`, `DOTALL`) holds in both, and an invalid one crashes neither.
+names (`IGNORECASE`, `MULTILINE`, `DOTALL`) holds in both, and an invalid one crashes neither. A pattern file is user
+input: `flags` may be one name or a list, an entry that is not a flag name is ignored with a warning, and a `regex` that
+is not a string skips the pattern with a warning.
 
 ### Cache
 
@@ -612,11 +621,13 @@ the sanitizer, `validate`, and (through `pii.json`'s `mac_address` regex, which 
 
 Classifies a field whose key names a device identity and whose value has that identity's shape: `"serial_number"`,
 `"mac_address"`, or `None`. The key is read as its words, lowercased and joined with `_` (`StatusSoftwareSerialNum` →
-`status_software_serial_num`, `CMMACAddress` → `cmmac_address`), and must end with the identity (`SERIAL_KEY_RE`,
-`MAC_KEY_RE`): a serial (`serial`, `serial_number`, `serial_num`, `serial_no`, or exactly `sn`) or a MAC (`mac`,
-`mac_address`, `hwaddr`, ...), optionally numbered (`macaddress_5`). The last word may carry a glued prefix
-(`cmserialnumber`, `wanmacaddr`, `ethmac`) — except a word starting `hmac`, a message authentication code. A key whose
-identity is not last (`serialNumberLabel`, `MacAddressFilterEnabled`, `macaddr.wan`) is not an identity key.
+`status_software_serial_num`, `CMMACAddress` → `cmmac_address`) and as written, lowercased — an acronym run into a word
+(`HWaddr`, `MACaddress`, `SERIALnumber`) splits at the wrong letter, but its spelling still names the field — and either
+form must end with the identity (`SERIAL_KEY_RE`, `MAC_KEY_RE`): a serial (`serial`, `serial_number`, `serial_num`,
+`serial_no`, or exactly `sn`) or a MAC (`mac`, `mac_address`, `hwaddr`, ...), optionally numbered (`macaddress_5`). The
+last word may carry a glued prefix (`cmserialnumber`, `wanmacaddr`, `ethmac`) — except a word starting `hmac`, a message
+authentication code. A key whose identity is not last (`serialNumberLabel`, `MacAddressFilterEnabled`, `macaddr.wan`) is
+not an identity key.
 
 A serial value is one whitespace-free token of five or more characters carrying a digit that is not wholly a placeholder
 (`is_fully_redacted()`: `SN0000001234` contains a zero run and is still a serial) — the digit rule is what excludes

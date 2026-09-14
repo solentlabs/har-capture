@@ -158,6 +158,9 @@
     "cases": [
       {"id": "hnap_status_software_serial",   "key": "StatusSoftwareSerialNum",          "value": "ABC123DEF456",      "category": "serial_number"},
       {"id": "bare_hex_mac_camel_key",        "key": "CmMacAddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "hwaddr_mixed_case",             "key": "HWaddr",                           "value": "AABBCCDDEEFF",      "category": "mac_address"},
+      {"id": "macaddress_acronym_prefix",     "key": "MACaddress",                       "value": "aabb.ccdd.eeff",    "category": "mac_address"},
+      {"id": "serialnumber_acronym_prefix",   "key": "SERIALnumber",                     "value": "4131N12345678",     "category": "serial_number"},
       {"id": "all_digit_serial",              "key": "serialnumber",                     "value": "123456789012345",   "category": "serial_number"},
       {"id": "exact_sn",                      "key": "sn",                               "value": "TEST12345",         "category": "serial_number"},
       {"id": "suffix_serial",                 "key": "deviceSerial",                     "value": "X1Y2Z3W4",          "category": "serial_number"},
@@ -401,7 +404,12 @@
       {"id": "true_not_in_data",   "value": "true",                        "action": "redact"},
       {"id": "prose_ui_string",    "value": "Enter the current password",  "action": "review"},
       {"id": "two_words",          "value": "p w",                         "action": "review"},
-      {"id": "padded_token",       "value": " hunter2x ",                  "action": "redact"}
+      {"id": "padded_token",       "value": " hunter2x ",                  "action": "redact"},
+      {"id": "bearer_credential",  "value": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "action": "redact"},
+      {"id": "basic_credential",   "value": "Basic YWRtaW46aHVudGVyMg==",  "action": "redact"},
+      {"id": "digest_lowercase",   "value": "digest username=\"a\", response=\"f00d\"", "action": "redact"},
+      {"id": "pem_block",          "value": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----", "action": "redact"},
+      {"id": "prose_naming_scheme", "value": "Basic settings for the admin password", "action": "review"}
     ]
   },
   "iter_json_strings_cases": {

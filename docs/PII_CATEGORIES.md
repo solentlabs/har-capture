@@ -22,7 +22,7 @@ AA:BB:CC:DD:EE:FF → 02:a1:b2:c3:d4:e5
 **Format-preserving hash:**
 
 - Uses locally administered bit (`02` first octet)
-- Keeps the input's layout (separator and grouping)
+- Keeps the input's layout (separator and grouping) when salted; static mode writes `XX:XX:XX:XX:XX:XX`
 - Preserves correlation across requests
 
 ### IP Addresses (Private)

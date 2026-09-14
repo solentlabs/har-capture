@@ -64,8 +64,10 @@ The file is organized into 9 groups:
 1. **Core Redaction Utilities** — `_redact_value()`, `is_sensitive_field()`, `is_flaggable_field()`,
    `sanitize_header_value()`
 1. **Request Sanitization** — Headers, cookies, POST data (form/JSON), query strings, URL paths
-1. **Response Sanitization** — Headers, cookies, content (MIME-type dispatched)
-1. **Pattern-Based String Sanitization** — 10+ regex patterns for MACs, IPs, emails, SSN, credit cards
+1. **Response Sanitization** — Headers, cookies, content (`route_body()`: JSON by content, else by type, sniffed when
+   the type says nothing)
+1. **Text Outside the HTML Engine** — `_sanitize_body_string()`: the pattern-file pass (custom patterns, cards, SSNs),
+   MACs, IPv6 and IPv4, emails, phone numbers, and the positional passes between them
 1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
@@ -215,8 +217,8 @@ def sanitize_post_data(
 1. **Raw text**: sanitized as a text response body is (`_sanitize_body_string`): the pattern-file pass, the string
    patterns and the positional passes, labeled serials among them. Until 0.13.0 it took the string patterns alone.
 
-**Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all four branches (params, form, JSON,
-XML) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
+**Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all five branches (params, form, JSON,
+XML, text) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
 `sensitive.json`, e.g. `{"fields": {"auto_redact_patterns": ["vendorpw"]}}`. Module-global patterns are never mutated;
 the override is scoped per thread / asyncio task. Compiled regex pairs are cached per canonical key so repeated calls
 with the same extension avoid recompilation. `sanitize_html` enters the same scope, so the XML branch's delegation to
@@ -342,7 +344,7 @@ requests they send, so it arrives in a `Location` header or a wrapped URL.
 ### JSON Body Traversal
 
 ```python
-def _sanitize_json_recursive(data, hasher, collector, _depth=0):
+def _sanitize_json_recursive(data, hasher, collector, _depth=0, *, served=False):
 ```
 
 Traverses objects and arrays recursively. Every string leaf goes through the
@@ -354,8 +356,9 @@ Traverses objects and arrays recursively. Every string leaf goes through the
    shared with `validate`):
 
    - A MAC key (`MAC_KEY_RE`: `mac`, `macAddress`, `CmMacAddress`, `hw_addr`, a glued prefix like `wanmacaddr`) with a
-     MAC in any layout — colon, hyphen, bare 12-hex, dotted — → a MAC placeholder in the value's own layout. A constant
-     MAC (`is_constant_mac()`) is kept.
+     MAC in any layout — colon, hyphen, bare 12-hex, dotted — → a MAC placeholder in the value's own layout (with a
+     salt; static mode writes `XX:XX:XX:XX:XX:XX`, see [MAC layout](#format-preserving-hasher-hasherpy)). A constant MAC
+     (`is_constant_mac()`) is kept.
    - A serial key (`SERIAL_KEY_RE`: `serial`, `serialNumber`, `StatusSoftwareSerialNum`, `cmserialnumber`, and the exact
      bare key `sn`) with one whitespace-free token of five or more characters carrying a digit → `SERIAL_<hash>`.
      Placeholders (`-`, `N/A`) and labels (`Seriennummer`) carry no digit and stay.
@@ -364,15 +367,18 @@ Traverses objects and arrays recursively. Every string leaf goes through the
    identity must end it: `serialNumberLabel` and `MacAddressFilterEnabled` name something about the identity. A word
    starting `hmac` names a message authentication code, and `snr` is a signal ratio; neither counts.
 
-1. **Flaggable key** (`is_flaggable_field()`) holding a non-empty string → flagged for review, then traversed.
+1. **Flaggable key** (`is_flaggable_field()`) holding a non-empty string → traversed, then flagged for review as the
+   output holds it (after the string patterns), so choosing to redact it in the review removes it. SSID keys and served
+   prose below are flagged the same way.
 
 1. **SSID key** (`is_ssid_key()`: one of the key's words is `ssid` — `ssid`, `ssid_24g`, `guestSSID`) holding a network
-   name that is not a safe value or a placeholder → flagged for review (`wifi_ssid`, MEDIUM), never auto-redacted: the
-   name identifies a network rather than authenticating to it. The HTML engine auto-redacts a *labeled* SSID on a page
-   (passes 7a, 7c, 16), so one network name could be `WIFI_<hash>` there and raw under a JSON key; measured across the
-   fleet (0.13.0), 307 distinct raw names sit under JSON SSID keys in 29 captures, every one offered for review, and
-   none is also redacted on a page of the same capture. Auto-redacting JSON SSID keys would name no leak and cost those
-   307 names, so the rule stays review-only (ADR-12).
+   name that is not a safe value (the call's `safe_value_patterns`, domain and custom ones included) or a placeholder →
+   flagged for review (`wifi_ssid`, MEDIUM), never auto-redacted: the name identifies a network rather than
+   authenticating to it. The HTML engine auto-redacts a *labeled* SSID on a page (passes 7a, 7c, 16), so one network
+   name could be `WIFI_<hash>` there and raw under a JSON key; measured across the fleet (0.13.0), 307 distinct raw
+   names sit under JSON SSID keys in 29 captures, every one offered for review, and none is also redacted on a page of
+   the same capture. Auto-redacting JSON SSID keys would name no leak and cost those 307 names, so the rule stays
+   review-only (ADR-12).
 
 1. Anything else → traversed.
 
@@ -693,9 +699,10 @@ rule so a value is treated alike on every route: a card-shaped number (`credit_c
 the Luhn check (`luhn_valid()`), and an SSN-shaped one (`ssn`) is offered for review as `ssn`, never hashed. Under
 `--patterns base` this keeps the fleet's 8 card-shaped numbers in HTML bodies, all of which fail the Luhn check
 (0.13.0); the fleet holds no SSN-shaped value. The `network-device` domain does not include these patterns. The same
-pass runs on every other route (`_sanitize_body_string`), so a custom pattern matches anywhere in content, as
+pass runs on every other route (`_sanitize_body_string`), so a custom pattern matches anywhere in body text, as
 [CUSTOM_PATTERNS.md](../CUSTOM_PATTERNS.md) says; until 0.13.0 it ran only in the HTML engine, and a custom customer-ID
-pattern left the same value raw in a JSON, script or POST body.
+pattern left the same value raw in a JSON, script or POST body. Form fields and URL query values are not body text: they
+are judged by their field names (see [POST Data Sanitization](#post-data-sanitization)).
 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
@@ -715,7 +722,7 @@ match — see [VALIDATION_SPEC](VALIDATION_SPEC.md#check_contentcontent-location
 
 ### Sibling-Element and Structural Label/Value Rules
 
-**Sibling-element rule (passes 2, 2d):** The tag chain between a label and its value — `(?:<[^>]*>\s*)*` — permits
+**Sibling-element rule (passes 2, 2d):** The tag chain between a label and its value — `(?:<[^<>]*>\s*)*` — permits
 whitespace between tags, so label/value pairs rendered in sibling elements match (e.g. Technicolor .jst on the XB6/XB7/
 XB8/XB10 family renders `<span class="readonlyLabel">Serial Number:</span>` with the value in a following sibling
 `<span class="value">`). In passes 2 and 2d the separator-plus-tag run is captured and re-emitted verbatim, so redaction
@@ -805,10 +812,11 @@ flags ~25% of all label/value pairs on the Technicolor captures (`System Uptime`
 `Model`), which would shred diagnostic data in `REDACT` and flood the review UI in `FLAG`. Widening
 `safe_value_patterns` far enough to make that path safe is separate work.
 
-**Pass 3 — account IDs** (`ACCOUNT_LABEL_RE`): the label, its separator and any tags opening the value's element are
-kept as written, and the value runs to the next tag or whitespace, so the markup around it survives
-(`<p>Account ID: <b>ACCOUNT_…</b></p>`). A value `is_redacted()` recognizes is kept. `pii.json`'s `account_id` regex
-carries `ACCOUNT_LABEL_RE` verbatim (a test pins the two), so `check_for_pii` reports exactly what this pass replaces.
+**Pass 3 — account IDs** (`ACCOUNT_LABEL_RE`): the label, its separator, any tags opening the value's element and an
+opening quote are kept as written, and the value runs to the next tag, whitespace, quote, `&` or `;`, so the markup,
+script or query around it survives (`<p>Account ID: <b>ACCOUNT_…</b></p>`, `deviceId = "ACCOUNT_…";`,
+`?deviceid=ACCOUNT_…&x=1`). A value `is_redacted()` recognizes is kept. `pii.json`'s `account_id` regex carries
+`ACCOUNT_LABEL_RE` verbatim (a test pins the two), so `check_for_pii` reports exactly what this pass replaces.
 
 ### Idempotency Boundary
 
@@ -874,16 +882,18 @@ def check_for_pii(content: str, filename: str = "", custom_patterns: str | dict 
 Used in CI to check test fixtures for PII. It reads what the sanitizer reads — a JSON fixture one decoded string at a
 time, any other content whole — and judges each match's value, not the label around it, against the allowlist (a
 `pii.json` pattern's `value_group`), so a sanitized `Serial Number: SERIAL_<hash>` is clean. It reports only what a
-sanitize run clears: a match the sanitizer's own pass keeps — a constant MAC, a preserved gateway address, a dotted-quad
-version string, an IPv6 candidate that is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a
-MAC is not reported a second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields
-checked with `validate`'s predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the
-sanitizer's own placeholders), and its credential fields with the sanitizer's own field names (`is_sensitive_field()`,
-custom `fields` patterns included): a value that is neither empty nor allowlisted — one the sanitizer replaces and
-`validate` reports — is reported as `credential_field`. Both stop at `JSON_MAX_DEPTH`. Until 0.13.0 `check_for_pii` read
-no JSON field by name, so a plain password under a `password` key passed it; a consumer that taught it one with a `pii`
-regex pairing a key and its value (`"field": "value"`) no longer needs to, and should name the field in `fields` instead
-— a regex cannot pair across the decoded strings a JSON fixture is read as.
+sanitize run clears: a match the sanitizer's own pass keeps — a Luhn-failing card-shaped number, an SSN-shaped one
+(offered for review), a constant MAC, a preserved gateway address, a dotted-quad version string, an IPv6 candidate that
+is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a MAC is not reported a second time as
+an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with `validate`'s predicate
+(`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own placeholders), and its
+credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included): a
+value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
+value (`credential_value_action()`: a button word or prose is not reported) — is reported as `credential_field`. Both
+stop at `JSON_MAX_DEPTH`. Until 0.13.0 `check_for_pii` read no JSON field by name, so a plain password under a
+`password` key passed it; a consumer that taught it one with a `pii` regex pairing a key and its value
+(`"field": "value"`) no longer needs to, and should name the field in `fields` instead — a regex cannot pair across the
+decoded strings a JSON fixture is read as.
 
 The HTML engine's own patterns — passwords after a label (`password_field`), password inputs, session and CSRF tokens,
 account IDs, WPS PINs, config paths, Motorola password variables (`HTML_ONLY_PATTERNS`) — are reported only in content
@@ -897,6 +907,12 @@ A JSON fixture is read in one pass over its string literals, in document order, 
 its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,
 PHP's `\/`, an escaped quote). Line numbers come from one index of the newline offsets, so the cost stays linear in the
 fixture's size.
+
+**Tag runs stop at the next tag.** Every regex that reads inside a tag — the tag chains of passes 2, 2d and 3, the
+sibling and SSID attribute rules, password inputs, CSRF meta tags — writes an attribute run as `[^<>]*`, never `[^>]*`,
+and an SSID `<select>` body stops at the next `<select`. With `[^>]*`, a run of `<input` or `<a` tags with no closing
+`>` made a match attempt scan to the end of the body from every `<`: quadratic, and cubic where two runs share a tag (40
+KB of unclosed password inputs took three minutes). A test pins the rule.
 
 ## Heuristic Engine (heuristics.py)
 
@@ -1201,6 +1217,11 @@ necessarily the *same* secret rather than a coincidence.
 | Contains at least one digit                   | `GetDeviceInformation`, `configurationSettings` — identifiers   |
 | Not `is_safe_value()`                         | IPv6, CIDR, timestamps, versions, already-redacted placeholders |
 
+**Known secrets** bypass the eligibility bar: a value offered for review as a `credential` (prose served under a
+credential-named key) that Pass 1 also redacted as a credential elsewhere — a response echoing a passphrase the client
+submitted — is the same secret wherever it occurs, whatever its shape. It is propagated like any eligible value and
+withdrawn from the review, in either order of the two entries.
+
 The digit requirement is the operative form of "must not be word-shaped." Method names, config keys, and API identifiers
 are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls
 back to review.
@@ -1409,7 +1430,7 @@ Detects common redaction markers to warn users before double-sanitizing.
    values the strict Pass 1 rules already redacted. It introduces no detection of its own, and a value that fails
    eligibility keeps the pre-existing behavior (flagged for review). Widening eligibility is a scope change and is
    governed by
-   [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift-redact-more-is-a-change-against-the-founding-contract).
+   [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract).
 1. **Output is LF-only on every platform** — Every writer that emits a HAR or report pins `newline="\n"` rather than
    letting Python's text mode substitute `os.linesep`. Captures are committed downstream as immutable evidence in repos
    that enforce LF; a CRLF artifact gets rewritten by their hooks, and the same capture would otherwise be

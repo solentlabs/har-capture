@@ -57,6 +57,7 @@ from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
 from har_capture.sanitization.html import (
+    SERIAL_LABEL_HINT_RE,
     SERIAL_LABEL_RE,
     SIBLING_PASSWORD_RE,
     SIBLING_SSID_RE,
@@ -955,10 +956,6 @@ def check_content(
         _scan_text(text, location, findings, custom_patterns, serial_detectors, field_macs, seen_serials)
 
 
-# Every labeled-serial label holds one of these (SERIAL_LABEL_RE's vocabulary).
-_SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
-
-
 def _scan_text(
     text: str,
     location: str,
@@ -1008,7 +1005,7 @@ def _scan_text(
         )
 
     # Check for serial numbers
-    for pattern in SERIAL_PATTERNS if _SERIAL_LABEL_HINT_RE.search(text) else ():
+    for pattern in SERIAL_PATTERNS if SERIAL_LABEL_HINT_RE.search(text) else ():
         for match in pattern.finditer(text):
             value = match.group(match.lastindex or 0)
             if not is_redacted(value, custom_patterns):

@@ -27,6 +27,8 @@
     {"input_html": "Subscriber Number: SUB-9876",             "removed": "SUB-9876",              "placeholder": "***ACCOUNT***",      "id": "subscriber_number"},
     {"input_html": "<p>Account ID: <b>998877</b></p>",        "removed": "998877",                "placeholder": "Account ID: <b>***ACCOUNT***</b></p>", "id": "account_id_tag_wrapped"},
     {"input_html": "Customer Number: DEV_abc123",             "removed": "DEV_abc123",            "placeholder": "Customer Number: ***ACCOUNT***", "id": "account_id_prefix_shaped"},
+    {"input_html": "<a href=\"/s?deviceid=abc123&x=1\">Link</a>", "removed": "abc123",           "placeholder": "deviceid=***ACCOUNT***&x=1\">Link</a>", "id": "account_value_stops_at_url_delimiters"},
+    {"input_html": "var deviceId = \"abc123\";",              "removed": "abc123",                "placeholder": "var deviceId = \"***ACCOUNT***\";", "id": "account_quoted_script_value"},
     {"input_html": "SSID: HomeNetwork",                       "removed": "HomeNetwork",           "placeholder": "***WIFI***",         "id": "ssid_text_label"},
     {"input_html": "Network Name=MyWiFi5G",                   "removed": "MyWiFi5G",              "placeholder": "***WIFI***",         "id": "network_name_label"},
     {"input_html": "password_24g: 'MyP@ssw0rd'",              "removed": "MyP@ssw0rd",            "placeholder": "***PASS***",         "id": "js_password_obj"},
@@ -116,6 +118,7 @@
     "_comment": "check_for_pii with custom patterns: an entry that is not a pattern object is skipped, require_hex_letter drops matches with no a-f letter, and custom fields patterns (current or legacy key) name credential fields in a JSON fixture.",
     "cases": [
       {"id": "malformed_entry_skipped", "custom_patterns": {"patterns": {"broken": "not-a-pattern"}},                                                 "content": "dns 8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "dedicated_name_override_ignored", "custom_patterns": {"patterns": {"mac_address": {"regex": "\\b[0-9A-F]{12}\\b", "replacement_prefix": "MAC"}}}, "content": "<p>cm AABBCCDDEEF1</p>", "findings": []},
       {"id": "custom_credential_field", "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorsecret"]}},                             "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
       {"id": "legacy_custom_credential_field", "custom_patterns": {"fields": {"patterns": ["vendorsecret"]}},                                "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
       {"id": "require_hex_letter",      "custom_patterns": {"patterns": {"hexy": {"regex": "\\b[0-9a-f]{6}\\b", "replacement_prefix": "H", "require_hex_letter": true}}}, "content": "123456 abc123", "findings": [["hexy", "abc123"]]}
@@ -130,7 +133,11 @@
       {"id": "dotall",               "pattern": {"regex": "BEGIN.+?END",         "replacement_prefix": "S", "flags": ["DOTALL"]},     "content": "BEGIN\nx9\nEND",   "removed": "x9",        "findings": [["p", "BEGIN\nx9\nEND"]]},
       {"id": "invalid_regex_skipped", "pattern": {"regex": "([",                 "replacement_prefix": "B"},                          "content": "dns 8.8.8.8",       "removed": "8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
       {"id": "value_group_out_of_range", "pattern": {"regex": "ID-(\\d+)",     "replacement_prefix": "V", "value_group": 5},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]},
-      {"id": "value_group_unmatched", "pattern": {"regex": "ID-(?:(x)|\\d+)",  "replacement_prefix": "V", "value_group": 1},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]}
+      {"id": "value_group_unmatched", "pattern": {"regex": "ID-(?:(x)|\\d+)",  "replacement_prefix": "V", "value_group": 1},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]},
+      {"id": "flag_not_a_name_ignored", "pattern": {"regex": "abc9",           "replacement_prefix": "X", "flags": [2]},            "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "flag_nested_list_ignored", "pattern": {"regex": "abc9",          "replacement_prefix": "X", "flags": [["I"]]},        "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "flags_as_one_name",      "pattern": {"regex": "ABC9",            "replacement_prefix": "X", "flags": "IGNORECASE"},   "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "regex_not_a_string",     "pattern": {"regex": 5,                 "replacement_prefix": "X"},                          "content": "dns 8.8.8.8",       "removed": "8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]}
     ]
   },
 
@@ -185,6 +192,7 @@
       {"id": "json_credential_ui_strings", "content": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\"}", "findings": [["credential_field", "Password"]]},
       {"id": "json_credential_non_string", "content": "{\"auth\": true, \"has_credentials\": false}",  "findings": []},
       {"id": "card_luhn_valid",          "content": "card 4111111111111111",                            "findings": [["credit_card_visa", "4111111111111111"]]},
+      {"id": "ssn_offered_not_reported", "content": "<p>SSN: 123-45-6789</p> {x} SSN 123-45-6789",     "findings": []},
       {"id": "card_luhn_invalid_kept",   "content": "card 4111111111111112 id 5555555555554444",        "findings": [["credit_card_mastercard", "5555555555554444"]]},
       {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
     ]

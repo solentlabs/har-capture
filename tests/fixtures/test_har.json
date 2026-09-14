@@ -707,7 +707,7 @@
     ]
   },
   "no_collector_body_cases": {
-    "_comment": "_sanitize_response_content called without a collector (the library's lowest-level entry): nothing to hash with, so the positional passes are skipped and the string patterns write their static placeholders.",
+    "_comment": "_sanitize_response_content called without a collector (the library's lowest-level entry): every pass still runs and writes its static placeholder.",
     "cases": [
       {"id": "text_mac",   "mime": "text/plain",       "text": "mac 3C:7A:8A:12:34:56",           "present": "mac ***MAC***"},
       {"id": "text_ipv6",  "mime": "text/plain",       "text": "wan 2600:1700::1a",               "present": "wan ***IPV6***"},
@@ -725,7 +725,8 @@
       {"id": "json_mime_unparseable", "mime": "application/json",         "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\":",                     "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"mac\": \"02:"]},
       {"id": "xml_lone_surrogate",  "mime": "text/xml",                 "text": "<a><password>\ud800x</password></a>",                            "absent": ["\ud800x"],                  "present": ["<a><password>FIELD_"]},
       {"id": "plain_text_mac",      "mime": "text/plain",               "text": "mac=3C:7A:8A:12:34:56 wan 73.12.34.56",                          "absent": ["3C:7A:8A:12:34:56", "73.12.34.56"], "present": ["mac=02:"]},
-      {"id": "json_shadowed_flag_tier", "mime": "application/json",       "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}",            "absent": ["bobsmith"],                  "present": ["{\"username\": \"admin\"}"]}
+      {"id": "json_shadowed_flag_tier", "mime": "application/json",       "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}",            "absent": ["bobsmith"],                  "present": ["{\"username\": \"admin\"}"]},
+      {"id": "labeled_values_hasher_only", "mime": "text/plain",           "text": "Serial Number: 4131N12345678 <span>Password:</span><span>hunter2x</span>", "absent": ["4131N12345678", "hunter2x"], "present": ["Serial Number: SERIAL_", "<span>Password:</span><span>PASS_"]}
     ]
   },
   "cross_route_correlation_cases": {
@@ -754,10 +755,10 @@
     ]
   },
   "served_credential_cases": {
-    "_comment": "A value served under a credential-named key in a response's JSON (credential_value_action): Yes/No kept, prose offered for review (flagged, kept) with the string patterns still applied inside, anything else redacted. A submitted value (a POST) is redacted whatever its shape, and so is served prose the review cannot reach (inside a base64-wrapped body). via: response | post; decode_base64 decodes the sanitized body before the checks; flagged: the values offered for review.",
+    "_comment": "A value served under a credential-named key in a response's JSON (credential_value_action): Yes/No kept, prose offered for review (flagged, kept) with the string patterns still applied inside, anything else redacted. A submitted value (a POST) is redacted whatever its shape, and so is served prose the review cannot reach (inside a base64-wrapped body). via: response | post; decode_base64 decodes the sanitized body before the checks; flagged: regexes the values offered for review must match — each is the text as the output holds it, after the string patterns, so choosing to redact it in the review removes it.",
     "cases": [
-      {"id": "response_translation_table", "via": "response", "mime": "application/json", "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\", \"wifi_password\": \"hunter2x\"}", "absent": ["hunter2x"], "present": ["\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\"", "\"ADM_SHOW_PASSWORD\": \"Yes\"", "\"PAGE_DEVICE_PASSWORD_TITLE\": \"FIELD_", "\"wifi_password\": \"FIELD_"], "flagged": ["Set a new password"]},
-      {"id": "response_prose_keeps_string_patterns", "via": "response", "mime": "application/json", "text": "{\"password_hint\": \"Open 192.168.1.50 to reset it\"}", "absent": ["192.168.1.50"], "present": ["\"password_hint\": \"Open 10.255."], "flagged": ["Open 192.168.1.50 to reset it"]},
+      {"id": "response_translation_table", "via": "response", "mime": "application/json", "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\", \"wifi_password\": \"hunter2x\"}", "absent": ["hunter2x"], "present": ["\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\"", "\"ADM_SHOW_PASSWORD\": \"Yes\"", "\"PAGE_DEVICE_PASSWORD_TITLE\": \"FIELD_", "\"wifi_password\": \"FIELD_"], "flagged": ["^Set\\ a\\ new\\ password$"]},
+      {"id": "response_prose_keeps_string_patterns", "via": "response", "mime": "application/json", "text": "{\"password_hint\": \"Open 192.168.1.50 to reset it\"}", "absent": ["192.168.1.50"], "present": ["\"password_hint\": \"Open 10.255."], "flagged": ["^Open 10\\.255\\.\\d{1,3}\\.\\d{1,3} to reset it$"]},
       {"id": "post_prose_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"correct horse battery staple\"}", "absent": ["correct horse"], "present": ["\"password\": \"FIELD_"], "flagged": []},
       {"id": "post_yes_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"Yes\"}", "absent": ["\"Yes\""], "present": ["\"password\": \"FIELD_"], "flagged": []},
       {"id": "response_base64_prose_redacted", "via": "response", "mime": "text/plain", "decode_base64": true, "text": "eyJwYXNzd29yZCI6ICJTZXQgYSBuZXcgcGFzc3dvcmQifQ==", "absent": ["Set a new password"], "present": ["\"password\": \"FIELD_"], "flagged": []}
@@ -774,6 +775,30 @@
       {"id": "card_excluded_by_domain", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "custom_patterns": {"include_patterns": ["mac_address"]}, "absent": [], "present": ["card 4111111111111111"]},
       {"id": "card_in_text_body", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "absent": ["4111111111111111"], "present": ["card CC_"]},
       {"id": "labeled_serial_in_post_text", "via": "post", "mime": "text/plain", "text": "Serial Number: 4131N12345678", "absent": ["4131N12345678"], "present": ["Serial Number: SERIAL_"]}
+    ]
+  },
+  "echoed_credential_cases": {
+    "_comment": "A value the sanitizer redacts as a credential somewhere in a capture is redacted wherever else it is served, even as prose that alone would only be offered for review: the tool already knows it is a secret. entries: [via, JSON body] in capture order; the secret must not survive and must not be offered for review.",
+    "cases": [
+      {"id": "post_then_served_echo", "entries": [["post", "{\"wifi_password\": \"correct horse battery staple\"}"], ["response", "{\"wifi_password\": \"correct horse battery staple\"}"]], "secret": "correct horse battery staple"},
+      {"id": "served_echo_then_post", "entries": [["response", "{\"wifi_password\": \"correct horse battery staple\"}"], ["post", "{\"wifi_password\": \"correct horse battery staple\"}"]], "secret": "correct horse battery staple"},
+      {"id": "served_prose_alone_offered", "entries": [["response", "{\"PAGE_SET_PASSWORD\": \"Set a new password\"}"]], "secret": null}
+    ]
+  },
+  "flag_reachability_cases": {
+    "_comment": "Every value the JSON walker offers for review is flagged as the output holds it (after the string patterns), so choosing to redact it in the review removes it. text: a response JSON body; flagged: [category, regex] per value offered.",
+    "cases": [
+      {"id": "flag_tier_field_with_address", "text": "{\"username\": \"bob at 192.168.1.5\"}", "flagged": [["field", "^bob at 10\\.255\\.\\d{1,3}\\.\\d{1,3}$"]]},
+      {"id": "ssid_with_email", "text": "{\"ssid\": \"Net of bob@example.com\"}", "flagged": [["wifi_ssid", "^Net of user_[0-9a-f]+@redacted\\.invalid$"]]},
+      {"id": "served_prose_with_email", "text": "{\"wifi_passphrase\": \"admin@home.net rocks 42\"}", "flagged": [["credential", "^user_[0-9a-f]+@redacted\\.invalid rocks 42$"]]}
+    ]
+  },
+  "ssid_safe_value_cases": {
+    "_comment": "A network name under a JSON SSID key is offered for review unless a safe-value pattern the call's patterns carry (built-in, domain or custom) recognizes it. patterns: a built-in domain name or a custom patterns dict (or null); flagged: the values offered.",
+    "cases": [
+      {"id": "band_name_domain_safe", "text": "{\"ssid\": \"5GHz\"}", "patterns": "network-device", "flagged": []},
+      {"id": "custom_safe_pattern", "text": "{\"ssid\": \"Lab-Net-7\"}", "patterns": {"heuristics": {"safe_value_patterns": [{"regex": "^Lab-Net-\\d+$"}]}}, "flagged": []},
+      {"id": "network_name_offered", "text": "{\"ssid\": \"HomeNet-5G\"}", "patterns": "network-device", "flagged": ["HomeNet-5G"]}
     ]
   }
 }

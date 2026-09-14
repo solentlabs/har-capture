@@ -218,6 +218,29 @@ def _apply_pattern_inclusions(patterns: dict[str, Any], inclusions: list[str]) -
         del patterns[name]
 
 
+# pii.json patterns the sanitizer applies with a pass of its own (the HTML
+# engine's and the shared value passes) rather than the file's regex; the
+# pattern-file pass applies every other pattern, custom ones included.
+DEDICATED_PASS_PATTERNS = frozenset(
+    {
+        "mac_address",
+        "serial_number",
+        "wps_pin",
+        "account_id",
+        "private_ip",
+        "public_ip",
+        "ipv6",
+        "email",
+        "password_field",
+        "password_input",
+        "session_token",
+        "csrf_token",
+        "config_path",
+        "motorola_password",
+    }
+)
+
+
 def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) -> dict[str, Any]:
     """Load PII detection patterns.
 
@@ -251,7 +274,14 @@ def load_pii_patterns(custom_path: Path | str | dict[str, Any] | None = None) ->
     if custom_path:
         custom = _load_custom_patterns(custom_path)
         if "patterns" in custom and isinstance(custom["patterns"], dict):
-            builtin["patterns"].update(custom["patterns"])
+            for name, definition in custom["patterns"].items():
+                # A built-in with a pass of its own is matched by that pass's
+                # regex, not the file's: a custom definition would change what
+                # check_for_pii reports and nothing the sanitizer removes.
+                if name in DEDICATED_PASS_PATTERNS:
+                    _LOGGER.warning("Ignoring custom pattern '%s': a built-in pass owns that name", name)
+                    continue
+                builtin["patterns"][name] = definition
         if "preserved_gateway_ips" in custom and isinstance(custom["preserved_gateway_ips"], list):
             builtin["preserved_gateway_ips"].extend(custom["preserved_gateway_ips"])
         # Apply inclusions declared by the domain/custom file
@@ -730,11 +760,24 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:
     Returns:
         Compiled regex pattern, or None if the regex is invalid
     """
+    label = str(pattern_def.get("replacement_prefix", "unknown"))
+    regex = pattern_def["regex"]
+    if not isinstance(regex, str):
+        _warn_regex_not_a_string(label)
+        return None
+    # A pattern file is user input: a lone flag name counts as a list of one,
+    # and an entry that is not a name is ignored (with the warning an unknown
+    # name gets) rather than failing the run.
+    flags = pattern_def.get("flags", ())
+    names = [flags] if isinstance(flags, str) else flags if isinstance(flags, list) else []
     return _compile_regex(
-        pattern_def["regex"],
-        tuple(pattern_def.get("flags", ())),
-        pattern_def.get("replacement_prefix", "unknown"),
+        regex, tuple(name if isinstance(name, str) else repr(name) for name in names), label
     )
+
+
+@functools.lru_cache(maxsize=64)
+def _warn_regex_not_a_string(label: str) -> None:
+    _LOGGER.warning("Skipping pattern '%s': its regex is not a string", label)
 
 
 # Cached so a pattern compiled once per body (the HTML engine's pass 0) warns

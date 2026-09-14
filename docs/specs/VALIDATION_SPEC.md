@@ -77,6 +77,13 @@ round 1: three `[ERROR]` on `loginName: admin` exited 1 on a compliant capture).
 auto-redact-tier names — `admin` in a password field is a real credential leak. The model applies uniformly to form
 params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via `_classify_field_finding`.
 
+A flag-tier warning is the one finding a sanitize run leaves in place on purpose: the sanitizer offers the value for
+review and keeps it unless the user redacts it, so the warning is the reviewer's prompt, not a leak ADR-14 requires a
+remedy for. In a request — form params, POST bodies, query parameters — a flag-tier name holds what someone typed (a
+username), so the warning stays. In a response body's JSON it is not reported: there such names are mostly translation
+keys, and a warning on firmware text would prompt nothing (see "JSON fields" under `check_content` below). Across the
+fleet after sanitize (0.13.0) the flag-tier warnings are 174, all on `login`- and `username`-named request fields.
+
 ## Entry Point
 
 ```python
@@ -325,7 +332,7 @@ Severity: **warning**
 
 Severity: **warning**
 
-### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth)`
+### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth, _served)`
 
 Recursively scans JSON structures for sensitive field names and identity fields.
 
@@ -345,28 +352,30 @@ def check_json_fields(
     location: str,
     findings: list[Finding],
     path: str = "",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
+    _served: bool = False,
 ) -> None:
 ```
 
 #### Public Parameters
 
-| Parameter         | Type            | Description                                                   |
-| ----------------- | --------------- | ------------------------------------------------------------- |
-| `data`            | dict \| list    | JSON structure to scan                                        |
-| `location`        | str             | HAR location for findings (e.g., "Entry 5 (request body)")    |
-| `findings`        | list\[Finding\] | Accumulator list (mutated in-place)                           |
-| `path`            | str             | Current path in structure (e.g., "user.credentials.password") |
-| `custom_patterns` | str \| None     | Custom patterns file path                                     |
+| Parameter         | Type                | Description                                                   |
+| ----------------- | ------------------- | ------------------------------------------------------------- |
+| `data`            | dict \| list        | JSON structure to scan                                        |
+| `location`        | str                 | HAR location for findings (e.g., "Entry 5 (request body)")    |
+| `findings`        | list\[Finding\]     | Accumulator list (mutated in-place)                           |
+| `path`            | str                 | Current path in structure (e.g., "user.credentials.password") |
+| `custom_patterns` | str \| dict \| None | Custom patterns (file path or dict)                           |
 
 #### Internal Parameters
 
-| Parameter      | Type                 | Description                                          |
-| -------------- | -------------------- | ---------------------------------------------------- |
-| `_field_tiers` | \_FieldTiers \| None | Pre-compiled tier patterns — loaded once, reused     |
-| `_depth`       | int                  | Recursion depth counter — checked against limit (50) |
+| Parameter      | Type                 | Description                                                                                                                                  |
+| -------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_field_tiers` | \_FieldTiers \| None | Pre-compiled tier patterns — loaded once, reused                                                                                             |
+| `_depth`       | int                  | Recursion depth counter — checked against limit (50)                                                                                         |
+| `_served`      | bool                 | The JSON is a response body: a credential-named value the sanitizer keeps or offers for review (`credential_value_action()`) is not reported |
 
 **`_field_tiers` lifecycle:**
 
@@ -381,14 +390,14 @@ def check_json_fields(
 1. Starts at 0 on the initial call
 1. Incremented by 1 before each recursive call
 1. Checked against limit (50) at the start of each call
-1. If `_depth > 50`: return immediately (logged, not fatal)
+1. If `_depth > 50`: return immediately (silently: the sanitizer's key rules stop at the same depth)
 1. Prevents stack overflow from deeply nested or circular JSON
 
 #### Recursion Logic
 
 ```python
 def check_json_fields(data, location, findings, path="",
-                      custom_patterns=None, _field_tiers=None, _depth=0):
+                      custom_patterns=None, _field_tiers=None, _depth=0, _served=False):
     if _depth > 50:
         return
 
@@ -396,14 +405,16 @@ def check_json_fields(data, location, findings, path="",
         _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
-        for key, value in data.items():
+        for key, value in json_members(data):  # shadowed duplicates included
             current_path = f"{path}.{key}" if path else key
             # An identity field first (error), else the field tiers (error / warning / suppressed)
             if isinstance(value, str) and _identity_finding(key, value, custom_patterns):
                 findings.append(Finding(severity="error", ...))
-            elif isinstance(value, str) and value and not is_redacted(value):
+            elif isinstance(value, str) and value and not is_redacted(value, custom_patterns):
                 classified = _classify_field_finding(key, value, _field_tiers)
-                if classified is not None:
+                served_kept = _served and classified and classified[0] == "error" \
+                    and credential_value_action(value) != "redact"
+                if classified is not None and not served_kept:
                     severity, pattern = classified
                     findings.append(Finding(severity=severity, ...))
             # Recurse into nested structures
@@ -411,7 +422,7 @@ def check_json_fields(data, location, findings, path="",
                 check_json_fields(value, location, findings, current_path,
                                   custom_patterns,
                                   _field_tiers=_field_tiers,
-                                  _depth=_depth + 1)
+                                  _depth=_depth + 1, _served=_served)
 
     elif isinstance(data, list):
         for i, item in enumerate(data):
@@ -419,7 +430,7 @@ def check_json_fields(data, location, findings, path="",
                 check_json_fields(item, location, findings, f"{path}[{i}]",
                                   custom_patterns,
                                   _field_tiers=_field_tiers,
-                                  _depth=_depth + 1)
+                                  _depth=_depth + 1, _served=_served)
 ```
 
 Key design decisions:
@@ -469,13 +480,13 @@ depends on genuinely reading the earliest request.
 A **credential submission** is a POST whose `postData` carries a parameter with a password-shaped name (parsed `params`
 array, else an urlencoded `text` body; JSON bodies are not inspected). Names are matched against
 `password_fields.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields) — names
+[`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields) — names
 only, so the check works identically on raw and sanitized HARs. Two or more submissions suppress the warning: the tool
 cannot verify outcomes, so a repeat submission is taken as the deliberate wrong-password attempt the contributor
 instructions call for.
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields),
+[`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields),
 case-insensitively and full-match. Cookie names are read from both the parsed `request.cookies` array and the raw
 `Cookie` header, since HAR producers populate one, the other, or both.
 

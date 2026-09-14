@@ -1135,3 +1135,17 @@ def test_pass0_numbers_match_text_path(case: dict) -> None:
     for kept in case["kept"]:
         assert kept in out
     assert [f.original_value for f in collector.flagged] == case["flagged"]
+
+
+def test_tag_runs_stop_at_the_next_tag() -> None:
+    """No tag regex lets an attribute run cross a `<`.
+
+    `[^>]*` inside a tag makes a run of `<input ` or `<a ` with no closing `>`
+    quadratic, or cubic with two such runs (password inputs, CSRF meta tags:
+    minutes for 40 KB); `[^<>]*` stops each attempt at the next tag.
+    """
+    import har_capture.sanitization.html as html_module
+    from har_capture.patterns import load_pii_patterns
+
+    assert "[^>]*" not in Path(html_module.__file__).read_text(encoding="utf-8")
+    assert all("[^>]*" not in d["regex"] for d in load_pii_patterns()["patterns"].values())

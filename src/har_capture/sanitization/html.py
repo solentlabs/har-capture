@@ -35,6 +35,7 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
+from har_capture.patterns.loader import DEDICATED_PASS_PATTERNS
 from har_capture.patterns.redaction import (
     EMAIL_DOMAIN,
     EMAIL_LOCAL_PART,
@@ -80,7 +81,7 @@ _ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
 #     <span class="readonlyLabel">Default Password:</span>
 #     <span class="value">orange4213table</span>
 #
-# Passes 2 and 2d reach their values with a bare tag chain `(?:<[^>]*>\s*)*`,
+# Passes 2 and 2d reach their values with a bare tag chain `(?:<[^<>]*>\s*)*`,
 # but a bare chain is too loose for credential labels: its `\s*` also runs
 # through ordinary prose, so gateway help text such as
 #
@@ -128,8 +129,8 @@ def _sibling_label_value_pattern(labels: str, separators: str = ":") -> re.Patte
     separator_class = "[" + "".join(re.escape(c) for c in separators) + "]"
     return re.compile(
         r"((?:" + labels + r")\s*(?:\([^)]{0,24}\))?\s*" + separator_class + r"\s*"
-        r"</[a-zA-Z][^>]*>\s*"  # label element closes
-        r"<[a-zA-Z][^>]*>\s*)"  # value element opens
+        r"</[a-zA-Z][^<>]*>\s*"  # label element closes
+        r"<[a-zA-Z][^<>]*>\s*)"  # value element opens
         r"([^<>\s]+)"  # value: the element's entire text, one token
         r"(?=\s*</)",  # value element closes
         re.IGNORECASE,
@@ -160,10 +161,10 @@ SIBLING_SSID_RE = _sibling_label_value_pattern(r"ssid|network\s*name|wi-?fi\s*ne
 # ("Source SSID Index").
 _SSID_ATTRIBUTE_HELPER_SUFFIX = r"(?:help|label|desc|descr|description|title|tip|hint|note|msg|message|text|error|caption|legend|head|header)"
 SSID_ATTRIBUTE_RE = re.compile(
-    r"(<(?!th[\s>])[a-zA-Z][\w-]*[^>]*\b(?:class|id)\s*=\s*[\"'][^\"']*"
+    r"(<(?!th[\s>])[a-zA-Z][\w-]*[^<>]*\b(?:class|id)\s*=\s*[\"'][^\"'<>]*"
     r"(?:ssid|wifi_ntwrk|wifi[-_]?network|priwifinet|wireless[-_]?name)"
     r"(?![-_]?" + _SSID_ATTRIBUTE_HELPER_SUFFIX + r")"
-    r"[^\"']*[\"'][^>]*>\s*)"
+    r"[^\"'<>]*[\"'][^<>]*>\s*)"
     r"([^<>\s]+)"  # value: the element's entire text, one token
     r"(?=\s*</)",
     re.IGNORECASE,
@@ -174,13 +175,14 @@ SSID_ATTRIBUTE_RE = re.compile(
 # identifies it:
 #     <select name="mac_ssid" id="mac_ssid"><option value="17">XFSETUP-9210</option></select>
 SSID_SELECT_RE = re.compile(
-    r"<select\b[^>]*\b(?:name|id|class)\s*=\s*[\"'][^\"']*ssid[^\"']*[\"'][^>]*>.*?</select>",
+    r"<select\b[^<>]*\b(?:name|id|class)\s*=\s*[\"'][^\"'<>]*ssid[^\"'<>]*[\"'][^<>]*>"
+    r"(?:(?!<select\b).)*?</select>",
     re.IGNORECASE | re.DOTALL,
 )
 # Group 1 is the opening tag, group 2 the option text. An option whose `value`
 # attribute is empty is a chooser placeholder ("-- Select --"), never a network.
 SSID_OPTION_RE = re.compile(
-    r"(<option\b(?![^>]*\bvalue\s*=\s*[\"']\s*[\"'])[^>]*>\s*)([^<>\s]+)(?=\s*</option>)",
+    r"(<option\b(?![^<>]*\bvalue\s*=\s*[\"']\s*[\"'])[^<>]*>\s*)([^<>\s]+)(?=\s*</option>)",
     re.IGNORECASE,
 )
 
@@ -193,7 +195,7 @@ SSID_OPTION_RE = re.compile(
 # and `check_for_pii` share one label vocabulary and one value rule, and
 # `validate` never reports a labeled serial no sanitize run removes.
 #
-# The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags, so
+# The tag chain `(?:<[^<>]*>\s*)*` tolerates whitespace between tags, so
 # sibling-element pairs match (Technicolor .jst renders
 # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and the
 # label's own closing tags may precede its separator (<b>Serial Number</b>:).
@@ -210,43 +212,27 @@ SSID_OPTION_RE = re.compile(
 _SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
 _SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?!" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN + r")[a-zA-Z0-9\-_]{5,}"
 SERIAL_LABEL_RE = re.compile(
-    r"\b(" + _SERIAL_LABELS + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<[^>]*>\s*)*)(" + _SERIAL_VALUE + r")",
+    r"\b(" + _SERIAL_LABELS + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<[^<>]*>\s*)*)(" + _SERIAL_VALUE + r")",
     re.IGNORECASE,
 )
+# Every SERIAL_LABEL_RE label holds one of these; a text without one cannot
+# match, so the costlier pattern is skipped.
+SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
 
 # Account/subscriber IDs: pass 3. Group 1 runs from the label through its
-# separator and any tags opening the value's element (`Account ID: <b>`), kept
-# as written; group 2 is the value, which stops at a tag so the closing markup
-# survives. `pii.json`'s account_id regex carries it verbatim (a test pins the
+# separator, any tags opening the value's element (`Account ID: <b>`) and an
+# opening quote, kept as written; group 2 is the value, which stops at a tag,
+# a quote, `&` or `;`, so the markup, script or query around it survives. `pii.json`'s account_id regex carries it verbatim (a test pins the
 # two), so check_for_pii reports what this pass replaces.
 ACCOUNT_LABEL_RE = re.compile(
-    r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+(?:<[^>]*>\s*)*)([^\s<]+)",
+    r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+(?:<[^<>]*>\s*)*[\"']?)"
+    r"([^\s<>\"'&;]+)",
     re.IGNORECASE,
 )
 
 
-# pii.json patterns with a pass of their own in the HTML engine; pass 0
-# (redact_pattern_file_matches) applies every other pattern — the number
-# patterns and any custom one.
-DEDICATED_PASS_PATTERNS = frozenset(
-    {
-        "mac_address",
-        "serial_number",
-        "wps_pin",
-        "account_id",
-        "private_ip",
-        "public_ip",
-        "ipv6",
-        "email",
-        "password_field",
-        "password_input",
-        "session_token",
-        "csrf_token",
-        "config_path",
-        "motorola_password",
-    }
-)
-# Of those, the ones whose pass only the HTML engine runs. On a JSON or text
+# Of the patterns with a pass of their own (DEDICATED_PASS_PATTERNS), the ones
+# whose pass only the HTML engine runs. On a JSON or text
 # route their regexes match source code (`key:!0`, `auth = sign(...)`) far more
 # than values, so check_for_pii reports them only in content the sanitizer
 # routes to the HTML engine.
@@ -853,7 +839,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{hasher.hash_generic(pin, 'PIN')}"
 
     html = re.sub(
-        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)(\d{8})\b",
+        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<[^<>]*>\s*)*)(\d{8})\b",
         replace_wps_pin,
         html,
         flags=re.IGNORECASE,
@@ -1017,7 +1003,7 @@ def _sanitize_html_impl(
         return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
 
     html = re.sub(
-        r'(<input[^>]*type=["\'\\]?password["\'\\]?[^>]*value=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
+        r'(<input[^<>]*type=["\'\\]?password["\'\\]?[^<>]*value=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
         replace_password_input,
         html,
         flags=re.IGNORECASE,
@@ -1035,7 +1021,7 @@ def _sanitize_html_impl(
         return f"{prefix}{value_start}{hasher.hash_generic(match.group(3), 'WIFI')}{value_end}"
 
     html = re.sub(
-        r'(<label>[^<]*SSID[^<]*</label>\s*<input[^>]*)(value=["\'\\]?)([^"\'\\>]+)(["\'\\]?)',
+        r'(<label>[^<]*SSID[^<]*</label>\s*<input[^<>]*)(value=["\'\\]?)([^"\'\\>]+)(["\'\\]?)',
         replace_ssid_input,
         html,
         flags=re.IGNORECASE,
@@ -1066,7 +1052,7 @@ def _sanitize_html_impl(
         return f"{prefix}{hasher.hash_generic(match.group(2), 'CSRF')}{suffix}"
 
     html = re.sub(
-        r'(<meta[^>]*name=["\'\\]?csrf-token["\'\\]?[^>]*content=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
+        r'(<meta[^<>]*name=["\'\\]?csrf-token["\'\\]?[^<>]*content=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
         replace_csrf,
         html,
         flags=re.IGNORECASE,
@@ -1248,7 +1234,8 @@ def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[
         return is_ipv6_host_address(value)
     if pattern_name.startswith("credit_card_"):
         return luhn_valid(value)
-    return True
+    # An SSN-shaped number is offered for review, never hashed.
+    return pattern_name != "ssn"
 
 
 # The tokens of a JSON document that locate its strings: a string literal

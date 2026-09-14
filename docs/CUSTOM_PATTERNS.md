@@ -67,7 +67,11 @@ src/har_capture/patterns/
   have, or that did not take part, falls back to the whole match.
 - **`require_hex_letter`** (boolean, `check_for_pii` only): report a match only if it contains a hex letter (`a`–`f`)
 
-A pattern whose regex does not compile is skipped with one warning; the rest of the run continues.
+A custom pattern may replace a built-in by name (`ssn`, `credit_card_visa`), except one the sanitizer applies with a
+pass of its own (`mac_address`, `serial_number`, `account_id`, the address and email patterns, the HTML engine's labeled
+patterns): that definition is ignored with a warning. A pattern whose regex does not compile, or is not a string, is
+skipped with one warning, and a `flags` entry that is not a flag name is ignored with a warning; the rest of the run
+continues. `flags` may also be a single name (`"IGNORECASE"`).
 
 ### JSON-vs-Regex Escape Trap
 
@@ -135,19 +139,21 @@ sanitize_har_file("capture.har", custom_patterns=patterns_dict)
 
 ## Extending Sensitive Field Detection
 
-The examples above extend `pii.patterns` — value-based regexes that match anywhere in content (e.g. a customer-ID string
-format). Field-level redaction is a separate pass: when sanitizing form bodies, JSON bodies, XML elements,
-`postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field name** against two regex sets
-loaded from `sensitive.json`:
+The examples above extend `pii.patterns` — value-based regexes that match anywhere in body text: HTML, each JSON string
+and key, scripts and other text bodies, and POST text (e.g. a customer-ID string format). Form fields and URL query
+values are judged by their field names instead. Field-level redaction is a separate pass: when sanitizing form bodies,
+JSON bodies, XML elements, `postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field
+name** against two regex sets loaded from `sensitive.json`:
 
 - **`fields.auto_redact_patterns`** — field names that trigger automatic redaction of the associated value (100%
   confidence, e.g. `password`, `secret`, `token`).
 - **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
 
 `check_for_pii` reads the same `fields` names: in a JSON fixture, a value under an `auto_redact_patterns` name that is
-neither empty nor already redacted is reported as `credential_field`. Name a credential field there rather than writing
-a `pii` regex that pairs a key with its value — a JSON fixture is read one decoded string at a time, so such a regex
-never matches in one.
+neither empty nor already redacted is reported as `credential_field` — unless it is a button word (`Yes`, `No`) or
+prose, which the sanitizer keeps or offers for review in a response. Name a credential field there rather than writing a
+`pii` regex that pairs a key with its value — a JSON fixture is read one decoded string at a time, so such a regex never
+matches in one.
 
 To add a field name that the built-ins don't recognize — the way Sercomm/Hitron's `pws` was before it was promoted to a
 built-in, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. The examples

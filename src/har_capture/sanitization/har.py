@@ -28,6 +28,7 @@ from har_capture.patterns import (
     EMAIL_RE,
     IPV6_RE,
     JSON_MAX_DEPTH,
+    KNOWN_AUTH_SCHEMES,
     MAC_RE,
     PRIVATE_IP_RE,
     PUBLIC_IP_RE,
@@ -65,8 +66,10 @@ from har_capture.patterns import (
     split_url_password,
     split_url_query,
 )
+from har_capture.patterns.loader import compile_safe_value_patterns
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
+    SERIAL_LABEL_HINT_RE,
     is_private_ip_in_range,
     is_valid_ip_address,
     pattern_file_patterns,
@@ -225,32 +228,12 @@ def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] |
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS, _SCHEME_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
 
-# Auth schemes recognized by sanitize_header_value when redacting an
-# Authorization-style header. Preserving the scheme token lets downstream
-# tools (e.g. cable_modem_monitor's analyze_har) classify the auth mechanism
-# from a single authenticated request, rather than waiting for a 401 +
-# WWW-Authenticate exchange that may never appear when the browser sends
-# cached credentials. The list is intentionally restricted to RFC-recognized
-# schemes (IANA HTTP Authentication Scheme Registry) so an unrecognized
-# leading token — which could be the start of a secret in a non-standard
-# format — falls through to full redaction.
-_KNOWN_AUTH_SCHEMES: frozenset[str] = frozenset(
-    {
-        "basic",
-        "bearer",
-        "digest",
-        "ntlm",
-        "negotiate",
-        "oauth",
-    }
-)
-
 # Response cookie headers. RFC 6265 sec. 4.1.1 gives these a different grammar
 # from the request `Cookie` header: one `name=value` cookie pair followed by
 # `;`-separated attributes, rather than a list of cookie pairs. Only the pair
 # is cookie data, so only it is redacted — see `_sanitize_set_cookie_value`.
 # Hardcoded rather than pattern-configured for the same reason as
-# `_KNOWN_AUTH_SCHEMES`: it is protocol structure, not a domain pattern.
+# `KNOWN_AUTH_SCHEMES`: it is protocol structure, not a domain pattern.
 _SET_COOKIE_HEADERS: frozenset[str] = frozenset({"set-cookie", "set-cookie2"})
 
 
@@ -299,6 +282,7 @@ class _CallPatterns:
     allowlist: dict[str, Any]
     serial_detectors: tuple[Any, ...]
     pattern_file: tuple[tuple[str, re.Pattern[str], str], ...]
+    safe_values: tuple[re.Pattern[str], ...]
 
 
 def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _CallPatterns:
@@ -308,6 +292,7 @@ def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _Cal
         load_allowlist(custom_patterns),
         tuple(_resolve_serial_detectors(custom_patterns)),
         tuple(pattern_file_patterns(custom_patterns)),
+        tuple(compile_safe_value_patterns(load_sensitive_patterns(custom_patterns))),
     )
 
 
@@ -333,7 +318,15 @@ def _active_call_patterns() -> _CallPatterns:
 
 @contextmanager
 def _call_patterns_scope(custom_patterns: str | dict[str, Any] | None) -> Iterator[None]:
-    """Make ``custom_patterns`` the active call's patterns for this scope."""
+    """Make ``custom_patterns`` the active call's patterns for this scope.
+
+    A scope already active for the same patterns object is kept, so a
+    ``sanitize_har`` call resolves them once rather than once per entry.
+    """
+    active = _CALL_PATTERNS_CTX.get()
+    if custom_patterns is not None and active is not None and active.custom_patterns is custom_patterns:
+        yield
+        return
     token = _CALL_PATTERNS_CTX.set(
         None if custom_patterns is None else _resolve_call_patterns(custom_patterns)
     )
@@ -730,7 +723,7 @@ def sanitize_header_value(
         # non-standard format can't leak its leading token.
         stripped = value.lstrip()
         parts = stripped.split(None, 1)
-        if len(parts) == 2 and parts[0].lower() in _KNOWN_AUTH_SCHEMES:
+        if len(parts) == 2 and parts[0].lower() in KNOWN_AUTH_SCHEMES:
             scheme, credential = parts
             hashed = _redact_value(credential, hasher, "AUTH", collector)
             return f"{scheme} {hashed}"
@@ -1034,7 +1027,8 @@ def _is_reviewable_ssid(key: str, value: object) -> bool:
         return False
     from har_capture.sanitization.heuristics import is_safe_value
 
-    return not is_allowlisted(value, _active_call_patterns().allowlist) and not is_safe_value(value)
+    active = _active_call_patterns()
+    return not is_allowlisted(value, active.allowlist) and not is_safe_value(value, list(active.safe_values))
 
 
 # The placeholders _redact_value writes for a credential-named field:
@@ -1120,19 +1114,21 @@ def _sanitize_credential_value(
     can reach it (no collector, or flags muted inside an encoded payload).
     """
     action = credential_value_action(value) if served else "redact"
-    if action == "review" and collector is not None and collector.accepts_flags:
-        # LOW: every such value across the fleet is UI text, so the review
-        # shows it without pre-selecting it for redaction.
+    reviewable = action == "review" and collector is not None and collector.accepts_flags
+    if action != "keep" and not reviewable:
+        return _redact_value(value, hasher, "FIELD", collector)
+    result: str = _sanitize_json_recursive(value, hasher, collector, depth + 1, served=served)
+    if reviewable and collector is not None:
+        # The text as the output holds it, so the review can replace it. LOW:
+        # every such value across the fleet is UI text, so the review shows
+        # it without pre-selecting it for redaction.
         collector.flag_value(
-            value,
+            result,
             "credential",
             ConfidenceLevel.LOW,
             f"JSON key '{key}'",
             f"Text under credential-named key '{key}' in a response: a UI string, or a passphrase with spaces",
         )
-    elif action != "keep":
-        return _redact_value(value, hasher, "FIELD", collector)
-    result: str = _sanitize_json_recursive(value, hasher, collector, depth + 1, served=served)
     return result
 
 
@@ -1190,26 +1186,28 @@ def _sanitize_json_recursive(
                     collector.record_auto_redaction("serial_number")
                 result[out_key] = hasher.hash_generic(str(value), "SERIAL") if hasher else "***SERIAL***"
             elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
+                # Flagged as the output holds it, so the review can replace it.
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
                 collector.flag_value(
-                    value,
+                    result[out_key],
                     "field",
                     ConfidenceLevel.MEDIUM,
                     f"JSON key '{key}'",
                     f"Flaggable field name '{key}' in JSON",
                 )
+            elif collector and _is_reviewable_ssid(key, value):
+                # Flagged as the output holds it, so the review can replace it.
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
                 )
-            elif collector and _is_reviewable_ssid(key, value):
                 collector.flag_value(
-                    str(value),
+                    result[out_key],
                     "wifi_ssid",
                     ConfidenceLevel.MEDIUM,
                     f"JSON key '{key}'",
                     f"Wi-Fi network name under SSID key '{key}' in JSON",
-                )
-                result[out_key] = _sanitize_json_recursive(
-                    value, hasher, collector, _depth + 1, served=served
                 )
             else:
                 result[out_key] = _sanitize_json_recursive(
@@ -1745,10 +1743,6 @@ def _sanitize_request(
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
-# Every labeled-serial label holds one of these; a text without one cannot match.
-_SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
-
-
 def _sanitize_body_string(
     text: str,
     hasher: Hasher | None = None,
@@ -1774,8 +1768,8 @@ def _sanitize_body_string(
     Args:
         text: The text
         hasher: Hasher for the string patterns (None: static placeholders)
-        collector: Collector with hasher for the positional passes (None:
-            nothing to hash with, so they are skipped)
+        collector: Collector for redaction counts and review flags (None: the
+            passes hash with ``hasher``, or static placeholders without one)
         custom_patterns: Optional custom patterns for the allowlist checks
         serial_detectors: Compiled high-confidence vendor serial detectors
         pattern_file: ``pattern_file_patterns()`` resolved for the call (None:
@@ -1786,23 +1780,20 @@ def _sanitize_body_string(
     """
     if not text:
         return text
-    # With no collector the pattern file's matches still take static
-    # placeholders, as the string patterns do; review flags are discarded.
-    patterns_collector = (
-        collector if collector is not None else RedactionCollector(hasher=hasher or Hasher(salt=None))
-    )
+    # With no collector the passes that need one hash with the caller's
+    # hasher (static placeholders without one), and review flags are discarded.
+    passes = collector if collector is not None else RedactionCollector(hasher=hasher or Hasher(salt=None))
     if pattern_file is None:
         pattern_file = pattern_file_patterns(custom_patterns)
-    text = redact_pattern_file_matches(text, patterns_collector.hasher, patterns_collector, pattern_file)
+    text = redact_pattern_file_matches(text, passes.hasher, passes, pattern_file)
     text = _redact_macs(text, hasher, collector)
-    if collector is not None:
-        if _SERIAL_LABEL_HINT_RE.search(text):
-            text = redact_labeled_serials(text, collector.hasher, collector, custom_patterns)
-        if serial_detectors:
-            text = redact_vendor_serials(text, list(serial_detectors), collector.hasher, collector)
+    if SERIAL_LABEL_HINT_RE.search(text):
+        text = redact_labeled_serials(text, passes.hasher, passes, custom_patterns)
+    if serial_detectors:
+        text = redact_vendor_serials(text, list(serial_detectors), passes.hasher, passes)
     text = _redact_ip_addresses(text, hasher, collector)
-    if collector is not None and "<" in text:
-        text = redact_structural_credentials(text, collector.hasher, collector, custom_patterns)
+    if "<" in text:
+        text = redact_structural_credentials(text, passes.hasher, passes, custom_patterns)
     return _redact_emails_and_flag_phones(text, hasher, collector)
 
 
@@ -2173,7 +2164,9 @@ def _is_propagation_eligible(value: str) -> bool:
     return not is_safe_value(value)
 
 
-def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
+def _propagation_search_keys(
+    registry: dict[str, str], known_secrets: frozenset[str] = frozenset()
+) -> list[tuple[str, str]]:
     """Expand eligible redacted values into the needles to search for.
 
     Each value contributes its literal form plus its percent-encoded form, so a
@@ -2187,13 +2180,16 @@ def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
 
     Args:
         registry: Original value -> placeholder, from RedactionCollector
+        known_secrets: Values searched for whatever their shape: each is both
+            redacted somewhere as a credential and offered for review elsewhere,
+            so every textual match is the same secret
 
     Returns:
         (needle, placeholder) pairs, longest needle first
     """
     needles: dict[str, str] = {}
     for original, placeholder in registry.items():
-        if not _is_propagation_eligible(original):
+        if original not in known_secrets and not _is_propagation_eligible(original):
             continue
         needles.setdefault(original, placeholder)
         encoded = urllib.parse.quote(original, safe="")
@@ -2202,7 +2198,9 @@ def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
     return sorted(needles.items(), key=lambda item: -len(item[0]))
 
 
-def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str]) -> int:
+def _propagate_redacted_values(
+    har_data: dict[str, Any], registry: dict[str, str], known_secrets: frozenset[str] = frozenset()
+) -> int:
     """Replace remaining verbatim occurrences of already-redacted values in-place.
 
     Substitution is one token for one token, so path segment count, query shape,
@@ -2211,11 +2209,13 @@ def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str
     Args:
         har_data: The sanitized HAR data (mutated in place)
         registry: Original value -> placeholder, from RedactionCollector
+        known_secrets: Values propagated whatever their shape (see
+            ``_propagation_search_keys``)
 
     Returns:
         Number of occurrences replaced
     """
-    search_keys = _propagation_search_keys(registry)
+    search_keys = _propagation_search_keys(registry, known_secrets)
     if not search_keys:
         return 0
 
@@ -2317,20 +2317,22 @@ def sanitize_har(
     orig_entries = har_data.get("log", {}).get("entries", [])
     url_credentials = _scan_url_credentials(orig_entries) if isinstance(orig_entries, list) else {}
 
-    # Sanitize all entries using the shared collector
+    # Sanitize all entries using the shared collector, the call's patterns
+    # resolved once for all of them.
     if "entries" in log and isinstance(log["entries"], list):
         sanitized_entries = []
-        for i, entry in enumerate(log["entries"]):
-            sanitized_entries.append(
-                sanitize_entry(
-                    entry,
-                    custom_patterns=custom_patterns,
-                    collector=collector,
-                    heuristics=heuristics,
-                    _skip_copy=True,
-                    _url_credential=url_credentials.get(i),
+        with _call_patterns_scope(custom_patterns):
+            for i, entry in enumerate(log["entries"]):
+                sanitized_entries.append(
+                    sanitize_entry(
+                        entry,
+                        custom_patterns=custom_patterns,
+                        collector=collector,
+                        heuristics=heuristics,
+                        _skip_copy=True,
+                        _url_credential=url_credentials.get(i),
+                    )
                 )
-            )
         log["entries"] = sanitized_entries
 
     # Sanitize pages (if present) using the shared collector
@@ -2373,12 +2375,22 @@ def sanitize_har(
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
     # surfaces with no field name to match (most commonly a URL path segment).
-    propagated = _propagate_redacted_values(result, collector.redacted_values)
+    # A value offered for review as a credential that is redacted as one
+    # elsewhere (a served echo of a submitted passphrase) is a known secret:
+    # it is propagated whatever its shape.
+    known_secrets = frozenset(
+        f.original_value
+        for f in collector.flagged
+        if f.category == "credential" and f.original_value in collector.redacted_values
+    )
+    propagated = _propagate_redacted_values(result, collector.redacted_values, known_secrets)
     if propagated:
         collector.auto_redacted_counts["propagated"] = propagated
         # A propagated value has no surviving occurrence left, so asking the user
         # to review it is a decision with no effect. Drop it from the review queue.
-        collector.drop_flagged({v for v in collector.redacted_values if _is_propagation_eligible(v)})
+        collector.drop_flagged(
+            {v for v in collector.redacted_values if v in known_secrets or _is_propagation_eligible(v)}
+        )
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)

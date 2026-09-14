@@ -295,7 +295,7 @@ Three rules follow:
    canonical counterexamples — both are long, both are opaque to a naive detector, both are URL path segments. They are
    why `_LONG_TOKEN_PATTERN` requires mixed letters *and* digits at 32+ characters.
 
-**Relationship to invariant 11:** [`SANITIZATION_SPEC.md`](specs/SANITIZATION_SPEC.md#constraints-invariants) invariant
+**Relationship to invariant 11:** [`SANITIZATION_SPEC.md`](specs/SANITIZATION_SPEC.md#constraints--invariants) invariant
 11 governs *confidence* — what may auto-redact without user review. This ADR governs *scope* — what is eligible to be
 considered PII at all. A change can clear invariant 11 (100% confident the value is what we think it is) and still fail
 this ADR (the thing we are certain about is protocol structure). Both gates apply.
