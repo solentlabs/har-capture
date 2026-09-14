@@ -21,6 +21,13 @@ if TYPE_CHECKING:
 
     from har_capture.patterns.hasher import Hasher
 
+# A value shorter than this is never offered for review: it identifies no one,
+# and the review replaces a value everywhere it occurs, so redacting `1` or
+# `OK` would rewrite every IP address and status text in the file. Across the
+# CMM fleet (0.13.0) all 66 such offers were `OK` under `LoginResult` and `1`
+# under `login`.
+_MIN_OFFERED_LENGTH = 3
+
 _CONFIDENCE_RANK = {ConfidenceLevel.LOW: 0, ConfidenceLevel.MEDIUM: 1, ConfidenceLevel.HIGH: 2}
 
 
@@ -128,9 +135,10 @@ class RedactionCollector:
                 that is exactly a phone number): that is the same occurrence,
                 so it is not counted twice, and a flag the traversal created
                 takes this category, context and reason, its confidence never
-                lowered. A flag from another occurrence keeps its own.
+                lowered. Another occurrence counts once more, and relabels the
+                item only when it is more confident.
         """
-        if self._flags_muted:
+        if self._flags_muted or len(value.strip()) < _MIN_OFFERED_LENGTH:
             return
         call = self._flag_calls
         self._flag_calls += 1
@@ -152,8 +160,13 @@ class RedactionCollector:
                 if _CONFIDENCE_RANK[confidence] > _CONFIDENCE_RANK[existing.confidence]:
                     existing.confidence = confidence
         else:
-            # The same value found again (keep the first context seen)
+            # The same value found again. The item takes the label of its
+            # most confident occurrence, whatever the entry order: an API key
+            # seen first as a username is still offered as an API key.
             existing.occurrences += 1
+            if _CONFIDENCE_RANK[confidence] > _CONFIDENCE_RANK[existing.confidence]:
+                existing.category, existing.confidence = category, confidence
+                existing.context, existing.reason = context, reason
         self._flag_touched[value] = call
 
     def drop_flagged(self, values: set[str]) -> int:

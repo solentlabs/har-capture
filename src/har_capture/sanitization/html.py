@@ -85,11 +85,32 @@ _ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
 # with a stray quote, or a quoted value over 2,048 characters, is not read.
 # An unquoted "anything but `>`" run made a series of unclosed tags quadratic
 # (cubic with two runs in one tag); a test pins its absence.
-_TAG_RUN = r"""(?:=\s*\\?"[^"]{0,2048}"|=\s*\\?'[^']{0,2048}'|[^<>"'])*"""
-# An attribute value as its own group: after an opening quote (a JS-escaped
-# `\"` included) it runs to the closing one; unquoted, it stops at whitespace
-# or the tag's `>`, so the markup after the tag survives.
-_ATTR_VALUE = r"""((?<=["'\\])[^"'\\]+|(?<!["'\\])[^\s"'\\>]+)"""
+_TAG_UNIT = r"""(?:=\s*\\?"[^"]{0,2048}"|=\s*\\?'[^']{0,2048}'|[^<>"'])"""
+_TAG_RUN = _TAG_UNIT + "*"
+
+
+def _tag_run_to(anchor: str) -> str:
+    """A tag run that stops at the first ``anchor`` and cannot pass it.
+
+    A regex with two runs around an anchor (`<input RUN type=password RUN
+    value=`) otherwise retries the second run from every copy of the anchor
+    in one unclosed tag: quadratic (56 KB took five seconds). Stopping at the
+    first copy tries it once. Python 3.10 has no atomic groups, and a capture
+    group would renumber the groups every caller reads.
+    """
+    return r"(?:(?!" + anchor + r")" + _TAG_UNIT + r")*"
+
+
+# An attribute value as its own group. Quoted, it runs to the quote that
+# opened it (a JS-escaped `\"` included), so `value="ab'cd"` is one value —
+# but it does not start with the other quote: `value="' + $("#pw").val()` is
+# script building the markup, not a value; a
+# backslash run belongs to it only before an ordinary character, so the run
+# that escapes the closing quote stays outside. Unquoted, it stops at
+# whitespace or the tag's `>`, so the markup after the tag survives.
+_ATTR_VALUE = (
+    r"""((?<=")(?!')(?:[^"\\]|\\+(?=[^"\\]))+|(?<=')(?!")(?:[^'\\]|\\+(?=[^'\\]))+|(?<!["'\\])[^\s"'\\>]+)"""
+)
 
 
 # Sibling-element label/value pairs where the value occupies its OWN element.
@@ -178,11 +199,14 @@ SIBLING_SSID_RE = _sibling_label_value_pattern(r"ssid|network\s*name|wi-?fi\s*ne
 # and `<th>` stays excluded because a column heading is not a value
 # ("Source SSID Index").
 _SSID_ATTRIBUTE_HELPER_SUFFIX = r"(?:help|label|desc|descr|description|title|tip|hint|note|msg|message|text|error|caption|legend|head|header)"
-SSID_ATTRIBUTE_RE = re.compile(
-    r"(<(?!th[\s>])[a-zA-Z][\w-]*" + _TAG_RUN + r"\b(?:class|id)\s*=\s*[\"'][^\"'<>]*"
+_SSID_ATTRIBUTE = (
+    r"\b(?:class|id)\s*=\s*\\*[\"'][^\"'<>\\]*"
     r"(?:ssid|wifi_ntwrk|wifi[-_]?network|priwifinet|wireless[-_]?name)"
     r"(?![-_]?" + _SSID_ATTRIBUTE_HELPER_SUFFIX + r")"
-    r"[^\"'<>]*[\"']" + _TAG_RUN + r">\s*)"
+    r"[^\"'<>\\]*\\*[\"']"
+)
+SSID_ATTRIBUTE_RE = re.compile(
+    r"(<(?!th[\s>])[a-zA-Z][\w-]*" + _tag_run_to(_SSID_ATTRIBUTE) + _SSID_ATTRIBUTE + _TAG_RUN + r">\s*)"
     r"([^<>\s]+)"  # value: the element's entire text, one token
     r"(?=\s*</)",
     re.IGNORECASE,
@@ -192,8 +216,9 @@ SSID_ATTRIBUTE_RE = re.compile(
 # has no label and no attribute of its own here — only the enclosing control
 # identifies it:
 #     <select name="mac_ssid" id="mac_ssid"><option value="17">XFSETUP-9210</option></select>
+_SSID_SELECT_ATTRIBUTE = r"\b(?:name|id|class)\s*=\s*\\*[\"'][^\"'<>\\]*ssid[^\"'<>\\]*\\*[\"']"
 SSID_SELECT_RE = re.compile(
-    r"<select\b" + _TAG_RUN + r"\b(?:name|id|class)\s*=\s*[\"'][^\"'<>]*ssid[^\"'<>]*[\"']" + _TAG_RUN + r">"
+    r"<select\b" + _tag_run_to(_SSID_SELECT_ATTRIBUTE) + _SSID_SELECT_ATTRIBUTE + _TAG_RUN + r">"
     r"(?:(?!<select\b).)*?</select>",
     re.IGNORECASE | re.DOTALL,
 )
@@ -202,7 +227,7 @@ SSID_SELECT_RE = re.compile(
 SSID_OPTION_RE = re.compile(
     r"(<option\b(?!"
     + _TAG_RUN
-    + r"\bvalue\s*=\s*[\"']\s*[\"'])"
+    + r"\bvalue\s*=\s*\\*[\"']\s*\\*[\"'])"
     + _TAG_RUN
     + r">\s*)([^<>\s]+)(?=\s*</option>)",
     re.IGNORECASE,
@@ -260,37 +285,65 @@ ACCOUNT_LABEL_RE = re.compile(
 
 # WPS PINs (pass 2d), password inputs (pass 8) and CSRF meta tags (pass 10).
 # `pii.json` carries each verbatim (a test pins them), so check_for_pii reports
-# what these passes replace. An attribute's quote may be JS-escaped (`\"`, in a
-# `document.write` string); a password input's or CSRF token's value group is
-# _ATTR_VALUE, and group 3 is its closing quote.
-_QUOTE = r"(?:\\?[\"'])?"
+# what these passes replace. An attribute's quote may be JS-escaped, at any
+# depth (`\"`, `\\\"`: a `document.write` string, itself in a JSON body); a
+# password input's or CSRF token's value group is _ATTR_VALUE, and group 3 is
+# its closing quote.
+_QUOTE = r"(?:\\*[\"'])?"
 WPS_PIN_LABEL_RE = re.compile(
     r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<"
     + _TAG_RUN
     + r">\s*)*)(\d{8})\b",
     re.IGNORECASE,
 )
+_PASSWORD_TYPE = rf"type={_QUOTE}password"
+_CSRF_NAME = rf"name={_QUOTE}csrf-token"
 PASSWORD_INPUT_RE = re.compile(
-    rf"(<input{_TAG_RUN}type={_QUOTE}password{_QUOTE}{_TAG_RUN}value={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
+    rf"(<input{_tag_run_to(_PASSWORD_TYPE)}{_PASSWORD_TYPE}{_QUOTE}{_TAG_RUN}value={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
     re.IGNORECASE,
 )
 CSRF_META_RE = re.compile(
-    rf"(<meta{_TAG_RUN}name={_QUOTE}csrf-token{_QUOTE}{_TAG_RUN}content={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
+    rf"(<meta{_tag_run_to(_CSRF_NAME)}{_CSRF_NAME}{_QUOTE}{_TAG_RUN}content={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
     re.IGNORECASE,
 )
 
 # Labeled passwords (pass 7) and session tokens (pass 9): group 1 is the
 # label, group 2 the separator and any opening quote (kept as written), group 3
-# the value. The value stops at a quote, JS-escaped or not, so in
+# the value. The value stops at a quote however deeply it is escaped, so in
 # `password=\"hunter2x\"` it is `hunter2x`, not a lone backslash with the
-# secret left after it. `pii.json` carries both verbatim.
-_LABELED_VALUE_CHAR = r"""(?:[^"'<>\s\\]|\\(?!["']))"""
+# secret left after it. A backslash run belongs to the value only when an
+# ordinary character follows it, so a run before the closing quote stays in
+# place and the string around the value still closes. `pii.json` carries both
+# verbatim.
+_LABELED_VALUE_CHAR = r"""(?:[^"'<>\s\\]|\\+(?=[^"'<>\s\\]))"""
+# Group 2 is the separator — spacing entities included (`Password:&nbsp;x`), so
+# `Password:&nbsp;&nbsp;</td>` has no value to take — then an opening quote, or
+# for an unquoted value a check that it is not code: a negation (`!0`), an
+# entity, or a call (`c.getPasswordField(`, `function(e,t,n)`). Minified
+# script supplies those after `password:` and `cookie=` (181 fleet matches,
+# none a credential); a quoted value is data and is always taken.
+_SPACING_ENTITY = r"&(?:nbsp|ensp|emsp|thinsp|#160|#x[aA]0);"
+_LABELED_SEPARATOR = (
+    r"(\s*[=:]\s*(?:" + _SPACING_ENTITY + r"\s*)*(?:\\*[\"']|(?![!&]|[A-Za-z_$][\w$]*(?:\.[\w$]+)*\()))"
+)
+# `key` counts as a credential label only glued to a word (`wifikey`,
+# `wifi0_wpapsk_key`, `passkey`). A bare `key` is a script variable as often
+# as a label (all 44 unredacted fleet matches are JavaScript assignments), so
+# its value is offered for review instead (KEY_FIELD_RE).
 PASSWORD_FIELD_RE = re.compile(
-    r"(password|passphrase|psk|key|wpa[0-9]*key)(\s*[=:]\s*" + _QUOTE + r")(" + _LABELED_VALUE_CHAR + r"+)",
+    r"(password|passphrase|psk|wpa[0-9]*key|(?<=[A-Za-z0-9_])key)"
+    + _LABELED_SEPARATOR
+    + r"("
+    + _LABELED_VALUE_CHAR
+    + r"+)",
+    re.IGNORECASE,
+)
+KEY_FIELD_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])(key)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"+)",
     re.IGNORECASE,
 )
 SESSION_TOKEN_RE = re.compile(
-    r"(session|token|auth|cookie)(\s*[=:]\s*" + _QUOTE + r")(" + _LABELED_VALUE_CHAR + r"{20,})",
+    r"(session|token|auth|cookie)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"{20,})",
     re.IGNORECASE,
 )
 
@@ -919,7 +972,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'SERIAL')}{quote2}"
 
     html = re.sub(
-        r'\b(\w*serial[-_]?(?:num(?:ber)?|no)\w*|\w+serial)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*serial[-_]?(?:num(?:ber)?|no)|\w+serial\b)(\w+(?:-(?:num(?:ber)?|no)\w*)?)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_serial,
         html,
         flags=re.IGNORECASE,
@@ -996,6 +1049,17 @@ def _sanitize_html_impl(
 
     html = PASSWORD_FIELD_RE.sub(replace_password, html)
 
+    # 7-key. A bare `key` label: offered for review, never replaced here.
+    for match in KEY_FIELD_RE.finditer(html):
+        if not is_redacted(match.group(3), custom_patterns):
+            collector.flag_value(
+                match.group(3),
+                "credential",
+                ConfidenceLevel.LOW,
+                match.group(0)[:80],
+                "Value after a bare 'key' label: a key or a script variable",
+            )
+
     # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>)
     def replace_ssid_text(match: re.Match[str]) -> str:
         if is_redacted(match.group(3), custom_patterns):
@@ -1024,7 +1088,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'PASS')}{quote2}"
 
     html = re.sub(
-        r'\b(\w*password\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*password)(\w+)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_password,
         html,
         flags=re.IGNORECASE,
@@ -1192,7 +1256,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'WIFI')}{quote2}"
 
     html = re.sub(
-        r'\b(\w*ssid\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*ssid)(\w+)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_ssid,
         html,
         flags=re.IGNORECASE,

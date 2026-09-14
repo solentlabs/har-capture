@@ -27,7 +27,8 @@ Sanitization happens in **two passes**:
 ### Pass 2: Apply User Decisions
 
 - You review flagged values and decide which to redact
-- Selected values are redacted via global find-replace
+- Selected values are redacted everywhere a string holds them, escaped and percent-encoded copies included
+- Values under three characters are never offered: replacing one everywhere would rewrite unrelated text
 - Salt is preserved to ensure consistent hashing across both passes
 
 ## Flagging Heuristics

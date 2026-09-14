@@ -255,7 +255,8 @@ field name to match — most commonly a URL path segment. It adds no detection o
 collision-safety test on values Pass 1 already redacted.
 
 **Pass 2** presents flagged values for interactive review (TTY) or writes them to a JSON report (CI/CD). User-selected
-redactions are applied via global find-and-replace using the same session salt.
+redactions replace every copy of a value inside string values — escaped and percent-encoded forms too — using the same
+session salt.
 
 See [Sanitization Spec](specs/SANITIZATION_SPEC.md) for the full entry point signatures, per-field logic, and two-pass
 model.

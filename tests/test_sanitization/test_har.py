@@ -3964,35 +3964,6 @@ class TestApplyUserRedactions:
             result = apply_user_redactions(har_data, report)
         assert isinstance(result, dict), "Should return valid result despite error"
 
-    def test_json_decode_error_after_replacement(self) -> None:
-        """Test HarValidationError raised if json.loads fails after replacement."""
-        from unittest.mock import patch
-
-        har_data = {"log": {"entries": [{"note": "target_value"}]}}
-        report = SanitizationReport(
-            input_file="",
-            output_file="",
-            salt="test",
-            flagged=[
-                FlaggedValue(
-                    original_value="target_value",
-                    category="test",
-                    confidence="HIGH",
-                    context="ctx",
-                    reason="test",
-                    status=RedactionStatus.USER_REDACTED,
-                ),
-            ],
-        )
-        with (
-            patch(
-                "har_capture.sanitization.har.json.loads",
-                side_effect=json.JSONDecodeError("broken", "", 0),
-            ),
-            pytest.raises(HarValidationError, match="Failed to parse HAR"),
-        ):
-            apply_user_redactions(har_data, report)
-
 
 # =============================================================================
 # XML POST Data Sanitization
@@ -4936,6 +4907,12 @@ class TestEchoedCredentials:
             assert any(kept in text for text in readable)
         for value in case["offered"]:
             assert value in offered
+        if "gone_after_review" in case:
+            for item in report.flagged:
+                item.status = RedactionStatus.USER_REDACTED
+            reviewed = _readable_strings(apply_user_redactions(sanitized, report)["log"]["entries"])
+            for text in case["gone_after_review"]:
+                assert not any(text in readable_text for readable_text in reviewed)
 
 
 @pytest.mark.parametrize(

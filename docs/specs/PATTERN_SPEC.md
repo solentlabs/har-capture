@@ -65,21 +65,27 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Built-in patterns:**
 
-| Name          | Prefix              | What It Matches                                     |
-| ------------- | ------------------- | --------------------------------------------------- |
-| mac_address   | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`) |
-| serial_number | SERIAL              | SN, S/N, Serial Number labels + values              |
-| account_id    | ACCOUNT             | Account, Subscriber, Customer, Device ID labels     |
-| private_ip    | (format-preserving) | 10.x, 172.16-31.x, 192.168.x                        |
-| public_ip     | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)     |
-| ipv6          | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)          |
-| email         | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                    |
-| session_token | TOKEN               | 20+ char alphanumeric strings                       |
-| csrf_token    | CSRF                | CSRF tokens in meta tags                            |
-| password      | PASS                | password=, passphrase= patterns                     |
-| ssn           | SSN                 | Social Security Number (flagged, not auto-redacted) |
-| credit_card   | CC                  | Visa/MC/Amex with Luhn validation                   |
-| config_path   | CONFIG              | .cfg file references                                |
+| Name              | Prefix              | What It Matches                                                                  |
+| ----------------- | ------------------- | -------------------------------------------------------------------------------- |
+| mac_address       | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`)                              |
+| serial_number     | SERIAL              | A serial label and its value (`SERIAL_LABEL_RE`)                                 |
+| wps_pin           | PIN                 | A WPS/pairing/default PIN label and 8 digits (`WPS_PIN_LABEL_RE`)                |
+| account_id        | ACCOUNT             | An Account/Subscriber/Customer/Device ID label and value (`ACCOUNT_LABEL_RE`)    |
+| private_ip        | (format-preserving) | 10.x, 172.16-31.x, 192.168.x (`PRIVATE_IP_RE`)                                   |
+| public_ip         | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)                                  |
+| ipv6              | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)                                       |
+| email             | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                                                 |
+| password_field    | PASS                | A password/passphrase/psk/glued-`key` label and its value (`PASSWORD_FIELD_RE`)  |
+| password_input    | PASS                | An `<input type=password>` value (`PASSWORD_INPUT_RE`)                           |
+| session_token     | TOKEN               | A session/token/auth/cookie label and a 20+ character value (`SESSION_TOKEN_RE`) |
+| csrf_token        | CSRF                | A `<meta name=csrf-token>` content value (`CSRF_META_RE`)                        |
+| config_path       | CONFIG              | .cfg file references                                                             |
+| motorola_password | PASS                | Motorola `var CurrentPw… = '…'` script variables                                 |
+| ssn               | SSN                 | Social Security Number (flagged, not auto-redacted)                              |
+| credit_card\_\*   | CC                  | Visa/MC/Amex with Luhn validation                                                |
+
+The labeled and tag patterns are the sanitizer's compiled regexes verbatim, pinned by a test, so `check_for_pii` reports
+what the HTML engine replaces.
 
 **`preserved_gateway_ips`**: Array of IP addresses that should never be redacted. These are common router gateway
 addresses that appear in every device capture and don't constitute PII (e.g., `192.168.1.1`, `192.168.0.1`, `10.0.0.1`).

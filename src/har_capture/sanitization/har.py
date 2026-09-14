@@ -2089,14 +2089,17 @@ def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
 def _scan_submitted_credentials(entries: list[Any]) -> frozenset[str]:
     """Every value the capture's requests submit under a credential-named field.
 
-    POST JSON members (to ``JSON_MAX_DEPTH``), form data (text and params) and
-    the ``queryString`` array, judged by ``is_sensitive_field``. Read before
+    Every request's ``postData`` — its ``params``, and its text read as JSON
+    members (to ``JSON_MAX_DEPTH``) when it parses as JSON, else as
+    ``&``-separated form pairs when it holds ``=`` — and the ``queryString``
+    array, judged by ``is_sensitive_field``. Read before
     sanitizing, so a response served before the request that submits the same
     value is matched too. Empty values and this sanitizer's own placeholders
-    are not credentials. XML, multipart and base64-wrapped bodies, and a URL
-    query with no ``queryString`` array, are not read: a served copy of a
-    value submitted only there is judged by its shape alone, which offers
-    prose for review (none of these occurs in the fleet's requests).
+    are not credentials. XML, multipart and base64-wrapped bodies are not
+    parsed as such (one holding ``=`` is split as form pairs like any other
+    text), and a URL query with no ``queryString`` array is not read: a served
+    copy of a value submitted only there is judged by its shape alone, which
+    offers prose for review (none of these occurs in the fleet's requests).
     """
     found: set[str] = set()
     for entry in entries:
@@ -2612,6 +2615,44 @@ def _validate_har_for_redaction(har_data: dict[str, Any]) -> None:
         raise HarValidationError("Missing required 'log' key", "root")
 
 
+def _user_redaction_forms(value: str) -> set[str]:
+    r"""Every text a HAR string can hold ``value`` as.
+
+    As written; percent-encoded, as a URL path (``/`` kept), a query value or a
+    form body (``+`` for space) carries it; and escaped, as a JSON body inside
+    the string carries it (``\"``, ``\u00e9``, PHP's ``\/``).
+    """
+    forms = {
+        value,
+        urllib.parse.quote(value),
+        urllib.parse.quote(value, safe=""),
+        urllib.parse.quote_plus(value),
+    }
+    for escaped in (json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]):
+        forms.update((escaped, escaped.replace("/", "\\/")))
+    return forms
+
+
+def _replace_in_string_values(data: Any, replacements: dict[str, str]) -> None:
+    """Replace each form with its placeholder inside every string value of ``data``, in place.
+
+    Keys, numbers and every other JSON structure are left alone, so no value
+    can corrupt the HAR (``200`` is not a status code's digits, ``name`` is
+    not a key). One matcher per call, longest form first at each position, so
+    a form is never matched inside a placeholder already written.
+    """
+    pattern = re.compile("|".join(re.escape(form) for form in sorted(replacements, key=len, reverse=True)))
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        slots = list(node.items()) if isinstance(node, dict) else list(enumerate(node))
+        for slot, child in slots:
+            if isinstance(child, str):
+                node[slot] = pattern.sub(lambda match: replacements[match.group(0)], child)
+            elif isinstance(child, dict | list):
+                stack.append(child)
+
+
 def apply_user_redactions(
     har_data: dict[str, Any],
     report: SanitizationReport,
@@ -2659,14 +2700,16 @@ def apply_user_redactions(
     result = copy.deepcopy(har_data)
 
     try:
-        # Serialize to string for global replacement
-        content = json.dumps(result)
+        # A HAR that cannot be serialized cannot be written back either.
+        json.dumps(result)
     except (TypeError, ValueError) as e:
         raise HarValidationError(f"Failed to serialize HAR data: {e}") from e
 
-    # Apply each redaction, longest original first: a value can contain
-    # another offered value (a username holding a phone number), and
-    # replacing the inner one first would leave the outer unmatched.
+    # Every form of every chosen value, mapped to its placeholder. A value
+    # can contain another offered value (a username holding a phone number):
+    # longest originals claim a shared form first, and the matcher tries
+    # longest forms first, so the outer value is replaced whole.
+    replacements: dict[str, str] = {}
     for item in sorted(redactions_to_apply, key=lambda flagged: len(flagged.original_value), reverse=True):
         try:
             # Generate redacted value via the category→prefix map, so
@@ -2677,27 +2720,15 @@ def apply_user_redactions(
             # safe-value patterns did not all recognize as redacted.
             redacted = hasher.hash_sensitive_value(item.original_value, item.category)
             item.redacted_value = redacted
-
-            # IMPORTANT: Escape values for JSON string context
-            # This handles newlines, quotes, backslashes, etc.
-            escaped_original = json.dumps(item.original_value)[1:-1]  # Strip quotes
-            escaped_redacted = json.dumps(redacted)[1:-1]
-
-            # Perform global replacement
-            content = content.replace(escaped_original, escaped_redacted)
-
+            for form in _user_redaction_forms(item.original_value):
+                replacements.setdefault(form, redacted)
         except Exception as e:  # noqa: PERF203 - intentional: continue with other redactions on error
             _LOGGER.warning("Failed to redact flagged item (category=%s): %s", item.category, e)
-            # Continue with other redactions
             continue
 
-    try:
-        # Parse back to dict — cast needed because json.loads returns Any
-        parsed: dict[str, Any] = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise HarValidationError(
-            f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
-        ) from e
+    parsed = result
+    if replacements:
+        _replace_in_string_values(parsed, replacements)
 
     # Refresh the embedded metadata's user-decision counts. The metadata was
     # embedded at the end of Pass 1, before any review decision existed, so

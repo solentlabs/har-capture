@@ -1168,14 +1168,58 @@ def test_tag_runs_are_quote_aware_and_bounded() -> None:
     assert all("[^>]*" not in d["regex"] for d in load_pii_patterns()["patterns"].values())
 
 
-def test_word_runs_start_at_a_word_boundary() -> None:
-    r"""A group opening with `\w*` or `\w+` is anchored by `\b`.
+def test_word_runs_do_not_backtrack_through_a_label() -> None:
+    r"""No group opens with a `\w` run followed by a literal or class.
 
-    Unanchored, `(\w*password\w*)` is retried from every letter of a long
-    word: 16 KB of letters took five seconds in sanitize_html. The anchor
-    changes no match, since a leftmost match already starts at the word start.
+    `(\w*password\w*)` is retried from every letter of a long word and, even
+    anchored by `\b`, backtracks through every earlier `password` in a word
+    that repeats it: 64 KB took eleven seconds in sanitize_html. The passes
+    check the label with a lookahead instead, `\b(?=\w*password)(\w+)`, which
+    matches the same words (a differential test over random strings found no
+    difference) in linear time.
     """
     import har_capture.sanitization.html as html_module
 
     source = Path(html_module.__file__).read_text(encoding="utf-8")
-    assert not re.search(r"(?<!\\b)\(\\w[*+]", source)
+    assert not re.search(r"\((?:\?:)?\\w[*+][A-Za-z\[]", source)
+
+
+@pytest.mark.parametrize(
+    ("html", "offered"),
+    [
+        ("Network Key: abc123xyz", ["abc123xyz"]),
+        ("x = {key: 'QWERTY_CONST'};", ["QWERTY_CONST"]),
+        ("obj.key = value123", ["value123"]),
+        ("wifikey=abc123xyz", []),
+        ("wpakey=abc123xyz", []),
+    ],
+    ids=[
+        "text_label",
+        "script_literal",
+        "property_access_offered",
+        "glued_label_redacted",
+        "wpa_key_redacted",
+    ],
+)
+def test_bare_key_label_is_offered_for_review(html: str, offered: list[str]) -> None:
+    """A bare `key` label is not a credential with certainty: its value is offered (LOW), not redacted."""
+    from har_capture.patterns import Hasher
+    from har_capture.sanitization.collector import RedactionCollector
+
+    collector = RedactionCollector(hasher=Hasher.create("test"))
+    result = sanitize_html(html, collector=collector)
+    assert [f.original_value for f in collector.flagged] == offered
+    assert all(value in result for value in offered)
+    assert all(f.confidence.value == "low" and f.category == "credential" for f in collector.flagged)
+
+
+@pytest.mark.parametrize("name", ["PASSWORD_INPUT_RE", "CSRF_META_RE", "SSID_ATTRIBUTE_RE", "SSID_SELECT_RE"])
+def test_two_run_tag_regexes_stop_at_the_first_anchor(name: str) -> None:
+    """A tag regex with runs on both sides of an anchor runs to its first copy only (`_tag_run_to`).
+
+    With two free runs, one unclosed tag repeating the anchor retried the
+    second run from every copy: 56 KB took five seconds, 224 KB two minutes.
+    """
+    import har_capture.sanitization.html as html_module
+
+    assert "(?:(?!" in getattr(html_module, name).pattern

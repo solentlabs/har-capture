@@ -360,10 +360,35 @@ _SCHEME_CREDENTIALS_RE = re.compile(
 _AUTH_PARAM = r"""[\w-]+=(?:"[^"]*"|[^\s,]*)"""
 _AUTH_PARAMS_RE = re.compile(_AUTH_PARAM + r"(?:\s*,\s*" + _AUTH_PARAM + r")*")
 _TOKEN68_RE = re.compile(r"[A-Za-z0-9._~+/-]{16,}=*")
-# A PEM block: its BEGIN line, any `Name: value` headers, then base64 body
-# text (lines flattened to spaces too). The END line is not required: a
-# truncated block is still key material.
-_PEM_BLOCK_RE = re.compile(r"-----BEGIN [A-Z0-9 ]+-----\s+(?:[\w-]+:[^\n]*\n\s*)*[A-Za-z0-9+/]{16,}")
+# PEM blocks. A complete block is a BEGIN line and an END line with base64
+# body text between them, however the lines are laid out: flattened to spaces
+# with its headers, written with literal `\n` escapes, or split into short
+# groups. A truncated block is a BEGIN line, any `Name: value` header lines,
+# then a base64 run: still key material without its END line. Each header line
+# is bounded, so one long line of BEGIN markers cannot make the scan quadratic.
+_PEM_BEGIN_RE = re.compile(r"-----BEGIN [A-Z0-9 ]{1,64}-----")
+_PEM_END_RE = re.compile(r"-----END [A-Z0-9 ]{1,64}-----")
+_PEM_BODY_RE = re.compile(r"[A-Za-z0-9+/]{16,}|(?:[A-Za-z0-9+/]{4,}\s+){4,}")
+_PEM_TRUNCATED_BODY_RE = re.compile(r"\s+(?:[\w-]{1,64}:[^\n]{0,256}\n\s*)*[A-Za-z0-9+/]{16,}")
+
+
+def _has_pem_block(value: str) -> bool:
+    """True if a value holds a PEM block, complete or truncated.
+
+    Each END line is paired with the last BEGIN line before it, so the spans
+    searched for body text never overlap and the scan stays linear.
+    """
+    begins = list(_PEM_BEGIN_RE.finditer(value))
+    if not begins:
+        return False
+    index = 0
+    for end in _PEM_END_RE.finditer(value):
+        last = None
+        while index < len(begins) and begins[index].end() <= end.start():
+            last, index = begins[index], index + 1
+        if last is not None and _PEM_BODY_RE.search(value, last.end(), end.start()):
+            return True
+    return any(_PEM_TRUNCATED_BODY_RE.match(value, begin.end()) for begin in begins)
 
 
 def _is_format_credential(value: str) -> bool:
@@ -375,7 +400,7 @@ def _is_format_credential(value: str) -> bool:
     each way. A scheme word followed by prose (``Basic settings``, ``Bearer
     token``, ``OAuth 2.0``) is not a credential.
     """
-    if _PEM_BLOCK_RE.search(value):
+    if _has_pem_block(value):
         return True
     match = _SCHEME_CREDENTIALS_RE.fullmatch(value)
     if match is None:

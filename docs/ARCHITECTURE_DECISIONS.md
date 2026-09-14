@@ -474,9 +474,9 @@ failure ADR-14 forbids.
    When that fails under a text type, the bytes are read as latin-1 — capture stores a page base64 exactly when its
    bytes are not UTF-8, whatever charset it declares, and latin-1 maps every byte, so none is lost.
 1. **A decoded body is written back as plain text, `encoding` dropped.** Re-encoding would keep the body out of reach of
-   the passes that run on the serialized HAR — Pass 1b propagation and Pass 2's find-and-replace — and a consumer that
-   reads HAR reads both forms. An `AUTH_<hash>` placeholder left under `encoding: base64` by an earlier release, which
-   no decoder accepts, loses the marker.
+   the passes that replace text where it sits — Pass 1b propagation and Pass 2's review replacement — and a consumer
+   that reads HAR reads both forms. An `AUTH_<hash>` placeholder left under `encoding: base64` by an earlier release,
+   which no decoder accepts, loses the marker.
 1. **Binary stays as recorded, and neither tool scans it.** Bytes that are not text under any of the rules above are not
    a body either tool can reason about; a check on replacement characters would report what no sanitize run clears.
 

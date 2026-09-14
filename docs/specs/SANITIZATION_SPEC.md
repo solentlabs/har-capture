@@ -49,7 +49,7 @@ two-pass model (auto-sanitize + interactive review) and the format-preserving ha
               ┌───────────────────────────────────────┐
               │    Pass 2: Interactive Review         │
               │    apply_user_redactions(report)      │
-              │    Global find-replace with same salt │
+              │  Replace in strings, same salt        │
               └───────────────────────────────────────┘
 ```
 
@@ -419,9 +419,11 @@ shared with `validate` and `check_for_pii`), because there the key is often a fi
 text about credentials — `PAGE_GENERAL_SET_PASSWORD`, and in one table a bare `password` or `passphrase`. A button word
 (`Yes`, `No`) is kept; prose (words on both sides of a space) is offered for review as `credential` at LOW confidence
 (shown, not pre-selected for redaction), with the string patterns still applied inside it; anything else is replaced.
-Prose whose format proves it a credential is replaced too: a PEM block (BEGIN line, optional headers, base64 body; the
-END line not required, so a truncated key still counts) or a known auth scheme followed by credentials (`Basic` and
-base64 of `user:pass`, auth-params, or a token68 of 16+ characters holding a digit or symbol or mixing case), while
+Prose whose format proves it a credential is replaced too: a PEM block — a BEGIN and an END line with base64 body text
+between them, however laid out (flattened to spaces with its headers, written with literal `\n` escapes, split into
+short groups), or a BEGIN line, header lines and a base64 run with no END line (a truncated key still counts); each END
+is paired with the last BEGIN before it, so the scan is linear — or a known auth scheme followed by credentials (`Basic`
+and base64 of `user:pass`, auth-params, or a token68 of 16+ characters holding a digit or symbol or mixing case), while
 `Basic settings`, `Bearer token` and `OAuth 2.0` stay prose. Prose the review cannot reach — inside a base64-wrapped
 body, where flags are muted — is replaced. A value a client **submits** (a POST body) is replaced whatever its shape:
 there the key names the field the credential is typed into. And a served prose value equal to a credential the capture
@@ -503,7 +505,7 @@ mime type's declared charset, else as strict UTF-8. When that fails and the type
 JSON, XML, JavaScript, form data), the bytes are read as latin-1: capture stores a page base64 exactly when its bytes
 are not UTF-8, whatever charset it declares ([`_patch_missing_bodies`](CAPTURE_SPEC.md#eager-response-body-capture)),
 and latin-1 maps every byte. The decoded body is sanitized as that text and **written back as plain text with `encoding`
-dropped**, so Pass 1b and Pass 2's find-and-replace reach it like any other body.
+dropped**, so Pass 1b and Pass 2's review replacement reach it like any other body.
 
 **Binary** is a `base64` body whose bytes are not text: they do not decode under a type that does not declare text, or
 they decode to text holding NUL. Binary is written back exactly as recorded — the sanitizer does not touch it and
@@ -710,7 +712,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
 | 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
-| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`: `password=value`, `psk: 'value'`    | `hasher.hash_value(val, "PASS")`        |
+| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`; bare `key`: `KEY_FIELD_RE`, offered | `hasher.hash_value(val, "PASS")`        |
 | 7a   | SSID text labels               | SSID labels in HTML text nodes                           | `hasher.hash_value(val, "WIFI")`        |
 | 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
 | 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")` |
@@ -945,26 +947,45 @@ fixture's size.
 the sibling and SSID attribute rules, password and SSID inputs, CSRF meta tags — writes an attribute run as `_TAG_RUN`:
 an attribute's quoted value, which may hold `<` or `>` (an `onkeyup="if(this.value.length<8)…"` handler), or any
 character but `<`, `>` or a quote, so an unquoted value may hold `(`, `)`, `;`, `{` or `}` (`onfocus=clear()`,
-`style=font-weight:bold;`: 84 such `<font>` and `<b>` tags in the fleet). A quote opens a value only right after `=`
-(`=\s*`, the quote JS-escaped or not: `class=\"v\"` in a `document.write` string, the shape of 32,000 fleet `<td>`
-tags), so script is not read as a tag: a `'<input type="password" …'` string in code cannot start a match that pairs the
-code's string quotes and walks on to a later `value=` (17 such false redactions across the fleet with a run that paired
-any quotes). Each quoted value is bounded at 2,048 characters, so one stray quote cannot run a match across the
-document. A tag whose run is broken — a stray quote not after `=` (`<font color="red"">`), or a quoted value over 2,048
-characters (none of the fleet's tags holds one) — is not read, and its value is kept. An attribute quote in a password
-input, SSID input or CSRF meta tag may be JS-escaped too (`value=\"…\"`); the value runs to its closing quote, or,
-unquoted, stops at whitespace or the tag's `>`, so the markup after the tag survives. An SSID `<select>` body stops at
-the next `<select`. An unquoted "anything but `>`" run made a series of unclosed `<input` or `<a` tags scan to the end
-of the body from every `<`: quadratic, and cubic where two runs share a tag (40 KB of unclosed password inputs took
-three minutes). A test pins the rule, and every `pii.json` pattern that reads a tag is the sanitizer's compiled regex
-verbatim (`SERIAL_LABEL_RE`, `ACCOUNT_LABEL_RE`, `WPS_PIN_LABEL_RE`, `PASSWORD_INPUT_RE`, `CSRF_META_RE`), as are the
-labeled password and session-token patterns (`PASSWORD_FIELD_RE`, `SESSION_TOKEN_RE`).
+`style=font-weight:bold;`: 1,045 fleet tags hold such a value — 292 `<li>`, 247 `<a>`, 227 `<input>`, 63 `<font>` among
+them). A quote opens a value only right after `=` (`=\s*`, the quote JS-escaped or not: `class=\"v\"` in a
+`document.write` string, the shape of 32,000 fleet `<td>` tags), so script is not read as a tag: a
+`'<input type="password" …'` string in code cannot start a match that pairs the code's string quotes and walks on to a
+later `value=` (17 such false redactions across the fleet with a run that paired any quotes). Each quoted value is
+bounded at 2,048 characters, so one stray quote cannot run a match across the document. A tag whose run is broken — a
+stray quote not after `=` (`<font color="red"">`), or a quoted value over 2,048 characters (none of the fleet's tags
+holds one) — is not read, and its value is kept. An attribute quote in a password input, SSID input, CSRF meta tag or
+SSID attribute may be JS-escaped too, at any depth (`value=\"…\"`). A quoted value runs to the quote that opened it, so
+`value="ab'cd"` is one value (it used to stop at the `'` and leave `cd`), and a backslash run belongs to it only before
+an ordinary character, so the run escaping the closing quote stays in place. Unquoted, a value stops at whitespace or
+the tag's `>`, so the markup after the tag survives. An SSID `<select>` body stops at the next `<select`. A regex with a
+run on each side of an anchor (`<input RUN type=password RUN value=`, the CSRF meta tag, the SSID attribute and select
+rules) runs only to the first copy of the anchor (`_tag_run_to`): with two free runs, one unclosed tag repeating the
+anchor retried the second run from every copy (56 KB took five seconds, 224 KB two minutes). An unquoted "anything but
+`>`" run made a series of unclosed `<input` or `<a` tags scan to the end of the body from every `<`: quadratic, and
+cubic where two runs share a tag (40 KB of unclosed password inputs took three minutes). A test pins the rule, and every
+`pii.json` pattern that reads a tag is the sanitizer's compiled regex verbatim (`SERIAL_LABEL_RE`, `ACCOUNT_LABEL_RE`,
+`WPS_PIN_LABEL_RE`, `PASSWORD_INPUT_RE`, `CSRF_META_RE`), as are the labeled password and session-token patterns
+(`PASSWORD_FIELD_RE`, `SESSION_TOKEN_RE`).
 
 **Labeled values keep their separator and quote.** Passes 7 (labeled passwords) and 9 (session tokens) replace only the
-value: `passphrase: 'x'` becomes `passphrase: 'PASS_…'`, not `passphrase=PASS_…'`, so the script around it still parses.
-The value stops at a quote, JS-escaped or not: in `password=\"hunter2x\"` it is `hunter2x`. The earlier optional-quote
-class `["'\\]?` could not match an escaped quote, so the pass took the lone backslash as the value and left the secret
-after it.
+value: `passphrase: 'x'` becomes `passphrase: 'PASS_…'`, not `passphrase=PASS_…'`. The value stops at a quote however
+deeply it is escaped: in `password=\"hunter2x\"` and `password=\\\"hunter2x\\\"` it is `hunter2x`. A backslash run
+belongs to the value only before an ordinary character, so in `"password=abc\\";` the escaped backslash before the
+closing quote stays and the string still closes. The earlier optional-quote class `["'\\]?` could not match an escaped
+quote, so the pass took a lone backslash as the value and left the secret after it.
+
+**A labeled value is data, not markup or code** (`_LABELED_SEPARATOR`, shared by passes 7 and 9 and `pii.json`). Spacing
+entities after the separator are separator (`Password:&nbsp;hunter2` takes `hunter2`; `Password:&nbsp;&nbsp;</td>` has
+no value). An unquoted value that is code by syntax — a negation (`password:!0`), an entity, or a call
+(`c.getPasswordField(`, `cookie=function(e,t,n)`) — is not taken; a quoted value always is. Across the fleet (0.13.0)
+these were 181 matches, every one spacing or minified script: 145 `Password:&nbsp;…` cells in 19 captures and 36 code
+values. The trade: an unquoted password that begins with `!` or `&`, or reads as a call (`abc(`), is left; the fleet has
+none. `key` is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`); a bare `key` is a script
+variable as often as a label — all 44 of its unredacted fleet matches were JavaScript assignments — so its value is
+offered for review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it. What remains: a
+glued `…Key=` followed by a minified member expression (`Key=Y.util…;`, 8 matches in 4 captures) still reads as a
+credential.
 
 ## Heuristic Engine (heuristics.py)
 
@@ -1307,13 +1328,15 @@ def _propagate_redacted_values(har_data: dict, registry: dict[str, str]) -> int:
 The registry (`RedactionCollector.redacted_values`) maps original value → assigned placeholder and is populated by
 `_redact_value` on every auto-redaction, so a value keeps the placeholder its first surface gave it. The sweep runs
 before `_embed_sanitization_metadata`, and its replacement count is recorded under the `propagated` category in
-`auto_redacted_counts`.
+`auto_redacted_counts`. It is one substring scan per needle over the serialized HAR, so it costs needles × size: across
+the fleet (0.13.0) no capture has more than 5 needles (0.05 s at most); a synthetic capture whose session cookie rotates
+on each of 8,000 requests takes about 19 s. A multi-needle matcher is not built for a shape the fleet does not have.
 
 **Review queue.** An eligible value with no surviving occurrence is withdrawn from `report.flagged`
 (`RedactionCollector.drop_flagged()`) — presenting it would ask the user for a decision that cannot change the output.
 Survival is judged on every string in the HAR, each JSON body's decoded strings included (`_readable_text`): a copy the
 sweep's needles do not match — `\/` in a PHP body, an ASCII-escaped JSON string — keeps the value offered, since the
-review's find-and-replace over the serialized HAR does reach it. A copy inside a base64-wrapped payload is not read:
+review replaces those forms ([Pass 2](#pass-2-interactive-review)). A copy inside a base64-wrapped payload is not read:
 neither the sweep nor the review can rewrite it there, so offering the value would promise a redaction that cannot
 happen (base64-wrapped payloads occur nowhere in the fleet). Only flagged values are searched, so the check costs one
 scan per flagged, redacted value, not per redacted value (a session cookie rotating per request made that quadratic).
@@ -1417,7 +1440,11 @@ def _detect_client_side_cookies(entries: list[dict]) -> list[str]:
 
 Entry point: `apply_user_redactions(report)`
 
-1. User reviews flagged items and sets status: `USER_REDACTED` or `USER_SKIPPED`
+1. User reviews flagged items and sets status: `USER_REDACTED` or `USER_SKIPPED`. Each value is one item: every
+   occurrence counts once (a field's flag on its whole value and a narrower pass's flag on the same text are one
+   occurrence), and the item takes the label — category and confidence — of its most confident occurrence, the first on
+   a tie, so an API key seen first as a `username` is still offered as an API key. A value under three characters is
+   never offered.
 1. For each `USER_REDACTED` item, longest original value first — an offered value can contain another (a username
    holding a phone number), and replacing the inner one first would leave the outer unmatched:
    - Recreate hasher with original salt from report
@@ -1425,9 +1452,15 @@ Entry point: `apply_user_redactions(report)`
      [category→prefix map](#category-to-prefix-mapping) as Pass 1, so user redactions carry recognized placeholder
      prefixes (`CRED_`, `SERIAL_`, ...). Building the prefix from the raw category name produced placeholders like
      `CREDENTIAL_`/`SERIAL_NUMBER_` that the allowlist and safe-value patterns did not all recognize as redacted.
-   - JSON-escape both original and redacted values
-   - Global find-and-replace in serialized HAR text
-1. Parse HAR back from JSON
+   - Collect every form the value can take in a HAR string (`_user_redaction_forms`): as written; percent-encoded as a
+     URL path, query value or form body writes it (`quote`, `quote(safe="")`, `quote_plus`); JSON-escaped as a body
+     inside the string writes it (`\"`, `\u00e9`, PHP's `\/`). Before 0.13.0 only the literal form was replaced, so a
+     form body's `login_user=%22…%22` or a PHP body's `\/` copy survived the user's choice.
+1. Replace every form with its placeholder inside each string value (`_replace_in_string_values`), one matcher per call,
+   longest form first at each position. Keys, numbers and other JSON structure are never touched: the earlier
+   find-and-replace on the serialized HAR rewrote every `1` when a user redacted `login=1`, corrupting the file (14
+   fleet captures; the review then exited, losing every decision). A value under three characters is no longer offered
+   at all (`RedactionCollector`).
 1. Refresh the embedded metadata's `user_redacted` / `user_skipped` counts — the metadata was embedded at the end of
    Pass 1, before any review decision existed, so a reviewed artifact would otherwise report `user_redacted: 0` forever
    (observed on the CM2500 contributor capture, 2026-08-19)
@@ -1472,12 +1505,13 @@ Detects common redaction markers to warn users before double-sanitizing.
 1. **Cookie metadata is preserved** — In a `Set-Cookie` value, the reserved attributes (`HttpOnly`, `Secure`,
    `SameSite`, `Path`, `Domain`, `Expires`, `Max-Age`, `Partitioned`, `Priority`) survive verbatim; only the cookie
    pair's value is redacted. The reserved-word list is `COOKIE_ATTRIBUTE_NAMES` in
-   `src/har_capture/patterns/redaction.py` — one source of truth for both the attribute-name check and the
-   serialized-metadata regex.
+   `src/har_capture/patterns/redaction.py`, and `cookie_segment_actions()` there is the one segment rule the sanitizer
+   and `validate` share.
 1. **Credit card detection requires Luhn** — A 16-digit number is only redacted as a credit card if it passes Luhn
    checksum validation.
-1. **Global find-replace in Pass 2** — User-selected redactions are applied via string replacement on the serialized
-   JSON, ensuring all occurrences (headers, body, URLs) are caught.
+1. **Pass 2 replaces every copy, and only inside strings** — a user-selected value is replaced wherever a string value
+   holds it (headers, bodies, URLs), in every form a string carries it (`_user_redaction_forms`: percent-encoded,
+   JSON-escaped). Keys, numbers and other structure are never touched, so no choice can corrupt the HAR.
 1. **Scanner passes require 100% confidence** — Every regex in the HTML scanner pipeline (passes 0–16) auto-redacts
    without user review. A pattern that produces false positives is a bug. Patterns that cannot achieve 100% confidence
    belong in the heuristic engine (flagged for user review), not the scanner pipeline.
