@@ -103,7 +103,17 @@ Conservative detection misses real PII.
 values for interactive review — the user sees the value, its context, why it was flagged, and decides whether to redact.
 
 **Consequence:** The tool is safe by default (Pass 1 catches universal PII) while giving the user control over edge
-cases. Non-interactive mode (CI/headless) writes flagged values to a JSON report instead.
+cases. The review needs a terminal, and a flagged value nobody reviews ships as captured — so the sanitized file records
+how its review ended (`log._har_capture.sanitization.review`: `completed`, `skipped`, `cancelled`, `no_tty`,
+`none_flagged`; absent when no review was recorded). Four CMM catalog fixtures shipped 33–46 flagged values each with
+`user_redacted: 0` and nothing to say whether anyone had looked; the recorded outcome lets a recipient tell a reviewed
+capture from an ignored one.
+
+Without a terminal, neither command prompts; each records `no_tty` and warns loudly with the flagged count. `sanitize`
+also writes the flagged values to a JSON report beside its input (`<input>.review.json`, or `--report`): the raw input
+is already on disk, so the report adds no new copy of it. `get` deliberately writes no report: the raw capture never
+persists on disk (design constraint 5), and a report would hold its flagged values. Recording is a library function
+(`record_review`), so the CLI stays a thin wrapper (Code Organization rule 3).
 
 ## ADR-7: XML POST Bodies Are Sanitized via Two Layers
 

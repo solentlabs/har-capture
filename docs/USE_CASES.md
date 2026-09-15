@@ -447,7 +447,8 @@ ______________________________________________________________________
 
 1. Pipeline runs sanitize command
 1. Heuristic analysis runs, flagging suspicious values
-1. No TTY detected — flagged values written to `.review.json` report instead of interactive prompt
+1. No TTY detected — flagged values written to `.review.json` report instead of interactive prompt; the sanitized file
+   records `review: no_tty` and a warning names the flagged count
 1. Sanitized output written
 1. Exit code 0 on success
 

@@ -3050,6 +3050,9 @@ _REQUIRED_METADATA_KEYS = frozenset(
         "user_skipped",
         "flagged_total",
         "warnings",
+        # Written by Pass 1 only when nothing is flagged (none_flagged), as in
+        # every report below; test_review.py covers a report awaiting review.
+        "review",
     }
 )
 

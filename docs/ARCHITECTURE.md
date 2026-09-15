@@ -254,9 +254,9 @@ already-redacted value with the placeholder that value was assigned. This catche
 field name to match — most commonly a URL path segment. It adds no detection of its own; eligibility is a
 collision-safety test on values Pass 1 already redacted.
 
-**Pass 2** presents flagged values for interactive review (TTY) or writes them to a JSON report (CI/CD). User-selected
+**Pass 2** presents flagged values for interactive review (TTY); without a terminal nobody is prompted. User-selected
 redactions replace every copy of a value inside string values — escaped and percent-encoded forms too — using the same
-session salt.
+session salt, and the sanitized file records how the review ended (`sanitization.review`, see ADR-6).
 
 See [Sanitization Spec](specs/SANITIZATION_SPEC.md) for the full entry point signatures, per-field logic, and two-pass
 model.

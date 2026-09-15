@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from har_capture.cli._completeness_display import display_completeness
 from har_capture.cli._patterns_resolver import require_patterns
+from har_capture.sanitization.report import ReviewOutcome
 
 
 def capture(
@@ -329,7 +330,14 @@ def _display_results(result: CaptureWorkflowResult, patterns: list[str] | None =
 
 
 def _run_interactive_review(result: CaptureWorkflowResult) -> None:
-    """Run interactive review of flagged values after capture."""
+    """Review the flagged values after capture, and record how the review ended.
+
+    Without a terminal nobody is prompted: the file records ``no_tty`` and a
+    loud warning names the count. No report file is written — it would hold
+    the flagged values, and the raw capture never persists on disk.
+    """
+    from har_capture.cli import interactive
+
     # Type narrowing: ensure we have capture data
     if not result.capture:
         typer.echo("Error: No capture data available for interactive review", err=True)
@@ -348,7 +356,14 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
         typer.echo("No suspicious values found. All values were handled automatically.")
         return
 
-    from har_capture.cli.interactive import display_summary, run_interactive_review
+    # compressed_path was written pre-review by the capture pipeline;
+    # save_review regenerates it from the reviewed file.
+    compressed_path = result.capture.compressed_path
+
+    if not interactive.stdin_is_tty():
+        interactive.save_review(report, sanitized_path, ReviewOutcome.NO_TTY, compressed_path=compressed_path)
+        interactive.warn_unreviewed(len(report.flagged), sanitized_path)
+        return
 
     # Determine salt mode for display
     salt_mode = "random (correlation within file)" if report.salt else "static placeholders"
@@ -357,23 +372,11 @@ def _run_interactive_review(result: CaptureWorkflowResult) -> None:
     # (raw_path is None when keep_raw=False, which is the default)
     input_display = str(raw_path) if raw_path else str(sanitized_path)
 
-    review_completed = run_interactive_review(
+    outcome = interactive.run_interactive_review(
         report,
         input_path=input_display,
         output_path=str(sanitized_path),
         salt_mode=salt_mode,
     )
-
-    if review_completed and report.total_user_redacted > 0:
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        # compressed_path was written pre-review by the capture pipeline;
-        # apply_reviewed_redactions regenerates it from the reviewed file.
-        apply_reviewed_redactions(
-            report,
-            sanitized_path,
-            compressed_path=result.capture.compressed_path,
-        )
-
-    # Display summary
-    display_summary(report)
+    interactive.save_review(report, sanitized_path, outcome, compressed_path=compressed_path)
+    interactive.display_summary(report)

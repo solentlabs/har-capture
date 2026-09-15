@@ -24,6 +24,8 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from har_capture.cli.interactive import (
@@ -450,12 +452,12 @@ def make_report():  # type: ignore[no-untyped-def]
 
 
 # =============================================================================
-# apply_reviewed_redactions — file I/O + atomic rename + 3 error branches
+# save_review — the CLI wrapper over the library's record_review
 # =============================================================================
 
 
-class TestApplyReviewedRedactions:
-    """Tests for ``apply_reviewed_redactions``: happy path + 3 error branches."""
+class TestSaveReview:
+    """``save_review`` records the outcome and turns failures into a clean exit."""
 
     @pytest.fixture
     def sanitized_har_file(self, tmp_path):  # type: ignore[no-untyped-def]
@@ -471,99 +473,64 @@ class TestApplyReviewedRedactions:
         f.write_text(json.dumps(har_data))
         return f
 
-    def test_happy_path_writes_atomically(  # type: ignore[no-untyped-def]
+    def test_records_outcome_and_applies(  # type: ignore[no-untyped-def]
         self, sanitized_har_file, make_report, make_flagged, capsys
     ):
-        """Real HAR file + populated report -> redactions applied via tempfile + rename."""
-        from har_capture.cli.interactive import apply_reviewed_redactions
-        from har_capture.sanitization.report import RedactionStatus
+        """The outcome lands in the file and the user's redactions are applied."""
+        import json
+
+        from har_capture.cli.interactive import save_review
+        from har_capture.sanitization.report import RedactionStatus, ReviewOutcome
 
         flagged = make_flagged([("alice", "field", "medium")])
         flagged[0].status = RedactionStatus.USER_REDACTED
-        flagged[0].redacted_value = "REDACTED"
-        report = make_report(flagged=flagged)
+        save_review(make_report(flagged=flagged), sanitized_har_file, ReviewOutcome.COMPLETED)
 
-        apply_reviewed_redactions(report, sanitized_har_file)
+        out = capsys.readouterr().out
+        assert "Applied 1 user redaction(s)" in out
+        written = json.loads(sanitized_har_file.read_text())
+        assert written["log"]["_har_capture"]["sanitization"]["review"] == "completed"
+        assert "alice" not in sanitized_har_file.read_text()
 
-        captured = capsys.readouterr()
-        assert "Applying user redactions" in captured.out
-        assert sanitized_har_file.exists()  # rename succeeded
-
-    def test_unreadable_input_raises_typer_exit(  # type: ignore[no-untyped-def]
-        self, tmp_path, make_report, capsys
+    @pytest.mark.parametrize(
+        "content",
+        [None, "{not valid json", '{"no_log": 1}'],
+        ids=["missing_file", "invalid_json", "not_a_har"],
+    )
+    def test_unrecordable_file_exits(  # type: ignore[no-untyped-def]
+        self, tmp_path, make_report, capsys, content
     ):
-        """Open() failure -> typer.Exit(1) with friendly message."""
+        """A file that cannot be read or is not a HAR -> typer.Exit(1)."""
         import typer
 
-        from har_capture.cli.interactive import apply_reviewed_redactions
+        from har_capture.cli.interactive import save_review
+        from har_capture.sanitization.report import ReviewOutcome
 
-        # Path that doesn't exist trips OSError on open().
-        missing = tmp_path / "missing.har"
-        report = make_report()
+        target = tmp_path / "x.har"
+        if content is not None:
+            target.write_text(content)
 
         with pytest.raises(typer.Exit) as excinfo:
-            apply_reviewed_redactions(report, missing)
+            save_review(make_report(), target, ReviewOutcome.NO_TTY)
         assert excinfo.value.exit_code == 1
-        captured = capsys.readouterr()
-        assert "Failed to read sanitized file" in captured.err
+        assert "Failed to record the review" in capsys.readouterr().err
 
-    def test_invalid_json_raises_typer_exit(  # type: ignore[no-untyped-def]
-        self, tmp_path, make_report, capsys
-    ):
-        """Malformed JSON -> typer.Exit(1) with friendly message."""
-        import typer
-
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        bad = tmp_path / "bad.har"
-        bad.write_text("{not valid json")
-        report = make_report()
-
-        with pytest.raises(typer.Exit):
-            apply_reviewed_redactions(report, bad)
-        captured = capsys.readouterr()
-        assert "Failed to read sanitized file" in captured.err
-
-    def test_apply_user_redactions_failure_caught(  # type: ignore[no-untyped-def]
+    def test_write_failure_exits(  # type: ignore[no-untyped-def]
         self, sanitized_har_file, make_report, monkeypatch, capsys
     ):
-        """Exception from apply_user_redactions -> typer.Exit(1)."""
+        """OSError on the atomic rename -> typer.Exit(1)."""
         import typer
 
-        from har_capture import sanitization as san_mod
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
-            raise RuntimeError("redaction kaboom")
-
-        monkeypatch.setattr(san_mod, "apply_user_redactions", boom)
-        with pytest.raises(typer.Exit):
-            apply_reviewed_redactions(make_report(), sanitized_har_file)
-        captured = capsys.readouterr()
-        assert "Failed to apply redactions" in captured.err
-
-    def test_write_failure_cleans_up_tempfile(  # type: ignore[no-untyped-def]
-        self, sanitized_har_file, make_report, monkeypatch, capsys
-    ):
-        """OSError on Path.replace -> typer.Exit(1) + temp cleanup attempted."""
-        import typer
-
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        original_replace = Path.replace
+        from har_capture.cli.interactive import save_review
+        from har_capture.sanitization.report import ReviewOutcome
 
         def fail_replace(self, target):  # type: ignore[no-untyped-def]
             raise OSError("disk full")
 
         monkeypatch.setattr(Path, "replace", fail_replace)
-
         with pytest.raises(typer.Exit):
-            apply_reviewed_redactions(make_report(), sanitized_har_file)
-        captured = capsys.readouterr()
-        assert "Failed to write output file" in captured.err
-
-        # Restore for cleanup of any leftovers.
-        monkeypatch.setattr(Path, "replace", original_replace)
+            save_review(make_report(), sanitized_har_file, ReviewOutcome.COMPLETED)
+        assert "Failed to record the review" in capsys.readouterr().err
 
 
 class TestCompressedRegeneration:
@@ -571,8 +538,8 @@ class TestCompressedRegeneration:
 
     The interactive review rewrites the .sanitized.har; a .har.gz written
     before the review then still carries every value the review scrubbed —
-    in exactly the artifact contributors upload. apply_reviewed_redactions
-    must leave the pair byte-identical.
+    in exactly the artifact contributors upload. save_review must leave the
+    pair byte-identical.
     """
 
     @staticmethod
@@ -603,13 +570,14 @@ class TestCompressedRegeneration:
         """The capture-flow path: gz handed in explicitly is rewritten to match."""
         import gzip
 
-        from har_capture.cli.interactive import apply_reviewed_redactions
+        from har_capture.cli.interactive import save_review
+        from har_capture.sanitization.report import ReviewOutcome
 
         har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
         har_file, gz_file = self._make_pair(tmp_path, har_data)
         report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
 
-        apply_reviewed_redactions(report, har_file, compressed_path=gz_file)
+        save_review(report, har_file, ReviewOutcome.COMPLETED, compressed_path=gz_file)
 
         with gzip.open(gz_file, "rb") as f:
             gz_content = f.read()
@@ -617,46 +585,14 @@ class TestCompressedRegeneration:
         assert b"7S0245KL9BAAA" not in gz_content, "scrubbed serial must not survive in the gz"
         assert "Regenerated compressed file" in capsys.readouterr().out
 
-    def test_sibling_gz_autodetected(  # type: ignore[no-untyped-def]
-        self, tmp_path, make_report, make_flagged
-    ):
-        """Without an explicit path, an existing <output>.gz sibling is regenerated."""
-        import gzip
-
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
-        har_file, gz_file = self._make_pair(tmp_path, har_data)
-        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
-
-        apply_reviewed_redactions(report, har_file)
-
-        with gzip.open(gz_file, "rb") as f:
-            assert f.read() == har_file.read_bytes()
-
-    def test_no_gz_sibling_creates_nothing(  # type: ignore[no-untyped-def]
-        self, tmp_path, make_report, make_flagged
-    ):
-        """No compressed artifact exists -> none is invented."""
-        import json
-
-        from har_capture.cli.interactive import apply_reviewed_redactions
-
-        har_file = tmp_path / "device.sanitized.har"
-        har_file.write_text(json.dumps({"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}))
-        report = self._redacting_report(make_report, make_flagged, "7S0245KL9BAAA")
-
-        apply_reviewed_redactions(report, har_file)
-
-        assert not (tmp_path / "device.sanitized.har.gz").exists()
-
     def test_regeneration_failure_is_fatal_and_loud(  # type: ignore[no-untyped-def]
         self, tmp_path, make_report, make_flagged, monkeypatch, capsys
     ):
         """A gz write failure exits non-zero and names the stale file."""
         import typer
 
-        from har_capture.cli.interactive import apply_reviewed_redactions
+        from har_capture.cli.interactive import save_review
+        from har_capture.sanitization.report import ReviewOutcome
 
         har_data = {"log": {"entries": [], "content": "Serial: 7S0245KL9BAAA"}}
         har_file, gz_file = self._make_pair(tmp_path, har_data)
@@ -668,14 +604,32 @@ class TestCompressedRegeneration:
         monkeypatch.setattr("gzip.open", fail_open)
 
         with pytest.raises(typer.Exit) as excinfo:
-            apply_reviewed_redactions(report, har_file, compressed_path=gz_file)
+            save_review(report, har_file, ReviewOutcome.COMPLETED, compressed_path=gz_file)
         assert excinfo.value.exit_code == 1
         err = capsys.readouterr().err
         assert "STALE" in err
         assert str(gz_file) in err
 
+    def test_regenerate_compressed_har_failure_is_loud(  # type: ignore[no-untyped-def]
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The stale-sibling refresh `sanitize` runs fails the same loud way."""
+        import typer
 
-# Path is needed by apply_reviewed_redactions tests above.
+        from har_capture.cli.interactive import regenerate_compressed_har
+
+        har_file, gz_file = self._make_pair(tmp_path, {"log": {"entries": []}})
+
+        def fail_open(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise OSError("disk full")
+
+        monkeypatch.setattr("gzip.open", fail_open)
+        with pytest.raises(typer.Exit):
+            regenerate_compressed_har(har_file, gz_file)
+        assert "STALE" in capsys.readouterr().err
+
+
+# Path is needed by the save_review tests above.
 from pathlib import Path  # noqa: E402
 
 # =============================================================================
@@ -930,151 +884,45 @@ class TestRunQuickActionPromptHappy:
 # each item ends up with given a particular action.
 
 
-class TestRunInteractiveReview:
-    """Drive the main review loop with each top-level action.
+_REVIEW_OUTCOME_CASES = json.loads(
+    (Path(__file__).parent.parent / "fixtures" / "test_interactive.json").read_text()
+)["review_outcome_cases"]
 
-    Each test verifies the loop terminates with the expected per-item
-    redaction statuses.
+
+class TestRunInteractiveReview:
+    """Drive the main review loop down each path out of it.
+
+    Each row fixes the quick-action answers (and the checkbox selection),
+    and checks the outcome returned and every value's status afterwards —
+    the outcome is what the sanitized file records.
     """
 
-    def test_no_flagged_short_circuits(  # type: ignore[no-untyped-def]
-        self, make_report, capsys
-    ):
-        from har_capture.cli.interactive import run_interactive_review
-
-        result = run_interactive_review(make_report())
-        assert result is True
-        captured = capsys.readouterr()
-        assert "No suspicious values found" in captured.out
-
-    def test_action_skip_leaves_items_flagged(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
+    @pytest.mark.parametrize("case", _REVIEW_OUTCOME_CASES, ids=[c["id"] for c in _REVIEW_OUTCOME_CASES])
+    def test_review_outcome(self, case, make_flagged, make_report, monkeypatch):  # type: ignore[no-untyped-def]
         from har_capture.cli import interactive as mod
-        from har_capture.sanitization.report import RedactionStatus
+        from har_capture.sanitization.report import RedactionStatus, ReviewOutcome
 
-        flagged = make_flagged([("alice", "credential", "high")])
-        report = make_report(flagged=flagged)
-
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: "skip")
-        result = run_interactive_review_via(mod, report)
-        assert result is True
-        assert flagged[0].status == RedactionStatus.FLAGGED
-
-    def test_action_none_returns_false(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        """Cancelled action -> review_completed = False."""
-        from har_capture.cli import interactive as mod
-
-        flagged = make_flagged([("alice", "credential", "high")])
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: None)
-        assert run_interactive_review_via(mod, make_report(flagged=flagged)) is False
-
-    def test_action_all_marks_everyone_redacted(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        from har_capture.cli import interactive as mod
-        from har_capture.sanitization.report import RedactionStatus
-
-        flagged = make_flagged(
-            [
-                ("alice", "credential", "high"),
-                ("bob", "credential", "medium"),
-                ("router-1", "device_name", "low"),
-            ]
+        flagged = (
+            make_flagged(
+                [
+                    ("alice", "credential", "high"),
+                    ("bob", "credential", "medium"),
+                    ("router-1", "device_name", "low"),
+                ]
+            )
+            if case["actions"]
+            else []
         )
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: "all")
-        assert run_interactive_review_via(mod, make_report(flagged=flagged)) is True
-        assert all(f.status == RedactionStatus.USER_REDACTED for f in flagged)
-
-    def test_action_high_marks_only_high_redacted(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        from har_capture.cli import interactive as mod
-        from har_capture.sanitization.report import (
-            ConfidenceLevel,
-            RedactionStatus,
-        )
-
-        flagged = make_flagged(
-            [
-                ("alice", "credential", "high"),
-                ("bob", "credential", "medium"),
-                ("router-1", "device_name", "low"),
-            ]
-        )
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: "high")
-        run_interactive_review_via(mod, make_report(flagged=flagged))
-
-        for f in flagged:
-            if f.confidence == ConfidenceLevel.HIGH:
-                assert f.status == RedactionStatus.USER_REDACTED
-            else:
-                assert f.status == RedactionStatus.USER_SKIPPED
-
-    def test_action_high_medium_marks_high_and_medium(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        from har_capture.cli import interactive as mod
-        from har_capture.sanitization.report import (
-            ConfidenceLevel,
-            RedactionStatus,
-        )
-
-        flagged = make_flagged(
-            [
-                ("alice", "credential", "high"),
-                ("bob", "credential", "medium"),
-                ("router-1", "device_name", "low"),
-            ]
-        )
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: "high_medium")
-        run_interactive_review_via(mod, make_report(flagged=flagged))
-
-        for f in flagged:
-            if f.confidence in (ConfidenceLevel.HIGH, ConfidenceLevel.MEDIUM):
-                assert f.status == RedactionStatus.USER_REDACTED
-            else:
-                assert f.status == RedactionStatus.USER_SKIPPED
-
-    def test_action_select_applies_per_item_selection(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        from har_capture.cli import interactive as mod
-        from har_capture.sanitization.report import RedactionStatus
-
-        flagged = make_flagged(
-            [
-                ("alice", "credential", "high"),
-                ("bob", "credential", "medium"),
-                ("router-1", "device_name", "low"),
-            ]
-        )
-        monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: "select")
-        # User selects items 0 and 2 in the checkbox prompt.
-        monkeypatch.setattr(mod, "run_checkbox_selection", lambda f: [0, 2])
-        run_interactive_review_via(mod, make_report(flagged=flagged))
-
-        # After flagged.sort(), the order may shift — we verify by value.
-        by_value = {f.original_value: f.status for f in flagged}
-        assert by_value["alice"] == RedactionStatus.USER_REDACTED
-        # bob is not in selection -> skipped
-        assert by_value["bob"] == RedactionStatus.USER_SKIPPED
-
-    def test_action_select_back_loops_to_action_menu(  # type: ignore[no-untyped-def]
-        self, make_flagged, make_report, monkeypatch
-    ):
-        """ESC from select re-enters the action menu; second action skips out."""
-        from har_capture.cli import interactive as mod
-
-        flagged = make_flagged([("alice", "credential", "high")])
-
-        actions = iter(["select", "skip"])
+        actions = iter(case["actions"])
         monkeypatch.setattr(mod, "run_quick_action_prompt", lambda f: next(actions))
-        monkeypatch.setattr(mod, "run_checkbox_selection", lambda f: None)
-        result = run_interactive_review_via(mod, make_report(flagged=flagged))
-        assert result is True
+        monkeypatch.setattr(mod, "run_checkbox_selection", lambda f: case["checkbox"])
+
+        outcome = run_interactive_review_via(mod, make_report(flagged=flagged))
+
+        assert outcome is ReviewOutcome(case["outcome"])
+        assert {f.original_value: f.status for f in flagged} == {
+            value: RedactionStatus(status) for value, status in case["statuses"].items()
+        }
 
 
 def run_interactive_review_via(mod, report):  # type: ignore[no-untyped-def]

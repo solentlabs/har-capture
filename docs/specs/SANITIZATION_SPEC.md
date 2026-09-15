@@ -15,7 +15,8 @@ two-pass model (auto-sanitize + interactive review) and the format-preserving ha
 | `src/har_capture/sanitization/html.py`       | HTML/content engine, multi-pass scanner pipeline                                   |
 | `src/har_capture/sanitization/heuristics.py` | Heuristic engine: entropy analysis, credential prefix, adjacency, domain detectors |
 | `src/har_capture/sanitization/collector.py`  | Redaction/flag collection during sanitization                                      |
-| `src/har_capture/sanitization/report.py`     | SanitizationReport data structures                                                 |
+| `src/har_capture/sanitization/report.py`     | SanitizationReport data structures, `ReviewOutcome`                                |
+| `src/har_capture/sanitization/review.py`     | Recording the review in a sanitized file (`record_review`), compressed copy        |
 | `src/har_capture/patterns/hasher.py`         | Salted format-preserving hashing (SHA-256)                                         |
 
 ## Architecture Overview
@@ -1265,7 +1266,8 @@ Metadata embedded via `_embed_sanitization_metadata()`:
       "sanitization": {
         "salt_mode": "salted",
         "heuristics": "flag",
-        "redaction_counts": {"mac": 12, "ip": 8, "email": 3}
+        "redaction_counts": {"mac": 12, "ip": 8, "email": 3},
+        "review": "completed"
       },
       "_client_side_cookies": ["credential"],
       "_sanitized_credentials": [{"entry_index": 1, "location": "url_query_param"}]
@@ -1478,12 +1480,30 @@ Entry point: `apply_user_redactions(report)`
    (observed on the CM2500 contributor capture, 2026-08-19)
 1. Return modified data
 
-**Compressed-artifact regeneration:** the CLI wrapper (`apply_reviewed_redactions`, `cli/interactive.py`) rewrites the
-`.sanitized.har` atomically and then **regenerates the `.har.gz`** — the one passed by the capture flow, or an
-auto-detected `<output>.gz` sibling. Without this, a `.gz` compressed before the review keeps every value the review
+**Recording the review:** `record_review(har_path, report, outcome, compressed_path=None)` (`sanitization/review.py`) is
+the file side of Pass 2. It applies the user's redactions (`apply_user_redactions`), writes the outcome to
+`log._har_capture.sanitization.review` with the `user_redacted` / `user_skipped` counts, replaces the `.sanitized.har`
+atomically (LF line endings), and then **regenerates the `.har.gz`** — the one the capture flow names, or an existing
+`<har_path>.gz` sibling. Without the regeneration, a `.gz` compressed before the review keeps every value the review
 scrubbed, in exactly the artifact contributors upload (observed on all three reviewed CM2500 captures, 2026-08-19). A
-regeneration failure is fatal and names the stale file; `har-capture validate` backstops the pair with a
+regeneration failure raises `StaleCompressedError` naming the stale file, and the CLI exits non-zero with that name;
+`har-capture validate` backstops the pair with a
 [freshness check](VALIDATION_SPEC.md#compressed-artifact-freshness-check).
+
+Every ending is recorded, a review that redacted nothing included — a skipped or cancelled review, or one nobody could
+be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`sanitization/report.py`):
+
+| `review`       | Written by                          | Meaning                                                                        |
+| -------------- | ----------------------------------- | ------------------------------------------------------------------------------ |
+| `none_flagged` | Pass 1 (`sanitize_har_file`)        | Nothing was offered for review                                                 |
+| `completed`    | The CLI, after the review           | The user decided every item (redacting any, all or none of them)               |
+| `skipped`      | The CLI, after the review           | The user chose to keep every flagged value; each item is `USER_SKIPPED`        |
+| `cancelled`    | The CLI, after the review           | The user left the review without deciding; items stay `FLAGGED`                |
+| `no_tty`       | The CLI, with no terminal to prompt | Nobody was asked; the flagged values remain as captured                        |
+| (absent)       | —                                   | No review recorded: a library caller that ran none, or a release before 0.13.0 |
+
+Without a terminal `get` and `sanitize` never prompt (InquirerPy would fail and read as a cancel): each records `no_tty`
+and prints a warning with the flagged count. `sanitize` also writes the report file; `get` writes none — see ADR-6.
 
 ### Pre-Sanitization Detection
 

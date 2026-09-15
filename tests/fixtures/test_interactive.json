@@ -21,5 +21,17 @@
         }
       ]
     }
-  }
+  },
+
+  "_comment_review_outcome_cases": "run_interactive_review over each path out of the review loop: the quick-action answers in order (null = Ctrl+C/ESC), the checkbox selection when 'select' is chosen (null = ESC back to the menu), the outcome returned, and each value's status afterwards.",
+  "review_outcome_cases": [
+    {"id": "none_flagged",       "actions": [],                 "checkbox": null,   "outcome": "none_flagged", "statuses": {}},
+    {"id": "skip",               "actions": ["skip"],           "checkbox": null,   "outcome": "skipped",      "statuses": {"alice": "skipped", "bob": "skipped", "router-1": "skipped"}},
+    {"id": "cancel",             "actions": [null],             "checkbox": null,   "outcome": "cancelled",    "statuses": {"alice": "flagged", "bob": "flagged", "router-1": "flagged"}},
+    {"id": "all",                "actions": ["all"],            "checkbox": null,   "outcome": "completed",    "statuses": {"alice": "user", "bob": "user", "router-1": "user"}},
+    {"id": "high",               "actions": ["high"],           "checkbox": null,   "outcome": "completed",    "statuses": {"alice": "user", "bob": "skipped", "router-1": "skipped"}},
+    {"id": "high_medium",        "actions": ["high_medium"],    "checkbox": null,   "outcome": "completed",    "statuses": {"alice": "user", "bob": "user", "router-1": "skipped"}},
+    {"id": "select",             "actions": ["select"],         "checkbox": [0, 2], "outcome": "completed",    "statuses": {"alice": "user", "bob": "skipped", "router-1": "user"}},
+    {"id": "select_back_then_skip", "actions": ["select", "skip"], "checkbox": null, "outcome": "skipped",     "statuses": {"alice": "skipped", "bob": "skipped", "router-1": "skipped"}}
+  ]
 }

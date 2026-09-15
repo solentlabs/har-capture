@@ -577,7 +577,7 @@ contributors upload.
   reports the divergence **once**, and counts a stale pair as an **error** (exit 1) — unlike completeness gaps, a stale
   `.gz` is a live PII-leak vector, not a coverage note
 
-The interactive review itself regenerates the `.gz` after applying user redactions (see
+The review itself regenerates the `.gz` when it records its outcome (`record_review`, see
 [SANITIZATION_SPEC](SANITIZATION_SPEC.md)), so this check is the backstop for artifacts produced outside that flow —
 hand-edited files, older tool versions, interrupted runs.
 

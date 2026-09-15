@@ -8,12 +8,13 @@ Uses Rich for beautiful tables and InquirerPy for checkbox selection.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import tempfile
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from har_capture.sanitization.report import ReviewOutcome
 
 if TYPE_CHECKING:
     from har_capture.sanitization.report import FlaggedValue, SanitizationReport
@@ -120,71 +121,68 @@ def capture_html_context(html: str, start: int, end: int, window: int = 50) -> s
     return f"...{before}>>>{match_text}<<<{after}..."
 
 
-def apply_reviewed_redactions(
+def stdin_is_tty() -> bool:
+    """Return True if stdin is a real terminal the review can prompt in.
+
+    The one seam for "interactive or not" across ``get`` and ``sanitize``,
+    so tests override a single function instead of click's runtime-replaced
+    ``sys.stdin``.
+    """
+    return sys.stdin.isatty()
+
+
+def warn_unreviewed(count: int, path: str | Path) -> None:
+    """Warn loudly that flagged values were left unreviewed for want of a terminal."""
+    import typer
+
+    typer.echo(
+        f"WARNING: {count} flagged value(s) were NOT reviewed: there is no terminal to prompt in. "
+        f"They remain in {path} as captured, and the file records review: no_tty. "
+        "Review the file before sharing it, or run the command again from a terminal.",
+        err=True,
+    )
+
+
+def save_review(
     report: SanitizationReport,
     output_path: str | Path,
+    outcome: ReviewOutcome,
     compressed_path: str | Path | None = None,
 ) -> None:
-    """Apply user redactions from interactive review to sanitized file.
+    """Apply and record the review in the sanitized file (``record_review``).
 
-    Reads the sanitized HAR, applies redactions, writes atomically
-    via tempfile + rename, then regenerates the compressed sibling so
-    it can never go stale relative to the reviewed file — the ``.gz``
-    is the artifact contributors upload, and a pre-review copy retains
-    exactly the values the review scrubbed.
+    Every ending is recorded, a review that redacted nothing included, so
+    the file tells its recipient whether anyone looked at its flagged
+    values. A failure exits non-zero; a compressed copy left stale is named.
 
     Args:
         report: Sanitization report with user redaction decisions
         output_path: Path to the sanitized HAR file to update
-        compressed_path: Compressed artifact to regenerate from the
-            reviewed file. ``None`` auto-detects an existing
-            ``<output_path>.gz`` sibling.
+        outcome: How the review ended
+        compressed_path: Compressed artifact to regenerate from the reviewed
+            file. ``None`` regenerates an existing ``<output_path>.gz`` sibling.
     """
     import typer
 
-    from har_capture.sanitization import apply_user_redactions
+    from har_capture.sanitization import StaleCompressedError, record_review
 
     typer.echo()
-    typer.echo("Applying user redactions...")
-
+    if report.total_user_redacted:
+        typer.echo("Applying user redactions...")
     try:
-        with open(output_path, encoding="utf-8") as f:
-            sanitized_data = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        typer.echo(f"Error: Failed to read sanitized file: {e}", err=True)
+        regenerated = record_review(output_path, report, outcome, compressed_path)
+    except StaleCompressedError as e:
+        _echo_stale(e.compressed_path, Path(output_path), e)
+        raise typer.Exit(1) from None
+    except (OSError, ValueError) as e:
+        typer.echo(f"Error: Failed to record the review in {output_path}: {e}", err=True)
         raise typer.Exit(1) from None
 
-    try:
-        final_data = apply_user_redactions(sanitized_data, report)
-    except Exception as e:
-        typer.echo(f"Error: Failed to apply redactions: {e}", err=True)
-        raise typer.Exit(1) from None
-
-    try:
-        result_dir = Path(output_path).parent
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=result_dir, delete=False, suffix=".har.tmp"
-        ) as tmp_file:
-            json.dump(final_data, tmp_file, indent=2)
-            tmp_path = tmp_file.name
-
-        Path(tmp_path).replace(output_path)
-    except OSError as e:
-        typer.echo(f"Error: Failed to write output file: {e}", err=True)
-        try:
-            if "tmp_path" in locals():
-                Path(tmp_path).unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise typer.Exit(1) from None
-
-    typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
-
-    if compressed_path is None:
-        sibling = Path(str(output_path) + ".gz")
-        compressed_path = sibling if sibling.exists() else None
-    if compressed_path is not None:
-        regenerate_compressed_har(Path(output_path), Path(compressed_path))
+    if report.total_user_redacted:
+        typer.echo(f"  Applied {report.total_user_redacted} user redaction(s)")
+    typer.echo(f"  Recorded review: {outcome.value}")
+    if regenerated is not None:
+        typer.echo(f"  Regenerated compressed file: {regenerated}")
 
 
 def regenerate_compressed_har(source: Path, compressed_path: Path) -> None:
@@ -193,29 +191,28 @@ def regenerate_compressed_har(source: Path, compressed_path: Path) -> None:
     A failure here is treated as fatal: a stale compressed artifact
     silently carries the PII the review just scrubbed.
     """
-    import gzip
-
     import typer
 
+    from har_capture.sanitization import write_compressed_copy
+
     try:
-        with (
-            open(source, "rb") as f_in,
-            gzip.open(compressed_path, "wb", compresslevel=9) as f_out,
-        ):
-            f_out.write(f_in.read())
+        write_compressed_copy(source, compressed_path)
     except OSError as e:
-        typer.echo(
-            f"Error: Failed to regenerate compressed file {compressed_path}: {e}",
-            err=True,
-        )
-        typer.echo(
-            f"  {compressed_path} is now STALE — do not share it. "
-            f"Re-create it from {source} before uploading.",
-            err=True,
-        )
+        _echo_stale(compressed_path, source, e)
         raise typer.Exit(1) from None
 
     typer.echo(f"  Regenerated compressed file: {compressed_path}")
+
+
+def _echo_stale(compressed_path: Path, source: Path, error: OSError) -> None:
+    """Name a compressed file left stale, and say how to recover."""
+    import typer
+
+    typer.echo(f"Error: Failed to regenerate compressed file {compressed_path}: {error}", err=True)
+    typer.echo(
+        f"  {compressed_path} is now STALE — do not share it. Re-create it from {source} before uploading.",
+        err=True,
+    )
 
 
 # =============================================================================
@@ -484,7 +481,7 @@ def run_interactive_review(
     input_path: str | None = None,
     output_path: str | None = None,
     salt_mode: str | None = None,
-) -> bool:
+) -> ReviewOutcome:
     """Run the interactive review with Rich + InquirerPy.
 
     Args:
@@ -494,7 +491,9 @@ def run_interactive_review(
         salt_mode: Salt mode description (for redisplay on ESC)
 
     Returns:
-        True if review completed normally, False if cancelled
+        How the review ended: ``COMPLETED`` once every item is decided,
+        ``SKIPPED`` (every item marked kept), ``CANCELLED`` (nothing
+        decided), or ``NONE_FLAGGED`` when there was nothing to review
     """
     from rich.console import Console
 
@@ -510,7 +509,7 @@ def run_interactive_review(
     if not flagged:
         console.print()
         console.print("[green]✓[/] No suspicious values found. All values were handled automatically.")
-        return True
+        return ReviewOutcome.NONE_FLAGGED
 
     # Sort by confidence (high first), then by category
     confidence_order = {"high": 0, "medium": 1, "low": 2}
@@ -536,12 +535,14 @@ def run_interactive_review(
         if action is None:
             console.print()
             console.print("[yellow]Review cancelled.[/]")
-            return False
+            return ReviewOutcome.CANCELLED
 
         if action == "skip":
+            for item in flagged:
+                item.status = RedactionStatus.USER_SKIPPED
             console.print()
             console.print("[yellow]Review skipped.[/] Flagged values will remain unchanged.")
-            return True
+            return ReviewOutcome.SKIPPED
 
         if action == "all":
             # Redact all
@@ -549,7 +550,7 @@ def run_interactive_review(
                 item.status = RedactionStatus.USER_REDACTED
             console.print()
             console.print(f"[green]✓[/] Marked all {len(flagged)} items for redaction.")
-            return True
+            return ReviewOutcome.COMPLETED
 
         if action == "high":
             # Redact high confidence only
@@ -562,7 +563,7 @@ def run_interactive_review(
                     item.status = RedactionStatus.USER_SKIPPED
             console.print()
             console.print(f"[green]✓[/] Marked {count} high-confidence items for redaction.")
-            return True
+            return ReviewOutcome.COMPLETED
 
         if action == "high_medium":
             # Redact high + medium
@@ -575,7 +576,7 @@ def run_interactive_review(
                     item.status = RedactionStatus.USER_SKIPPED
             console.print()
             console.print(f"[green]✓[/] Marked {count} items for redaction.")
-            return True
+            return ReviewOutcome.COMPLETED
 
         # Individual selection mode
         selected_indices = run_checkbox_selection(flagged)
@@ -597,7 +598,7 @@ def run_interactive_review(
             f"[green]✓[/] Marked {len(selected_indices)} items for redaction, skipped {len(flagged) - len(selected_indices)}."
         )
 
-        return True
+        return ReviewOutcome.COMPLETED
 
 
 # =============================================================================

@@ -85,7 +85,7 @@ from har_capture.sanitization.html import (
     redact_vendor_serials,
     sanitize_html,
 )
-from har_capture.sanitization.report import ConfidenceLevel
+from har_capture.sanitization.report import ConfidenceLevel, ReviewOutcome
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -2069,6 +2069,10 @@ def _embed_sanitization_metadata(
         "flagged_total": len(report.flagged),
         "warnings": list(report.warnings),
     }
+    if not report.flagged:
+        # Nothing to review, so the outcome is known now; any other outcome
+        # is recorded by whoever runs the review (record_review).
+        metadata["sanitization"]["review"] = ReviewOutcome.NONE_FLAGGED.value
 
 
 def _parse_cookie_names(cookie_header_value: str) -> list[str]:

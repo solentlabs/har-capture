@@ -309,107 +309,109 @@ class TestRunInteractiveReview:
         captured = capsys.readouterr()
         assert "No suspicious values found" in captured.out
 
-    def test_full_review_with_no_user_redactions(
+    # ┌──────────────┬───────┬──────────────┬───────────┬──────────┐
+    # │ id           │ tty   │ user outcome │ recorded  │ prompted │
+    # └──────────────┴───────┴──────────────┴───────────┴──────────┘
+    #
+    # Without a terminal the review is never prompted (InquirerPy would fail
+    # and read as a cancel): no_tty is recorded, a loud warning names the
+    # count, and no report file is written — the raw capture never persists.
+    #
+    # fmt: off
+    TTY_CASES = [
+        # (id,          tty,   user_outcome, recorded)
+        ("no_tty",      False, None,         "no_tty"),
+        ("completed",   True,  "completed",  "completed"),
+        ("skipped",     True,  "skipped",    "skipped"),
+        ("cancelled",   True,  "cancelled",  "cancelled"),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("case_id", "tty", "user_outcome", "recorded"), TTY_CASES, ids=[c[0] for c in TTY_CASES]
+    )
+    def test_review_outcome_recorded(
         self,
+        case_id: str,
+        tty: bool,
+        user_outcome: str | None,
+        recorded: str,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
+        tmp_path: Path,
     ) -> None:
-        """Review runs, user redacts nothing -> apply path is NOT called."""
+        """Every flagged capture records how its review ended, TTY or not."""
         from har_capture.capture.workflow import CaptureResult
         from har_capture.cli import interactive as interactive_mod
         from har_capture.cli.capture import _run_interactive_review
+        from har_capture.sanitization.report import ReviewOutcome
 
         review_calls: list[dict[str, Any]] = []
-        summary_calls: list[Any] = []
+        saved: list[tuple[Any, ...]] = []
+        summaries: list[Any] = []
 
-        def fake_review(report: Any, **kwargs: Any) -> bool:
+        def fake_review(report: Any, **kwargs: Any) -> ReviewOutcome:
             review_calls.append(kwargs)
-            return True
+            return ReviewOutcome(user_outcome)
 
-        def fail_apply(*a: Any, **k: Any) -> None:
-            pytest.fail("apply must not run when total_user_redacted == 0")
-
+        monkeypatch.setattr(interactive_mod, "stdin_is_tty", lambda: tty)
         monkeypatch.setattr(interactive_mod, "run_interactive_review", fake_review)
-        monkeypatch.setattr(interactive_mod, "display_summary", summary_calls.append)
-        monkeypatch.setattr(interactive_mod, "apply_reviewed_redactions", fail_apply)
+        monkeypatch.setattr(interactive_mod, "display_summary", summaries.append)
+        monkeypatch.setattr(
+            interactive_mod,
+            "save_review",
+            lambda report, path, outcome, compressed_path=None: saved.append(
+                (path, outcome, compressed_path)
+            ),
+        )
 
         cap = CaptureResult(
             success=True,
             har_path=Path("/test/raw.har"),
-            sanitized_path=Path("/test/clean.har"),
-            sanitization_report=self._make_report(flagged=[object()], salt=True, total_user_redacted=0),
+            sanitized_path=tmp_path / "clean.har",
+            compressed_path=tmp_path / "clean.har.gz",
+            sanitization_report=self._make_report(flagged=[object(), object()], salt=True),
         )
         _run_interactive_review(self._make_result(capture=cap))
 
-        assert review_calls
-        assert summary_calls
-        kwargs = review_calls[0]
-        assert kwargs["input_path"] == "/test/raw.har"
-        assert kwargs["output_path"] == "/test/clean.har"
-        assert "random" in kwargs["salt_mode"]
-
-    def test_full_review_applies_when_user_redacted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """User redacts >=1 value -> apply_reviewed_redactions runs."""
-        from har_capture.capture.workflow import CaptureResult
-        from har_capture.cli import interactive as interactive_mod
-        from har_capture.cli.capture import _run_interactive_review
-
-        apply_calls: list[tuple[Any, ...]] = []
-
-        monkeypatch.setattr(
-            interactive_mod,
-            "run_interactive_review",
-            lambda report, **kwargs: True,
-        )
-        monkeypatch.setattr(
-            interactive_mod,
-            "apply_reviewed_redactions",
-            lambda r, p, compressed_path=None: apply_calls.append((r, p, compressed_path)),
-        )
-        monkeypatch.setattr(
-            interactive_mod,
-            "display_summary",
-            lambda r: None,
-        )
-
-        cap = CaptureResult(
-            success=True,
-            har_path=None,  # exercises the input_display fallback to sanitized_path
-            sanitized_path=Path("/test/clean.har"),
-            sanitization_report=self._make_report(
-                flagged=[object()],
-                salt=False,
-                total_user_redacted=3,
-            ),
-        )
-        _run_interactive_review(self._make_result(capture=cap))
-
-        assert len(apply_calls) == 1
-        assert apply_calls[0][1] == Path("/test/clean.har")
+        assert saved == [(tmp_path / "clean.har", ReviewOutcome(recorded), tmp_path / "clean.har.gz")]
+        assert bool(review_calls) == tty
+        assert bool(summaries) == tty
+        err = capsys.readouterr().err
+        assert ("2 flagged value(s) were NOT reviewed" in err) == (not tty)
+        assert not list(tmp_path.glob("*.review.json")), "get never writes a report file"
+        if tty:
+            assert review_calls[0]["input_path"] == "/test/raw.har"
+            assert review_calls[0]["output_path"] == str(tmp_path / "clean.har")
+            assert "random" in review_calls[0]["salt_mode"]
 
     def test_static_salt_mode_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``report.salt is False`` -> "static placeholders" label."""
+        """``report.salt is False`` -> "static placeholders" label; no raw path -> sanitized path shown."""
         from har_capture.capture.workflow import CaptureResult
         from har_capture.cli import interactive as interactive_mod
         from har_capture.cli.capture import _run_interactive_review
+        from har_capture.sanitization.report import ReviewOutcome
 
-        captured_salt_mode: list[str] = []
+        captured: list[dict[str, Any]] = []
 
-        def capture_kwargs(report: Any, **kwargs: Any) -> bool:
-            captured_salt_mode.append(kwargs["salt_mode"])
-            return False
+        def capture_kwargs(report: Any, **kwargs: Any) -> ReviewOutcome:
+            captured.append(kwargs)
+            return ReviewOutcome.CANCELLED
 
+        monkeypatch.setattr(interactive_mod, "stdin_is_tty", lambda: True)
         monkeypatch.setattr(interactive_mod, "run_interactive_review", capture_kwargs)
         monkeypatch.setattr(interactive_mod, "display_summary", lambda r: None)
-        monkeypatch.setattr(interactive_mod, "apply_reviewed_redactions", lambda r, p: None)
+        monkeypatch.setattr(interactive_mod, "save_review", lambda *a, **k: None)
 
         cap = CaptureResult(
             success=True,
+            har_path=None,
             sanitized_path=Path("/test/x.har"),
             sanitization_report=self._make_report(flagged=[object()], salt=False),
         )
         _run_interactive_review(self._make_result(capture=cap))
-        assert captured_salt_mode == ["static placeholders"]
+        assert captured[0]["salt_mode"] == "static placeholders"
+        assert captured[0]["input_path"] == "/test/x.har"
 
 
 # =============================================================================
