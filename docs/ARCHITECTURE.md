@@ -50,7 +50,8 @@ without har-capture carrying any product-specific code.
    ability to trace behavior across requests.
 
 1. **PII never persists on disk unsanitized.** Raw captures go to temp files, get sanitized immediately, and the temp
-   file is deleted. Even on crash, the raw HAR lives in `/tmp`, not the user's working directory.
+   file is deleted. Even on crash — or when sanitization fails, which keeps the temp file and names it rather than lose
+   the capture — the raw HAR lives in `/tmp`, not the user's working directory.
 
 ## Code Organization
 
@@ -202,7 +203,8 @@ review (Pass 2), which rewrites the `.sanitized.har` **and regenerates the `.har
 go stale relative to the reviewed file. Browser downloads are saved out of Playwright's ephemeral artifacts directory
 into `<output-stem>_downloads/` before the context closes — raw device output, NOT sanitized, and announced as such.
 
-The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See
+The raw temp file is deleted, ensuring PII doesn't persist on disk — except when sanitization fails, when it is the only
+copy of the capture and is kept in the temp dir and named in the error. See
 [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
 
 **Completeness check**: a HAR that omits the auth exchange still looks structurally complete, so

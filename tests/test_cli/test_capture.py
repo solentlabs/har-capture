@@ -755,7 +755,12 @@ class TestCaptureCommand:
                 probes=ProbeResult(data={"auth_challenge": {"status_code": 401}}),
             )
 
-        monkeypatch.setattr(workflow_module, "run_probes_phase", fake_probes)
+        monkeypatch.setattr(workflow_module, "run_auth_probe_phase", fake_probes)
+        monkeypatch.setattr(
+            workflow_module,
+            "run_probes_phase",
+            lambda *a, **k: pytest.fail("the CLI runs only the auth probe (ADR-2)"),
+        )
 
         capture_kwargs: list[dict[str, Any]] = []
 

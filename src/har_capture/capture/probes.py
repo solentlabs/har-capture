@@ -240,6 +240,28 @@ def probe_icmp(host: str, timeout: int = 5) -> dict[str, Any]:
 # =============================================================================
 
 
+def run_auth_probe(url: str, timeout: int = 10) -> dict[str, Any]:
+    """Run only the auth challenge probe: one unauthenticated GET.
+
+    What the CLI runs when credentials are given: Playwright's
+    ``http_credentials`` suppresses the device's 401 in the HAR, and this
+    records it first. The other probes cost requests a single-session device
+    may not have to spare (ADR-2).
+
+    Args:
+        url: Target URL to probe.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Dict with keys: ran_at, target_url, auth_challenge.
+    """
+    return {
+        "ran_at": datetime.now(tz=timezone.utc).isoformat(),
+        "target_url": url,
+        "auth_challenge": probe_auth_challenge(url, timeout=timeout),
+    }
+
+
 def run_probes(url: str, timeout: int = 10) -> dict[str, Any]:
     """Run all pre-capture diagnostic probes.
 
@@ -254,9 +276,7 @@ def run_probes(url: str, timeout: int = 10) -> dict[str, Any]:
     host = parsed.hostname or parsed.netloc or url
 
     return {
-        "ran_at": datetime.now(tz=timezone.utc).isoformat(),
-        "target_url": url,
-        "auth_challenge": probe_auth_challenge(url, timeout=timeout),
+        **run_auth_probe(url, timeout=timeout),
         "head_support": probe_head_support(url, timeout=timeout),
         "icmp": probe_icmp(host, timeout=max(1, timeout // 2)),
     }

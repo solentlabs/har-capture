@@ -372,6 +372,32 @@ def run_probes_phase(
     return result
 
 
+def run_auth_probe_phase(
+    target_url: str,
+    timeout: int = 10,
+    result: CaptureWorkflowResult | None = None,
+) -> CaptureWorkflowResult:
+    """Run only the auth challenge probe (what the CLI runs with credentials).
+
+    Args:
+        target_url: Full URL to probe
+        timeout: Timeout for the HTTP probe
+        result: Existing result to update, or None to create new
+
+    Returns:
+        CaptureWorkflowResult with probe data holding ``auth_challenge``
+    """
+    from har_capture.capture.probes import run_auth_probe
+
+    if result is None:
+        result = CaptureWorkflowResult()
+    result.phase = "auth_probe"
+
+    result.probes = ProbeResult(data=run_auth_probe(target_url, timeout=timeout))
+
+    return result
+
+
 def run_capture_phase(
     target: str,
     output: Path | None = None,
@@ -409,7 +435,8 @@ def run_capture_phase(
         timeout: Timeout in seconds (None = wait for user to close)
         interactive: Flag suspicious values for interactive review
         result: Existing result to update, or None to create new
-        custom_patterns: Domain pattern name, file path, or pre-loaded dict
+        custom_patterns: Custom patterns file path or pre-loaded dict (resolve a
+            domain name such as ``network-device`` with ``resolve_patterns_arg``)
         wait_for_data: Wait for async data fetches before navigating
         target_url: Pre-computed URL from connectivity check (skips dup check)
         page_load_strategy: Playwright wait_until for page.goto
@@ -483,6 +510,8 @@ def run_capture_workflow(
     skip_session_check: bool = False,
     skip_auth_check: bool = False,
     page_load_strategy: str = "networkidle",
+    custom_patterns: str | dict[str, Any] | None = None,
+    interactive: bool = True,
 ) -> CaptureWorkflowResult:
     """Run the complete capture workflow.
 
@@ -505,7 +534,7 @@ def run_capture_workflow(
         include_fonts: Include font files
         include_images: Include image files
         include_media: Include media files
-        headless: Run browser in headless mode
+        headless: Run browser in headless mode; requires ``timeout``
         timeout: Timeout in seconds (None = wait for user to close)
         skip_browser_check: Skip browser installation check
         wait_for_data: Wait for async data fetches before navigating
@@ -513,9 +542,16 @@ def run_capture_workflow(
         skip_session_check: Skip session contamination check (Phase 3)
         skip_auth_check: Skip Basic Auth detection (Phase 5)
         page_load_strategy: Playwright wait_until for page.goto
+        custom_patterns: Custom patterns file path or pre-loaded dict (resolve a
+            domain name such as ``network-device`` with ``resolve_patterns_arg``)
+        interactive: Flag suspicious values for interactive review
 
     Returns:
         CaptureWorkflowResult with workflow status
+
+    Raises:
+        ValueError: If ``headless`` is set without a ``timeout`` — raised
+            before any phase runs, so nothing is sent to the device
 
     Example:
         >>> result = run_capture_workflow("http://192.168.1.1", headless=True, timeout=10)
@@ -530,6 +566,10 @@ def run_capture_workflow(
         >>> if result.capture_success:
         ...     print(f"Captured: {result.sanitized_path}")
     """
+    from har_capture.capture.browser import require_timeout_when_headless
+
+    require_timeout_when_headless(headless, timeout)
+
     # Phase 1: Browser check
     if not skip_browser_check:
         result = check_browser_phase(browser)
@@ -574,7 +614,9 @@ def run_capture_workflow(
         include_media=include_media,
         headless=headless,
         timeout=timeout,
+        interactive=interactive,
         result=result,
+        custom_patterns=custom_patterns,
         wait_for_data=wait_for_data,
         target_url=result.target_url,
         page_load_strategy=page_load_strategy,

@@ -105,10 +105,12 @@ result = run_probes_phase(target_url, timeout=10, result=result)
 # result.probes.data: dict with auth_challenge, head_support, icmp keys
 ```
 
-> **CLI behavior:** The CLI only runs the auth probe, and only when `--username`/`--password` is provided (see
+> **CLI behavior:** The CLI only runs the auth probe (`run_auth_probe_phase` → `run_auth_probe()`, one GET), and only
+> when `--username`/`--password` is provided (see
 > [ADR-3](../ARCHITECTURE_DECISIONS.md#adr-3-probes-are-opt-in-diagnostics)). When Playwright's `http_credentials` is
 > set, it suppresses the 401 response in the HAR — the auth probe captures that data before suppression. Without
-> credentials, the browser shows the native auth dialog and the full 401 exchange is recorded in the HAR naturally.
+> credentials, the browser shows the native auth dialog and the full 401 exchange is recorded in the HAR naturally. The
+> auth-only result carries `ran_at`, `target_url` and `auth_challenge`.
 >
 > **Library API:** `run_capture_workflow()` runs all three probes by default. Pass `skip_probes=True` to skip.
 
@@ -194,7 +196,8 @@ reachable before launching Playwright.
 
 > **Library API note:** `run_capture_workflow()` still runs session check (Phase 3), probes (Phase 4), and auth
 > detection (Phase 5) by default for backward compatibility. Use `skip_session_check=True`, `skip_probes=True`, and
-> `skip_auth_check=True` to match the CLI's minimal-pre-flight behavior.
+> `skip_auth_check=True` to match the CLI's minimal-pre-flight behavior. It forwards `custom_patterns` and `interactive`
+> to the capture (before 0.13.0 it had neither, so a workflow capture was sanitized without its domain patterns).
 
 ### `target_url` Parameter
 
@@ -276,7 +279,8 @@ Testable with: zero mocks (real temp file).
 #### `_run_post_capture_pipeline(...) -> CaptureResult`
 
 Strips browser-internal entries, assesses capture completeness, runs sanitization, copies raw HAR if needed, cleans up
-temp file, compresses. The temp file is always deleted.
+temp file, compresses. The temp file is deleted unless sanitization failed with no `--keep-raw` copy — then it is the
+only copy of the capture, and it is kept (see [File Cleanup](#file-cleanup)).
 
 **Browser-internal entry stripping** (`strip_browser_internal_entries()`) runs first, on the raw temp HAR, so no
 downstream artifact — raw copy included — keeps entries whose request URL is not http(s). Browser-internal traffic
@@ -304,7 +308,7 @@ def capture_device_har(
     include_fonts: bool = False,                      # Include font entries
     include_images: bool = False,                     # Include image entries
     include_media: bool = False,                      # Include media entries
-    headless: bool = False,                           # Run without visible browser
+    headless: bool = False,                           # Run without visible browser (requires timeout)
     timeout: int | None = None,                       # Seconds to wait (None = interactive)
     interactive: bool = True,                         # Flag suspicious values for review
     probes: dict[str, Any] | None = None,             # Probe results to inject
@@ -338,7 +342,7 @@ class CaptureResult:
 class CapturePathInfo:
     output_path: Path       # User-facing HAR output path
     sanitized_output: Path  # Path for sanitized HAR (stem + .sanitized.har)
-    temp_path: Path         # Temp file path for raw HAR (PII, always deleted)
+    temp_path: Path         # Temp file path for raw HAR (PII; deleted unless sanitization fails)
     host: str               # Extracted hostname from target
     target_url: str         # Full URL for navigation
 ```
@@ -571,7 +575,9 @@ sanitization pipeline entirely), and `log._solentlabs.downloads` in the HAR (fil
 
 ### Timeout vs Interactive Mode
 
-**Timeout mode** (`timeout=N` in the Python API — not exposed as a CLI flag):
+**Timeout mode** (`timeout=N` in the Python API — not exposed as a CLI flag; a headless capture requires it, and
+`capture_device_har()` / `run_capture_workflow()` raise `ValueError` for `headless=True` without one, before any request
+— see [ADR-2](../ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)):
 
 - If `wait_for_data=True`: Uses `page.wait_for_timeout(N * 1000)` (keeps Playwright event loop active so the JS counter
   continues tracking) followed by a final quiescence wait
@@ -700,15 +706,22 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
 
 ### File Cleanup
 
-| Condition                     | Temp file | Raw HAR          | Sanitized HAR | Compressed  |
-| ----------------------------- | --------- | ---------------- | ------------- | ----------- |
-| Default (sanitize + compress) | Deleted   | Not created      | Deleted       | Kept        |
-| `--keep-raw`                  | Deleted   | Copied from temp | Kept          | Kept        |
-| `--no-sanitize`               | Deleted   | Copied from temp | Not created   | Kept        |
-| `--no-compress`               | Deleted   | Not created      | Kept          | Not created |
-| Interactive mode              | Deleted   | Not created      | Kept          | Kept        |
+| Condition                                  | Temp file | Raw HAR          | Sanitized HAR | Compressed  |
+| ------------------------------------------ | --------- | ---------------- | ------------- | ----------- |
+| Default (sanitize + compress, interactive) | Deleted   | Not created      | Kept          | Kept        |
+| `interactive=False` (Python API)           | Deleted   | Not created      | Deleted       | Kept        |
+| `--keep-raw`                               | Deleted   | Copied from temp | Kept          | Kept        |
+| `--no-sanitize`                            | Deleted   | Copied from temp | Not created   | Not created |
+| `--no-compress`                            | Deleted   | Not created      | Kept          | Not created |
+| Sanitization fails                         | **Kept**  | Not created      | Not created   | Not created |
+| Sanitization fails with `--keep-raw`       | Deleted   | Copied from temp | Not created   | Not created |
 
-The raw temp file is **always** deleted regardless of flags, ensuring PII doesn't persist.
+Unsanitized output is never compressed. The raw temp file is deleted in every case but one: when sanitization fails (a
+capture over the 100 MB sanitize limit, a sanitizer exception, a bad `custom_patterns` argument) and no `--keep-raw`
+copy exists, the temp file is the only copy of the capture. It is kept where it is — the temp dir, never the working
+directory — the capture reports failure (`success=False`), and the error names the file and the
+`har-capture sanitize <file> --patterns <domain>` command that finishes it. Before 0.13.0 the pipeline deleted it and
+reported success, losing the capture silently.
 
 ## `CaptureOptions` Dataclass
 
@@ -727,8 +740,8 @@ class CaptureOptions:
 
 ## Constraints / Invariants
 
-1. **Raw HAR never persists** — The temp file is deleted after sanitization, even if the process crashes (it's in
-   `/tmp`).
+1. **Raw HAR never persists in the working directory** — The temp file is deleted after sanitization; if the process
+   crashes, or sanitization fails, it stays in the temp dir (a failure names it so the capture can be finished).
 1. **Sanitization runs before compression** — The compressed `.har.gz` always contains sanitized content.
 1. **Browser state capture happens after navigation** — Cookies and storage are captured after `page.goto()` completes
    and any wait-for-data polling finishes.

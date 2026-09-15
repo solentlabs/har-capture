@@ -326,7 +326,7 @@ class CapturePathInfo:
     Attributes:
         output_path: User-facing HAR output path
         sanitized_output: Path for sanitized HAR (stem + .sanitized.har)
-        temp_path: Temp file path for raw HAR (PII, always deleted)
+        temp_path: Temp file path for raw HAR (PII; deleted unless sanitization fails)
         host: Extracted hostname from target
         target_url: Full URL for navigation (e.g., http://192.168.1.1/)
     """
@@ -1062,7 +1062,8 @@ def _run_post_capture_pipeline(
     """Run sanitization, copy raw, compress, and cleanup.
 
     Args:
-        temp_path: Path to raw HAR temp file (always deleted)
+        temp_path: Path to raw HAR temp file (deleted unless sanitization fails
+            and no --keep-raw copy exists: then it is the only copy, kept and named)
         output_path: User-facing output path for raw HAR
         sanitized_output: Path for sanitized HAR output
         sanitize: Whether to sanitize the HAR
@@ -1070,7 +1071,7 @@ def _run_post_capture_pipeline(
         keep_raw: Whether to keep the raw (unsanitized) HAR
         interactive: Whether to flag suspicious values for review
         capture_options: Filtering options (fonts, images, media)
-        custom_patterns: Domain pattern for sanitization
+        custom_patterns: Custom patterns file path or pre-loaded dict
 
     Returns:
         CaptureResult with paths to generated files and a completeness report
@@ -1094,11 +1095,12 @@ def _run_post_capture_pipeline(
         _LOGGER.warning("Capture-completeness check failed: %s", e)
 
     # Sanitize from temp file to user's output location
+    sanitize_error: str | None = None
     if sanitize:
         try:
-            from har_capture.sanitization import sanitize_har_file
+            from har_capture import sanitization
 
-            _, sanitization_report = sanitize_har_file(
+            _, sanitization_report = sanitization.sanitize_har_file(
                 str(temp_path),
                 str(sanitized_output),
                 heuristics=HeuristicMode.FLAG if interactive else HeuristicMode.DISABLED,
@@ -1108,6 +1110,7 @@ def _run_post_capture_pipeline(
             result.sanitization_report = sanitization_report
         except Exception as e:
             _LOGGER.warning("Sanitization failed: %s", e)
+            sanitize_error = str(e) or type(e).__name__
 
     # Copy raw file if keep_raw or no sanitization
     if keep_raw or not sanitize:
@@ -1120,11 +1123,25 @@ def _run_post_capture_pipeline(
             result.error = f"Failed to save HAR file: {e}"
             _LOGGER.error("Failed to copy raw HAR to %s: %s", output_path, e)
 
-    # Always clean up temp file (raw PII should not persist)
-    try:
-        temp_path.unlink()
-    except Exception as e:
-        _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
+    if sanitize_error is not None:
+        # Never lose a capture: the raw file stays where it already is — the
+        # --keep-raw copy, else the temp file (the one place design
+        # constraint 5 lets raw PII sit on a failure) — and the error says
+        # how to finish it.
+        kept = result.har_path or temp_path
+        result.success = False
+        result.error = (
+            f"Sanitization failed: {sanitize_error}. The raw, UNSANITIZED capture was kept at {kept}. "
+            f"Finish it with `har-capture sanitize {kept} --patterns <domain>`, then delete the raw file."
+        )
+
+    # Clean up the temp file (raw PII should not persist), unless it is the
+    # only copy of a capture sanitization failed on.
+    if sanitize_error is None or result.har_path is not None:
+        try:
+            temp_path.unlink()
+        except Exception as e:
+            _LOGGER.debug("Failed to clean up temp file %s: %s", temp_path, e)
 
     # Compress the sanitized file (never compress unsanitized)
     if compress and result.sanitized_path and result.sanitized_path.exists():
@@ -1143,6 +1160,21 @@ def _run_post_capture_pipeline(
             _LOGGER.warning("Compression failed: %s", e)
 
     return result
+
+
+def require_timeout_when_headless(headless: bool, timeout: int | None) -> None:
+    """Reject a headless capture with no timeout.
+
+    Without a timeout a capture ends when the user closes the browser, and a
+    headless browser has no window to close: it would wait forever.
+
+    Raises:
+        ValueError: If ``headless`` is set and ``timeout`` is None
+    """
+    if headless and timeout is None:
+        raise ValueError(
+            "headless capture needs a timeout: with no window, nobody can close the browser to end it"
+        )
 
 
 def capture_device_har(
@@ -1182,12 +1214,13 @@ def capture_device_har(
         include_fonts: If True, don't filter font files (.woff, .ttf, etc.)
         include_images: If True, don't filter image files (.png, .jpg, etc.)
         include_media: If True, don't filter media files (.mp3, .mp4, etc.)
-        headless: If True, run browser in headless mode (for automated capture)
+        headless: If True, run browser in headless mode (for automated capture);
+            requires ``timeout``
         timeout: Seconds to wait before closing browser (None = wait for user to close)
         interactive: If True, flag suspicious values for interactive review
         probes: Pre-capture diagnostic probe results to include in output
-        custom_patterns: Domain pattern name, file path, or pre-loaded dict
-            for domain-specific sanitization rules.
+        custom_patterns: Custom patterns file path or pre-loaded dict (resolve a
+            domain name such as ``network-device`` with ``resolve_patterns_arg``)
         wait_for_data: If True, wait for async data fetches (XHR/fetch) to
             complete before navigating away from each page.  Prevents losing
             SPA data (e.g. HNAP/SOAP responses) that loads after the initial
@@ -1204,6 +1237,7 @@ def capture_device_har(
 
     Raises:
         ImportError: If Playwright is not installed
+        ValueError: If ``headless`` is set without a ``timeout``
 
     Example:
         >>> result = capture_device_har("router.local")
@@ -1212,6 +1246,8 @@ def capture_device_har(
         # Automated capture (headless with timeout)
         >>> result = capture_device_har("example.com", headless=True, timeout=10)
     """
+    require_timeout_when_headless(headless, timeout)
+
     capture_options = CaptureOptions(
         include_fonts=include_fonts,
         include_images=include_images,

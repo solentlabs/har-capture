@@ -13,7 +13,8 @@ interface, logs in, visits pages — the tool records everything.
 packages.
 
 **Consequence:** The tool should not attempt to automate device interaction (login, navigation) in the default path.
-Automated/headless mode exists for CI and advanced users but is not the primary use case.
+Automated/headless capture exists in the Python API for CI and advanced users (see ADR-2) but is not the primary use
+case, and the CLI does not offer it.
 
 ## ADR-2: Minimal Pre-Flight in Interactive Mode
 
@@ -40,8 +41,18 @@ dialogs, redirects, and errors naturally — the user is present to respond.
 pre-flight further: skips probes, skips auth detection, uses `domcontentloaded` page load strategy, disables
 wait-for-data.
 
-**Headless/automated mode** (`--headless --timeout N`) is the exception: no human is present, so auth detection and
-probes are necessary. The user requesting headless mode implicitly accepts the connection overhead.
+**Headless/automated capture** is a Python API mode (`capture_device_har(headless=True, timeout=N)`,
+`run_capture_workflow(...)`), and the exception to minimal pre-flight: no human is present, so the library's workflow
+runs session, probe and auth checks by default. A headless capture requires a `timeout` — without one it would wait for
+a user to close a window that does not exist — and both entry points raise `ValueError` before sending anything.
+
+**No `--headless` CLI flag (0.13.0, decision D3).** Earlier revisions of this ADR and ADR-3 described
+`--headless --timeout N` and `--diagnostics` flags; the CLI never had them. They are not added: a form-login device
+cannot be captured headless (nobody is there to fill the form), and ADR-1 makes capture user-driven. Unattended capture
+of a Basic-Auth device stays available through the Python API.
+
+**With credentials** (`--username/--password`), the CLI sends one more pre-flight request, the auth challenge probe:
+Playwright's `http_credentials` suppresses the device's 401 in the HAR, and the probe records it first (ADR-3).
 
 **Consequence:** The default interactive capture goes from 5 pre-flight HTTP requests to 1. Most devices work without
 any flags.
@@ -52,12 +63,15 @@ any flags.
 cable_modem_monitor's intake pipeline uses this to reverse-engineer auth patterns. But the probe data is also present in
 the HAR itself (the browser's first request to a 401 endpoint is recorded).
 
-**Decision:** Probes are opt-in via `--diagnostics`. The HAR already contains the auth exchange from the browser's
-natural interaction. Probes add a pre-Playwright snapshot that's useful when `http_credentials` suppresses the 401,
-which only happens in automated mode.
+**Decision:** The CLI runs one probe, the auth challenge (`run_auth_probe_phase`), and only when `--username/--password`
+is given: Playwright's `http_credentials` then suppresses the 401 in the HAR, and the probe is the only record of it.
+Without credentials the browser shows the native auth dialog and the HAR holds the full 401 exchange, so no probe runs.
+`--minimal` skips it. The HEAD and ICMP probes run only in the Python API (`run_capture_workflow()` runs all three by
+default; `skip_probes=True` skips them).
 
-**Consequence:** har-capture stays domain-agnostic. Downstream consumers (CMM intake) request `--diagnostics` when they
-need probe metadata. Default users don't pay the connection cost.
+**Consequence:** har-capture stays domain-agnostic, and the CLI sends at most one request beyond the connectivity and
+session checks. A consumer that needs the HEAD or ICMP results uses the Python API. (Before 0.13.0 the CLI ran all three
+probes when credentials were given, and this ADR named a `--diagnostics` flag that never existed.)
 
 ## ADR-4: Auto-Fallback for Persistent-Connection Devices
 

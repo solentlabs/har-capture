@@ -249,37 +249,44 @@ ______________________________________________________________________
 
 **Actor**: CI/CD pipeline or automated script capturing without user interaction.
 
-**Goal**: Capture a HAR file non-interactively.
+**Goal**: Capture a HAR file non-interactively, through the Python API. The CLI has no headless mode (ADR-2, decision
+D3): `har-capture get` always opens a browser and waits for the user to close it.
 
 **Preconditions**:
 
 - Target device is accessible from the CI environment
-- Credentials provided via command line or environment
-- No TTY available
+- The device needs no in-page login (a form or HNAP login cannot be filled headless); Basic-Auth credentials are passed
+  as `http_credentials`
+- A `timeout` is set — a headless capture without one raises `ValueError` before sending anything
 
 **Flow**:
 
-1. Script runs capture command
-1. System runs all pre-flight checks (browser, connectivity, session contamination, probes, auth)
-1. Browser launches, navigates to device
+1. Script calls `run_capture_workflow(target, headless=True, timeout=N, http_credentials=..., custom_patterns=...)`
+1. System runs the pre-flight checks (browser, connectivity, session contamination, probes, auth)
+1. Browser launches headless, navigates to the device
 1. Wait-for-data captures async requests
-1. Browser closes when page activity completes
-1. Sanitization runs with heuristic flagging; flagged values written to report (no TTY)
-1. Compressed HAR file is produced
-1. Script receives exit code 0 (success) or 1 (failure)
+1. Browser closes after `timeout` seconds and a final quiescence wait
+1. Sanitization runs with the given patterns; no review runs, so a file with flagged values records no review outcome
+1. Compressed HAR file is produced; the result's `capture_success` and `capture_error` report the outcome
 
 **Variations**:
 
-- Basic Auth device → `--username` and `--password` required
-- `timeout` and `headless` parameters are available via the Python API (`capture_device_har()`) but not exposed as CLI
-  flags
+- `capture_device_har(target, headless=True, timeout=N)` skips the workflow's pre-flight phases
+- `interactive=False` disables heuristic flagging
 
-**CLI Example**:
+**Python Example**:
 
-```bash
-har-capture get http://192.168.1.1 \
-    --username admin --password pass123 \
-    --patterns network-device --output captures/modem.har
+```python
+from har_capture.capture import run_capture_workflow
+from har_capture.patterns.loader import resolve_patterns_arg
+
+result = run_capture_workflow(
+    "http://192.168.1.1",
+    headless=True,
+    timeout=30,
+    http_credentials={"username": "admin", "password": "..."},
+    custom_patterns=str(resolve_patterns_arg("network-device")),
+)
 ```
 
 ______________________________________________________________________

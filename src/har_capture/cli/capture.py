@@ -127,8 +127,8 @@ def capture(
             check_browser_phase,
             check_connectivity_phase,
             check_session_phase,
+            run_auth_probe_phase,
             run_capture_phase,
-            run_probes_phase,
         )
     except ImportError:
         typer.echo("Capture requires Playwright. Install with: pip install har-capture[capture]", err=True)
@@ -203,7 +203,7 @@ def capture(
         if not minimal:
             typer.echo()
             typer.echo("Running auth probe (credentials provided)...")
-            result = run_probes_phase(result.target_url, result=result)
+            result = run_auth_probe_phase(result.target_url, result=result)
             if result.probe_data:
                 auth_probe = result.probe_data.get("auth_challenge", {})
                 auth_status = auth_probe.get("status_code", "?")

@@ -26,6 +26,7 @@ from har_capture.capture.browser import (
     _run_post_capture_pipeline,
     capture_device_har,
     filter_and_compress_har,
+    require_timeout_when_headless,
 )
 from har_capture.capture.connectivity import (
     check_basic_auth,
@@ -43,6 +44,7 @@ from har_capture.capture.probes import (
     probe_auth_challenge,
     probe_head_support,
     probe_icmp,
+    run_auth_probe,
     run_probes,
 )
 from har_capture.capture.workflow import (
@@ -56,6 +58,7 @@ from har_capture.capture.workflow import (
     check_browser_phase,
     check_connectivity_phase,
     check_session_phase,
+    run_auth_probe_phase,
     run_capture_phase,
     run_capture_workflow,
     run_probes_phase,
@@ -66,6 +69,7 @@ __all__ = [
     # Core capture
     "capture_device_har",
     "filter_and_compress_har",
+    "require_timeout_when_headless",
     "CaptureResult",
     "CaptureOptions",
     "CapturePathInfo",
@@ -87,11 +91,13 @@ __all__ = [
     "install_browser_deps",
     # Probes
     "run_probes",
+    "run_auth_probe",
     "probe_auth_challenge",
     "probe_head_support",
     "probe_icmp",
     "ProbeResult",
     "run_probes_phase",
+    "run_auth_probe_phase",
     # Workflow orchestration
     "CaptureWorkflowResult",
     "BrowserCheckResult",
