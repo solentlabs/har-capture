@@ -24,6 +24,7 @@ Dependencies:
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import re
 import urllib.parse
@@ -236,9 +237,9 @@ class TestSchemeRedactBranch:
         """A single token with no scheme/credential split → full redact."""
         assert sanitize_header_value("Authorization", "SoloToken") == "[REDACTED]"
 
-    def test_empty_value_full_redacts(self) -> None:
-        """An empty Authorization value is fully redacted (no token to preserve)."""
-        assert sanitize_header_value("Authorization", "") == "[REDACTED]"
+    def test_empty_value_kept(self) -> None:
+        """An empty Authorization value is kept: there is nothing to hide."""
+        assert sanitize_header_value("Authorization", "") == ""
 
     def test_lowercase_header_name_still_matches(self) -> None:
         """Header-name matching is case-insensitive."""
@@ -2253,6 +2254,22 @@ SANITIZE_HAR_SANITIZED_CRED_CASES = [
     ([_ENTRY([{"name": "Cookie", "value": "session=abc"}], [])],               [],
      "cookie_only_not_a_url_cred"),
 ]
+
+# A re-sanitized file: entry 1 held the credential, now AUTH_ in its URL.
+_SANITIZED_TOKEN_ENTRIES = [
+    {"request": {"url": "https://device.local/", "headers": [], "queryString": []}},
+    {"request": {"url": "https://device.local/status.html?login_AUTH_1a2b3c4d", "headers": [], "queryString": []}},
+]
+_ANNOTATED = {"entry_index": 1, "location": "url_query_param"}
+RESANITIZE_ANNOTATION_CASES = [
+    # (prior annotation,                         entries,                                          expected, desc)
+    ([_ANNOTATED],                               _SANITIZED_TOKEN_ENTRIES,                         [1],      "prior_kept"),
+    ([_ANNOTATED],                               _CRED_BARE_URL + _SANITIZED_TOKEN_ENTRIES[1:],   [0, 1],   "prior_merged_with_new"),
+    ([{"entry_index": 0, "location": "url_query_param"}], _CRED_BARE_URL,                           [0],      "prior_same_as_new_once"),
+    ([{"entry_index": 7}, {"entry_index": "1"}, {"entry_index": True}, "x", {"entry_index": -1}],
+                                                 _SANITIZED_TOKEN_ENTRIES,                         [],       "malformed_or_out_of_range_dropped"),
+    ("not-a-list",                               _SANITIZED_TOKEN_ENTRIES,                         [],       "non_list_prior_ignored"),
+]
 # fmt: on
 
 
@@ -2310,6 +2327,22 @@ class TestSanitizedCredentialAnnotation:
         # Confirm the URL was actually sanitized (placeholder is not valid base64 credential)
         result_url = result["log"]["entries"][1]["request"]["url"]
         assert "YWRtaW46cGFzcw==" not in result_url
+
+    @pytest.mark.parametrize(
+        ("prior", "entries", "expected", "desc"),
+        RESANITIZE_ANNOTATION_CASES,
+        ids=[c[3] for c in RESANITIZE_ANNOTATION_CASES],
+    )
+    def test_prior_annotation_kept(self, prior: list, entries: list, expected: list[int], desc: str) -> None:
+        """A sanitized file's annotation survives sanitizing it again.
+
+        The second run cannot recognize the ``AUTH_`` placeholder the first
+        wrote, so the prior entries are kept alongside any it finds itself.
+        """
+        har = {"log": {"entries": entries, "_har_capture": {"_sanitized_credentials": prior}}}
+        result, _ = sanitize_har(har, salt="test")
+        creds = result["log"]["_har_capture"]["_sanitized_credentials"]
+        assert creds == [{"entry_index": i, "location": "url_query_param"} for i in expected], desc
 
 
 # =============================================================================
@@ -4643,6 +4676,7 @@ FLAG_REACHABILITY_CASES = _HAR_FIXTURE["flag_reachability_cases"]["cases"]
 FLAG_LABEL_CASES = _HAR_FIXTURE["flag_label_cases"]["cases"]
 ENTRY_SECURITY_DETAILS_CASES = _HAR_FIXTURE["entry_security_details_cases"]["cases"]
 SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
+EMPTY_VALUE_CASES = _HAR_FIXTURE["empty_value_cases"]["cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4686,6 +4720,27 @@ class TestJsonIdentityBodies:
         """The same key rule applies to a JSON POST body."""
         post = {"mimeType": "application/json", "text": '{"StatusSoftwareSerialNum": "4131N12345678"}'}
         assert "4131N12345678" not in sanitize_post_data(post, Hasher.create("post"))["text"]
+
+
+class TestEmptyValues:
+    """An empty credential value is kept on every route, as the JSON route keeps it."""
+
+    @pytest.mark.parametrize("case", EMPTY_VALUE_CASES, ids=[c["id"] for c in EMPTY_VALUE_CASES])
+    def test_empty_value(self, case: dict) -> None:
+        request = {"method": "POST", "url": "http://192.168.100.1/login", "headers": [], "cookies": []}
+        request.update(copy.deepcopy(case["request"]))
+        entry = {"request": request, "response": {"status": 200, "headers": [], "content": {"text": ""}}}
+        result, report = sanitize_har({"log": {"entries": [entry]}}, salt="empty")
+
+        node: Any = result["log"]["entries"][0]["request"]
+        path, expected = case["check"]
+        for step in path:
+            node = node[step]
+        if expected.endswith("*"):
+            assert node.startswith(expected[:-1])
+        else:
+            assert node == expected
+        assert bool(report.auto_redacted_counts) == case.get("counted", False)
 
 
 class TestValuePassBodies:

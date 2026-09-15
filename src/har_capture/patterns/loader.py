@@ -454,7 +454,7 @@ def get_session_cookie_patterns(custom_path: Path | str | None = None) -> list[s
 
 
 def get_password_field_patterns(custom_path: Path | str | None = None) -> list[str]:
-    """Get POST-parameter name regexes that mark a credential submission.
+    """Get the field-name regexes that mark a request body as a credential submission.
 
     Args:
         custom_path: Optional path to custom capture settings

@@ -37,10 +37,10 @@ def display_completeness(
         )
 
         typer.echo("Capture coverage:")
-        typer.echo(f"  Requests:      {report.total_entries} ({report.unique_urls} unique URLs)")
-        typer.echo(f"  Methods:       {methods or 'none'}")
-        typer.echo(f"  POST requests: {report.post_count}")
-        typer.echo(f"  Set-Cookie:    {report.set_cookie_responses} response(s) set a cookie")
+        typer.echo(f"  Requests:               {report.total_entries} ({report.unique_urls} unique URLs)")
+        typer.echo(f"  Methods:                {methods or 'none'}")
+        typer.echo(f"  Credential submissions: {report.credential_submission_count}")
+        typer.echo(f"  Set-Cookie:             {report.set_cookie_responses} response(s) set a cookie")
         typer.echo()
 
     for warning in report.warnings:

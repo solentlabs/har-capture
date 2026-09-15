@@ -414,6 +414,13 @@ looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fle
 stops 480 of the sanitizer's own placeholders being hashed again (46 in POST JSON, 434 in responses), 27 empty passwords
 in POST JSON stay empty, and 4 look-alike values under a credential key are replaced (measured with this rule, 0.13.0).
 
+Every other route keeps an empty value the same way: an empty form field (`params` and urlencoded text), query
+parameter, cookie or credential header comes back empty and is not counted (`_redact_value()` returns it unchanged).
+Before 0.13.0 those routes wrote a placeholder for it, inventing a submission the capture never made — an empty default
+password became indistinguishable from a real one, and capture-completeness counted it as a login. Releases 0.8.2–0.10.2
+did the same in JSON: 19 fleet HNAP captures carry such a `FIELD_` value in the login challenge phase, whose password is
+empty on the wire.
+
 A value a **response** serves under a credential-named key is judged by its shape too (`credential_value_action()`,
 shared with `validate` and `check_for_pii`), because there the key is often a firmware translation table's label for UI
 text about credentials — `PAGE_GENERAL_SET_PASSWORD`, and in one table a bare `password` or `passphrase`. A button word
@@ -1365,6 +1372,11 @@ base64 alphabet and breaks regex-based detection in the sanitized HAR.
 
 - Empty list (`[]`) means no URL query param credentials were detected.
 - Always present after `sanitize_har` — even when empty.
+- Sanitizing a file that already carries the annotation keeps its entries (those naming an existing entry; malformed
+  items and indices past the entries are dropped) alongside the ones this run finds: the earlier run's `AUTH_`
+  placeholder is no longer recognizable, so without the merge a re-sanitized URL-token capture would lose the only
+  record of its login. `annotated_url_credential_entries()` (`patterns/redaction.py`) is the one reader, shared by the
+  merge, `validate` and [capture-completeness](VALIDATION_SPEC.md#capture-completeness-validation).
 
 ```python
 def _scan_url_credentials(entries: list) -> dict[int, str]:

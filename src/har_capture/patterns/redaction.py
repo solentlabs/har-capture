@@ -1274,6 +1274,35 @@ def iter_url_credentials(request: Mapping[str, Any]) -> Iterator[QueryCredential
             yield found
 
 
+def annotated_url_credential_entries(log: Mapping[str, Any]) -> set[int]:
+    """Return the entry indices a HAR's ``_sanitized_credentials`` annotation lists.
+
+    ``sanitize_har`` writes the annotation (``log._har_capture``) before it
+    replaces each URL credential with an ``AUTH_`` placeholder, which no scan
+    recognizes afterwards — so on a sanitized file the annotation is the only
+    record of which requests carried one. Items that are not objects, or whose
+    index is not an integer, are skipped; an index past the entries simply
+    matches none.
+
+    Args:
+        log: A HAR's ``log`` object
+
+    Returns:
+        The annotated entry indices
+    """
+    meta = log.get("_har_capture")
+    items = meta.get("_sanitized_credentials") if isinstance(meta, dict) else None
+    if not isinstance(items, list):
+        return set()
+    return {
+        item["entry_index"]
+        for item in items
+        if isinstance(item, dict)
+        and isinstance(item.get("entry_index"), int)
+        and not isinstance(item["entry_index"], bool)
+    }
+
+
 def is_base64_decodable_text(value: str) -> bool:
     """Check if a value is base64 that decodes to printable text.
 

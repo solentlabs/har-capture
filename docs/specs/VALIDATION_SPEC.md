@@ -461,38 +461,75 @@ def analyze_capture_completeness(har, custom_patterns_path=None) -> CaptureCompl
 ```python
 @dataclass
 class CaptureCompletenessReport:
-    total_entries: int                        # Requests captured
-    method_counts: dict[str, int]             # Count per HTTP method
-    unique_urls: int                          # Distinct request URLs
-    set_cookie_responses: int                 # Responses carrying Set-Cookie (not proof of a session)
-    first_request_session_cookies: list[str]  # Session cookies already on request #1
-    credential_post_counts: dict[str, int]    # Credential submissions per request URL
-    warnings: list[CompletenessWarning]       # Gaps found (empty == complete)
+    total_entries: int                            # Requests captured
+    method_counts: dict[str, int]                 # Count per HTTP method
+    unique_urls: int                              # Distinct request URLs
+    set_cookie_responses: int                     # Responses carrying Set-Cookie (not proof of a session)
+    first_request_session_cookies: list[str]      # Session cookies already on request #1
+    credential_submission_counts: dict[str, int]  # Credential submissions per request URL (see Keys)
+    warnings: list[CompletenessWarning]           # Gaps found (empty == complete)
 
-    post_count: int             # property — method_counts["POST"]
-    credential_post_count: int  # property — total credential submissions
-    complete: bool              # property — no warnings
+    credential_submission_count: int  # property — total credential submissions
+    complete: bool                    # property — no warnings
 ```
 
 Three gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
 
-| Code                     | Trigger                                          | Meaning                                                                                                                                                                                          |
-| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mid_session_capture`    | Session cookie present on the **first** request  | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
-| `no_post_requests`       | Zero `POST` entries                              | No form or auth submission was recorded                                                                                                                                                          |
-| `single_credential_post` | Exactly one credential submission in the capture | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
+| Code                           | Trigger                                                              | Meaning                                                                                                                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mid_session_capture`          | Session cookie present on the **first** request                      | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
+| `no_credential_submission`     | No credential submission, and no `POST`/`PUT`/`PATCH` request at all | Nothing that could carry a login was recorded                                                                                                                                                    |
+| `single_credential_submission` | Exactly one credential submission in the capture                     | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
 
 "First request" is resolved by `startedDateTime` when every entry carries one (index-tiebroken for same-millisecond
 stamps), falling back to file order otherwise — foreign HARs are not guaranteed to be sorted, and the mid-session signal
 depends on genuinely reading the earliest request.
 
-A **credential submission** is a POST whose `postData` carries a parameter with a password-shaped name (parsed `params`
-array, else an urlencoded `text` body; JSON bodies are not inspected). Names are matched against
-`password_fields.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields) — names
-only, so the check works identically on raw and sanitized HARs. Two or more submissions suppress the warning: the tool
-cannot verify outcomes, so a repeat submission is taken as the deliberate wrong-password attempt the contributor
-instructions call for.
+A **credential submission** is a request carrying any of:
+
+- a `POST`, `PUT` or `PATCH` body with a **non-empty** value under a password-shaped field name: the parsed `params`
+  array, else the `text` read by its shape, not its declared type — a JSON object or array is walked by key through
+  nested objects and arrays to `JSON_MAX_DEPTH` (50), any other text is read as urlencoded. Text that looks like JSON
+  but does not parse is not read (`parse_qsl` would make field names out of its values). Only string values count: a
+  boolean or number under such a key is a setting (`showPassword: true`), and a container is walked into;
+- a base64 `user:pass` URL credential (`iter_url_credentials()`, every shape in
+  [SANITIZATION_SPEC URL Sanitization](SANITIZATION_SPEC.md#url-sanitization)) or, on a sanitized file, an entry the
+  `log._har_capture._sanitized_credentials` annotation lists (`annotated_url_credential_entries()`) — the sanitizer's
+  `AUTH_` placeholder is no longer recognizable as a credential;
+- a `Basic` or `Digest` `Authorization` value not seen on an earlier request. A browser resends the same Basic value on
+  every request to the realm (9 of the 15 CMM fleet captures with Basic auth resend it 3×), while a refused attempt
+  carries a different value.
+
+Each request counts once, whichever of these it carries. Field names are matched against `password_fields.name_patterns`
+in [`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields).
+Every signal read survives sanitization — field names, whether a value is empty (the sanitizer keeps an empty value and
+never empties one), the `Authorization` scheme, distinct header values (hashed one placeholder per value), and the
+annotation — so the check reports the same gaps on raw and sanitized HARs; the `TestSanitizedParity` rows enforce it.
+Two or more submissions suppress the single-submission warning: the tool cannot verify outcomes, so a repeat submission
+is taken as the deliberate wrong-password attempt the contributor instructions call for. An empty password is not a
+submission, so HNAP's first login phase (`LoginPassword: ""`, the challenge request) is not counted and its second phase
+is.
+
+**Why "no submission" also needs no write request.** Many logins cannot be read by field name: across the 480 CMM fleet
+captures, 117 hold a `POST` but no readable submission — HNAP captures holding only the challenge phase (27), encrypted
+`AuthData`/`EncryptData` form logins (19), encrypted LuCI `arguments` (13). Warning "re-record" on those would repeat
+the cable_modem_monitor #213 failure (a JSON `PUT` login told "No POST requests were captured... Re-record"), so the
+no-submission gap is reported only when nothing in the capture could have carried a login.
+
+**Keys.** `credential_submission_counts` is keyed by the request URL with its query, fragment and userinfo dropped
+(split by hand; `urlparse` raises on an unbalanced IPv6 bracket). Those parts can carry the credential itself, and `get`
+prints the single-submission warning, which names the URL, for the raw capture.
+
+**Accepted limits** (fleet counts over the 480 CMM captures):
+
+- Basic/Digest values are told apart by value, so a file sanitized with static placeholders (`--salt none`, one
+  `***AUTH***` for every value) counts every attempt as one — 0 fleet captures carry Basic auth under static
+  placeholders (6 hashed, 9 raw). A Digest value differs on every request (its `uri`/`nc`/`response` change), so each
+  request counts and the single-submission nudge never fires for Digest — 0 fleet captures use Digest.
+- An HNAP capture whose challenge phase carries a value counts two submissions for one login, suppressing the nudge — a
+  false negative costs a nudge, never evidence. 25 fleet captures do; 19 of them hold a `FIELD_` placeholder that
+  har-capture 0.8.2–0.10.2 wrote over the empty value (the sanitizer now keeps an empty value on every route).
+- XML and multipart bodies are not read (0 fleet XML login bodies); GET query-string passwords are not read (0 fleet).
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
 [`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields),

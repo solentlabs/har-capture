@@ -1,5 +1,5 @@
 {
-  "_comment": "HAR fixtures for capture-completeness validation. The mid-session cases reproduce cable_modem_monitor issue #120, where a PHPSESSID cookie on the first request meant the login exchange happened before recording started.",
+  "_comment": "HAR fixtures for capture-completeness validation. The mid-session cases reproduce cable_modem_monitor issue #120, where a PHPSESSID cookie on the first request meant the login exchange happened before recording started. The submission cases reproduce cable_modem_monitor #213 (a PUT JSON login told to re-record).",
   "clean_login_flow": {
     "log": {
       "entries": [
@@ -32,6 +32,26 @@
           },
           "response": {
             "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/api/v1/session/login",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "text": "{\"password\":\"wrong-key\"}"
+            }
+          },
+          "response": {
+            "status": 401,
             "headers": []
           }
         },
@@ -158,7 +178,7 @@
       ]
     }
   },
-  "mid_session_and_no_post": {
+  "mid_session_and_no_submission": {
     "log": {
       "entries": [
         {
@@ -180,7 +200,7 @@
       ]
     }
   },
-  "no_post_requests": {
+  "no_credential_submission": {
     "log": {
       "entries": [
         {
@@ -574,7 +594,7 @@
       ]
     }
   },
-  "single_credential_post": {
+  "single_credential_submission": {
     "log": {
       "entries": [
         {
@@ -628,7 +648,7 @@
       ]
     }
   },
-  "two_credential_posts": {
+  "two_credential_submissions": {
     "log": {
       "entries": [
         {
@@ -744,7 +764,7 @@
       ]
     }
   },
-  "credential_post_urlencoded_text": {
+  "credential_urlencoded_text": {
     "log": {
       "entries": [
         {
@@ -777,7 +797,7 @@
       ]
     }
   },
-  "credential_post_json_body_not_counted": {
+  "credential_json_body": {
     "log": {
       "entries": [
         {
@@ -809,5 +829,1134 @@
         }
       ]
     }
-  }
+  },
+  "put_json_login": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "url": "http://192.168.100.1/actionHandler/ajaxSet_login.php",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"username\":\"admin\",\"password\":\"example-pw\",\"ipAddress\":\"192.168.100.10\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cmconnectionstatus.php?ct_9f8e7d6c5b4a",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "url": "http://192.168.100.1/actionHandler/ajaxSet_logout.php",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"DoLogOut\":1}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "hnap_two_phase": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/HNAP1/",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"Login\":{\"Action\":\"request\",\"Username\":\"admin\",\"LoginPassword\":\"\",\"Captcha\":\"\",\"PrivateLogin\":\"LoginPassword\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/HNAP1/",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"Login\":{\"Action\":\"login\",\"Username\":\"admin\",\"LoginPassword\":\"0A1B2C3D4E5F60718293A4B5C6D7E8F9\",\"Captcha\":\"\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/HNAP1/",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"GetMultipleHNAPs\":{\"GetCustomerStatusStartupSequence\":\"\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "basic_auth_only": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 401,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+              }
+            ],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/DocsisStatus.htm",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+              }
+            ],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "basic_auth_refused_then_accepted": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 401,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46d3JvbmctcHc="
+              }
+            ],
+            "cookies": []
+          },
+          "response": {
+            "status": 401,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+              }
+            ],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/DocsisStatus.htm",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+              }
+            ],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "url_token_raw": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cmconnectionstatus.html?login_YWRtaW46ZXhhbXBsZS1wdw==",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cmconnectionstatus.html?ct_9f8e7d6c5b4a",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "url_token_sanitized_metadata": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cmconnectionstatus.html?login_AUTH_1a2b3c4d",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cmconnectionstatus.html?ct_9f8e7d6c5b4a",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ],
+      "_har_capture": {
+        "_sanitized_credentials": [
+          {
+            "entry_index": 1,
+            "location": "url_query_param"
+          }
+        ]
+      }
+    }
+  },
+  "put_without_credential": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "PUT",
+            "url": "http://192.168.100.1/api/v1/lang/1/language",
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "cookies": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"language\":{\"language\":\"en\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "credential_submission_cases": [
+    {
+      "id": "form_params",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "params": [
+              {
+                "name": "loginPassword",
+                "value": "x1"
+              }
+            ]
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "form_params_empty_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "params": [
+              {
+                "name": "loginPassword",
+                "value": ""
+              }
+            ]
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "form_params_no_password_name",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "params": [
+              {
+                "name": "buttonSelect",
+                "value": "2"
+              }
+            ]
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "urlencoded_text",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "user=admin&pwd=x1"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "urlencoded_empty_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "user=admin&pwd="
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_flat",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"username\":\"admin\",\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "json_value_holding_equals",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\": \"a=b\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "json_nested_empty_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"Login\":{\"LoginPassword\":\"\"}}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_nested_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"Login\":{\"LoginPassword\":\"ABCDEF12\"}}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "json_array_of_objects",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "[{\"method\":\"login\",\"params\":{\"passwd\":\"x1\"}}]"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "json_container_under_password_key",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"passwordPolicy\":{\"minLength\":8}}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_number_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\":12345678}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_boolean_value",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"showPassword\":true}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_past_depth_limit",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"a\":{\"password\":\"x1\"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_read_by_shape_not_type",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "mimeType": "application/x-www-form-urlencoded",
+            "text": "{\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "body_without_text",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "params": []
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "json_shaped_text_not_parsing",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"note\": \"a=b&password=x1\""
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "put_json",
+      "requests": [
+        {
+          "method": "PUT",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "patch_json",
+      "requests": [
+        {
+          "method": "PATCH",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "lowercase_method",
+      "requests": [
+        {
+          "method": "put",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "delete_body_not_a_submission",
+      "requests": [
+        {
+          "method": "DELETE",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "text": "{\"password\":\"x1\"}"
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "get_body_not_a_submission",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "params": [
+              {
+                "name": "password",
+                "value": "x1"
+              }
+            ]
+          }
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "url_credential_prefixed",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html?login_YWRtaW46ZXhhbXBsZS1wdw==",
+          "headers": []
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "url_credential_bare",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html?YWRtaW46ZXhhbXBsZS1wdw==",
+          "headers": []
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "url_credential_query_array",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html",
+          "headers": [],
+          "queryString": [
+            {
+              "name": "auth",
+              "value": "YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "url_opaque_token_not_a_credential",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html?ct_9f8e7d6c5b4a",
+          "headers": []
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "sanitized_metadata",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html?login_AUTH_1a2b3c4d",
+          "headers": []
+        }
+      ],
+      "sanitized_credentials": [
+        {
+          "entry_index": 0,
+          "location": "url_query_param"
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "sanitized_metadata_malformed",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html",
+          "headers": []
+        }
+      ],
+      "sanitized_credentials": [
+        {
+          "entry_index": "0"
+        },
+        {
+          "entry_index": true
+        },
+        {
+          "entry_index": 7
+        },
+        "not-a-dict"
+      ],
+      "count": 0
+    },
+    {
+      "id": "url_credential_and_metadata_same_entry",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/status.html?login_YWRtaW46ZXhhbXBsZS1wdw==",
+          "headers": []
+        }
+      ],
+      "sanitized_credentials": [
+        {
+          "entry_index": 0,
+          "location": "url_query_param"
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_header",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_header_resent",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "url": "http://d/a",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "url": "http://d/b",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_header_two_values",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46d3JvbmctcHc="
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
+    {
+      "id": "basic_scheme_case_insensitive",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_header_name_case_insensitive",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_scheme_without_credentials",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic "
+            }
+          ]
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "digest_header",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Digest username=\"admin\", realm=\"r\", nonce=\"n1\", uri=\"/\", response=\"0a1b2c\""
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "bearer_header_not_a_submission",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiJ9.e30.x"
+            }
+          ]
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "schemeless_header_not_a_submission",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "proxy_authorization_not_a_submission",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Proxy-Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        }
+      ],
+      "count": 0
+    },
+    {
+      "id": "form_login_carrying_basic_header",
+      "requests": [
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ],
+          "postData": {
+            "params": [
+              {
+                "name": "pwd",
+                "value": "x1"
+              }
+            ]
+          }
+        }
+      ],
+      "count": 1
+    },
+    {
+      "id": "basic_then_form_login",
+      "requests": [
+        {
+          "method": "GET",
+          "url": "http://d/login",
+          "headers": [
+            {
+              "name": "Authorization",
+              "value": "Basic YWRtaW46ZXhhbXBsZS1wdw=="
+            }
+          ]
+        },
+        {
+          "method": "POST",
+          "url": "http://d/login",
+          "headers": [],
+          "postData": {
+            "params": [
+              {
+                "name": "pwd",
+                "value": "x1"
+              }
+            ]
+          }
+        }
+      ],
+      "count": 2
+    }
+  ],
+  "submission_url_cases": [
+    {
+      "id": "plain",
+      "url": "http://192.168.100.1/goform/Login",
+      "shown": "http://192.168.100.1/goform/Login"
+    },
+    {
+      "id": "query_dropped",
+      "url": "http://192.168.100.1/goform/Login?id=1",
+      "shown": "http://192.168.100.1/goform/Login"
+    },
+    {
+      "id": "url_credential_dropped",
+      "url": "http://192.168.100.1/status.html?login_YWRtaW46ZXhhbXBsZS1wdw==",
+      "shown": "http://192.168.100.1/status.html"
+    },
+    {
+      "id": "hash_routed_query_dropped",
+      "url": "http://192.168.100.1/#/login?pwd=x1",
+      "shown": "http://192.168.100.1/"
+    },
+    {
+      "id": "userinfo_dropped",
+      "url": "http://admin:example-pw@192.168.100.1/login",
+      "shown": "http://192.168.100.1/login"
+    },
+    {
+      "id": "user_only_userinfo_dropped",
+      "url": "http://admin@192.168.100.1/login",
+      "shown": "http://192.168.100.1/login"
+    },
+    {
+      "id": "userinfo_holding_at_sign",
+      "url": "http://admin:p@ss@192.168.100.1/login",
+      "shown": "http://192.168.100.1/login"
+    },
+    {
+      "id": "unbalanced_ipv6_bracket",
+      "url": "http://[fe80::1/login?pwd=x1",
+      "shown": "http://[fe80::1/login"
+    }
+  ]
 }

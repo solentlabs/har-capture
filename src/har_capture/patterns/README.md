@@ -97,7 +97,8 @@ Defines patterns for recognizing already-redacted values (to avoid double-flaggi
 
 ### capture.json
 
-Defines file extensions to filter during HAR capture, and the cookie names that mark an established login session.
+Defines file extensions to filter during HAR capture, the cookie names that mark an established login session, and the
+field names that mark a credential submission.
 
 ```json
 {
@@ -109,6 +110,9 @@ Defines file extensions to filter during HAR capture, and the cookie names that 
   },
   "session_cookies": {
     "name_patterns": ["^phpsessid$", "^jsessionid$"]
+  },
+  "password_fields": {
+    "name_patterns": ["pass(?:word|wd|phrase)?", "pwd"]
   }
 }
 ```
@@ -118,6 +122,8 @@ Defines file extensions to filter during HAR capture, and the cookie names that 
 - `bloat_extensions` categories can be selectively included via CLI flags (`--include-fonts`, etc.)
 - `session_cookies.name_patterns`: case-insensitive full-match regexes on cookie *names*, used by capture-completeness
   validation to warn that a recording began mid-session
+- `password_fields.name_patterns`: case-insensitive substring regexes on field *names* (form params, urlencoded text,
+  JSON keys), used by capture-completeness validation to count credential submissions
 
 ## Custom Patterns
 

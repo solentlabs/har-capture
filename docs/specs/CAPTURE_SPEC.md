@@ -667,8 +667,8 @@ Before sanitization, `analyze_capture_completeness()` inspects the raw HAR and a
 and the first request is the mid-session signal.
 
 The check itself lives in `validation/` and is shared with `har-capture sanitize` / `har-capture validate` — see
-[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the two warning codes, and
-the ordering rule.
+[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the three warning codes,
+what counts as a credential submission, and the ordering rule.
 
 ### Sanitization
 

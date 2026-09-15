@@ -740,6 +740,18 @@
       {"id": "labeled_values_hasher_only", "mime": "text/plain",           "text": "Serial Number: 4131N12345678 <span>Password:</span><span>hunter2x</span>", "absent": ["4131N12345678", "hunter2x"], "present": ["Serial Number: SERIAL_", "<span>Password:</span><span>PASS_"]}
     ]
   },
+  "empty_value_cases": {
+    "_comment": "An empty value under a credential name, header or cookie is kept and not counted: there is nothing to hide, and a placeholder would invent a value the capture never sent (an empty default password). The JSON route always kept it; the form, query, cookie and header routes wrote a placeholder. The last row is the other side of the rule. check: [path into the sanitized request, expected value, or a prefix ending in '*'].",
+    "cases": [
+      {"id": "form_params",       "request": {"postData": {"params": [{"name": "loginName", "value": "admin"}, {"name": "loginPassword", "value": ""}]}}, "check": [["postData", "params", 1, "value"], ""]},
+      {"id": "form_text",         "request": {"postData": {"mimeType": "application/x-www-form-urlencoded", "text": "loginName=admin&loginPassword="}}, "check": [["postData", "text"], "loginName=admin&loginPassword="]},
+      {"id": "query_array",       "request": {"queryString": [{"name": "password", "value": ""}]},                                        "check": [["queryString", 0, "value"], ""]},
+      {"id": "query_url",         "request": {"url": "http://192.168.100.1/login.cgi?password=&page=1"},                                  "check": [["url"], "http://192.168.100.1/login.cgi?password=&page=1"]},
+      {"id": "cookie_array",      "request": {"cookies": [{"name": "sessionid", "value": ""}]},                                          "check": [["cookies", 0, "value"], ""]},
+      {"id": "authorization",     "request": {"headers": [{"name": "Authorization", "value": ""}]},                                      "check": [["headers", 0, "value"], ""]},
+      {"id": "non_empty_redacted", "request": {"postData": {"params": [{"name": "loginPassword", "value": "x1"}]}},                      "check": [["postData", "params", 0, "value"], "FIELD_*"], "counted": true}
+    ]
+  },
   "cross_route_correlation_cases": {
     "_comment": "One value in bodies of every route gets one placeholder: the engines share regexes, validity rules, pass order and hasher, so a consumer can follow it across the capture. template holds {v}; placeholder is the regex its replacement must match, in every body; a case's own bodies replace the shared ones (a value two passes could claim: a MAC after a serial label, an address in a credential's element).",
     "cases": [

@@ -34,6 +34,7 @@ from har_capture.patterns.redaction import (
     MAC_RE,
     SET_COOKIE_HEADERS,
     URL_VALUED_HEADERS,
+    annotated_url_credential_entries,
     certificate_name_macs,
     cookie_segment_actions,
     credential_value_action,
@@ -1236,11 +1237,7 @@ def validate_har(
     # Entries whose URL credentials were sanitized by har-capture — the sanitizer
     # already applied the server-token preservation heuristic to their response
     # bodies, so re-running the bare base64 check here would be a false positive.
-    url_cred_entry_indices: set[int] = {
-        loc["entry_index"]
-        for loc in log.get("_har_capture", {}).get("_sanitized_credentials", [])
-        if isinstance(loc, dict) and isinstance(loc.get("entry_index"), int)
-    }
+    url_cred_entry_indices = annotated_url_credential_entries(log)
 
     for i, entry in enumerate(entries):
         request = entry.get("request", {})

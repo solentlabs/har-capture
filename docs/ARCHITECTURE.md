@@ -119,7 +119,7 @@ graph TD
     subgraph process[Post-Capture Processing]
         direction TB
         meta[Inject metadata + pre_capture_cookies] --> strip[Strip browser-internal entries<br>chrome:// etc.]
-        strip --> complete[Completeness check<br>mid-session? any POSTs? refused login?]
+        strip --> complete[Completeness check<br>mid-session? any login submitted? refused login?]
         complete --> sanitize[Pass 1: Auto-sanitize PII]
         sanitize --> filter[Filter bloat file types]
         filter --> compress[Gzip compress]
@@ -208,9 +208,9 @@ The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. S
 **Completeness check**: a HAR that omits the auth exchange still looks structurally complete, so
 [`analyze_capture_completeness()`](specs/VALIDATION_SPEC.md#capture-completeness-validation) reports what the capture
 does and does not contain — warning when a session cookie on the first request shows recording began mid-session, when
-no POST was captured at all, and when exactly one credential submission was captured (no deliberately refused login on
-file). It runs on the raw HAR (bloat filtering can drop the true first entry) and **only warns**: captures are immutable
-evidence, so nothing is mutated or rejected.
+nothing that could carry a login was captured at all, and when exactly one credential submission was captured (no
+deliberately refused login on file). It runs on the raw HAR (bloat filtering can drop the true first entry) and **only
+warns**: captures are immutable evidence, so nothing is mutated or rejected.
 
 ## Sanitization Pipeline
 

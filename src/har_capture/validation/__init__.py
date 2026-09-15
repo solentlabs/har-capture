@@ -18,8 +18,8 @@ from har_capture.validation.artifacts import (
 )
 from har_capture.validation.completeness import (
     MID_SESSION_CAPTURE,
-    NO_POST_REQUESTS,
-    SINGLE_CREDENTIAL_POST,
+    NO_CREDENTIAL_SUBMISSION,
+    SINGLE_CREDENTIAL_SUBMISSION,
     CaptureCompletenessReport,
     CompletenessWarning,
     analyze_capture_completeness,
@@ -54,8 +54,8 @@ __all__ = [
     "CaptureCompletenessReport",
     "CompletenessWarning",
     "MID_SESSION_CAPTURE",
-    "NO_POST_REQUESTS",
-    "SINGLE_CREDENTIAL_POST",
+    "NO_CREDENTIAL_SUBMISSION",
+    "SINGLE_CREDENTIAL_SUBMISSION",
     # PII leak detection
     "MAC_PATTERN",
     "SENSITIVE_FIELDS",

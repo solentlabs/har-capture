@@ -39,6 +39,7 @@ from har_capture.patterns import (
     JsonObjectWithDuplicates,
     QueryCredential,
     QueryPayload,
+    annotated_url_credential_entries,
     certificate_name_macs,
     classify_identity_field,
     cookie_segment_actions,
@@ -554,8 +555,13 @@ def _redact_value(
         collector: Optional collector to record the redaction
 
     Returns:
-        Hashed value if hasher provided, otherwise REDACTED placeholder
+        Hashed value if hasher provided, otherwise REDACTED placeholder;
+        an empty value comes back empty
     """
+    if value == "":
+        # Nothing to hide, and a placeholder would invent a value the capture
+        # never sent (an empty default password), as the JSON route never has.
+        return value
     if collector:
         collector.record_auto_redaction(category.lower())
     placeholder = hasher.hash_generic(value, category) if hasher else REDACTED
@@ -2468,8 +2474,11 @@ def sanitize_har(
         client_side = _detect_client_side_cookies(log["entries"])
         meta = log.setdefault("_har_capture", {})
         meta["_client_side_cookies"] = client_side
+        # A file sanitized before keeps its annotation: this run cannot
+        # recognize the AUTH_ placeholders the earlier one wrote.
+        prior = {i for i in annotated_url_credential_entries(log) if 0 <= i < len(log["entries"])}
         meta["_sanitized_credentials"] = [
-            {"entry_index": i, "location": "url_query_param"} for i in url_credentials
+            {"entry_index": i, "location": "url_query_param"} for i in sorted(prior | url_credentials.keys())
         ]
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on

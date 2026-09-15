@@ -511,7 +511,7 @@ class TestCompletenessReporting:
         Sanitization replaces the cookie *value* but keeps the *name*, which
         is all the mid-session check reads.
         """
-        har = self._write(tmp_path, "mid_session_and_no_post", "mid.har")
+        har = self._write(tmp_path, "mid_session_and_no_submission", "mid.har")
 
         result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
 
@@ -526,7 +526,7 @@ class TestCompletenessReporting:
         result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
 
         assert result.exit_code == 0
-        assert "POST requests: 2" in result.output
+        assert "Credential submissions: 2" in result.output
         assert "Recording began mid-session" not in result.output
 
 

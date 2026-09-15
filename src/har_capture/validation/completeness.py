@@ -7,7 +7,9 @@ A HAR missing the auth exchange still looks complete — it parses, the
 entries are well-formed, the tool reports success — and downstream an auth
 config gets hand-authored from evidence that was never in the file. Two
 failure modes produce that: recording that began mid-session (the browser
-was already logged in), and a capture holding no submission at all.
+was already logged in), and a capture holding no submission at all. A third
+gap is a capture holding exactly one credential submission: the refused
+login, as valuable as the success, was never recorded.
 
 Warns only. Captures are immutable evidence; nothing here mutates or
 rejects a HAR.
@@ -22,16 +24,32 @@ from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 from har_capture.patterns import (
+    JSON_MAX_DEPTH,
+    annotated_url_credential_entries,
     compile_pattern,
     get_password_field_patterns,
     get_session_cookie_patterns,
+    iter_url_credentials,
+    parse_json_container,
 )
 
 MID_SESSION_CAPTURE = "mid_session_capture"
-NO_POST_REQUESTS = "no_post_requests"
-SINGLE_CREDENTIAL_POST = "single_credential_post"
+NO_CREDENTIAL_SUBMISSION = "no_credential_submission"
+SINGLE_CREDENTIAL_SUBMISSION = "single_credential_submission"
+
+# Methods whose body can submit a login: a form, or JSON (the SB8200 PHP
+# firmware of cable_modem_monitor #213 logs in with a JSON PUT).
+_SUBMISSION_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+# Authorization schemes whose value is the credential itself (RFC 7617,
+# RFC 7616). A Bearer token presents a session already established.
+_CREDENTIAL_SCHEMES = frozenset({"basic", "digest"})
+
+# Userinfo ahead of the host, up to its last '@' (a password can hold one).
+_USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@")
 
 
 @dataclass(frozen=True)
@@ -63,11 +81,13 @@ class CaptureCompletenessReport:
         first_request_session_cookies: Session-cookie names on the first
             request: the mid-session signal. "First" is by
             ``startedDateTime`` when every entry has one, else file order.
-        credential_post_counts: Number of credential submissions (POSTs
-            carrying a password-named parameter) per request URL. Exactly
-            one submission in the whole capture means no refused login was
-            recorded — auth-failure evidence is as valuable as the success
-            and cannot be reconstructed later.
+        credential_submission_counts: Number of credential submissions per
+            request URL (query, fragment and userinfo dropped — they can
+            carry the credential, and ``get`` prints this for the raw
+            capture). See ``analyze_capture_completeness`` for what counts.
+            Exactly one submission in the whole capture means no refused
+            login was recorded — auth-failure evidence is as valuable as the
+            success and cannot be reconstructed later.
         warnings: Gaps found; empty when the capture looks complete
     """
 
@@ -76,18 +96,13 @@ class CaptureCompletenessReport:
     unique_urls: int = 0
     set_cookie_responses: int = 0
     first_request_session_cookies: list[str] = field(default_factory=list)
-    credential_post_counts: dict[str, int] = field(default_factory=dict)
+    credential_submission_counts: dict[str, int] = field(default_factory=dict)
     warnings: list[CompletenessWarning] = field(default_factory=list)
 
     @property
-    def credential_post_count(self) -> int:
+    def credential_submission_count(self) -> int:
         """Total credential submissions across all URLs."""
-        return sum(self.credential_post_counts.values())
-
-    @property
-    def post_count(self) -> int:
-        """Number of POST requests captured."""
-        return self.method_counts.get("POST", 0)
+        return sum(self.credential_submission_counts.values())
 
     @property
     def complete(self) -> bool:
@@ -148,44 +163,99 @@ def _compile_password_field_patterns(
     return [pattern for pattern in compiled if pattern is not None]
 
 
-def _post_param_names(request: dict[str, Any]) -> list[str]:
-    """Collect POST parameter names from a request's postData.
+def _is_password_name(name: str, patterns: list[re.Pattern[str]]) -> bool:
+    """True if a field name matches a password-field pattern."""
+    return any(pattern.search(name) for pattern in patterns)
 
-    Reads the parsed ``params`` array when present, else parses an
-    urlencoded ``text`` body. JSON bodies are not inspected — the devices
-    this warning serves submit login forms urlencoded, and a false
-    negative here only suppresses a nudge, never evidence.
+
+def _json_has_password(data: dict[str, Any] | list[Any], patterns: list[re.Pattern[str]]) -> bool:
+    """True if a parsed JSON body holds a non-empty string under a password-named key.
+
+    Walks nested objects and arrays (an HNAP login nests its fields under
+    ``Login``) to ``JSON_MAX_DEPTH``, the depth the sanitizer and validator
+    read to. A non-string value is not a submission: containers are walked
+    into, and a boolean or number under such a key is a setting
+    (``showPassword: true``).
+    """
+    stack: list[tuple[Any, int]] = [(data, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > JSON_MAX_DEPTH:
+            continue
+        members = node.items() if isinstance(node, dict) else ((None, value) for value in node)
+        for key, value in members:
+            if isinstance(value, str):
+                if value and key is not None and _is_password_name(str(key), patterns):
+                    return True
+            elif isinstance(value, dict | list):
+                stack.append((value, depth + 1))
+    return False
+
+
+def _body_has_password(request: dict[str, Any], patterns: list[re.Pattern[str]]) -> bool:
+    """True if a request body carries a non-empty value under a password-named field.
+
+    Reads the parsed ``params`` array when present, else the ``text`` by its
+    shape, not its declared type: a JSON object or array is walked by key,
+    other text is read as urlencoded. Text that looks like JSON but does not
+    parse is not read at all — ``parse_qsl`` would make field names out of
+    its values. Only names and emptiness are read, and sanitization keeps
+    both (it never empties a value, and keeps an empty one), so the answer
+    is the same on raw and sanitized HARs.
     """
     post_data = request.get("postData")
     if not isinstance(post_data, dict):
-        return []
+        return False
 
     params = post_data.get("params")
     if isinstance(params, list) and params:
-        return [str(p.get("name", "")) for p in params if isinstance(p, dict)]
+        return any(
+            isinstance(param, dict)
+            and isinstance(param.get("value"), str)
+            and bool(param["value"])
+            and _is_password_name(str(param.get("name", "")), patterns)
+            for param in params
+        )
 
     text = post_data.get("text")
-    if isinstance(text, str) and text and "=" in text:
-        # A JSON body containing "=" (inside a value) would otherwise be
-        # fed to parse_qsl and yield garbage names — some containing the
-        # very keywords we match on, making the count input-dependent.
-        if text.lstrip().startswith(("{", "[")):
-            return []
-        from urllib.parse import parse_qsl
-
-        return [name for name, _ in parse_qsl(text, keep_blank_values=True)]
-    return []
-
-
-def _is_credential_post(request: dict[str, Any], patterns: list[re.Pattern[str]]) -> bool:
-    """True if the request is a POST carrying a password-named parameter.
-
-    Reads parameter *names* only, so it works identically on raw and
-    sanitized HARs (sanitization redacts values, never names).
-    """
-    if str(request.get("method") or "").upper() != "POST":
+    if not isinstance(text, str) or not text:
         return False
-    return any(pattern.search(name) for name in _post_param_names(request) for pattern in patterns)
+    parsed = parse_json_container(text)
+    if parsed is not None:
+        return _json_has_password(parsed, patterns)
+    if text.lstrip().startswith(("{", "[")):
+        return False
+    return any(
+        value and _is_password_name(name, patterns) for name, value in parse_qsl(text, keep_blank_values=True)
+    )
+
+
+def _credential_header_values(request: dict[str, Any]) -> list[str]:
+    """Return the Basic/Digest ``Authorization`` values a request carries.
+
+    The whole value is the identity of one submission: a browser resends the
+    same Basic value on every request to the realm, and a refused attempt
+    carries a different one. Sanitization hashes each value to its own
+    placeholder, so distinct values stay distinct.
+    """
+    values: list[str] = []
+    for header in request.get("headers") or []:
+        if not isinstance(header, dict) or str(header.get("name", "")).lower() != "authorization":
+            continue
+        value = str(header.get("value", "")).strip()
+        scheme, _, credentials = value.partition(" ")
+        if scheme.lower() in _CREDENTIAL_SCHEMES and credentials.strip():
+            values.append(value)
+    return values
+
+
+def _submission_url(url: str) -> str:
+    """Return a request URL without its query, fragment or userinfo.
+
+    Split by hand rather than with ``urlparse``, which raises on a URL it
+    cannot parse (an unbalanced IPv6 bracket).
+    """
+    return _USERINFO_RE.sub(r"\1", re.split(r"[?#]", url, maxsplit=1)[0])
 
 
 def _has_set_cookie(response: dict[str, Any]) -> bool:
@@ -229,8 +299,24 @@ def analyze_capture_completeness(
 
     On the capture path this runs against the raw HAR before bloat
     filtering, which can remove the true first entry. It is equally valid
-    against a sanitized HAR from any source: cookie *values* are redacted
-    by sanitization but names survive, and names are all this reads.
+    against a sanitized HAR from any source: every signal read here survives
+    sanitization — cookie and field names, whether a value is empty, the
+    ``Authorization`` scheme, distinct header values, and the URL-credential
+    annotation.
+
+    A credential submission is a request that carries one of:
+
+    - a POST/PUT/PATCH body with a non-empty value under a password-named
+      field (form ``params``, urlencoded text, or JSON keys at any depth);
+    - a base64 ``user:pass`` URL credential, or on a sanitized file an entry
+      the ``_sanitized_credentials`` annotation lists;
+    - a Basic or Digest ``Authorization`` value not seen on an earlier
+      request (browsers resend it on every request to the realm).
+
+    Each request counts once. "No submission" is reported only when the
+    capture holds none of these and no POST/PUT/PATCH at all: a write request
+    whose login this cannot read (a hashed or encrypted form) must not draw a
+    false "re-record".
 
     Args:
         har: Parsed HAR data
@@ -240,14 +326,17 @@ def analyze_capture_completeness(
     Returns:
         CaptureCompletenessReport with a coverage summary and any warnings
     """
-    entries = har.get("log", {}).get("entries") or []
+    log = har.get("log", {})
+    entries = log.get("entries") or []
 
     report = CaptureCompletenessReport(total_entries=len(entries))
 
     password_patterns = _compile_password_field_patterns(custom_patterns_path)
+    annotated = annotated_url_credential_entries(log)
+    header_values: set[str] = set()
 
     urls: set[str] = set()
-    for entry in entries:
+    for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         if _has_set_cookie(entry.get("response") or {}):
@@ -260,8 +349,17 @@ def analyze_capture_completeness(
         url = str(request.get("url") or "")
         if url:
             urls.add(url)
-        if _is_credential_post(request, password_patterns):
-            report.credential_post_counts[url] = report.credential_post_counts.get(url, 0) + 1
+        credential_headers = _credential_header_values(request)
+        new_header = not header_values.issuperset(credential_headers)
+        header_values.update(credential_headers)
+        if (
+            (method in _SUBMISSION_METHODS and _body_has_password(request, password_patterns))
+            or index in annotated
+            or next(iter_url_credentials(request), None) is not None
+            or new_header
+        ):
+            key = _submission_url(url)
+            report.credential_submission_counts[key] = report.credential_submission_counts.get(key, 0) + 1
     report.unique_urls = len(urls)
 
     first_entry = _first_entry(entries)
@@ -291,11 +389,11 @@ def analyze_capture_completeness(
             )
         )
 
-    if report.credential_post_count == 1:
-        login_url = next(iter(report.credential_post_counts))
+    if report.credential_submission_count == 1:
+        login_url = next(iter(report.credential_submission_counts))
         report.warnings.append(
             CompletenessWarning(
-                code=SINGLE_CREDENTIAL_POST,
+                code=SINGLE_CREDENTIAL_SUBMISSION,
                 message=(
                     f"Only one credential submission was captured ({login_url}). "
                     "A deliberately refused login (wrong password) is NOT in this "
@@ -309,14 +407,17 @@ def analyze_capture_completeness(
             )
         )
 
-    if not report.post_count:
+    if not report.credential_submission_count and not any(
+        report.method_counts.get(method) for method in _SUBMISSION_METHODS
+    ):
         report.warnings.append(
             CompletenessWarning(
-                code=NO_POST_REQUESTS,
+                code=NO_CREDENTIAL_SUBMISSION,
                 message=(
-                    "No POST requests were captured — no form or auth submission was "
-                    "recorded. If this device logs in via POST, the auth exchange is "
-                    "NOT in this file."
+                    "No credential submission was captured — no POST, PUT or PATCH "
+                    "request, no Basic or Digest Authorization header, and no URL "
+                    "credential. If this device requires a login, the auth exchange "
+                    "is NOT in this file."
                 ),
                 remedy=(
                     "Re-record and complete the full login (submit the form) while the capture is running."

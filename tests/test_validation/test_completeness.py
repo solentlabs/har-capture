@@ -2,8 +2,12 @@
 
 Test Coverage:
     - Mid-session detection (Cookie header, cookies array, case-insensitive names)
-    - Zero-POST detection
-    - Single-credential-POST detection (missing refused login)
+    - No-submission detection (nothing that could carry a login)
+    - Single-credential-submission detection (missing refused login)
+    - What counts as a credential submission: form, urlencoded and JSON
+      bodies of POST/PUT/PATCH, URL credentials (raw or annotated), and
+      Basic/Digest headers counted once per distinct value
+    - Raw/sanitized parity: sanitizing a capture never changes its gaps
     - Session vs. benign cookie-name matching against the built-in pattern list
     - Coverage summary counts (methods, unique URLs, Set-Cookie responses)
     - Malformed/empty HAR tolerance
@@ -25,10 +29,11 @@ from typing import Any
 import pytest
 
 from har_capture.patterns import clear_pattern_cache, get_password_field_patterns, get_session_cookie_patterns
+from har_capture.sanitization import sanitize_har
 from har_capture.validation.completeness import (
     MID_SESSION_CAPTURE,
-    NO_POST_REQUESTS,
-    SINGLE_CREDENTIAL_POST,
+    NO_CREDENTIAL_SUBMISSION,
+    SINGLE_CREDENTIAL_SUBMISSION,
     analyze_capture_completeness,
 )
 
@@ -48,21 +53,37 @@ def _cookie_har(name: str) -> dict[str, Any]:
     return har
 
 
+# ┌──────────────────────────────────┬───────────────────────────────────────────────┬──────────────────────────────────────┐
+# │ fixture_key                      │ expected_codes                                │ description                          │
+# └──────────────────────────────────┴───────────────────────────────────────────────┴──────────────────────────────────────┘
+#
+# A write request (POST/PUT/PATCH) whose login the tool cannot read (HNAP
+# phase one only, encrypted AuthData) must not draw "no submission": 117 CMM
+# fleet captures have one, so only a capture with nothing that could carry a
+# login does.
+#
 # fmt: off
 WARNING_CASES = [
-    # (fixture_key,               expected_codes,                            description)
-    ("clean_login_flow",          [],                                        "login_captured_no_warnings"),
-    ("mid_session_cookie_header", [MID_SESSION_CAPTURE],                     "phpsessid_in_cookie_header"),
-    ("mid_session_cookies_array", [MID_SESSION_CAPTURE],                     "jsessionid_in_cookies_array"),
-    ("mid_session_and_no_post",   [MID_SESSION_CAPTURE, NO_POST_REQUESTS],   "both_gaps_reported"),
-    ("no_post_requests",          [NO_POST_REQUESTS],                        "gets_only"),
-    ("benign_first_request_cookie", [],                                      "non_session_cookie_ignored"),
-    ("empty_har",                 [NO_POST_REQUESTS],                        "empty_capture"),
-    ("single_credential_post",    [SINGLE_CREDENTIAL_POST],                  "one_login_no_refused_attempt"),
-    ("two_credential_posts",      [],                                        "refused_plus_real_login"),
-    ("post_without_password_field", [],                                      "action_post_is_not_a_login"),
-    ("credential_post_urlencoded_text", [SINGLE_CREDENTIAL_POST],            "urlencoded_text_body_counted"),
-    ("credential_post_json_body_not_counted", [],                            "json_body_with_equals_not_counted"),
+    # (fixture_key,                       expected_codes,                                   description)
+    ("clean_login_flow",                  [],                                               "login_captured_no_warnings"),
+    ("mid_session_cookie_header",         [MID_SESSION_CAPTURE],                            "phpsessid_in_cookie_header"),
+    ("mid_session_cookies_array",         [MID_SESSION_CAPTURE],                            "jsessionid_in_cookies_array"),
+    ("mid_session_and_no_submission",     [MID_SESSION_CAPTURE, NO_CREDENTIAL_SUBMISSION],  "both_gaps_reported"),
+    ("no_credential_submission",          [NO_CREDENTIAL_SUBMISSION],                       "gets_only"),
+    ("benign_first_request_cookie",       [],                                               "non_session_cookie_ignored"),
+    ("empty_har",                         [NO_CREDENTIAL_SUBMISSION],                       "empty_capture"),
+    ("single_credential_submission",      [SINGLE_CREDENTIAL_SUBMISSION],                   "one_login_no_refused_attempt"),
+    ("two_credential_submissions",        [],                                               "refused_plus_real_login"),
+    ("post_without_password_field",       [],                                               "action_post_is_not_a_login"),
+    ("credential_urlencoded_text",        [SINGLE_CREDENTIAL_SUBMISSION],                   "urlencoded_text_body_counted"),
+    ("credential_json_body",              [SINGLE_CREDENTIAL_SUBMISSION],                   "json_body_counted"),
+    ("put_json_login",                    [SINGLE_CREDENTIAL_SUBMISSION],                   "put_json_login_counted"),
+    ("hnap_two_phase",                    [SINGLE_CREDENTIAL_SUBMISSION],                   "hnap_empty_first_phase_not_counted"),
+    ("basic_auth_only",                   [SINGLE_CREDENTIAL_SUBMISSION],                   "basic_header_resent_counted_once"),
+    ("basic_auth_refused_then_accepted",  [],                                               "two_basic_values_two_submissions"),
+    ("url_token_raw",                     [SINGLE_CREDENTIAL_SUBMISSION],                   "url_credential_counted"),
+    ("url_token_sanitized_metadata",      [SINGLE_CREDENTIAL_SUBMISSION],                   "annotated_url_credential_counted"),
+    ("put_without_credential",            [],                                               "put_write_request_not_no_submission"),
 ]
 # fmt: on
 
@@ -170,6 +191,105 @@ class TestSessionCookieNames:
         assert report.first_request_session_cookies == []
 
 
+SUBMISSION_CASES = FIXTURES["credential_submission_cases"]
+SUBMISSION_URL_CASES = FIXTURES["submission_url_cases"]
+
+
+def _submission_har(case: dict[str, Any]) -> dict[str, Any]:
+    """Build a HAR holding one entry per request of a submission case."""
+    entries = [
+        {"request": copy.deepcopy(request), "response": {"status": 200, "headers": []}}
+        for request in case["requests"]
+    ]
+    log: dict[str, Any] = {"entries": entries}
+    if "sanitized_credentials" in case:
+        log["_har_capture"] = {"_sanitized_credentials": copy.deepcopy(case["sanitized_credentials"])}
+    return {"log": log}
+
+
+class TestCredentialSubmissions:
+    """What counts as a credential submission, one shape per row."""
+
+    @pytest.mark.parametrize("case", SUBMISSION_CASES, ids=[c["id"] for c in SUBMISSION_CASES])
+    def test_submission_count(self, case: dict[str, Any]) -> None:
+        """Test each request shape contributes the expected submissions."""
+        report = analyze_capture_completeness(_submission_har(case))
+
+        assert report.credential_submission_count == case["count"], case["id"]
+
+    @pytest.mark.parametrize("case", SUBMISSION_URL_CASES, ids=[c["id"] for c in SUBMISSION_URL_CASES])
+    def test_submission_url_shown_without_query_or_userinfo(self, case: dict[str, Any]) -> None:
+        """Test a submission is keyed by a URL that cannot carry its credential.
+
+        ``get`` prints the report for the raw capture, so the query, fragment
+        and userinfo — where a URL credential lives — never reach the key.
+        """
+        request = {
+            "method": "POST",
+            "url": case["url"],
+            "postData": {"params": [{"name": "pwd", "value": "x1"}]},
+        }
+
+        report = analyze_capture_completeness({"log": {"entries": [{"request": request}]}})
+
+        assert report.credential_submission_counts == {case["shown"]: 1}
+
+    def test_single_warning_never_prints_the_url_credential(self) -> None:
+        """Test the single-submission warning names the page, not the credential."""
+        report = analyze_capture_completeness(_har("url_token_raw"))
+
+        message = report.warnings[0].message
+        assert "http://192.168.100.1/cmconnectionstatus.html" in message
+        assert "login_" not in message
+        assert "YWRtaW46" not in message
+
+
+class TestSanitizedParity:
+    """Sanitizing a capture never changes what completeness reports.
+
+    Every signal is read from something the sanitizer keeps: field and
+    cookie names, whether a value is empty, the header scheme, distinct
+    header values (hashed per value), and the URL-credential annotation.
+    """
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "expected_codes", "description"),
+        WARNING_CASES,
+        ids=[c[2] for c in WARNING_CASES],
+    )
+    def test_same_gaps_after_sanitizing(
+        self, fixture_key: str, expected_codes: list[str], description: str
+    ) -> None:
+        """Test each capture shape reports the same gaps once sanitized."""
+        sanitized, _ = sanitize_har(_har(fixture_key))
+
+        report = analyze_capture_completeness(sanitized)
+
+        assert [w.code for w in report.warnings] == expected_codes, description
+
+    @pytest.mark.parametrize("case", SUBMISSION_CASES, ids=[c["id"] for c in SUBMISSION_CASES])
+    def test_same_count_after_sanitizing(self, case: dict[str, Any]) -> None:
+        """Test each request shape counts the same once sanitized."""
+        sanitized, _ = sanitize_har(_submission_har(case))
+
+        report = analyze_capture_completeness(sanitized)
+
+        assert report.credential_submission_count == case["count"], case["id"]
+
+    def test_same_count_after_sanitizing_twice(self) -> None:
+        """Test a re-sanitized URL-token capture still counts its login.
+
+        The second run cannot recognize its own ``AUTH_`` placeholder, so
+        only the annotation the first run wrote carries the submission.
+        """
+        once, _ = sanitize_har(_har("url_token_raw"))
+        twice, _ = sanitize_har(once)
+
+        report = analyze_capture_completeness(twice)
+
+        assert [w.code for w in report.warnings] == [SINGLE_CREDENTIAL_SUBMISSION]
+
+
 class TestCoverageSummary:
     """The operator-facing coverage numbers."""
 
@@ -181,7 +301,7 @@ class TestCoverageSummary:
         assert report.method_counts == {"GET": 3, "POST": 1, "DELETE": 1}
         assert report.unique_urls == 4
         assert report.set_cookie_responses == 2
-        assert report.post_count == 1
+        assert report.credential_submission_count == 0
 
     def test_empty_har_summary(self) -> None:
         """Test an empty capture reports zeros rather than raising."""
@@ -190,7 +310,7 @@ class TestCoverageSummary:
         assert report.total_entries == 0
         assert report.method_counts == {}
         assert report.unique_urls == 0
-        assert report.post_count == 0
+        assert report.credential_submission_count == 0
 
     def test_malformed_entries_do_not_inflate_counts(self) -> None:
         """Test entries without a usable request contribute no method or URL.
@@ -248,7 +368,7 @@ class TestCoverageSummary:
         report = analyze_capture_completeness({})
 
         assert report.total_entries == 0
-        assert [w.code for w in report.warnings] == [NO_POST_REQUESTS]
+        assert [w.code for w in report.warnings] == [NO_CREDENTIAL_SUBMISSION]
 
 
 class TestSessionCookiePatternLoading:
