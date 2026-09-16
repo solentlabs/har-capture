@@ -152,7 +152,7 @@ Headers are classified into four tiers from `sensitive.json`:
    - **Request `Cookie`**: a list of cookie pairs. Every `name=value` segment is cookie data, so every value is redacted
      — including a cookie whose name happens to be a reserved attribute word (`path=…` in a request header is a cookie,
      not an attribute). A valueless segment is a nameless cookie and is redacted whole, except a valueless `Secure`,
-     `HttpOnly` or `Partitioned`: the fleet's recorders write those there (7,882 segments in 0.13.0's scan, in raw
+     `HttpOnly` or `Partitioned`: the fleet's recorders write those there (7,882 segments across the fleet, in raw
      captures too), and they are not data.
    - **Response `Set-Cookie` / `Set-Cookie2`**: one cookie pair followed by `;`-separated attributes. A value whose
      every segment is a valid RFC 6265 attribute (`is_set_cookie_attribute()`: valueless `Secure` / `HttpOnly` /
@@ -167,9 +167,9 @@ Headers are classified into four tiers from `sensitive.json`:
      of the request path, both of which the HAR already carries unredacted in the URL and `Host` header; the remaining
      attributes are dates, flags and enum tokens. They are kept by name, not checked against the RFC grammar: a reserved
      attribute after the cookie is never cookie data, and the fleet holds no raw `Expires`, `Max-Age`, `SameSite` or
-     `Domain` value to prove a stricter rule would keep real ones (only 68 raw `Path` values survive earlier releases'
-     sanitizing). An *unreserved* `k=v` segment in the attribute position is still redacted — an unknown key there gets
-     no free pass; a valueless token after the cookie has no value half to redact and is kept.
+     `Domain` value to prove a stricter rule would keep real ones (it holds only 68 raw `Path` values). An *unreserved*
+     `k=v` segment in the attribute position is still redacted — an unknown key there gets no free pass; a valueless
+     token after the cookie has no value half to redact and is kept.
    - Serialized attribute metadata (`HttpOnly: true, Secure: true`) is not attribute syntax: as a request segment or a
      Set-Cookie's first segment it is redacted like any nameless cookie.
 1. **All other headers**: Passed through unmodified — except the URL-valued headers `Referer`, `Location` and
@@ -190,10 +190,10 @@ Patterns loaded from `sensitive.json` `fields.auto_redact_patterns` and `fields.
 (`credentials?$`: `userCredential`, `user_credentials`), so a field naming a kind or encoding of credential
 (`credential_encoding`, `credentialType`) is not one.
 
-**ADR-12 accounting** (`credential` as the last word, 0.13.0): *redacts less.* CMM's catalog holds 24
-`credential_encoding` values (two distinct, encoding names) that the bare `credential` pattern made errors in `validate`
-and would have made `check_for_pii` findings; no key across the 480 fleet HARs or the catalog holds a credential under
-`credential` anywhere but last. *Fidelity:* those values are kept.
+**ADR-12 accounting** (`credential` as the last word): *redacts less.* CMM's catalog holds 24 `credential_encoding`
+values (two distinct, encoding names) that a bare `credential` pattern would make `validate` errors and `check_for_pii`
+findings; no key across the 480 fleet HARs or the catalog holds a credential under `credential` anywhere but last.
+*Fidelity:* those values are kept.
 
 Callers can extend these per-call via `sanitize_post_data(..., custom_patterns=...)` or
 `sanitize_html(..., custom_patterns=...)`. The extension is additive (never replacing built-ins) and is applied via a
@@ -224,8 +224,7 @@ def sanitize_post_data(
    name in the form matches a sensitive or flaggable pattern) whose value is base64 decoding to printable text
    (`is_base64_decodable_text()`) is flagged for review at MEDIUM confidence, category `credential` — not auto-redacted,
    since base64-decodable alone is not a 100%-confidence signal. This is the backstop for vendor credential fields the
-   name patterns don't know yet (the Sercomm/Hitron `pws` class, cable_modem_monitor issue #92; `pws` itself is now a
-   built-in auto-redact pattern).
+   name patterns don't know yet (the Sercomm/Hitron `pws` class; `pws` itself is a built-in auto-redact pattern).
 1. **JSON body** (`_rewrite_json`): a body that parses as a JSON object or array is JSON **whatever its type** — a
    `text/plain` XHR body, or jQuery's `application/x-www-form-urlencoded` default around `JSON.stringify` — as
    `validate` reads it. It gets the [JSON traversal](#json-body-traversal) rules and is written back as a response is.
@@ -236,8 +235,8 @@ def sanitize_post_data(
    must not break correlation. A field **name** is judged percent-decoded too (`p%61ssword`, `user%5Bpass%5D`), as
    `validate` and HAR's decoded `postData.params` read it; the written pair keeps the raw name. A value is judged by its
    field name and the credential shapes, as a query parameter's is: a MAC, IP address or email in the value of a field
-   whose name is not sensitive is neither redacted nor reported by `validate`. Across the CMM fleet (0.13.0) none of 709
-   form bodies and none of 6,234 query values holds one.
+   whose name is not sensitive is neither redacted nor reported by `validate`. Across the CMM fleet none of 709 form
+   bodies and none of 6,234 query values holds one.
 1. **XML body** (`_sanitize_xml_fields`, then `sanitize_html`): a markup type (`mime_kind()`: `text/xml`,
    `application/xml`, any `+xml` such as `application/soap+xml`) — the predicate `validate`'s XML check uses too. Its
    elements and attributes are first redacted by name, parsed by `parse_xml()`, the one parse `validate`'s XML check
@@ -246,7 +245,7 @@ def sanitize_post_data(
    runs the full scanner pipeline. XML POST bodies from device APIs (e.g., modem XML getter/setter endpoints) are
    sanitized identically to XML response content.
 1. **Raw text**: sanitized as a text response body is (`_sanitize_body_string`): the pattern-file pass, the string
-   patterns and the positional passes, labeled serials among them. Until 0.13.0 it took the string patterns alone.
+   patterns and the positional passes, labeled serials among them.
 
 **Per-call `custom_patterns`** extends the auto-redact and flag regex sets across all five branches (params, form, JSON,
 XML, text) via a `ContextVar`-scoped override entered at the top of `sanitize_post_data`. The dict shape mirrors
@@ -304,15 +303,13 @@ One decision tree serves the URL string and the array (`_classify_query_param`),
 1. Flaggable name → flagged for review.
 
 **Base64-wrapped payloads.** Decoded, base64 of a JSON object or of a URL has a colon, so a bare `user:pass` test reads
-it as a credential. Until 0.13.0 a padded one was replaced whole by `AUTH_<hash>` and an unpadded one was kept verbatim
-— the outcome depended on the payload's length modulo 3, and neither sanitized what was inside. Now text that decodes to
-structure (a JSON object or array, parsed or not, or a URL) is never a credential on any surface:
-`is_base64_credential()` itself rejects it. In a query, a payload that parses (`find_query_payload()`) is sanitized
-inside — a JSON payload with the JSON rules, a URL payload with these query rules — and `validate` checks inside it with
-the matching checks (`check_json_fields`, `check_url`), in the same order as this tree: a payload under an
-identity-style name is checked inside, not flagged by name. A payload with nothing to redact stays byte-identical. A
-rewritten one is encoded in the original's form: unpadded only where the original visibly stripped its padding (no `=`
-where its length needed one), percent-encoded where the original was, JSON as
+it as a credential. Text that decodes to structure (a JSON object or array, parsed or not, or a URL) is never a
+credential on any surface: `is_base64_credential()` itself rejects it. In a query, a payload that parses
+(`find_query_payload()`) is sanitized inside — a JSON payload with the JSON rules, a URL payload with these query rules
+— and `validate` checks inside it with the matching checks (`check_json_fields`, `check_url`), in the same order as this
+tree: a payload under an identity-style name is checked inside, not flagged by name. A payload with nothing to redact
+stays byte-identical. A rewritten one is encoded in the original's form: unpadded only where the original visibly
+stripped its padding (no `=` where its length needed one), percent-encoded where the original was, JSON as
 [the body rules](#response-content-dispatch) write it. A POST field (form params or an urlencoded body) follows the same
 tree: a credential-named field is redacted whole, a `base64(user:pass)` value is a credential before an identity-style
 name is considered, and a payload value is sanitized inside.
@@ -322,28 +319,27 @@ HAR's text: Pass 1b cannot propagate a redacted value into one, and Pass 2 could
 nothing inside a payload is offered for review (`RedactionCollector.flags_muted()`), and a secret inside one is redacted
 by Pass 1's rules or not at all. `validate` reports only the errors it finds inside a payload for the same reason: an
 identity-style field there has no review to clear it. The accepted cost, recorded under ADR-12: a session token another
-surface redacted survives inside a payload unless the payload's own rules catch it — a padded payload was destroyed
-whole before 0.13.0, an unpadded one kept intact; the fleet holds none.
+surface redacted survives inside a payload unless the payload's own rules catch it; the fleet holds no such payload.
 
-**ADR-12 accounting** (three changes widen redaction: the marker shape, URL-valued headers, and a credential under an
+**ADR-12 accounting** (three rules widen redaction: the marker shape, URL-valued headers, and a credential under an
 identity-style name):
 
-- *Leak closed:* Arris SB8200 URL-token firmware logs in with `?login_<base64(user:pass)>`. Every earlier release left
-  the admin password recoverable from the URL, the `queryString` array, and every later `Referer`. Separately, a
-  sensitive parameter (`?password=…`) or credential in a URL-valued header or `redirectURL` was only cleaned when
-  [Pass 1b](#pass-1b-redacted-value-propagation) happened to match it — never for a value under 16 characters or one
-  whose encoding differed from the request URL's. And `?user=<b64>` was offered for review as a username while the
-  validator reported it as a credential.
+- *Leak closed:* Arris SB8200 URL-token firmware logs in with `?login_<base64(user:pass)>`; without the marker shape the
+  admin password is recoverable from the URL, the `queryString` array, and every later `Referer`. Without the header
+  rule, a sensitive parameter (`?password=…`) or credential in a URL-valued header or `redirectURL` is cleaned only when
+  [Pass 1b](#pass-1b-redacted-value-propagation) happens to match it — never for a value under 16 characters or one
+  whose encoding differs from the request URL's. And without the credential-first order, `?user=<b64>` is offered for
+  review as a username while the validator reports it as a credential.
 - *Fidelity cost:* none beyond the value itself. The marker, the key and the segment count survive, so the auth flow
   reads the same and a consumer can still see which request carried the login; a header's URL keeps its path and every
   non-sensitive parameter.
 - *Cannot-be-structure proof:* the credential tail must decode strictly to UTF-8 `user:pass` and not be a base64 JSON or
-  URL payload (0.13.0; see Base64-wrapped payloads above). A restored one must additionally clear the length floor and
-  be printable, so restoration adds no structure redaction. Measured 2026-09-12 across the request-URL query segments of
-  481 cable_modem_monitor fleet HARs (11,065), `find_query_credential()` matches 14 — all `admin:` credentials, 5 bare
-  and 9 marker-prefixed — and nothing else. The header rule adds no new detection: it applies the URL's own rules to the
-  URLs in `Referer`, `Location`, `Content-Location` and `redirectURL`, and over the same fleet it changed no header
-  value. `?user=<b64>` passes the same credential proof as any other keyed value.
+  URL payload (see Base64-wrapped payloads above). A restored one must additionally clear the length floor and be
+  printable, so restoration adds no structure redaction. Across the request-URL query segments of 481
+  cable_modem_monitor fleet HARs (11,065), `find_query_credential()` matches 14 — all `admin:` credentials, 5 bare and 9
+  marker-prefixed — and nothing else. The header rule adds no new detection: it applies the URL's own rules to the URLs
+  in `Referer`, `Location`, `Content-Location` and `redirectURL`, and over the same fleet it redacts no header value.
+  `?user=<b64>` passes the same credential proof as any other keyed value.
 
 **Userinfo password.** A URL's userinfo (RFC 3986: the `user:password` part ahead of the host) carries a credential by
 position (`split_url_password()`, shared with `check_url`); the password becomes `AUTH_<hash>` and the user, host and
@@ -355,14 +351,13 @@ requests they send, so it arrives in a `Location` header or a wrapped URL.
 
 **ADR-12 accounting** (a new detection, and the POST order):
 
-- *Leak closed:* a userinfo password survived every sanitize run, and `validate` reported nothing; a padded wrapped URL
-  carrying one was only removed before 0.13.0 because the whole value was taken for a credential. And a POST field with
-  an identity-style name holding `base64(user:pass)` was flagged for review, where the same value in a query has been
-  redacted since 0.12.5.
+- *Leak closed:* without the userinfo rule a userinfo password survives every sanitize run. Without the POST order, a
+  POST field with an identity-style name holding `base64(user:pass)` is flagged for review, where the same value in a
+  query is redacted.
 - *Fidelity cost:* none beyond the password; the URL's structure survives.
 - *Cannot-be-structure proof:* RFC 3986 gives the text between `scheme://user:` and the authority's `@` no other
-  meaning. Measured 2026-09-13, no URL across the cable_modem_monitor fleet's request URLs, `Referer`, `Location`,
-  `Content-Location` or `redirectURL` values carries userinfo, so the rule changes no fleet capture.
+  meaning. No URL across the cable_modem_monitor fleet's request URLs, `Referer`, `Location`, `Content-Location` or
+  `redirectURL` values carries userinfo, so the rule changes no fleet capture.
 
 **URL path** (`_sanitize_url_path`):
 
@@ -409,15 +404,14 @@ Traverses objects and arrays recursively. Every string leaf goes through the
    name that is not a safe value (the call's `safe_value_patterns`, domain and custom ones included) or a placeholder →
    flagged for review (`wifi_ssid`, MEDIUM), never auto-redacted: the name identifies a network rather than
    authenticating to it. The HTML engine auto-redacts a *labeled* SSID on a page (passes 7a, 7c, 16), so one network
-   name could be `WIFI_<hash>` there and raw under a JSON key; measured across the fleet (0.13.0), 307 distinct raw
-   names sit under JSON SSID keys in 29 captures, every one offered for review, and none is also redacted on a page of
-   the same capture. Auto-redacting JSON SSID keys would name no leak and cost those 307 names, so the rule stays
-   review-only (ADR-12).
+   name could be `WIFI_<hash>` there and raw under a JSON key; across the fleet, 307 distinct raw names sit under JSON
+   SSID keys in 29 captures, every one offered for review, and none is also redacted on a page of the same capture.
+   Auto-redacting JSON SSID keys would name no leak and cost those 307 names, so the rule is review-only (ADR-12).
 
 1. Anything else → traversed.
 
 The key rules judge string values only; a number, boolean, null or container under a credential- or identity-named key
-is traversed, not redacted, and `validate` reports none. Across the fleet (0.13.0) such values are 54 booleans (`auth`,
+is traversed, not redacted, and `validate` reports none. Across the fleet such values are 54 booleans (`auth`,
 `has_credentials`) and nothing else.
 
 A sensitive key holding an empty string, or exactly the placeholder this rule writes (`FIELD_<hex>`, `***FIELD***`,
@@ -425,14 +419,12 @@ A sensitive key holding an empty string, or exactly the placeholder this rule wr
 stays empty and a sanitized value is not hashed again. Anything else is replaced, including a real value that merely
 looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fleet's already-sanitized fixtures this
 stops 480 of the sanitizer's own placeholders being hashed again (46 in POST JSON, 434 in responses), 27 empty passwords
-in POST JSON stay empty, and 4 look-alike values under a credential key are replaced (measured with this rule, 0.13.0).
+in POST JSON stay empty, and 4 look-alike values under a credential key are replaced.
 
 Every other route keeps an empty value the same way: an empty form field (`params` and urlencoded text), query
-parameter, cookie or credential header comes back empty and is not counted (`_redact_value()` returns it unchanged).
-Before 0.13.0 those routes wrote a placeholder for it, inventing a submission the capture never made — an empty default
-password became indistinguishable from a real one, and capture-completeness counted it as a login. Releases 0.8.2–0.10.2
-did the same in JSON: 19 fleet HNAP captures carry such a `FIELD_` value in the login challenge phase, whose password is
-empty on the wire.
+parameter, cookie or credential header comes back empty and is not counted (`_redact_value()` returns it unchanged). A
+placeholder there would invent a submission the capture never made: an empty default password would read as a real one,
+and capture-completeness would count it as a login.
 
 A value a **response** serves under a credential-named key is judged by its shape too (`credential_value_action()`,
 shared with `validate` and `check_for_pii`), because there the key is often a firmware translation table's label for UI
@@ -455,21 +447,17 @@ alone. XML, multipart and base64-wrapped request bodies, and a URL query with no
 this; a served copy of a value submitted only there is judged by its shape, so prose is offered for review, ADR-12's
 default (the fleet's requests hold none of these).
 
-**ADR-12 accounting** (served credential-named values by shape, 0.13.0; Ken, 2026-09-14: "auto redaction should not
-overextend otherwise we end up with bad data"):
+**ADR-12 accounting** (served credential-named values by shape):
 
 - *Evidence:* across the 480 fleet HARs and CMM's catalog, 107 credential-named keys hold 3,027 values. Every
   non-placeholder value a response serves under one sits in one of three translation tables (923, 1,149 and 1,331
   members), byte-identical across the capture folders that hold it — firmware text, not a user's secret: 1,220 prose
   strings, 442 single-word labels, 48 `Yes`/`No`. Of the credentials clients submit, none is prose or a button word.
-- *Fidelity regained:* the 48 button words are kept, and the 1,220 prose strings reach the review (10–26 distinct per
-  affected capture, median 13) instead of becoming `FIELD_<hash>`. Single-word labels are still replaced: by shape they
-  cannot be told from a password.
+- *Fidelity:* the 48 button words are kept, and the 1,220 prose strings reach the review (10–26 distinct per affected
+  capture, median 13) instead of becoming `FIELD_<hash>`. Single-word labels are replaced: by shape they cannot be told
+  from a password.
 - *Leak stance:* no raw credential served in a response exists in the fleet to test prose against (every one is already
-  a placeholder), and a WPA passphrase may contain spaces, so prose is offered for review, not kept. Until 0.13.0 this
-  spec rejected exempting whitespace values on that ground; review, not exemption, is what answers it.
-- *Rejected:* "the credential word ends the key" — it would stop redacting real submitted passwords under
-  `password_login`, and still redact the tables' `password` and `passphrase` labels.
+  a placeholder), and a WPA passphrase may contain spaces, so prose is offered for review, not kept.
 
 Every string — each value, and each object key — is the unit of text: it gets the positional passes the HTML engine runs
 (labeled serials, vendor serials, structural credentials) interleaved with the
@@ -495,22 +483,18 @@ placeholder — the same MAC in two cases, or any two MACs in static mode — ke
 - Malformed JSON is caught and logged: a POST body is left as-is, a response body takes the text path (sanitization
   continues)
 
-Until 0.13.0 the identity rules matched five exact lowercase keys each (`mac`, `macaddress`, `mac_address`, `hwaddr`,
-`hw_addr`; `serial`, `serial_number`, `serialnumber`, `serialnum`, `sn`) and redacted any non-empty value under them;
-keys went out verbatim.
-
 **ADR-12 accounting** (identity keys by their words, keys as text):
 
-- *Leak closed:* a serial or MAC under any key but the ten exact names survived — HNAP's `StatusSoftwareSerialNum`,
-  `CmMacAddress` holding a bare-hex MAC — while `validate` reported neither (it now reports both, as errors). A MAC,
-  address or email used as an object key survived while `validate` reported it.
+- *Leak closed:* a serial or MAC under a key that is not a plain identity name — HNAP's `StatusSoftwareSerialNum`,
+  `CmMacAddress` holding a bare-hex MAC — which `validate` reports as errors; and a MAC, address or email used as an
+  object key, which `validate` reports.
 - *Fidelity cost:* none beyond the values. A MAC placeholder keeps the value's layout, so a parser of the field still
   parses it; a hashed key keeps the object's shape and its correlation with the same value elsewhere.
 - *Cannot-be-structure proof:* the key states what the value is, and the value must also have that identity's shape, so
-  a label, flag or placeholder under an identity key is kept — the old rule redacted `"serialNumber": "-"`. Measured
-  2026-09-13 across 480 cable_modem_monitor fleet HARs: 54 serials under HNAP identity keys are now redacted, and 70
-  values under the old exact keys are no longer rewritten — 54 are `-` and 16 are `SERIAL_` placeholders an earlier run
-  wrote. No fleet JSON body has a MAC, address or email as a key.
+  a label, flag or placeholder under an identity key (`"serialNumber": "-"`) is kept. Across 480 cable_modem_monitor
+  fleet HARs, 54 serials under HNAP identity keys are redacted, and 70 values under plain identity keys (`mac`,
+  `serial`, `sn`, …) are kept — 54 are `-` and 16 are `SERIAL_` placeholders already in the capture. No fleet JSON body
+  has a MAC, address or email as a key.
 
 ### Response Content Dispatch
 
@@ -529,9 +513,9 @@ dropped**, so Pass 1b and Pass 2's review replacement reach it like any other bo
 
 **Binary** is a `base64` body whose bytes are not text: they do not decode under a type that does not declare text, or
 they decode to text holding NUL. Binary is written back exactly as recorded — the sanitizer does not touch it and
-`validate` does not scan it, because both read bodies through the same decoder. A body an earlier release wiped to an
-`AUTH_<hash>` placeholder while keeping `encoding: base64` (a state no decoder accepts) has its `encoding` dropped, so
-the output is valid.
+`validate` does not scan it, because both read bodies through the same decoder. A body that is an `AUTH_<hash>`
+placeholder still marked `encoding: base64` (a state no decoder accepts) has its `encoding` dropped, so the output is
+valid.
 
 **2. One dispatch on the text** (`_sanitize_body_text`), in order:
 
@@ -558,64 +542,57 @@ So a value two passes could claim gets one placeholder on every route — a MAC 
 in a password's element is an address — on the unit of text `validate` checks: a text body's whole text, and each
 decoded string of a JSON body (every value and key). Reading JSON one decoded string at a time means an escape
 (`\u003c`, `\/`) hides no markup from either tool, and no match can pair a label in one string with a value in the next
-— on the raw JSON text a structural value could run through a closing quote, and its replacement broke the document.
-Until 0.13.0 only the HTML engine ran pass 2, so a `Serial Number: <value>` in a JSON string, a script or a text body
-was reported by `validate` and left by every sanitize run; the fleet holds none outside HTML bodies. The JSON route then
-parses the text (`parse_json_container()`: nesting too deep for the parser counts as not JSON, never a crash) and runs
-`_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical. Changed JSON is re-serialized
-in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default spacing, or a 2- or
-4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the original's surrounding
-whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing with non-ASCII as
-written. The text path is `_sanitize_body_string()`, over the whole body whatever its size. Until 0.13.0 it skipped
-strings over 1 MB (10,000 characters until 2026-08-19, which exempted the CM2500's 33 KB `utility.js`), while `validate`
-scanned them. Across the cable_modem_monitor fleet, dropping the guard redacts 48 MACs and 12 IP addresses in
-`text/javascript` bodies over 1 MB, all reported by `validate` before.
+— on the raw JSON text a structural value could run through a closing quote, and its replacement would break the
+document. The JSON route then parses the text (`parse_json_container()`: nesting too deep for the parser counts as not
+JSON, never a crash) and runs `_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical.
+Changed JSON is re-serialized in whichever layout `json.dumps` can write that reproduces the original exactly — compact,
+default spacing, or a 2- or 4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the
+original's surrounding whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing
+with non-ASCII as written. The text path is `_sanitize_body_string()`, over the whole body whatever its size, as
+`validate` scans it: across the cable_modem_monitor fleet, `text/javascript` bodies over 1 MB hold 48 MACs and 12 IP
+addresses.
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
-transport base64 around plain JSON. Before 0.13.0 these were sanitized correctly, by accident — the decoder for bodies
-that are *themselves* base64 JSON also decoded the transport layer. The bodies that broke were markup and text. Arris
-SB8200 fragments (`pageheaderA.htm`, `footer.htm`) are HTML served as `application/octet-stream` and stored base64; HNAP
-`x-unknown` bodies carry markup the same way. The credential guard read their transport base64 as `base64(user:pass)`
-whenever the text held a colon (CSS, `http://`) and replaced the whole body with `AUTH_<hash>`
-(cable_modem_monitor#213), and one without a colon passed through every pass unscanned, while `validate` decoded and
-scanned both.
+transport base64 around plain JSON. Arris SB8200 fragments (`pageheaderA.htm`, `footer.htm`) are HTML served as
+`application/octet-stream` and stored base64; HNAP `x-unknown` bodies carry markup the same way. Read without decoding,
+their transport base64 matches `base64(user:pass)` whenever the text holds a colon (CSS, `http://`), which would replace
+the whole body with `AUTH_<hash>`, and one without a colon would pass every pass unscanned, while `validate` decodes and
+scans both.
 
-**ADR-12 accounting** (the dispatch redacts in bodies no pass reached before):
+**ADR-12 accounting** (the dispatch redacts in bodies no other route reaches):
 
 - *Leak closed:* PII in transport-encoded markup and text bodies, in bodies of types that say nothing about their text
   (`application/octet-stream`, `x-unknown`), in form data, SVG, `application/javascript`, and declared JSON that does
-  not parse, and vendor serials in JSON — all reported by `validate` and left by sanitize.
-- *Fidelity cost:* none beyond the redacted values, and a gain: #213's fragments are no longer destroyed, and JSON with
-  nothing to redact is no longer re-serialized. A transport-encoded body is written as the text it decodes to, not its
+  not parse, and vendor serials in JSON — all reported by `validate`.
+- *Fidelity cost:* none beyond the redacted values, and a gain: transport-encoded fragments are not destroyed, and JSON
+  with nothing to redact is not re-serialized. A transport-encoded body is written as the text it decodes to, not its
   base64; for a latin-1 read that text stands in for bytes that were not UTF-8, and they are recovered by encoding it as
-  latin-1. The lost behavior: a transport-encoded body whose text is literally `user:pass` is no longer replaced — the
-  base64 that matched `is_base64_credential()` was the recorder's, and the same text served plainly was never replaced
-  either.
-- *Cannot-be-structure proof:* the engines and their rules are unchanged; only which text reaches them changes. One rule
-  changes, in the other direction: a MAC that is one byte repeated — broadcast `ff:ff:…`, zero `00:00:…` — is a protocol
-  constant, and scripts compare against it (`if (mac == 'ff:ff:ff:ff:ff:ff')`), so neither tool treats it as PII
-  (`is_constant_mac()`; `validate` already skipped it). Measured 2026-09-13 across 480 cable_modem_monitor fleet HARs:
-  180 transport-encoded text bodies (`applation/json`, `application/octet-stream`, `x-unknown`), 16 more that earlier
-  releases had already wiped to `AUTH_`, 1,942 binary bodies (images, fonts) that stay untouched, and no base64-wrapped
-  JSON or URL payload in any body or query. In script bodies, `application/javascript` now adds 25 private and 14 public
-  IP redactions (example addresses in comments among them — known patterns always apply), while 342 constant MACs across
-  script and markup bodies (296 zero, 46 broadcast) are no longer rewritten.
+  latin-1. The cost: a transport-encoded body whose text is literally `user:pass` is not replaced — the base64 that
+  matches `is_base64_credential()` is the recorder's, and the same text served plainly is not replaced either.
+- *Cannot-be-structure proof:* the engines and their rules are the same on every route; the dispatch decides only which
+  text reaches them. One rule goes the other direction: a MAC that is one byte repeated — broadcast `ff:ff:…`, zero
+  `00:00:…` — is a protocol constant, and scripts compare against it (`if (mac == 'ff:ff:ff:ff:ff:ff')`), so neither
+  tool treats it as PII (`is_constant_mac()`). Across 480 cable_modem_monitor fleet HARs: 180 transport-encoded text
+  bodies (`applation/json`, `application/octet-stream`, `x-unknown`), 16 more already reduced to an `AUTH_` placeholder,
+  1,942 binary bodies (images, fonts) that stay untouched, and no base64-wrapped JSON or URL payload in any body or
+  query. In script bodies, `application/javascript` adds 25 private and 14 public IP redactions (example addresses in
+  comments among them — known patterns always apply), while 342 constant MACs across script and markup bodies (296 zero,
+  46 broadcast) are kept.
 
-**ADR-12 accounting** (text that parses as JSON routes as JSON whatever its type, 0.13.0):
+**ADR-12 accounting** (text that parses as JSON routes as JSON whatever its type):
 
 - *Leak closed:* HNAP serves JSON as `text/html`, and the HTML engine reads no keys: a serial under
-  `StatusSoftwareSerialNum` survived every sanitize run (54 across the fleet) while `validate`, which parses the body,
-  now reports it as an error.
-- *Fidelity cost:* the JSON key rules now apply to these bodies, and they include the credential-name rule. Its values
-  under a credential-named key became `FIELD_<hash>` — across the fleet, 220 strings in HNAP `text/html` JSON, all UI
-  copy from translation bundles (132 phrases, 88 single words; none a token with a digit). The key survives, so the
-  structure a consumer reads is intact. Since the served-value rule above, the phrases reach the review and button words
-  are kept; single words are still replaced.
+  `StatusSoftwareSerialNum` (54 across the fleet) is left by that engine, while `validate`, which parses the body,
+  reports it as an error.
+- *Fidelity cost:* the JSON key rules apply to these bodies, and they include the credential-name rule: across the
+  fleet, 220 strings under credential-named keys in HNAP `text/html` JSON, all UI copy from translation bundles (132
+  phrases, 88 single words; none a token with a digit). The key survives, so the structure a consumer reads is intact.
+  Under the served-value rule above, the phrases reach the review and button words are kept; single words are replaced.
 - *Cannot-be-structure proof:* only text that parses as a JSON object or array is rerouted, and the rules that then
   apply are the JSON engine's. The HTML engine's passes `validate` checks for all run on this route too — address and
   MAC passes through the same regexes ([String Pattern Sanitization](#string-pattern-sanitization)), labeled serials,
-  structural credentials and vendor serials on the raw text. Measured across the fleet, rerouting removed no redaction
-  the HTML engine made in these bodies other than the IPv6 constants below.
+  structural credentials and vendor serials on the raw text. Across the fleet, the JSON route drops no redaction the
+  HTML engine would make in these bodies; the IPv6 constants below are kept by both.
 
 ### String Pattern Sanitization
 
@@ -638,35 +615,31 @@ routes (a per-call scope, like the field patterns'):
 | Phone numbers | US/CA formats **with a separator, parens, or leading +**                              | Flagged, not auto-redacted             |
 
 Card- and SSN-shaped numbers are the pattern file's (`credit_card_*`, `ssn`), handled by the pattern-file pass with the
-HTML engine's rules, so a domain that leaves them out of `include_patterns` leaves them out on every route. Until 0.13.0
-this path had its own card and SSN regexes, applied whatever the domain; and it had other regexes of its own: no IPv6
-pass at all, a private-IP regex that read `10.` plus two octets (so a `10.x.x.x` address never matched), and an email
-regex whose `[A-Z|a-z]` class ran on through a following `|field`. A private-range match is an address when every octet
-is 255 or less: zero-padded as some devices print it (`192.168.001.100`) it is redacted, and `192.168.1.999` is not an
-address on either route. The same holds inside an IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address,
-hashed whole as IPv6 rather than its tail as IPv4.
+HTML engine's rules, so a domain that leaves them out of `include_patterns` leaves them out on every route. A
+private-range match is an address when every octet is 255 or less: zero-padded as some devices print it
+(`192.168.001.100`) it is redacted, and `192.168.1.999` is not an address on either route. The same holds inside an
+IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address, hashed whole as IPv6 rather than its tail as IPv4.
 
 **ADR-12 accounting** (IPv6 and `10.x` in JSON and text bodies):
 
-- *Leak closed:* measured 2026-09-13 across 480 cable_modem_monitor fleet HARs, sanitize left 960 IPv6 addresses in JSON
-  bodies (478 global, 482 link-local — an EUI-64 link-local address embeds the device's MAC) and 197 `10.x` addresses in
-  JSON and text bodies (180 and 17). `validate` reported none: it had no IPv6 check, and it reports no private IPv4.
-- *Fidelity cost:* none beyond the addresses, which get the placeholders the HTML engine has always written. As on the
-  HTML route, a `10.255.x.x` placeholder an earlier run wrote is hashed again (2,942 in the fleet's already-sanitized
-  fixtures; see [Idempotency Boundary](#idempotency-boundary)).
+- *Leak closed:* across 480 cable_modem_monitor fleet HARs, JSON bodies hold 960 IPv6 addresses (478 global, 482
+  link-local — an EUI-64 link-local address embeds the device's MAC) and JSON and text bodies hold 197 `10.x` addresses
+  (180 and 17), all redacted by this path. `validate` reports no private IPv4.
+- *Fidelity cost:* none beyond the addresses, which get the placeholders the HTML engine writes. As on the HTML route, a
+  `10.255.x.x` placeholder already in a capture is hashed again (2,942 in the fleet's already-sanitized fixtures; see
+  [Idempotency Boundary](#idempotency-boundary)).
 - *Cannot-be-structure proof:* the detection is the HTML engine's, applied to text that never reached it; an IPv6
   candidate is an address only when `ipaddress` parses it, so clock times and MACs stay.
 
 **IPv6 constants are kept** (`is_ipv6_host_address()`), by both engines. The unspecified `::` ("none configured") and
-loopback `::1` identify no device — they are IPv6's `0.0.0.0` and `127.0.0.1`, which the IPv4 passes have always kept —
-and a `2001:db8::` placeholder in their place reads as a real address. Keeping them redacts less, which ADR-12 makes the
-default; for the record, the HTML engine rewrote 281 of them across the fleet before 0.13.0, and the JSON and text path,
-now given the IPv6 pass, would have rewritten 2,929 more; no fleet value of either is PII. The static-mode placeholder
-`::` is therefore stable.
+loopback `::1` identify no device — they are IPv6's `0.0.0.0` and `127.0.0.1`, which the IPv4 passes keep — and a
+`2001:db8::` placeholder in their place reads as a real address. Keeping them redacts less, which ADR-12 makes the
+default: across the fleet they occur 281 times in HTML bodies and 2,929 times in JSON and text bodies, and no fleet
+value of either is PII. The static-mode placeholder `::` is therefore stable.
 
 **Phone numbers require formatting**: a bare 10–11 digit run never matches — separator-free runs are constants,
 counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
-`1732584193` = 0x67452301, were flagged 31× per review before this rule).
+`1732584193` = 0x67452301, would otherwise be flagged 31× per review).
 
 ### MAC Addresses
 
@@ -680,27 +653,23 @@ MAC that is one byte repeated — broadcast `ff:ff:ff:ff:ff:ff`, zero `00:00:00:
 identity, and is left alone by both tools (`is_constant_mac()`; see
 [Response Content Dispatch](#response-content-dispatch)).
 
-Until 0.13.0 the sanitizer required `\b` on both sides and the validator required nothing, so a MAC glued to an
-identifier was reported by `validate` and left by every sanitize run.
-
-**Known limit — glued placeholders (0.13.0 decision).** A placeholder glued to a neighbour can complete a new match that
-`validate` and `check_for_pii` then report and no sanitize run clears (ADR-14): five MAC groups glued to an IPv4 address
+**Known limit — glued placeholders.** A placeholder glued to a neighbour can complete a new match that `validate` and
+`check_for_pii` then report and no sanitize run clears (ADR-14): five MAC groups glued to an IPv4 address
 (`3C:11:22:33:44:8.8.8.8`, whose address placeholder completes a sixth group), a hex pair glued to a MAC placeholder
 (`ff-02:da:…`), an email placeholder followed by more text under a serial-named key. The fuzz harness builds these from
 its vocabulary; the fleet holds none — after sanitize, neither tool finds a MAC, IP address or IPv6 address anywhere in
-the 480 fleet captures. The general fix — both checkers skip any match overlapping a placeholder the sanitizer wrote —
-would touch every check in both tools, and bounding the MAC run would reopen the glued-identifier leak above, so neither
-is built. A capture that holds such a shape is reported by `validate` and fixed by hand.
+the 480 fleet captures. Neither checker skips a match overlapping a placeholder, and bounding the MAC run would reopen
+the glued-identifier leak above, so a capture that holds such a shape is reported by `validate` and fixed by hand.
 
-**ADR-12 accounting** (redacts MACs the `\b` form missed):
+**ADR-12 accounting** (MACs with no boundary):
 
-- *Leak closed:* a MAC written directly against an identifier character (`cm_mac_<MAC>`, `HWaddr<MAC>`, `wanmac<MAC>`)
-  survived sanitize while `validate` reported it.
+- *Leak closed:* a MAC written directly against an identifier character (`cm_mac_<MAC>`, `HWaddr<MAC>`, `wanmac<MAC>`),
+  which a `\b`-bounded pattern misses and `validate` reports.
 - *Fidelity cost:* none beyond the MAC; the identifier around it is untouched.
-- *Cannot-be-structure proof:* the matched text is the same six colon- or hyphen-joined hex pairs the sanitizer has
-  always redacted, and exactly what `validate` has always reported; what it is glued to does not change what it is.
-  Measured 2026-09-12 across the cable_modem_monitor fleet, all 11,953 such runs sit between punctuation or whitespace,
-  so the change redacts nothing the fleet contains.
+- *Cannot-be-structure proof:* the matched text is the same six colon- or hyphen-joined hex pairs as a free-standing
+  MAC, and exactly what `validate` reports; what it is glued to does not change what it is. Across the
+  cable_modem_monitor fleet, all 11,953 such runs sit between punctuation or whitespace, so dropping the boundary
+  redacts nothing the fleet contains.
 
 **IP address heuristic** (`is_valid_ip_address()`):
 
@@ -726,7 +695,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 1    | MAC addresses                  | `MAC_RE` (see [MAC addresses](#mac-addresses))           | `hasher.hash_mac()`                     |
 | 2    | Serial numbers (inline)        | `\bSN\b\|S/N\|Serial Number` + value with a digit        | `hasher.hash_value(val, "SERIAL")`      |
 | 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial      | `hasher.hash_value(val, "SERIAL")`      |
-| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value (issue #47)              | `hasher.hash_value(val, "PIN")`         |
+| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value                          | `hasher.hash_value(val, "PIN")`         |
 | 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token       | `hasher.hash_value(val, "SERIAL")`      |
 | 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`     |
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
@@ -750,12 +719,11 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 and custom ones): each match is hashed with the pattern's prefix, except the built-in number patterns, which keep one
 rule so a value is treated alike on every route: a card-shaped number (`credit_card_*`) is hashed only when it passes
 the Luhn check (`luhn_valid()`), and an SSN-shaped one (`ssn`) is offered for review as `ssn`, never hashed. Under
-`--patterns base` this keeps the fleet's 8 card-shaped numbers in HTML bodies, all of which fail the Luhn check
-(0.13.0); the fleet holds no SSN-shaped value. The `network-device` domain does not include these patterns. The same
-pass runs on every other route (`_sanitize_body_string`), so a custom pattern matches anywhere in body text, as
-[CUSTOM_PATTERNS.md](../CUSTOM_PATTERNS.md) says; until 0.13.0 it ran only in the HTML engine, and a custom customer-ID
-pattern left the same value raw in a JSON, script or POST body. Form fields and URL query values are not body text: they
-are judged by their field names (see [POST Data Sanitization](#post-data-sanitization)).
+`--patterns base` this keeps the fleet's 8 card-shaped numbers in HTML bodies, all of which fail the Luhn check; the
+fleet holds no SSN-shaped value. The `network-device` domain does not include these patterns. The same pass runs on
+every other route (`_sanitize_body_string`), so a custom pattern matches anywhere in body text, as
+[CUSTOM_PATTERNS.md](../CUSTOM_PATTERNS.md) says. Form fields and URL query values are not body text: they are judged by
+their field names (see [POST Data Sanitization](#post-data-sanitization)).
 
 **Pass 2c precision rule:** Matches variable names containing the compound `serial` + `number`/`num`/`no` (with optional
 separator), and names ending with `serial`. Does NOT match `serial` followed by unrelated suffixes (`Protocol`, `Port`,
@@ -765,12 +733,13 @@ separator), and names ending with `serial`. Does NOT match `serial` followed by 
 detectors from the loaded domain patterns (known vendor serial layouts, e.g. the Netgear 13-char format) to
 delimiter-bounded candidate tokens (`VENDOR_SERIAL_TOKEN_RE` in `patterns/loader.py`) anywhere in the content. A
 fullmatch auto-redacts as `SERIAL_<hash>` — in **every** heuristic mode, since this is what covers a serial with no
-label at all: the CM2500 round-1 leak was the serial inside `RouterStatus.htm`'s `tagValueList` blob, where FLAG-mode
-review was the only barrier and a skipped review shipped the raw value. The token extraction is the boundary guard: a
-serial-shaped substring of a longer identifier, hex run, or base64 blob is never a candidate. The same helper runs for
-non-HTML text body and each decoded JSON string (`_sanitize_body_string`; Netgear also serves pipe-delimited blobs from
-`.js` files). `har-capture validate` applies the same detectors to the same token extraction and errors on an unredacted
-match — see [VALIDATION_SPEC](VALIDATION_SPEC.md#check_contentcontent-location-findings-custom_patterns-keywords) and
+label at all, such as the serial inside the CM2500's `RouterStatus.htm` `tagValueList` blob, where FLAG-mode review
+would otherwise be the only barrier and a skipped review would ship the raw value. The token extraction is the boundary
+guard: a serial-shaped substring of a longer identifier, hex run, or base64 blob is never a candidate. The same helper
+runs for non-HTML text body and each decoded JSON string (`_sanitize_body_string`; Netgear also serves pipe-delimited
+blobs from `.js` files). `har-capture validate` applies the same detectors to the same token extraction and errors on an
+unredacted match — see
+[VALIDATION_SPEC](VALIDATION_SPEC.md#check_contentcontent-location-findings-custom_patterns-keywords) and
 [ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware).
 
 ### Sibling-Element and Structural Label/Value Rules
@@ -793,21 +762,17 @@ used by the `serial_number` / `wps_pin` patterns in `pii.json` (`check_for_pii`)
 whole email after the label (`Serial Number: admin123@example.com` is an email, for the email pass), while a serial
 followed by `@host` (`4131N12345678@cm1`) is still a serial. A table's label cell and value cell are one more sibling
 pair (`</td><td>` is a hop of the tag chain), and the chain hops only tags, so a following row's label text stops it.
-Until 0.13.0 a second pattern, pass 2b, matched label and value cells separately; everything it accepts the tag chain
-accepts too (every separator it allows after the label, and every tag between the cells), so in the sanitizer it never
-saw an unredacted value, and in `validate` it reported each table-cell serial a second time. It is removed.
 
-**ADR-12 accounting** (0.13.0):
+**ADR-12 accounting** (the shared serial label):
 
 - *Leak closed:* a serial whose label element closes before the colon (`<b>Serial Number</b>: X`), or labeled
-  `Serial No`, `Serial ID` or a bare `Serial:`, was reported by `validate`'s own looser patterns and left by pass 2.
-  Across the fleet the shared patterns change no pass 2 match (412 before and after); `validate` now reports 76 labeled
-  serials on raw captures where it reported 56, and none after sanitize.
-- *Fidelity gained:* without the digit rule pass 2 redacted words in label position — measured 2026-09-13 across the
-  cable_modem_monitor fleet, 132 digit-free values (`Status`, identifiers, labels, status words such as `Disabled`) —
-  and every one of the fleet's 69 real labeled serials carries a digit. Those 132 are no longer rewritten.
+  `Serial No`, `Serial ID` or a bare `Serial:`, which `validate` reports. Across the fleet pass 2 makes 412 matches;
+  `validate` reports 76 labeled serials on raw captures, and none after sanitize.
+- *Fidelity:* the digit rule keeps words in label position — across the cable_modem_monitor fleet, 132 digit-free values
+  (`Status`, identifiers, labels, status words such as `Disabled`) — and every one of the fleet's 69 real labeled
+  serials carries a digit.
 - *Cannot-be-structure proof:* the label declares the value a serial; the digit rule is what separates a serial from a
-  word in the same position. The closing-tag allowance changed no match across the fleet.
+  word in the same position. The closing-tag allowance adds no pass 2 match across the fleet.
 
 **Structural label/value rule (pass 7c).** A bare tag chain is too loose for credential labels: its `\s*` also runs
 through ordinary prose, so gateway help text like
@@ -821,9 +786,9 @@ LABEL:  </tag>  <tag>  VALUE  </tag>
 ```
 
 Help-text prose shares a text node with its `<strong>` label; a sticker value sits alone in `<span class="value">`.
-Requiring label-close then value-open then text then element-close is what separates them. Measured across the committed
-fleet captures this matches the four Device Label blocks and nothing else, where looser variants also matched minified
-jQuery and i18n prose.
+Requiring label-close then value-open then text then element-close is what separates them. Across the committed fleet
+captures this matches the four Device Label blocks and nothing else; looser variants also match minified jQuery and i18n
+prose.
 
 Pass 7c applies four patterns, all defined once in `sanitization/html.py` and **imported** by `validation/secrets.py`
 and `check_for_pii` so the three detection paths cannot diverge:
@@ -835,17 +800,17 @@ and `check_for_pii` so the three detection paths cannot diverge:
 | `SSID_ATTRIBUTE_RE`       | Element whose `class`/`id` names it an SSID holder                  | `WIFI` |
 | `iter_ssid_option_values` | `<option>` text inside an SSID-named `<select>`                     | `WIFI` |
 
-The value must also be a **single whitespace-free token**. The element rule alone still matched ordinary gateway markup
-that the fleet captures happen not to contain — `<dt>Password:</dt><dd>Not set</dd>` and
-`<div class="hint">Must be at least 8 characters</div>` were both redacted. Every real sticker value is one token; every
-prose and status false positive is not. The accepted cost is that an SSID containing a space is not matched.
+The value must also be a **single whitespace-free token**. The element rule alone matches ordinary gateway markup that
+the fleet captures happen not to contain — `<dt>Password:</dt><dd>Not set</dd>` and
+`<div class="hint">Must be at least 8 characters</div>`. Every real sticker value is one token; every prose and status
+false positive is not. The accepted cost is that an SSID containing a space is not matched.
 
 Guards, all applied by `is_structural_value_sensitive()` so the sanitizer, `validate`, and `check_for_pii` agree:
 
 - Bare `key` is dropped from the password vocabulary — a false-positive magnet across element boundaries (`metaKey`)
 - `<th>` is excluded from `SSID_ATTRIBUTE_RE`: a column heading is not a value ("Source SSID Index")
 - An attribute whose SSID token carries a helper suffix (`ssid_help`, `ssid-label`, `ssidTitle`, `ssid_desc`) names copy
-  *about* an SSID, not one — matching `ssid` as a bare substring redacted "Choose a name for your network"
+  *about* an SSID, not one — matching `ssid` as a bare substring would redact "Choose a name for your network"
 - Text ending in a separator is excluded — that is a label (`<span id="priwifinet">Private Wi-Fi Network- </span>`)
 - `<option value="">` is a chooser placeholder (`-- Select --`), never a network
 - Bare integers in an option list are row indices, mirroring the universal `^\d+$` entry in `SAFE_PATTERNS`
@@ -858,13 +823,12 @@ Guards, all applied by `is_structural_value_sensitive()` so the sanitizer, `vali
 therefore exposed as `redact_structural_credentials()` and applied to non-HTML text bodies too, so validate can never
 report an error that no sanitize run could clear.
 
-**Why the heuristic engine does not cover this.** The engine classifies both leaked values correctly when handed them
+**Why the heuristic engine does not cover this.** The engine classifies both kinds of value correctly when handed them
 (`wifi_ssid` for a default SSID, `credential` for a three-word passphrase), but HTML label/value text is never routed to
-`analyze_value` — in `html.py` heuristics reach only `_sanitize_pipe_value` and the Web Storage scanner. That is why the
-leak was identical in all three heuristic modes. Routing span text through the engine was measured and rejected: it
-flags ~25% of all label/value pairs on the Technicolor captures (`System Uptime`, `DHCP Lease Time`, `BOOT Version`,
-`Model`), which would shred diagnostic data in `REDACT` and flood the review UI in `FLAG`. Widening
-`safe_value_patterns` far enough to make that path safe is separate work.
+`analyze_value` — in `html.py` heuristics reach only `_sanitize_pipe_value` and the Web Storage scanner — so pass 7c
+behaves the same in all three heuristic modes. Routing span text through the engine would flag ~25% of all label/value
+pairs on the Technicolor captures (`System Uptime`, `DHCP Lease Time`, `BOOT Version`, `Model`), shredding diagnostic
+data in `REDACT` and flooding the review UI in `FLAG`.
 
 **Pass 3 — account IDs** (`ACCOUNT_LABEL_RE`): the label, its separator, any tags opening the value's element and an
 opening quote are kept as written, and the value runs to the next tag, whitespace, quote, `&` or `;`, so the markup,
@@ -877,16 +841,16 @@ script or query around it survives (`<p>Account ID: <b>ACCOUNT_…</b></p>`, `de
 Passes that emit a `PREFIX_<hash>` placeholder (serial, WPS PIN, account, password, SSID, token, CSRF, config, vendor JS
 vars, and the structural pass 7c) skip values `is_redacted()` already recognizes. Re-sanitizing an already-sanitized
 capture is therefore a byte-level no-op, even under the default random salt, and a placeholder can never be re-hashed.
-Pass 2 additionally admits `_` into its value class: without it the pass matched only the `SERIAL` prefix of its own
-output and prepended a fresh hash on every run, growing `SERIAL_<hash>_<hash>_<hash>...` without bound.
+Pass 2 additionally admits `_` into its value class: without it the pass would match only the `SERIAL` prefix of its own
+output and prepend a fresh hash on every run, growing `SERIAL_<hash>_<hash>_<hash>...` without bound.
 
 The **format-preserving** passes (MAC, private IP, public IP, IPv6, email) deliberately do *not* take that guard and
 remain non-idempotent. Their placeholders are valid-looking values inside reserved ranges, so the guard cannot tell a
 placeholder from a real value: `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and `10.255.62.183` a
 legitimate private address, and both would pass through unredacted. Skipping them would be a leak, not a fidelity gain;
-re-hashing costs no structure — the same format stays in the same position — so ADR-12 leaves the passes as they are.
-Two existing tests (`ipv6_compressed`, `test_full_flow_with_user_redactions`) pin this and fail if the guard is ever
-extended to these passes.
+re-hashing costs no structure — the same format stays in the same position — so under ADR-12 these passes re-hash. Two
+tests (`ipv6_compressed`, `test_full_flow_with_user_redactions`) pin this and fail if the guard is extended to these
+passes.
 
 Salt regeneration is a separate matter and is not a defect: `salt="auto"` mints a fresh salt per invocation and the salt
 is deliberately never persisted. Idempotency here comes from *skipping* already-redacted values, not from reproducing
@@ -945,19 +909,17 @@ an IPv6 candidate. A fixture that parses as JSON also has its identity fields ch
 credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included): a
 value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
 value (`credential_value_action()`: a button word or prose is not reported) — is reported as `credential_field`. Both
-stop at `JSON_MAX_DEPTH`. Until 0.13.0 `check_for_pii` read no JSON field by name, so a plain password under a
-`password` key passed it; a consumer that taught it one with a `pii` regex pairing a key and its value
-(`"field": "value"`) no longer needs to, and should name the field in `fields` instead — a regex cannot pair across the
-decoded strings a JSON fixture is read as.
+stop at `JSON_MAX_DEPTH`. A consumer names a credential field in `fields`, not with a `pii` regex pairing a key and its
+value (`"field": "value"`): a regex cannot pair across the decoded strings a JSON fixture is read as.
 
 The HTML engine's own patterns — passwords after a label (`password_field`), password inputs, session and CSRF tokens,
 account IDs, WPS PINs, config paths (`HTML_ONLY_PATTERNS`), and password script variables a pattern file names
 (`script_password`) — are reported only in content the sanitizer routes to that engine, read as it reads a body with no
 type (`route_body()`: JSON by content, `<` opens markup, else text). Elsewhere their regexes match source code: across
-the sanitized fleet (0.13.0) they reported 21,287 `password_field`, 3,061 `session_token` and 22 `account_id` matches,
-every one in a JavaScript or CSS body (`key:!0`, `auth = crc_sign(…)`), and none in a JSON or POST body. Running those
-passes on the text route would have hashed about 24,000 code tokens (ADR-12: no leak named, fidelity lost), so they stay
-the HTML engine's.
+the sanitized fleet, outside that content, they match 21,287 `password_field`, 3,061 `session_token` and 22 `account_id`
+values, every one in a JavaScript or CSS body (`key:!0`, `auth = crc_sign(…)`), and none in a JSON or POST body. Running
+those passes on the text route would hash about 24,000 code tokens (ADR-12: no leak named, fidelity lost), so they are
+the HTML engine's alone.
 
 A JSON fixture is read in one pass over its string literals, in document order, so each finding is reported on the line
 its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,
@@ -972,41 +934,39 @@ character but `<`, `>` or a quote, so an unquoted value may hold `(`, `)`, `;`, 
 them). A quote opens a value only right after `=` (`=\s*`, the quote JS-escaped or not: `class=\"v\"` in a
 `document.write` string, the shape of 32,000 fleet `<td>` tags), so script is not read as a tag: a
 `'<input type="password" …'` string in code cannot start a match that pairs the code's string quotes and walks on to a
-later `value=` (17 such false redactions across the fleet with a run that paired any quotes). Each quoted value is
+later `value=` (a run that paired any quotes would make 17 such false redactions across the fleet). Each quoted value is
 bounded at 2,048 characters, so one stray quote cannot run a match across the document. A tag whose run is broken — a
 stray quote not after `=` (`<font color="red"">`), or a quoted value over 2,048 characters (none of the fleet's tags
 holds one) — is not read, and its value is kept. An attribute quote in a password input, SSID input, CSRF meta tag or
 SSID attribute may be JS-escaped too, at any depth (`value=\"…\"`). A quoted value runs to the quote that opened it, so
-`value="ab'cd"` is one value (it used to stop at the `'` and leave `cd`), and a backslash run belongs to it only before
-an ordinary character, so the run escaping the closing quote stays in place. Unquoted, a value stops at whitespace or
-the tag's `>`, so the markup after the tag survives. An SSID `<select>` body stops at the next `<select`. A regex with a
-run on each side of an anchor (`<input RUN type=password RUN value=`, the CSRF meta tag, the SSID attribute and select
-rules) runs only to the first copy of the anchor (`_tag_run_to`): with two free runs, one unclosed tag repeating the
-anchor retried the second run from every copy (56 KB took five seconds, 224 KB two minutes). An unquoted "anything but
-`>`" run made a series of unclosed `<input` or `<a` tags scan to the end of the body from every `<`: quadratic, and
-cubic where two runs share a tag (40 KB of unclosed password inputs took three minutes). A test pins the rule, and every
-`pii.json` pattern that reads a tag is the sanitizer's compiled regex verbatim (`SERIAL_LABEL_RE`, `ACCOUNT_LABEL_RE`,
-`WPS_PIN_LABEL_RE`, `PASSWORD_INPUT_RE`, `CSRF_META_RE`), as are the labeled password and session-token patterns
-(`PASSWORD_FIELD_RE`, `SESSION_TOKEN_RE`).
+`value="ab'cd"` is one value, and a backslash run belongs to it only before an ordinary character, so the run escaping
+the closing quote stays in place. Unquoted, a value stops at whitespace or the tag's `>`, so the markup after the tag
+survives. An SSID `<select>` body stops at the next `<select`. A regex with a run on each side of an anchor
+(`<input RUN type=password RUN value=`, the CSRF meta tag, the SSID attribute and select rules) runs only to the first
+copy of the anchor (`_tag_run_to`): with two free runs, one unclosed tag repeating the anchor would retry the second run
+from every copy (five seconds for 56 KB, two minutes for 224 KB). An unquoted "anything but `>`" run would scan a series
+of unclosed `<input` or `<a` tags to the end of the body from every `<`: quadratic, and cubic where two runs share a tag
+(three minutes for 40 KB of unclosed password inputs). A test pins the rule, and every `pii.json` pattern that reads a
+tag is the sanitizer's compiled regex verbatim (`SERIAL_LABEL_RE`, `ACCOUNT_LABEL_RE`, `WPS_PIN_LABEL_RE`,
+`PASSWORD_INPUT_RE`, `CSRF_META_RE`), as are the labeled password and session-token patterns (`PASSWORD_FIELD_RE`,
+`SESSION_TOKEN_RE`).
 
 **Labeled values keep their separator and quote.** Passes 7 (labeled passwords) and 9 (session tokens) replace only the
 value: `passphrase: 'x'` becomes `passphrase: 'PASS_…'`, not `passphrase=PASS_…'`. The value stops at a quote however
 deeply it is escaped: in `password=\"hunter2x\"` and `password=\\\"hunter2x\\\"` it is `hunter2x`. A backslash run
 belongs to the value only before an ordinary character, so in `"password=abc\\";` the escaped backslash before the
-closing quote stays and the string still closes. The earlier optional-quote class `["'\\]?` could not match an escaped
-quote, so the pass took a lone backslash as the value and left the secret after it.
+closing quote stays and the string still closes.
 
 **A labeled value is data, not markup or code** (`_LABELED_SEPARATOR`, shared by passes 7 and 9 and `pii.json`). Spacing
 entities after the separator are separator (`Password:&nbsp;hunter2` takes `hunter2`; `Password:&nbsp;&nbsp;</td>` has
 no value). An unquoted value that is code by syntax — a negation (`password:!0`), an entity, or a call
-(`c.getPasswordField(`, `cookie=function(e,t,n)`) — is not taken; a quoted value always is. Across the fleet (0.13.0)
-these were 181 matches, every one spacing or minified script: 145 `Password:&nbsp;…` cells in 19 captures and 36 code
-values. The trade: an unquoted password that begins with `!` or `&`, or reads as a call (`abc(`), is left; the fleet has
-none. `key` is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`); a bare `key` is a script
-variable as often as a label — all 44 of its unredacted fleet matches were JavaScript assignments — so its value is
-offered for review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it. What remains: a
-glued `…Key=` followed by a minified member expression (`Key=Y.util…;`, 8 matches in 4 captures) still reads as a
-credential.
+(`c.getPasswordField(`, `cookie=function(e,t,n)`) — is not taken; a quoted value always is. Across the fleet these are
+181 matches, every one spacing or minified script: 145 `Password:&nbsp;…` cells in 19 captures and 36 code values. The
+trade: an unquoted password that begins with `!` or `&`, or reads as a call (`abc(`), is left; the fleet has none. `key`
+is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`); a bare `key` is a script variable as
+often as a label — all 44 of its unredacted fleet matches are JavaScript assignments — so its value is offered for
+review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it. What remains: a glued
+`…Key=` followed by a minified member expression (`Key=Y.util…;`, 8 matches in 4 captures) still reads as a credential.
 
 ## Heuristic Engine (heuristics.py)
 
@@ -1131,7 +1091,7 @@ CamelCase examples: `HomeNetwork`, `MyWiFi`, `GuestAccess`
 
 | Mode       | Pipe-delimited behavior                   | HAR field behavior                |
 | ---------- | ----------------------------------------- | --------------------------------- |
-| `DISABLED` | No heuristic analysis — skip              | Backward compatible with v0.3.1   |
+| `DISABLED` | No heuristic analysis — skip              | No heuristic flags or redactions  |
 | `FLAG`     | Flag values for review, preserve original | Interactive mode (user decides)   |
 | `REDACT`   | Auto-redact suspicious values             | Aggressive automated sanitization |
 
@@ -1147,9 +1107,8 @@ Categories:
 - **Time/Date**: HH:MM, ISO 8601, ctime, RFC 2822, uptime durations
 - **Network/Config**: DHCP Client, QAM256, ATDMA, 802.11ac, WPA2, subnet masks
 - **Placeholders**: UUIDs, IPv6 (with optional %zone-id), already-redacted values — including multi-word prefixes
-  (`SERIAL_NUMBER_...` from pre-fix artifacts) and comma/space-separated **lists** of placeholder addresses
-  (`192.0.2.182, 192.0.2.51`), which otherwise clear the entropy bar and get the sanitizer's own replacement values
-  re-flagged for review (reproduced on the CM2500 captures)
+  (`SERIAL_NUMBER_...`) and comma/space-separated **lists** of placeholder addresses (`192.0.2.182, 192.0.2.51`), which
+  would otherwise clear the entropy bar and re-flag the sanitizer's own replacement values for review
 
 ### ReDoS Prevention
 
@@ -1197,10 +1156,9 @@ no uniform MAC layout (mixed separators, or not a MAC) gets the colon form. Stat
 `XX:XX:XX:XX:XX:XX`.
 
 The digest is taken over the MAC's digits as uppercase colon pairs, whatever the input layout. Every layout of one MAC
-therefore shares its digits (`AA:BB:CC:DD:EE:FF` → `02:df:f0:2a:db:05`, `aabbccddeeff` → `02dff02adb05` under one salt),
-and a colon MAC under a fixed salt gets the same placeholder it got before 0.13.0. The placeholder *string* differs by
-layout, so a colon MAC and its hyphen spelling correlate by digits rather than byte-for-byte; before 0.13.0 both became
-the colon form. `allowlist.json` recognizes the colon and hyphen placeholders, which text scans meet. Bare and dotted
+therefore shares its digits (`AA:BB:CC:DD:EE:FF` → `02:df:f0:2a:db:05`, `aabbccddeeff` → `02dff02adb05` under one salt).
+The placeholder *string* differs by layout, so a colon MAC and its hyphen spelling correlate by digits rather than
+byte-for-byte. `allowlist.json` recognizes the colon and hyphen placeholders, which text scans meet. Bare and dotted
 placeholders are not in the global allowlist: `02deadbeef12` is as likely a password as a placeholder.
 
 ### Category-to-Prefix Mapping
@@ -1316,17 +1274,17 @@ The digit requirement is the operative form of "must not be word-shaped." Method
 are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls
 back to review.
 
-**Failing eligibility is not a leak** — it is the pre-existing behavior. The value stays flagged for interactive review,
-and Pass 2 resolves it if the user confirms. That is what allows the bar to be strict: a false negative costs nothing
-beyond the status quo, while a false positive would rewrite unrelated bytes across the file.
+**Failing eligibility is not a leak** — the value stays flagged for interactive review, and Pass 2 resolves it if the
+user confirms. That is what allows the bar to be strict: a false negative costs one review item, while a false positive
+would rewrite unrelated bytes across the file.
 
 Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
 delimiters are untouched.
 
 **Needle expansion and ordering** (`_propagation_search_keys`). Each eligible value contributes two needles — its
 literal form and its percent-encoded form (`quote(value, safe="")`) — both mapping to the same placeholder. A secret
-that had to be escaped to sit in a URL path is otherwise missed entirely, and that would contradict the rule the
-form-urlencoded branch already follows: an encoding difference must not break correlation.
+that had to be escaped to sit in a URL path is otherwise missed entirely, against the rule the form-urlencoded branch
+also follows: an encoding difference must not break correlation.
 
 Needles are applied **longest first**. When one redacted value is a prefix of another (a token and a token-plus-suffix),
 replacing the shorter first would substitute inside the longer one and emit a corrupted hybrid — neither placeholder nor
@@ -1351,8 +1309,8 @@ The registry (`RedactionCollector.redacted_values`) maps original value → assi
 `_redact_value` on every auto-redaction, so a value keeps the placeholder its first surface gave it. The sweep runs
 before `_embed_sanitization_metadata`, and its replacement count is recorded under the `propagated` category in
 `auto_redacted_counts`. It is one substring scan per needle over the serialized HAR, so it costs needles × size: across
-the fleet (0.13.0) no capture has more than 5 needles (0.05 s at most); a synthetic capture whose session cookie rotates
-on each of 8,000 requests takes about 19 s. A multi-needle matcher is not built for a shape the fleet does not have.
+the fleet no capture has more than 5 needles (0.05 s at most); a synthetic capture whose session cookie rotates on each
+of 8,000 requests takes about 19 s. A multi-needle matcher is not built for a shape the fleet does not have.
 
 **Review queue.** An eligible value with no surviving occurrence is withdrawn from `report.flagged`
 (`RedactionCollector.drop_flagged()`) — presenting it would ask the user for a decision that cannot change the output.
@@ -1361,9 +1319,9 @@ sweep's needles do not match — `\/` in a PHP body, an ASCII-escaped JSON strin
 review replaces those forms ([Pass 2](#pass-2-interactive-review)). A copy inside a base64-wrapped payload is not read:
 neither the sweep nor the review can rewrite it there, so offering the value would promise a redaction that cannot
 happen (base64-wrapped payloads occur nowhere in the fleet). Only flagged values are searched, so the check costs one
-scan per flagged, redacted value, not per redacted value (a session cookie rotating per request made that quadratic).
-Values that failed eligibility, and values that were only ever flagged (never auto-redacted), stay in the queue
-untouched.
+scan per flagged, redacted value, not per redacted value (which a session cookie rotating per request would make
+quadratic). Values that failed eligibility, and values that were only ever flagged (never auto-redacted), stay in the
+queue untouched.
 
 ### URL Credential Location Annotation
 
@@ -1388,10 +1346,10 @@ base64 alphabet and breaks regex-based detection in the sanitized HAR.
 - Empty list (`[]`) means no URL query param credentials were detected.
 - Always present after `sanitize_har` — even when empty.
 - Sanitizing a file that already carries the annotation keeps its entries (those naming an existing entry; malformed
-  items and indices past the entries are dropped) alongside the ones this run finds: the earlier run's `AUTH_`
-  placeholder is no longer recognizable, so without the merge a re-sanitized URL-token capture would lose the only
-  record of its login. `annotated_url_credential_entries()` (`patterns/redaction.py`) is the one reader, shared by the
-  merge, `validate` and [capture-completeness](VALIDATION_SPEC.md#capture-completeness-validation).
+  items and indices past the entries are dropped) alongside the ones this run finds: an `AUTH_` placeholder is not
+  recognizable as a credential, so without the merge a re-sanitized URL-token capture would lose the only record of its
+  login. `annotated_url_credential_entries()` (`patterns/redaction.py`) is the one reader, shared by the merge,
+  `validate` and [capture-completeness](VALIDATION_SPEC.md#capture-completeness-validation).
 
 ```python
 def _scan_url_credentials(entries: list) -> dict[int, str]:
@@ -1477,20 +1435,16 @@ Entry point: `apply_user_redactions(report)`
    - Recreate hasher with original salt from report
    - Hash value: `hasher.hash_sensitive_value(original_value, category)` — the same
      [category→prefix map](#category-to-prefix-mapping) as Pass 1, so user redactions carry recognized placeholder
-     prefixes (`CRED_`, `SERIAL_`, ...). Building the prefix from the raw category name produced placeholders like
-     `CREDENTIAL_`/`SERIAL_NUMBER_` that the allowlist and safe-value patterns did not all recognize as redacted.
+     prefixes (`CRED_`, `SERIAL_`, ...); a prefix built from the raw category name (`CREDENTIAL_`, `SERIAL_NUMBER_`)
+     would not be recognized as redacted everywhere.
    - Collect every form the value can take in a HAR string (`_user_redaction_forms`): as written; percent-encoded as a
      URL path, query value or form body writes it (`quote`, `quote(safe="")`, `quote_plus`); JSON-escaped as a body
-     inside the string writes it (`\"`, `\u00e9`, PHP's `\/`). Before 0.13.0 only the literal form was replaced, so a
-     form body's `login_user=%22…%22` or a PHP body's `\/` copy survived the user's choice.
+     inside the string writes it (`\"`, `\u00e9`, PHP's `\/`).
 1. Replace every form with its placeholder inside each string value (`_replace_in_string_values`), one matcher per call,
-   longest form first at each position. Keys, numbers and other JSON structure are never touched: the earlier
-   find-and-replace on the serialized HAR rewrote every `1` when a user redacted `login=1`, corrupting the file (14
-   fleet captures; the review then exited, losing every decision). A value under three characters is no longer offered
-   at all (`RedactionCollector`).
-1. Refresh the embedded metadata's `user_redacted` / `user_skipped` counts — the metadata was embedded at the end of
-   Pass 1, before any review decision existed, so a reviewed artifact would otherwise report `user_redacted: 0` forever
-   (observed on the CM2500 contributor capture, 2026-08-19)
+   longest form first at each position. Keys, numbers and other JSON structure are never touched, so redacting `login=1`
+   cannot rewrite every `1` in the file.
+1. Refresh the embedded metadata's `user_redacted` / `user_skipped` counts — the metadata is embedded at the end of Pass
+   1, before any review decision exists, so a reviewed artifact would otherwise report `user_redacted: 0`
 1. Return modified data
 
 **Recording the review:** `record_review(har_path, report, outcome, compressed_path=None)` (`sanitization/review.py`) is
@@ -1498,22 +1452,21 @@ the file side of Pass 2. It applies the user's redactions (`apply_user_redaction
 `log._har_capture.sanitization.review` with the `user_redacted` / `user_skipped` counts, replaces the `.sanitized.har`
 atomically (LF line endings), and then **regenerates the `.har.gz`** — the one the capture flow names, or an existing
 `<har_path>.gz` sibling. Without the regeneration, a `.gz` compressed before the review keeps every value the review
-scrubbed, in exactly the artifact contributors upload (observed on all three reviewed CM2500 captures, 2026-08-19). A
-regeneration failure raises `StaleCompressedError` naming the stale file, and the CLI exits non-zero with that name;
-`har-capture validate` backstops the pair with a
+scrubbed, in exactly the artifact contributors upload. A regeneration failure raises `StaleCompressedError` naming the
+stale file, and the CLI exits non-zero with that name; `har-capture validate` backstops the pair with a
 [freshness check](VALIDATION_SPEC.md#compressed-artifact-freshness-check).
 
 Every ending is recorded, a review that redacted nothing included — a skipped or cancelled review, or one nobody could
 be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`sanitization/report.py`):
 
-| `review`       | Written by                          | Meaning                                                                        |
-| -------------- | ----------------------------------- | ------------------------------------------------------------------------------ |
-| `none_flagged` | Pass 1 (`sanitize_har_file`)        | Nothing was offered for review                                                 |
-| `completed`    | The CLI, after the review           | The user decided every item (redacting any, all or none of them)               |
-| `skipped`      | The CLI, after the review           | The user chose to keep every flagged value; each item is `USER_SKIPPED`        |
-| `cancelled`    | The CLI, after the review           | The user left the review without deciding; items stay `FLAGGED`                |
-| `no_tty`       | The CLI, with no terminal to prompt | Nobody was asked; the flagged values remain as captured                        |
-| (absent)       | —                                   | No review recorded: a library caller that ran none, or a release before 0.13.0 |
+| `review`       | Written by                          | Meaning                                                                            |
+| -------------- | ----------------------------------- | ---------------------------------------------------------------------------------- |
+| `none_flagged` | Pass 1 (`sanitize_har_file`)        | Nothing was offered for review                                                     |
+| `completed`    | The CLI, after the review           | The user decided every item (redacting any, all or none of them)                   |
+| `skipped`      | The CLI, after the review           | The user chose to keep every flagged value; each item is `USER_SKIPPED`            |
+| `cancelled`    | The CLI, after the review           | The user left the review without deciding; items stay `FLAGGED`                    |
+| `no_tty`       | The CLI, with no terminal to prompt | Nobody was asked; the flagged values remain as captured                            |
+| (absent)       | —                                   | No review recorded: a library caller that ran none, or a version that records none |
 
 Without a terminal `get` and `sanitize` never prompt (InquirerPy would fail and read as a cancel): each records `no_tty`
 and prints a warning with the flagged count. `sanitize` also writes the report file; `get` writes none — see ADR-6.
@@ -1534,7 +1487,7 @@ Detects common redaction markers to warn users before double-sanitizing.
 1. **Same salt for both passes** — Pass 2 recreates the hasher with the salt stored in Pass 1's report, ensuring
    consistent hashing across passes.
 1. **Scanner order matters** — Earlier scanners in html.py may redact values that later scanners check. For example, MAC
-   scanner (pass 3) runs before IP scanner (pass 5), so MAC addresses aren't misidentified as hex strings.
+   scanner (pass 1) runs before the IP scanners (passes 4–6), so MAC addresses aren't misidentified as hex strings.
 1. **Depth limit prevents stack overflow** — JSON recursive traversal is capped at 50 levels. Exceeding the limit is
    logged, not fatal. Text nested past the parser's own limit is treated as text that does not parse
    (`parse_json_container()`), so hostile nesting never crashes a sanitize run.
@@ -1562,8 +1515,7 @@ Detects common redaction markers to warn users before double-sanitizing.
    belong in the heuristic engine (flagged for user review), not the scanner pipeline.
 1. **Propagation never widens what counts as a secret** — [Pass 1b](#pass-1b-redacted-value-propagation) only replaces
    values the strict Pass 1 rules already redacted. It introduces no detection of its own, and a value that fails
-   eligibility keeps the pre-existing behavior (flagged for review). Widening eligibility is a scope change and is
-   governed by
+   eligibility stays flagged for review. Widening eligibility is a scope change and is governed by
    [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract).
 1. **Output is LF-only on every platform** — Every writer that emits a HAR or report pins `newline="\n"` rather than
    letting Python's text mode substitute `os.linesep`. Captures are committed downstream as immutable evidence in repos

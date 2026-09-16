@@ -72,17 +72,17 @@ Severity levels:
 **error**; a name matching `flag_patterns` asserts identity-adjacent content the sanitizer itself only flags for review
 — an unredacted value is a **warning**. A flag-tier field whose value is a factory-default username
 (`KNOWN_DEFAULT_USERNAMES`, currently `admin`) is **suppressed entirely**: the value is fixed per device family and
-carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it (CM2500
-round 1: three `[ERROR]` on `loginName: admin` exited 1 on a compliant capture). Suppression never applies to
-auto-redact-tier names — `admin` in a password field is a real credential leak. The model applies uniformly to form
-params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via `_classify_field_finding`.
+carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it.
+Suppression never applies to auto-redact-tier names — `admin` in a password field is a real credential leak. The model
+applies uniformly to form params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via
+`_classify_field_finding`.
 
 A flag-tier warning is the one finding a sanitize run leaves in place on purpose: the sanitizer offers the value for
 review and keeps it unless the user redacts it, so the warning is the reviewer's prompt, not a leak ADR-14 requires a
 remedy for. In a request — form params, POST bodies, query parameters — a flag-tier name holds what someone typed (a
 username), so the warning stays. In a response body's JSON it is not reported: there such names are mostly translation
 keys, and a warning on firmware text would prompt nothing (see "JSON fields" under `check_content` below). Across the
-fleet after sanitize (0.13.0) the flag-tier warnings are 174, all on `login`- and `username`-named request fields.
+fleet after sanitize the flag-tier warnings are 174, all on `login`- and `username`-named request fields.
 
 ## Entry Point
 
@@ -164,7 +164,7 @@ constant MAC is not reported, and neither is a self-signed name: the sanitizer o
 Checks a header whose name (case-insensitive) is **exactly** one of the sanitizer's three sets from `sensitive.json`
 (`headers.full_redact`, `headers.cookie_redact`, `headers.scheme_redact`) — the sanitizer matches names exactly, so a
 header that merely contains one (`X-Cookie-Consent`) is not one it rewrites and is not reported. Each secret part of the
-value is checked on its own with `is_fully_redacted()`, so a placeholder in one part no longer clears the header:
+value is checked on its own with `is_fully_redacted()`, so a placeholder in one part does not clear the header:
 
 1. **Cookie headers**: the segments `cookie_segment_actions()` marks as cookie data — the classification the sanitizer
    rewrites (see [Sanitization Spec — Header Sanitization](SANITIZATION_SPEC.md#header-sanitization)): every request
@@ -193,8 +193,7 @@ Checks form field names and JSON body content:
 1. Report if value is not redacted
 1. If the name did NOT match but the form is **login-shaped** (any parameter name in the form matches a sensitive
    pattern) and the value is base64 that decodes to printable text (`is_base64_decodable_text()`), report a **warning**
-   — the backstop for vendor credential field names the patterns don't know yet (Sercomm/Hitron `pws`,
-   cable_modem_monitor issue #92)
+   — the backstop for vendor credential field names the patterns don't know yet (Sercomm/Hitron `pws`)
 
 **Form-urlencoded body** (`postData.text` with `application/x-www-form-urlencoded` content type):
 
@@ -235,8 +234,8 @@ Detects PII patterns in response content text. Keyword-only: `has_sanitized_url_
 **Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
 single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
 zeros (`0{6,}` — a separator-less zero MAC, a zeroed counter, a `#000000` in minified CSS) or a literal `XXX` /
-`REDACTED` anywhere in the body made the entire page look already-redacted and skipped every check below. That
-suppressed 209 of 750 committed fleet entries, including an XB10 page holding a plaintext default Wi-Fi password.
+`REDACTED` anywhere in the body would make the entire page look already-redacted and skip every check below. 209 of 750
+committed fleet entries contain such a run, including an XB10 page holding a plaintext default Wi-Fi password.
 `is_fully_redacted()` requires the whole string to be one opaque placeholder token: no whitespace, no markup, no
 structural punctuation, and a match accounting for the entire token rather than appearing inside it.
 
@@ -284,18 +283,16 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 
 - Imports the sanitizer's own pattern, `SERIAL_LABEL_RE` from `sanitization/html.py` (pass 2; see
   [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every labeled
-  serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). Until 0.13.0
-  `validate` kept its own looser patterns: a label merely containing `serial` (`cmSerialNumber:`) was reported and never
-  removed, and an unbounded label crossed a whole table row whose serial is a template placeholder (`<?get_cm_sn>`) and
-  reported the next row's firmware name on 12 fleet pages (TM1602A, CM820B)
+  serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). A label that
+  merely contains `serial` (`cmSerialNumber:`) is not a serial label, and a label whose value is a template placeholder
+  (`<?get_cm_sn>`) does not reach across the table row to the next row's firmware name
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
 
 - Imports the compiled patterns from `sanitization/html.py` (`SIBLING_PASSWORD_RE`, `SIBLING_SSID_RE`,
   `SSID_ATTRIBUTE_RE`, `iter_ssid_option_values`) rather than restating them, so the sanitizer's pass 7c, `validate`,
-  and `check_for_pii` cannot drift apart on what counts as a labeled credential — the 0.12.1 reconciliation covered
-  vendor serial *tokens* only and left this layer divergent
+  and `check_for_pii` cannot drift apart on what counts as a labeled credential
 - A **password** in a labeled field is an **error**: the label states outright that the value is a credential, so an
   unredacted match is a known leak, not a maybe (the ADR-13 determinism rule)
 - A **Wi-Fi network name** is a **warning**: an SSID identifies a network rather than authenticating to it
@@ -311,7 +308,6 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
   counts as a vendor serial
   ([ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware))
 - Exists because a serial inside a pipe-delimited blob (`tagValueList`) has no label for the patterns above to anchor on
-  — CM2500 round 1 shipped the real serial unmasked and `validate` blessed it
 - An unredacted fullmatch is an **error**: a vendor-format match is a known serial layout, not a maybe
 - Each distinct token is reported once per content body; `validate_har` compiles the detectors once per file and passes
   them via `serial_detectors`
@@ -321,8 +317,8 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 - Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost)
 - Excludes redacted placeholders (10.255.x.x, 192.0.2.x)
 - Excludes netmasks (`is_netmask()`: contiguous-bit masks like 255.255.252.0), reserved first octets (255.x, 0.x), and
-  version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them put
-  cosmetic noise on every healthy capture (CM2500 round 1: `255.255.255.0` reported as a potential public IP)
+  version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them would put
+  cosmetic noise on every healthy capture
 
 **Line numbers:**
 
@@ -335,9 +331,8 @@ Severity: **warning**
 - `IPV6_RE` candidates that `is_ipv6_host_address()` accepts — the sanitizer's own IPv6 pass (`patterns/redaction.py`),
   so a clock time, a MAC, the unspecified `::` and the loopback `::1` are not reported, and every address that is gets
   rewritten by any sanitize run, in every body route
-- Reported because a global address locates the subscriber and an EUI-64 link-local address embeds the device's MAC.
-  Until 0.13.0 there was no IPv6 check, and 960 IPv6 addresses in JSON bodies across the cable_modem_monitor fleet
-  survived sanitize unreported
+- Reported because a global address locates the subscriber and an EUI-64 link-local address embeds the device's MAC;
+  JSON bodies across the cable_modem_monitor fleet hold 960 IPv6 addresses
 - Placeholders (the `2001:db8::` documentation prefix) are skipped via `is_redacted()`
 - An IPv4-mapped address (`::ffff:1.2.3.4`) is one address: its dotted-quad tail is not reported again by the public-IP
   scan (`ipv6_host_spans()`)
@@ -498,7 +493,7 @@ A **credential submission** is a request carrying any of:
 - a base64 `user:pass` URL credential (`iter_url_credentials()`, every shape in
   [SANITIZATION_SPEC URL Sanitization](SANITIZATION_SPEC.md#url-sanitization)) or, on a sanitized file, an entry the
   `log._har_capture._sanitized_credentials` annotation lists (`annotated_url_credential_entries()`) — the sanitizer's
-  `AUTH_` placeholder is no longer recognizable as a credential;
+  `AUTH_` placeholder is not recognizable as a credential;
 - a `Basic` or `Digest` `Authorization` value not seen on an earlier request. A browser resends the same Basic value on
   every request to the realm (9 of the 15 CMM fleet captures with Basic auth resend it 3×), while a refused attempt
   carries a different value.
@@ -515,9 +510,9 @@ is.
 
 **Why "no submission" also needs no write request.** Many logins cannot be read by field name: across the 480 CMM fleet
 captures, 117 hold a `POST` but no readable submission — HNAP captures holding only the challenge phase (27), encrypted
-`AuthData`/`EncryptData` form logins (19), encrypted LuCI `arguments` (13). Warning "re-record" on those would repeat
-the cable_modem_monitor #213 failure (a JSON `PUT` login told "No POST requests were captured... Re-record"), so the
-no-submission gap is reported only when nothing in the capture could have carried a login.
+`AuthData`/`EncryptData` form logins (19), encrypted LuCI `arguments` (13). A write request can carry a login the tool
+cannot read (a JSON `PUT` login is one), so the no-submission gap is reported only when nothing in the capture could
+have carried a login.
 
 **Keys.** `credential_submission_counts` is keyed by the request URL with its query, fragment and userinfo dropped
 (split by hand; `urlparse` raises on an unbalanced IPv6 bracket). Those parts can carry the credential itself, and `get`
@@ -530,8 +525,8 @@ prints the single-submission warning, which names the URL, for the raw capture.
   placeholders (6 hashed, 9 raw). A Digest value differs on every request (its `uri`/`nc`/`response` change), so each
   request counts and the single-submission nudge never fires for Digest — 0 fleet captures use Digest.
 - An HNAP capture whose challenge phase carries a value counts two submissions for one login, suppressing the nudge — a
-  false negative costs a nudge, never evidence. 25 fleet captures do; 19 of them hold a `FIELD_` placeholder that
-  har-capture 0.8.2–0.10.2 wrote over the empty value (the sanitizer now keeps an empty value on every route).
+  false negative costs a nudge, never evidence. 25 fleet captures do; 19 of them hold a `FIELD_` placeholder in place of
+  the empty value, which the sanitizer does not write (it keeps an empty value on every route).
 - XML and multipart bodies are not read (0 fleet XML login bodies); GET query-string passwords are not read (0 fleet).
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
@@ -559,19 +554,16 @@ Analysis works on sanitized files because sanitization redacts cookie *values* b
 are all the mid-session check reads — so a contributor's sanitized `.har.gz` is still checkable at intake. `load_har()`
 handles `.har` and `.har.gz` transparently and is shared with `validate_har()`.
 
-**Why this exists:** cable_modem_monitor issue #120 (Technicolor CGA6444VF) shipped a HAR whose first request already
-carried a `PHPSESSID` cookie. The login exchange was never inside the capture window, the tool reported success, and a
-full auth config was hand-authored downstream from evidence that did not exist — five months and six contributor
-retests. The companion defect (same-URL POST dedup discarding the login submission) is closed: the capture no longer
-collapses repeated requests at all — see [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
+**Why this exists:** a capture whose first request already carries a session cookie holds no login exchange, and an auth
+config written from it rests on evidence that is not there. The login submission itself is kept because the capture
+never collapses repeated requests — see [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
 
 ## Compressed-Artifact Freshness Check
 
 `stale_compressed_sibling()` (`validation/artifacts.py`) compares a `.har` with its `.har.gz` sibling. Every har-capture
 flow writes the `.gz` as a byte-for-byte gzip of the final `.har`, so any divergence means one member predates the
-other's last edit. The known failure mode is a compressed artifact written before the interactive review scrubbed PII
-from the `.har` — observed on all three reviewed CM2500 captures (2026-08-19) — and the `.gz` is exactly the file
-contributors upload.
+other's last edit. The failure it catches is a compressed artifact written before the interactive review scrubbed PII
+from the `.har`, and the `.gz` is exactly the file contributors upload.
 
 - `compressed_sibling_pair(path)` resolves the `(har, gz)` pair from either member; an incomplete pair returns `None`
 - Divergent content (or an unreadable `.gz`) returns a human-readable problem description; a matching pair returns
@@ -726,8 +718,8 @@ Validation is intentionally simpler than sanitization:
    unsanitized HAR would produce overwhelming findings.
 1. **Redacted values are always suppressed** — If `is_redacted(value)` returns True, no finding is generated. This is
    the contract between sanitization and validation.
-1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Exceeding this is logged but does
-   not crash or produce findings for deeper content.
+1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Deeper content is skipped
+   silently — no crash and no findings.
 1. **Pattern compilation is done once** — `_field_tiers` is compiled on the first call to `check_json_fields` and reused
    across all recursive invocations and all entries; `validate_har` compiles the vendor-serial detectors once per file.
 1. **Cookie data is classified one segment at a time** — `cookie_segment_actions()` is the rule both tools share (see

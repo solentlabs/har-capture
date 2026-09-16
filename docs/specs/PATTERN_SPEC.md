@@ -378,8 +378,8 @@ SSNs. The domain declares which PII categories are relevant, including both core
 `pii.patterns`. The inclusion filter runs after the merge, so domain-specific patterns are first-class citizens
 alongside core patterns.
 
-When `include_patterns` is absent, all core patterns are applied (backward compatible). When multiple `--patterns` files
-are specified, `include_patterns` lists are accumulated across all files before being applied.
+When `include_patterns` is absent, all core patterns are applied. When multiple `--patterns` files are specified,
+`include_patterns` lists are accumulated across all files before being applied.
 
 As domain-specific patterns prove valuable across multiple consumers, they can be graduated to core (`pii.json`) — at
 which point existing domain files that already name them in `include_patterns` continue to work unchanged.
@@ -405,9 +405,9 @@ The built-in network device domain provides:
 - Safe value patterns for WiFi standards, modulation types, security protocols
 - WiFi SSID detector (band suffixes, common prefixes, CamelCase)
 - Device name detector (possessives, router brands, consumer devices)
-- Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — issue #49 C7000v2,
-  CM2500 7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate —
-  see the deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
+- Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — C7000v2, CM2500
+  7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
+  deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
 
 ## Merge Order
@@ -440,8 +440,8 @@ for header_key in ("full_redact", "cookie_redact", "scheme_redact"):
             custom["headers"][header_key]
         )
 
-# Field-name regex lists extend additively, tier by tier. The legacy
-# `patterns` key predates the tier split; its names join the auto-redact tier.
+# Field-name regex lists extend additively, tier by tier. Names under the
+# `patterns` key join the auto-redact tier.
 for key, tier in (("auto_redact_patterns", "auto_redact_patterns"),
                   ("flag_patterns", "flag_patterns"),
                   ("patterns", "auto_redact_patterns")):
@@ -466,11 +466,6 @@ for kind in ("password", "pipe_delimited"):
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})
 ```
-
-> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy `fields.patterns` key and silently dropped
-> `fields.auto_redact_patterns` / `fields.flag_patterns` from custom inputs — even though both keys appear in the
-> built-in `sensitive.json` schema. The merge now honors all three. File- or dict-based consumers that previously worked
-> around this by editing `sensitive.json` directly can switch to the `custom_patterns` kwarg.
 
 ## Loader Architecture
 

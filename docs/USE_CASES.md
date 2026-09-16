@@ -249,8 +249,8 @@ ______________________________________________________________________
 
 **Actor**: CI/CD pipeline or automated script capturing without user interaction.
 
-**Goal**: Capture a HAR file non-interactively, through the Python API. The CLI has no headless mode (ADR-2, decision
-D3): `har-capture get` always opens a browser and waits for the user to close it.
+**Goal**: Capture a HAR file non-interactively, through the Python API. The CLI has no headless mode (ADR-2):
+`har-capture get` always opens a browser and waits for the user to close it.
 
 **Preconditions**:
 
@@ -603,7 +603,7 @@ ______________________________________________________________________
 
 1. User runs sanitize command on the HAR file
 1. System detects XML MIME type on POST body entries
-1. XML POST bodies are routed through the HTML/XML content engine (same 17-pass scanner used for response content)
+1. XML POST bodies are routed through the HTML/XML content engine (the same scanner used for response content)
 1. Sensitive values within XML elements (passwords, tokens, MACs, IPs) are auto-redacted
 1. XML response bodies with `application/xml` MIME type are routed through the same engine
 1. Non-sensitive XML content (element names, action parameters, status values) is preserved
@@ -612,8 +612,8 @@ ______________________________________________________________________
 **Variations**:
 
 - Malformed XML → gracefully skipped (logged, sanitization continues)
-- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by existing form-urlencoded handler, not the
-  XML handler
+- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by the form-urlencoded handler, not the XML
+  handler
 - Mixed HAR with both XML and HTML responses → each entry routed by MIME type
 
 **CLI Example**:
@@ -1026,7 +1026,7 @@ def redact_capture_for_device(post_data: dict, device_spec: dict) -> dict:
 
 # Example: a Hitron CODA56 catalog entry lists "pws" as its credential field.
 # The consumer passes its catalog names regardless of built-in coverage —
-# overlap (pws is also a built-in since issue #92) is harmlessly redundant.
+# overlap (pws is also a built-in) is harmlessly redundant.
 hitron_spec = {"credential_field_names": ["pws"]}
 captured = {
     "mimeType": "application/x-www-form-urlencoded",
@@ -1053,5 +1053,5 @@ motorola_spec = {"credential_field_names": ["loginPassword"]}
 **Why not edit `sensitive.json`?** That file captures universal PII rules. One-off, consumer-specific credential names
 don't belong there because they'd apply to every capture across every consumer. The per-call hook keeps the universal
 set small and lets each consumer carry its own catalog. Names that recur across vendors do get promoted to the built-in
-set once field evidence justifies it — `pws` (Sercomm, Hitron) was promoted after cable_modem_monitor issue #92, joining
-`passwd` and `pwd` — at which point consumer catalogs that still pass them are harmlessly redundant.
+set once field evidence justifies it — the built-in set holds `pws` (Sercomm, Hitron) alongside `passwd` and `pwd` — at
+which point consumer catalogs that still pass them are harmlessly redundant.

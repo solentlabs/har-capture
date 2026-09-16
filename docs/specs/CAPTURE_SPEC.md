@@ -57,8 +57,8 @@ Returns `(reachable, scheme, error)`. Explicit schemes bypass auto-detection —
 **Target paths are dropped — and announced.** `_parse_target()`/`_strip_protocol()` keep only the host; capture always
 starts at the device root. The CLI calls `target_path()` up front and, when the target carried a path
 (`har-capture get https://host/DocsisStatus.htm`), prints a notice that the path is ignored and the user should navigate
-to the page inside the browser. Before the notice, the silent drop cost a wasted CM2500 capture run (2026-08-19): the
-run captured `/` instead of the named page.
+to the page inside the browser. The notice exists because a silently dropped path produces a capture of `/` instead of
+the page the user named.
 
 #### Protocol auto-detection (`detect_protocol`)
 
@@ -71,8 +71,8 @@ against dual-stack false-fail on IPv4-only LAN devices); bracketed IPv6 input (`
 v6-only targets are not silently dropped. Scheme matching is case-insensitive. If the user supplies an explicit `:port`
 (e.g. `127.0.0.1:8443`), only that port is probed. Returns a `ProtocolDetectionResult` with `success`, `protocol`,
 `working_url`, and `error`. The negotiated TLS version is logged for diagnostics but not classified or surfaced —
-har-capture cannot act on it (Chromium runs its own TLS stack); see ADR-10 for the rationale. Adapted from
-`cable_modem_monitor_core/connectivity.py` and intentionally duplicated rather than shared so har-capture's runtime
+har-capture cannot act on it (Chromium runs its own TLS stack); see ADR-10 for the rationale. The logic mirrors
+`cable_modem_monitor_core/connectivity.py` and is intentionally duplicated rather than shared so har-capture's runtime
 stays stdlib-only.
 
 ### Phase 3: Session Contamination Check (`check_session_phase`)
@@ -148,9 +148,9 @@ result = check_auth_phase(target_url, result)
 # result.auth.realm: str | None
 ```
 
-> **CLI behavior:** The CLI no longer calls `check_auth_phase`. In interactive mode, Playwright shows a native Basic
-> Auth dialog when the device responds with 401 — the user enters credentials in the browser and the full auth exchange
-> is captured in the HAR (see [ADR-2](../ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)). When
+> **CLI behavior:** The CLI does not call `check_auth_phase`. In interactive mode, Playwright shows a native Basic Auth
+> dialog when the device responds with 401 — the user enters credentials in the browser and the full auth exchange is
+> captured in the HAR (see [ADR-2](../ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)). When
 > `--username`/`--password` is provided, credentials are passed directly to Playwright's `http_credentials` without auth
 > detection.
 >
@@ -171,11 +171,10 @@ Calls `capture_device_har()` from `browser.py` with all accumulated state (crede
 
 ## Minimal Mode (`--minimal`)
 
-Some devices allow only one concurrent HTTP connection (e.g., Compal CH7465MT). The original capture workflow made 5
-pre-Playwright HTTP requests (connectivity, auth challenge probe, HEAD probe, auth detection, plus a duplicate
-connectivity check inside `capture_device_har()`), which exhausted the session slot before the browser opened. The
-refactored default makes 1–2 requests. The `--minimal` flag goes further by deferring the connectivity check into
-`capture_device_har()` and skipping everything else.
+Some devices allow only one concurrent HTTP connection (e.g., Compal CH7465MT), so every pre-Playwright HTTP request
+risks exhausting the session slot before the browser opens. The default CLI pre-flight is kept to a few requests (see
+the table below). The `--minimal` flag goes further by deferring the connectivity check into `capture_device_har()` and
+skipping everything else.
 
 ### What `--minimal` Does
 
@@ -194,16 +193,16 @@ refactored default makes 1–2 requests. The `--minimal` flag goes further by de
 The connectivity check is preserved in all modes because it determines `http` vs `https` and validates the device is
 reachable before launching Playwright.
 
-> **Library API note:** `run_capture_workflow()` still runs session check (Phase 3), probes (Phase 4), and auth
-> detection (Phase 5) by default for backward compatibility. Use `skip_session_check=True`, `skip_probes=True`, and
-> `skip_auth_check=True` to match the CLI's minimal-pre-flight behavior. It forwards `custom_patterns` and `interactive`
-> to the capture (before 0.13.0 it had neither, so a workflow capture was sanitized without its domain patterns).
+> **Library API note:** `run_capture_workflow()` runs session check (Phase 3), probes (Phase 4), and auth detection
+> (Phase 5) by default. Use `skip_session_check=True`, `skip_probes=True`, and `skip_auth_check=True` to match the CLI's
+> minimal-pre-flight behavior. It forwards `custom_patterns` and `interactive` to the capture, so a workflow capture is
+> sanitized with its domain patterns.
 
 ### `target_url` Parameter
 
 When the CLI workflow completes Phase 2, `target_url` (e.g., `http://192.168.100.1/`) is already known. Passing it to
-`capture_device_har()` eliminates the duplicate internal connectivity check that previously ran at the start of the
-function. This optimization applies to **all** capture modes, not just `--minimal`.
+`capture_device_har()` skips its internal connectivity check, so the device sees no duplicate request. This applies to
+**all** capture modes, not just `--minimal`.
 
 ### `page_load_strategy` Parameter
 
@@ -237,8 +236,8 @@ the mechanism.
 
 ### Internal Decomposition
 
-`capture_device_har()` is the public API — its signature is unchanged. Internally, it delegates to five extracted
-functions that can each be tested independently:
+`capture_device_har()` is the public API. Internally, it delegates to five helper functions that can each be tested
+independently:
 
 ```text
 capture_device_har()
@@ -264,15 +263,16 @@ Testable with: zero mocks.
 
 Everything that touches Playwright: launch browser, configure context (storage state, credentials, HAR recording),
 navigate with networkidle/domcontentloaded fallback, wait-for-data, capture cookies/storage, handle timeout vs
-interactive mode, close browser. Returns `BrowserSessionResult` with all captured browser state — eliminates the
-`nonlocal` pattern used previously to shuttle data out of a nested closure.
+interactive mode, close browser. Returns `BrowserSessionResult` with all captured browser state, so no data is shuttled
+out of a nested closure.
 
 Testable with: one mock (`sync_playwright`).
 
 #### `_inject_har_metadata(temp_path, target_url, probes, session)`
 
 Reads the raw HAR from the temp file, injects `_probes`, `_har_capture` (cookies, storage), and `_solentlabs`
-(pre-capture cookies, popup audit trail, dialog audit trail), writes back. Handles corrupt/unreadable HAR gracefully.
+(pre-capture cookies, popup audit trail, dialog audit trail, download audit records), writes back. Handles
+corrupt/unreadable HAR gracefully.
 
 Testable with: zero mocks (real temp file).
 
@@ -286,11 +286,11 @@ only copy of the capture, and it is kept (see [File Cleanup](#file-cleanup)).
 downstream artifact — raw copy included — keeps entries whose request URL is not http(s). Browser-internal traffic
 (`chrome://`, `chrome-extension://`, `devtools://`, `about:`) is never target-device evidence, and some of it leaks
 local machine state: `chrome://fileicon/?path=...` embeds the local filesystem path of every file on the downloads page
-(observed on the 2026-08-19 CM2500 happy-path capture: 11 chrome:// entries with Playwright temp-dir paths). The
-keep-list is a strict http/https allowlist by design — `blob:` and `data:` entries are deliberately stripped too:
-Playwright's recorder captures network-level traffic, so they essentially never appear as entries, and any bytes behind
-them arrived via an http(s) response that is already in the HAR. The standalone `sanitize` command does not drop entries
-— its contract is redaction, not removal — so this pollution is handled where it originates: at capture time.
+(for example, Playwright temp-dir paths). The keep-list is a strict http/https allowlist by design — `blob:` and `data:`
+entries are deliberately stripped too: Playwright's recorder captures network-level traffic, so they essentially never
+appear as entries, and any bytes behind them arrived via an http(s) response that is already in the HAR. The standalone
+`sanitize` command does not drop entries — its contract is redaction, not removal — so this pollution is handled where
+it originates: at capture time.
 
 Testable with: zero Playwright mocks (one mock for `sanitize_har_file` if isolating, or zero mocks with a real fixture).
 
@@ -384,8 +384,8 @@ Design decisions:
 
 - **Clean storage state**: `storage_state={"cookies": [], "origins": []}` forces an empty cookie jar and localStorage.
   Without this, some Playwright configurations inherit cookies or `httpCredentials` from launch options, causing the
-  first request to carry session artifacts (e.g., `Secure`, `XSRF_TOKEN`, `PHPSESSID`, `Authorization`). This prevents
-  all 6 failure signatures identified in the MCP intake pipeline.
+  first request to carry session artifacts (e.g., `Secure`, `XSRF_TOKEN`, `PHPSESSID`, `Authorization`), which
+  contaminates the capture.
 - **Temp file for raw HAR**: Created via `tempfile.mkstemp()` — raw PII is never written to the user's directory. The FD
   is closed but the path is kept for Playwright.
 - **Embedded content**: `record_har_content="embed"` embeds response bodies within the HAR JSON, avoiding external file
@@ -553,9 +553,9 @@ Testable with: zero mocks (real temp file).
 
 ### Download Preservation
 
-Playwright saves browser downloads into an ephemeral artifacts directory that is deleted when the context closes — the
-2026-08-19 CM2500 session lost the modem's event-log export this way: the HAR recorded the request entry but not the
-content, and the file itself was wiped.
+Playwright saves browser downloads into an ephemeral artifacts directory that is deleted when the context closes, and
+the HAR records the request entry but not the content — without preservation, a download such as a CM2500 event-log
+export is lost.
 
 Mechanism, in `_run_browser_session()`:
 
@@ -663,6 +663,7 @@ har_data["log"]["_solentlabs"] = {
     "pre_capture_cookies": pre_capture_cookies,  # Cookie jar state before navigation
     "popups": popup_records,                     # Popup audit trail
     "dialogs": dialog_records,                   # Dialog audit trail
+    "downloads": download_records,               # Download audit records (filenames only)
 }
 ```
 
@@ -720,8 +721,7 @@ Unsanitized output is never compressed. The raw temp file is deleted in every ca
 capture over the 100 MB sanitize limit, a sanitizer exception, a bad `custom_patterns` argument) and no `--keep-raw`
 copy exists, the temp file is the only copy of the capture. It is kept where it is — the temp dir, never the working
 directory — the capture reports failure (`success=False`), and the error names the file and the
-`har-capture sanitize <file> --patterns <domain>` command that finishes it. Before 0.13.0 the pipeline deleted it and
-reported success, losing the capture silently.
+`har-capture sanitize <file> --patterns <domain>` command that finishes it.
 
 ## `CaptureOptions` Dataclass
 
@@ -761,7 +761,7 @@ class CaptureOptions:
 1. **Self-signed certs are always accepted** — Both probes and Playwright context ignore certificate errors.
 1. **Browser context is always clean** — `storage_state={"cookies": [], "origins": []}` is hardcoded. No cookies,
    localStorage, or credentials leak from previous sessions.
-1. **`_solentlabs` audit surfaces are always present** — `_solentlabs.pre_capture_cookies`, `_solentlabs.popups`, and
-   `_solentlabs.dialogs` are emitted in every capture, even when the popup/dialog lists are empty. Downstream tools can
-   verify context cleanliness and see whether secondary browser events occurred without relying on missing-key
-   heuristics.
+1. **`_solentlabs` audit surfaces are always present** — `_solentlabs.pre_capture_cookies`, `_solentlabs.popups`,
+   `_solentlabs.dialogs`, and `_solentlabs.downloads` are emitted in every capture, even when the lists are empty.
+   Downstream tools can verify context cleanliness and see whether secondary browser events occurred without relying on
+   missing-key heuristics.
