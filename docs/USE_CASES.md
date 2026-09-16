@@ -249,37 +249,44 @@ ______________________________________________________________________
 
 **Actor**: CI/CD pipeline or automated script capturing without user interaction.
 
-**Goal**: Capture a HAR file non-interactively.
+**Goal**: Capture a HAR file non-interactively, through the Python API. The CLI has no headless mode (ADR-2):
+`har-capture get` always opens a browser and waits for the user to close it.
 
 **Preconditions**:
 
 - Target device is accessible from the CI environment
-- Credentials provided via command line or environment
-- No TTY available
+- The device needs no in-page login (a form or HNAP login cannot be filled headless); Basic-Auth credentials are passed
+  as `http_credentials`
+- A `timeout` is set — a headless capture without one raises `ValueError` before sending anything
 
 **Flow**:
 
-1. Script runs capture command
-1. System runs all pre-flight checks (browser, connectivity, session contamination, probes, auth)
-1. Browser launches, navigates to device
+1. Script calls `run_capture_workflow(target, headless=True, timeout=N, http_credentials=..., custom_patterns=...)`
+1. System runs the pre-flight checks (browser, connectivity, session contamination, probes, auth)
+1. Browser launches headless, navigates to the device
 1. Wait-for-data captures async requests
-1. Browser closes when page activity completes
-1. Sanitization runs with heuristic flagging; flagged values written to report (no TTY)
-1. Compressed HAR file is produced
-1. Script receives exit code 0 (success) or 1 (failure)
+1. Browser closes after `timeout` seconds and a final quiescence wait
+1. Sanitization runs with the given patterns; no review runs, so a file with flagged values records no review outcome
+1. Compressed HAR file is produced; the result's `capture_success` and `capture_error` report the outcome
 
 **Variations**:
 
-- Basic Auth device → `--username` and `--password` required
-- `timeout` and `headless` parameters are available via the Python API (`capture_device_har()`) but not exposed as CLI
-  flags
+- `capture_device_har(target, headless=True, timeout=N)` skips the workflow's pre-flight phases
+- `interactive=False` disables heuristic flagging
 
-**CLI Example**:
+**Python Example**:
 
-```bash
-har-capture get http://192.168.1.1 \
-    --username admin --password pass123 \
-    --patterns network-device --output captures/modem.har
+```python
+from har_capture.capture import run_capture_workflow
+from har_capture.patterns.loader import resolve_patterns_arg
+
+result = run_capture_workflow(
+    "http://192.168.1.1",
+    headless=True,
+    timeout=30,
+    http_credentials={"username": "admin", "password": "..."},
+    custom_patterns=str(resolve_patterns_arg("network-device")),
+)
 ```
 
 ______________________________________________________________________
@@ -447,7 +454,8 @@ ______________________________________________________________________
 
 1. Pipeline runs sanitize command
 1. Heuristic analysis runs, flagging suspicious values
-1. No TTY detected — flagged values written to `.review.json` report instead of interactive prompt
+1. No TTY detected — flagged values written to `.review.json` report instead of interactive prompt; the sanitized file
+   records `review: no_tty` and a warning names the flagged count
 1. Sanitized output written
 1. Exit code 0 on success
 
@@ -513,7 +521,8 @@ ______________________________________________________________________
 1. Every occurrence of MAC `AA:BB:CC:DD:EE:FF` maps to `02:a1:b2:c3:d4:e5`
 1. Every occurrence of IP `192.168.1.100` maps to `10.255.42.17`
 1. Downstream analysis can still determine: "device `02:a1:b2:c3:d4:e5` made requests on entries 1, 5, 12"
-1. Salt is stored in sanitization metadata for Pass 2 consistency
+1. The salt is kept in the sanitization report (never in the HAR, whose metadata records only `salt_mode`) for Pass 2
+   consistency
 
 **Variations**:
 
@@ -594,7 +603,7 @@ ______________________________________________________________________
 
 1. User runs sanitize command on the HAR file
 1. System detects XML MIME type on POST body entries
-1. XML POST bodies are routed through the HTML/XML content engine (same 17-pass scanner used for response content)
+1. XML POST bodies are routed through the HTML/XML content engine (the same scanner used for response content)
 1. Sensitive values within XML elements (passwords, tokens, MACs, IPs) are auto-redacted
 1. XML response bodies with `application/xml` MIME type are routed through the same engine
 1. Non-sensitive XML content (element names, action parameters, status values) is preserved
@@ -603,8 +612,8 @@ ______________________________________________________________________
 **Variations**:
 
 - Malformed XML → gracefully skipped (logged, sanitization continues)
-- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by existing form-urlencoded handler, not the
-  XML handler
+- Form-encoded POST to XML endpoint (e.g., `fun=10&token=abc`) → handled by the form-urlencoded handler, not the XML
+  handler
 - Mixed HAR with both XML and HTML responses → each entry routed by MIME type
 
 **CLI Example**:
@@ -1017,7 +1026,7 @@ def redact_capture_for_device(post_data: dict, device_spec: dict) -> dict:
 
 # Example: a Hitron CODA56 catalog entry lists "pws" as its credential field.
 # The consumer passes its catalog names regardless of built-in coverage —
-# overlap (pws is also a built-in since issue #92) is harmlessly redundant.
+# overlap (pws is also a built-in) is harmlessly redundant.
 hitron_spec = {"credential_field_names": ["pws"]}
 captured = {
     "mimeType": "application/x-www-form-urlencoded",
@@ -1044,5 +1053,5 @@ motorola_spec = {"credential_field_names": ["loginPassword"]}
 **Why not edit `sensitive.json`?** That file captures universal PII rules. One-off, consumer-specific credential names
 don't belong there because they'd apply to every capture across every consumer. The per-call hook keeps the universal
 set small and lets each consumer carry its own catalog. Names that recur across vendors do get promoted to the built-in
-set once field evidence justifies it — `pws` (Sercomm, Hitron) was promoted after cable_modem_monitor issue #92, joining
-`passwd` and `pwd` — at which point consumer catalogs that still pass them are harmlessly redundant.
+set once field evidence justifies it — the built-in set holds `pws` (Sercomm, Hitron) alongside `passwd` and `pwd` — at
+which point consumer catalogs that still pass them are harmlessly redundant.

@@ -94,8 +94,8 @@ def target_path(target: str) -> str:
     Capture always starts at the device root — ``_strip_protocol`` drops
     any path from the target. This helper exists so the CLI can *tell*
     the user that happened instead of silently capturing the wrong page
-    (a target of ``https://host/DocsisStatus.htm`` cost a wasted CM2500
-    capture run on 2026-08-19). A bare trailing slash is not a path.
+    (a target of ``https://host/DocsisStatus.htm`` would otherwise capture
+    the root page). A bare trailing slash is not a path.
     """
     lower = target.lower()
     for prefix in ("http://", "https://"):

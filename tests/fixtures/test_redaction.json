@@ -38,7 +38,8 @@
     "MAC_12345678",
     "PASS_abcdef12",
     "TOKEN_87654321",
-    "FIELD_deadbeef"
+    "FIELD_deadbeef",
+    "02-aa-bb-cc-dd-ee"
   ],
   "non_redacted_values": [
     "my_password",
@@ -47,7 +48,13 @@
     "00:11:22:33:44:55",
     "SomeDeviceName",
     "admin123",
-    "http://example.com"
+    "http://example.com",
+    "3c7a8a123456",
+    "02aabbccdde",
+    "02:aa-bb:cc-dd:ee",
+    "02aabbccddee",
+    "02aa.bbcc.ddee",
+    "02deadbeef12"
   ],
   "case_insensitive_pairs": [
     ["redacted", "Redacted", "REDACTED"],
@@ -87,7 +94,10 @@
       {"id": "placeholder_shaped_marker_credential", "segment": "AUTH_YWRtaW46U3VwM3JTZWNyZXQx", "prefix": "AUTH_", "credential": "YWRtaW46U3VwM3JTZWNyZXQx", "keyed": false},
       {"id": "doubled_question_mark",    "segment": "?YWRtaW46ZXhhbXBsZS1wdw==",              "prefix": "?",      "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": false},
       {"id": "doubled_equals",           "segment": "k==YWRtaW46ZXhhbXBsZS1wdw==",            "prefix": "k==",    "credential": "YWRtaW46ZXhhbXBsZS1wdw==", "keyed": true},
-      {"id": "padded_base64_json_redacted_as_before", "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "prefix": "q=", "credential": "eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "keyed": true},
+      {"id": "padded_base64_json_is_a_payload", "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ==", "prefix": null, "credential": null, "keyed": null},
+      {"id": "padded_base64_url_is_a_payload", "segment": "state=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbA==", "prefix": null, "credential": null, "keyed": null},
+      {"id": "padded_brace_text_not_a_credential", "segment": "q=e3BhZ2U6MSxzb3J0OjIyfQ==", "prefix": null, "credential": null, "keyed": null},
+      {"id": "unpadded_brace_text_not_a_credential", "segment": "q=e3BhZ2U6MSxzb3J0OjIyfQ", "prefix": null, "credential": null, "keyed": null},
       {"id": "unpadded_base64_url",      "segment": "state=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbA", "prefix": null, "credential": null,             "keyed": null},
       {"id": "unpadded_base64_json",     "segment": "q=eyJwYWdlIjoxLCJzb3J0IjoyfQ",           "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "multi_underscore_marker",  "segment": "a_login_YWRtaW46ZXhhbXBsZS1wdw==",       "prefix": null,     "credential": null,                       "keyed": null},
@@ -98,6 +108,574 @@
       {"id": "search_query",             "segment": "q=hello+world",                          "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "bare_base64_no_colon",     "segment": "aGVsbG8gd29ybGQ=",                       "prefix": null,     "credential": null,                       "keyed": null},
       {"id": "empty_segment",            "segment": "",                                       "prefix": null,     "credential": null,                       "keyed": null}
+    ]
+  },
+  "mac_regex_cases": {
+    "_comment": "MAC_RE over free text: matches are the MAC substrings found, in order. Six hex pairs joined by ':' or '-' match wherever they occur, glued to anything, so validate and sanitize agree on every such run. Across 11,953 MAC runs in the cable_modem_monitor fleet (2026-09-12) every one sits between punctuation or whitespace. A longer separated run is read six pairs at a time. Bare 12-hex is not matched: without a label it cannot be told from any other hex run.",
+    "cases": [
+      {"id": "colon_standalone",           "text": "mac 3C:7A:8A:12:34:56 end",           "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "hyphen_lowercase",           "text": "3c-7a-8a-12-34-56",                   "matches": ["3c-7a-8a-12-34-56"]},
+      {"id": "quoted_json_value",          "text": "\"3C:7A:8A:12:34:56\"",               "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_underscore",        "text": "cm_mac_3C:7A:8A:12:34:56",            "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_non_hex_letter",    "text": "HWaddr3C:7A:8A:12:34:56",             "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_hex_letter_before", "text": "wanmac3C:7A:8A:12:34:56",             "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_hex_digit_before",  "text": "13C:7A:8A:12:34:56",                  "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "glued_to_word_after",        "text": "3C:7A:8A:12:34:56Enabled",            "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "seven_groups_first_six",     "text": "3C:7A:8A:12:34:56:78",                "matches": ["3C:7A:8A:12:34:56"]},
+      {"id": "bare_twelve_hex",            "text": "3C7A8A123456",                        "matches": []},
+      {"id": "clock_time",                 "text": "uptime 12:34:56",                     "matches": []},
+      {"id": "ipv6_compressed",            "text": "fe80::3c7a:8aff:fe12:3456",           "matches": []},
+      {"id": "two_macs",                   "text": "3C:7A:8A:12:34:56,3C:7A:8A:12:34:57", "matches": ["3C:7A:8A:12:34:56", "3C:7A:8A:12:34:57"]}
+    ]
+  },
+  "url_credential_cases": {
+    "_comment": "iter_url_credentials(request): every base64(user:pass) credential in a request's query, as find_query_credential reads it: the URL string's segments first, then the queryString array (so a credential recorded in both appears twice). The query is read with split_url_query — from the first '?' to the next '#', so a hash route's '#/page?…' parameters count and a credential in a plain fragment does not — which never raises, unlike urlparse (an unbalanced IPv6 bracket). Malformed requests yield nothing.",
+    "cases": [
+      {"id": "bare_in_url",                    "request": {"url": "https://d.local/login?YWRtaW46cGFzcw==", "queryString": []},                                         "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "keyed_in_url",                   "request": {"url": "https://d.local/login?token=YWRtaW46cGFzcw==", "queryString": []},                                   "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "marker_in_url",                  "request": {"url": "https://d.local/status.html?login_YWRtaW46cGFzcw==", "queryString": []},                             "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "keyed_percent_encoded",          "request": {"url": "https://d.local/login?auth=YWRtaW46cGFzcw%3D%3D"},                                                   "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "url_and_array_both_reported",    "request": {"url": "https://d.local/login?YWRtaW46cGFzcw==", "queryString": [{"name": "YWRtaW46cGFzcw", "value": "="}]}, "credentials": ["YWRtaW46cGFzcw==", "YWRtaW46cGFzcw=="]},
+      {"id": "marker_split_by_query_parser",   "request": {"url": "", "queryString": [{"name": "login_YWRtaW46cGFzcw", "value": "="}]},                                 "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "credential_as_array_value",      "request": {"url": "", "queryString": [{"name": "token", "value": "YWRtaW46cGFzcw=="}]},                                 "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "credential_as_array_name",       "request": {"url": "", "queryString": [{"name": "YWRtaW46cGFzcw==", "value": ""}]},                                      "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "unbalanced_ipv6_bracket",        "request": {"url": "http://[::1/login?YWRtaW46cGFzcw=="},                                                                "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "credential_in_fragment_ignored", "request": {"url": "https://d.local/login#YWRtaW46cGFzcw=="},                                                            "credentials": []},
+      {"id": "hash_route_query",               "request": {"url": "https://d.local/login#tab?YWRtaW46cGFzcw=="},                                                        "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "no_query",                       "request": {"url": "https://d.local/status", "queryString": []},                                                         "credentials": []},
+      {"id": "bare_non_credential_segment",    "request": {"url": "https://d.local/page?debug", "queryString": []},                                                     "credentials": []},
+      {"id": "key_value_non_credential",       "request": {"url": "https://d.local/page?format=json", "queryString": []},                                               "credentials": []},
+      {"id": "placeholder_not_credential",     "request": {"url": "https://d.local/page?login_AUTH_d2c6b8e4"},                                                          "credentials": []},
+      {"id": "non_string_url",                 "request": {"url": 9000, "queryString": []},                                                                             "credentials": []},
+      {"id": "array_not_a_list",               "request": {"url": "https://d.local/page", "queryString": null},                                                         "credentials": []},
+      {"id": "array_entry_not_an_object",      "request": {"url": "", "queryString": ["not-a-dict", {"name": "YWRtaW46cGFzcw==", "value": ""}]},                        "credentials": ["YWRtaW46cGFzcw=="]},
+      {"id": "empty_name_empty_value",         "request": {"url": "", "queryString": [{"name": "format", "value": ""}]},                                                "credentials": []},
+      {"id": "empty_request",                  "request": {},                                                                                                           "credentials": []}
+    ]
+  },
+  "json_identity_key_cases": {
+    "_comment": "classify_identity_field(key, value): a key that names a serial or MAC, holding a value of that identity's shape. Keys are read as words (camelCase, acronyms, separators); the identity must end the key, though its last word may carry a glued prefix ('cmserialnumber') — except a word starting 'hmac'. A serial placeholder is not a serial; a MAC placeholder is still a MAC (it cannot be told from a real one). Serial values are one whitespace-free token of 5+ characters with a digit (every real serial across the fleet carries one; the digit-free values are placeholders like '-'). MAC values are any MAC form: separated, bare 12-hex, or dotted.",
+    "cases": [
+      {"id": "hnap_status_software_serial",   "key": "StatusSoftwareSerialNum",          "value": "ABC123DEF456",      "category": "serial_number"},
+      {"id": "bare_hex_mac_camel_key",        "key": "CmMacAddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "hwaddr_mixed_case",             "key": "HWaddr",                           "value": "AABBCCDDEEFF",      "category": "mac_address"},
+      {"id": "macaddress_acronym_prefix",     "key": "MACaddress",                       "value": "aabb.ccdd.eeff",    "category": "mac_address"},
+      {"id": "serialnumber_acronym_prefix",   "key": "SERIALnumber",                     "value": "4131N12345678",     "category": "serial_number"},
+      {"id": "hmac_suffix_camel",             "key": "userHMAC",                         "value": "AABBCCDDEEFF",      "category": null},
+      {"id": "hmac_suffix_lower",             "key": "requestHmac",                      "value": "AABBCCDDEEFF",      "category": null},
+      {"id": "hmac_after_digits",             "key": "SHA1HMAC",                         "value": "AABBCCDDEEFF",      "category": null},
+      {"id": "all_digit_serial",              "key": "serialnumber",                     "value": "123456789012345",   "category": "serial_number"},
+      {"id": "exact_sn",                      "key": "sn",                               "value": "TEST12345",         "category": "serial_number"},
+      {"id": "suffix_serial",                 "key": "deviceSerial",                     "value": "X1Y2Z3W4",          "category": "serial_number"},
+      {"id": "serial_no",                     "key": "SerialNo",                         "value": "SN-00012345",       "category": "serial_number"},
+      {"id": "screaming_serial_number",       "key": "SYSTEM_SERIAL_NUMBER",             "value": "4106844207105213",  "category": "serial_number"},
+      {"id": "acronym_mac_addr",              "key": "wanMACAddr",                       "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "numbered_mac_key",              "key": "macaddress_5",                     "value": "3C-7A-8A-12-34-56", "category": "mac_address"},
+      {"id": "dotted_mac_hw_addr",            "key": "hw_addr",                          "value": "3c7a.8a12.3456",    "category": "mac_address"},
+      {"id": "exact_mac",                     "key": "mac",                              "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "i18n_label_no_digit",           "key": "PAGE_STATUS_SYSTEM_SERIAL_NUMBER", "value": "Seriennummer",      "category": null},
+      {"id": "hmac_is_not_mac",               "key": "hmac_algorithm",                   "value": "3C7A8A123456",      "category": null},
+      {"id": "ofdma_is_not_mac",              "key": "ofdmachannel",                     "value": "3C7A8A123456",      "category": null},
+      {"id": "mac_filter_flag",               "key": "MacAddressFilterEnabled",          "value": "true",              "category": null},
+      {"id": "dash_placeholder",              "key": "serialNumber",                     "value": "-",                 "category": null},
+      {"id": "status_word",                   "key": "serialNumber",                     "value": "N/A",               "category": null},
+      {"id": "serial_port",                   "key": "serialPort",                       "value": "ttyS0",             "category": null},
+      {"id": "serial_number_label_key",       "key": "serialNumberLabel",                "value": "S/N 1234",          "category": null},
+      {"id": "serial_with_space",             "key": "serial",                           "value": "SN 12345",          "category": null},
+      {"id": "short_flag",                    "key": "serial",                           "value": "1",                 "category": null},
+      {"id": "snr_is_not_sn",                 "key": "snr",                              "value": "38.5dB",            "category": null},
+      {"id": "mac_status_word",               "key": "mac",                              "value": "Enabled",           "category": null},
+      {"id": "non_string_value",              "key": "serialNumber",                     "value": 12345678,            "category": null},
+      {"id": "glued_lowercase_mac_address",   "key": "cmmacaddress",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_lowercase_mac_addr",      "key": "wanmacaddr",                       "value": "3c:7a:8a:12:34:56", "category": "mac_address"},
+      {"id": "glued_acronym_mac",             "key": "CMMACAddress",                     "value": "3C-7A-8A-12-34-56", "category": "mac_address"},
+      {"id": "glued_lowercase_mac",           "key": "dhcpmac",                          "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_lowercase_serial",        "key": "cmserialnumber",                   "value": "SN0012345678",      "category": "serial_number"},
+      {"id": "mac_placeholder_still_mac",     "key": "mac",                              "value": "02:aa:bb:cc:dd:ee", "category": "mac_address"},
+      {"id": "bare_hmac_key",                 "key": "hmac",                             "value": "3C7A8A123456",      "category": null},
+      {"id": "identity_not_last_word",        "key": "macaddr.wan",                      "value": "3C7A8A123456",      "category": null},
+      {"id": "serial_placeholder_not_serial", "key": "SerialNumber",                     "value": "SERIAL_2c9c9cf9",   "category": null},
+      {"id": "glued_eth_mac",                 "key": "ethmac",                           "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_switch_mac",              "key": "switchmac",                        "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_bluetooth_mac",           "key": "bluetoothmac",                     "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "glued_wlan_eth_mac_addr",       "key": "wlanethmacaddr",                   "value": "3C7A8A123456",      "category": "mac_address"},
+      {"id": "prefixed_hmac_word",            "key": "x_hmac",                           "value": "3C7A8A123456",      "category": null},
+      {"id": "serial_containing_zero_run",    "key": "serialNumber",                     "value": "SN0000001234",      "category": "serial_number"},
+      {"id": "all_digit_serial_zero_run",     "key": "serialNumber",                     "value": "4106000000215",     "category": "serial_number"},
+      {"id": "serial_containing_xxx",         "key": "SerialNum",                        "value": "ABCXXX12345",       "category": "serial_number"},
+      {"id": "static_serial_placeholder",     "key": "SerialNumber",                     "value": "***SERIAL***",      "category": null}
+    ]
+  },
+  "transport_body_cases": {
+    "_comment": "decode_transport_body(content): the text a HAR response body carries. A body without 'encoding' is already text. A base64 body is decoded with the mime type's charset — or strict UTF-8 when none is declared or the declared one is unknown or not a text encoding. Bytes that do not decode are binary (None), except under a text mime type (is_text_mime), where undeclared non-UTF-8 bytes are read as latin-1: capture writes such a page base64 when it is not UTF-8, and browsers render undeclared pages in a Latin charset. Text holding NUL is binary.",
+    "cases": [
+      {"id": "plain_text_unchanged",                              "content": {"text": "<p>hi</p>", "mimeType": "text/html"},                                                             "expected": "<p>hi</p>"},
+      {"id": "base64_utf8_json",                                  "content": {"text": "eyJtYWMiOiAiM0M6N0E6OEE6MTI6MzQ6NTYifQ==", "mimeType": "application/json", "encoding": "base64"}, "expected": "{\"mac\": \"3C:7A:8A:12:34:56\"}"},
+      {"id": "base64_misspelled_mime",                            "content": {"text": "eyJhIjogMX0=", "mimeType": "applation/json", "encoding": "base64"},                               "expected": "{\"a\": 1}"},
+      {"id": "base64_latin1_declared",                            "content": {"text": "Y2Fm6Q==", "mimeType": "text/html; charset=ISO-8859-1", "encoding": "base64"},                    "expected": "café"},
+      {"id": "base64_latin1_undeclared_text_mime_read_as_latin1", "content": {"text": "Y2Fm6Q==", "mimeType": "text/html", "encoding": "base64"},                                        "expected": "café"},
+      {"id": "base64_unknown_charset_falls_back_to_utf8",         "content": {"text": "b2s=", "mimeType": "text/plain; charset=x-nonsense", "encoding": "base64"},                       "expected": "ok"},
+      {"id": "woff2_binary",                                      "content": {"text": "d09GMgABAAAAABI0//4=", "mimeType": "font/woff2", "encoding": "base64"},                           "expected": null},
+      {"id": "ascii_with_nul_is_binary",                          "content": {"text": "YWIAY2Q=", "mimeType": "application/octet-stream", "encoding": "base64"},                         "expected": null},
+      {"id": "invalid_base64",                                    "content": {"text": "not base64!!", "mimeType": "text/plain", "encoding": "base64"},                                   "expected": null},
+      {"id": "missing_text",                                      "content": {"mimeType": "text/html"},                                                                                  "expected": null},
+      {"id": "empty_text",                                        "content": {"text": "", "mimeType": "text/html"},                                                                      "expected": null},
+      {"id": "non_text_codec_hex_falls_back_to_utf8",             "content": {"text": "b2s=", "mimeType": "text/plain; charset=hex", "encoding": "base64"},                              "expected": "ok"},
+      {"id": "non_text_codec_zlib_falls_back_to_utf8",            "content": {"text": "b2s=", "mimeType": "text/plain; charset=zlib", "encoding": "base64"},                             "expected": "ok"},
+      {"id": "declared_charset_mismatch_text_mime_latin1",                      "content": {"text": "//4=", "mimeType": "text/plain; charset=punycode", "encoding": "base64"},                         "expected": "\u00ff\u00fe"},
+      {"id": "declared_charset_mismatch_octet_stream_binary", "content": {"text": "//4=", "mimeType": "application/octet-stream; charset=utf-8", "encoding": "base64"}, "expected": null},
+      {"id": "whitespace_only_base64",                            "content": {"text": "   ", "mimeType": "text/plain", "encoding": "base64"},                                            "expected": null},
+      {"id": "line_wrapped_base64",                               "content": {"text": "b2sg\nb2s=", "mimeType": "text/plain", "encoding": "base64"},                                     "expected": "ok ok"},
+      {"id": "nul_in_charset_falls_back_to_utf8",                 "content": {"text": "b2s=", "mimeType": "text/plain; charset=utf\u0000-8", "encoding": "base64"},                      "expected": "ok"},
+      {"id": "base64_latin1_undeclared_octet_stream_is_binary",   "content": {"text": "Y2Fm6Q==", "mimeType": "application/octet-stream", "encoding": "base64"},                         "expected": null},
+      {"id": "base64_latin1_undeclared_misspelled_json_mime",     "content": {"text": "eyJhIjogImNhZukifQ==", "mimeType": "applation/json", "encoding": "base64"},                       "expected": "{\"a\": \"café\"}"}
+    ]
+  },
+  "base64_payload_cases": {
+    "_comment": "decode_base64_payload(value): the text of a base64-wrapped structured payload — a JSON object or array, or a URL — whose colon would otherwise read as user:pass. Padding may be missing or excess (URLs strip and miscount it). A JSON scalar, colon text, non-UTF-8 bytes, and anything not base64 are not payloads.",
+    "cases": [
+      {"id": "json_object",            "value": "eyJhIjogMSwgImIiOiB7ImMiOiAyfX0=",         "expected": "{\"a\": 1, \"b\": {\"c\": 2}}"},
+      {"id": "json_array",             "value": "W3sieCI6IDF9LCB7InkiOiAyfV0=",             "expected": "[{\"x\": 1}, {\"y\": 2}]"},
+      {"id": "json_object_unpadded",   "value": "eyJhIjogMX0",                              "expected": "{\"a\": 1}"},
+      {"id": "url",                    "value": "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4/eD0x", "expected": "http://192.168.100.1/login?x=1"},
+      {"id": "surrounding_whitespace", "value": " eyJhIjogMX0=\n",                          "expected": "{\"a\": 1}"},
+      {"id": "json_scalar_number",     "value": "NDI=",                                     "expected": null},
+      {"id": "json_scalar_string",     "value": "Imp1c3QtYS1zdHJpbmci",                     "expected": null},
+      {"id": "brace_but_not_json",     "value": "e25vdCBqc29uOiAx",                         "expected": null},
+      {"id": "user_pass_credential",   "value": "YWRtaW46cGFzc3dvcmQ=",                     "expected": null},
+      {"id": "non_utf8_bytes",         "value": "//76+w==",                                 "expected": null},
+      {"id": "plain_json_not_base64",  "value": "{\"a\": 1}",                               "expected": null},
+      {"id": "html_not_base64",        "value": "<html></html>",                            "expected": null},
+      {"id": "empty",                  "value": "",                                         "expected": null}
+    ]
+  },
+  "text_mime_cases": {
+    "_comment": "mime_kind(mime): what a mime type declares its body to be — markup (HTML, XML, any +xml), json (any json subtype or +json, whatever the type: DM1000's applation/json), text (other text/*, JavaScript, form data), or null when the type says nothing about text. is_text_mime is kind != null. Parameters and case are ignored; a subtype merely containing 'json' or 'xml' is not one.",
+    "cases": [
+      {"id": "text_html",                  "mime": "text/html; charset=utf-8",                                                "kind": "markup"},
+      {"id": "text_plain",                 "mime": "TEXT/PLAIN",                                                              "kind": "text"},
+      {"id": "application_json",           "mime": "application/json",                                                        "kind": "json"},
+      {"id": "misspelled_json",            "mime": "applation/json",                                                          "kind": "json"},
+      {"id": "problem_json_suffix",        "mime": "application/problem+json",                                                "kind": "json"},
+      {"id": "application_xml",            "mime": "application/xml",                                                         "kind": "markup"},
+      {"id": "svg_xml_suffix",             "mime": "image/svg+xml",                                                           "kind": "markup"},
+      {"id": "application_javascript",     "mime": "application/javascript",                                                  "kind": "text"},
+      {"id": "application_x_javascript",   "mime": "application/x-javascript",                                                "kind": "text"},
+      {"id": "form_urlencoded",            "mime": "application/x-www-form-urlencoded",                                       "kind": "text"},
+      {"id": "octet_stream",               "mime": "application/octet-stream",                                                "kind": null},
+      {"id": "hnap_x_unknown",             "mime": "x-unknown",                                                               "kind": null},
+      {"id": "woff2",                      "mime": "font/woff2",                                                              "kind": null},
+      {"id": "png",                        "mime": "image/png",                                                               "kind": null},
+      {"id": "empty",                      "mime": "",                                                                        "kind": null},
+      {"id": "jsonlines_ish_not_subtype",  "mime": "application/jsonlines-ish",                                               "kind": null},
+      {"id": "office_document_is_not_xml", "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "kind": null},
+      {"id": "xhtml",                      "mime": "application/xhtml+xml",                                                   "kind": "markup"},
+      {"id": "text_css",                   "mime": "text/css",                                                                "kind": "text"},
+      {"id": "text_x_json",                "mime": "text/x-json",                                                             "kind": "json"},
+      {"id": "application_x_json",         "mime": "application/x-json",                                                      "kind": "json"}
+    ]
+  },
+  "json_container_cases": {
+    "_comment": "parse_json_container(text): a JSON object or array, or null. Scalars, invalid JSON and nesting too deep for the parser are not containers — hostile nesting must not crash either tool. 'nesting' builds '[' * n + ']' * n instead of a literal text.",
+    "cases": [
+      {"id": "mixed_list_nesting",             "text": "[1, {\"a\": [2, \"s\"]}, null]",                          "is_container": true},
+      {"id": "duplicate_key_differing_values", "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\": \"N/A\"}", "is_container": true},
+      {"id": "duplicate_key_same_values",      "text": "{\"ch\": 6, \"ch\": 6}",                                    "is_container": true},
+      {"id": "object",             "text": "{\"a\": 1}",     "is_container": true},
+      {"id": "array",              "text": "[1, 2]",         "is_container": true},
+      {"id": "leading_whitespace", "text": " \n {\"a\": 1}", "is_container": true},
+      {"id": "scalar_number",      "text": "42",             "is_container": false},
+      {"id": "scalar_string",      "text": "\"a\"",          "is_container": false},
+      {"id": "invalid",            "text": "{not json",      "is_container": false},
+      {"id": "empty",              "text": "",               "is_container": false},
+      {"id": "moderate_nesting",   "is_container": true,  "nesting": 100},
+      {"id": "hostile_nesting",    "is_container": false, "nesting": 20000}
+    ]
+  },
+  "constant_mac_cases": {
+    "_comment": "is_constant_mac(mac): one byte repeated — broadcast, zero — in any layout. Protocol constants, not identities: neither tool treats them as PII.",
+    "cases": [
+      {"id": "broadcast",             "mac": "ff:ff:ff:ff:ff:ff", "constant": true},
+      {"id": "zero_hyphen",           "mac": "00-00-00-00-00-00", "constant": true},
+      {"id": "repeated_upper",        "mac": "AA:AA:AA:AA:AA:AA", "constant": true},
+      {"id": "bare_zero",             "mac": "000000000000",      "constant": true},
+      {"id": "device_mac",            "mac": "3C:7A:8A:12:34:56", "constant": false},
+      {"id": "two_bytes_alternating", "mac": "ab:ab:ab:ab:ab:ac", "constant": false},
+      {"id": "not_a_mac",             "mac": "ff:ff",             "constant": false}
+    ]
+  },
+  "query_payload_cases": {
+    "_comment": "find_query_payload(segment): a base64-wrapped JSON or URL payload in one raw query segment. prefix is kept verbatim; encoded is the base64 with URL transport encoding undone; quoted records that the segment percent-encoded it. Credentials and non-payloads give null.",
+    "cases": [
+      {"id": "bare",                        "segment": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",        "prefix": "",      "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "keyed",                       "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",   "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "keyed_unpadded",              "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",    "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",  "quoted": false},
+      {"id": "percent_encoded_padding",     "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0%3D", "prefix": "data=", "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": true},
+      {"id": "space_for_plus",              "segment": "data=eyJrIjoifn5 PiJ9",                                       "prefix": "data=", "encoded": "eyJrIjoifn5+PiJ9",                                     "quoted": false},
+      {"id": "doubled_question_mark",       "segment": "?eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",       "prefix": "?",     "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "doubled_equals",              "segment": "k==eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",     "prefix": "k==",   "encoded": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=", "quoted": false},
+      {"id": "credential_is_not_a_payload", "segment": "YWRtaW46cGFzc3dvcmQ=",                                        "prefix": null,    "encoded": null,                                                   "quoted": null},
+      {"id": "plain_value",                 "segment": "page=2",                                                      "prefix": null,    "encoded": null,                                                   "quoted": null},
+      {"id": "empty",                       "segment": "",                                                            "prefix": null,    "encoded": null,                                                   "quoted": null}
+    ]
+  },
+  "url_password_cases": {
+    "_comment": "split_url_password(url): the password in a URL's userinfo, split so the URL reassembles byte-for-byte. The authority ends at the first '/', '?' or '#'; its userinfo runs to the authority's last '@' (as browsers parse it, so a password or an email-address username may hold '@'); the password starts after the userinfo's first ':'. A port, a path '@', or a user without a password give none.",
+    "cases": [
+      {"id": "user_and_password",         "url": "http://admin:Sup3r@192.168.100.1/status",         "parts": ["http://admin:", "Sup3r", "@192.168.100.1/status"]},
+      {"id": "password_with_colon",       "url": "http://a:b:c@h/",                                 "parts": ["http://a:", "b:c", "@h/"]},
+      {"id": "ftp_scheme",                "url": "ftp://u:p@h",                                     "parts": ["ftp://u:", "p", "@h"]},
+      {"id": "port_not_userinfo",         "url": "http://host:8080/a@b",                            "parts": null},
+      {"id": "user_without_password",     "url": "https://user@host/",                              "parts": null},
+      {"id": "at_in_query",               "url": "http://h/p?next=u:p@x",                           "parts": null},
+      {"id": "relative_url",              "url": "/rel?x=1",                                        "parts": null},
+      {"id": "at_sign_inside_password",   "url": "http://admin:p@ss99word@192.168.100.1/",          "parts": ["http://admin:", "p@ss99word", "@192.168.100.1/"]},
+      {"id": "email_address_username",    "url": "http://ken@example.com:Pw123456x@192.168.100.1/", "parts": ["http://ken@example.com:", "Pw123456x", "@192.168.100.1/"]},
+      {"id": "scheme_relative_reference", "url": "//admin:Pw123456x@192.168.100.1/status.html",     "parts": ["//admin:", "Pw123456x", "@192.168.100.1/status.html"]}
+    ]
+  },
+  "body_route_cases": {
+    "_comment": "route_body(mime, text): the engine a response body's text goes to, with the parsed JSON for the json route. Text that parses as a JSON object or array is JSON whatever its type declares (HNAP answers as text/html); otherwise a markup type goes to the HTML engine, any other text type to the text path, and a type that says nothing about text is sniffed (markup, else text).",
+    "cases": [
+      {"id": "json_declared",             "mime": "application/json",         "text": "{\"a\": 1}",                  "route": "json"},
+      {"id": "json_served_as_html",       "mime": "text/html",                "text": "{\"GetStatusResponse\": {}}", "route": "json"},
+      {"id": "json_served_as_text",       "mime": "text/plain",               "text": "[1, 2]",                      "route": "json"},
+      {"id": "json_untyped",              "mime": "",                         "text": " {\"a\": 1}",                 "route": "json"},
+      {"id": "invalid_json_declared",     "mime": "application/json",         "text": "callback({\"a\": 1})",        "route": "text"},
+      {"id": "html_declared",             "mime": "text/html",                "text": "<p>hi</p>",                   "route": "html"},
+      {"id": "brace_led_html_stays_html", "mime": "text/html",                "text": "{not json} <p>hi</p>",        "route": "html"},
+      {"id": "svg",                       "mime": "image/svg+xml",            "text": "<svg/>",                      "route": "html"},
+      {"id": "script",                    "mime": "application/javascript",   "text": "var a = 1;",                  "route": "text"},
+      {"id": "untyped_markup",            "mime": "application/octet-stream", "text": "<div>x</div>",                "route": "html"},
+      {"id": "untyped_text",              "mime": "x-unknown",                "text": "status ok",                   "route": "text"},
+      {"id": "whitespace_only",           "mime": "",                         "text": "   ",                         "route": "text"}
+    ]
+  },
+  "mac_placeholder_cases": {
+    "_comment": "is_mac_placeholder(value): a value hash_mac could have written — a MAC in any layout whose first octet is 02, hex lowercase. For a value already known to be a MAC (under a MAC-named key); as a free-text test a bare 02-prefixed hex run is ambiguous.",
+    "cases": [
+      {"id": "colon",          "value": "02:a1:b2:c3:d4:e5", "placeholder": true},
+      {"id": "hyphen",         "value": "02-a1-b2-c3-d4-e5", "placeholder": true},
+      {"id": "bare",           "value": "02a1b2c3d4e5",      "placeholder": true},
+      {"id": "dotted",         "value": "02a1.b2c3.d4e5",    "placeholder": true},
+      {"id": "real_bare_mac",  "value": "3c7a8a123456",      "placeholder": false},
+      {"id": "uppercase_bare", "value": "02A1B2C3D4E5",      "placeholder": false},
+      {"id": "not_a_mac",      "value": "02abc",             "placeholder": false}
+    ]
+  },
+  "network_value_regex_cases": {
+    "_comment": "The shared value regexes both engines (HTML passes 4-6 and 11, and the JSON/text string patterns) and validate use: matches are the substrings found, in order. For ipv6 a candidate counts only when is_ipv6_host_address accepts it, so clock times, MACs and the constants :: and ::1 are not host addresses. pii.json mirrors public_ip, ipv6 and email verbatim for check_for_pii.",
+    "cases": [
+      {"id": "ipv6_global_compressed",   "regex": "ipv6",       "text": "wan 2600:1700:abcd:1234::1a up",   "matches": ["2600:1700:abcd:1234::1a"]},
+      {"id": "ipv6_link_local_eui64",    "regex": "ipv6",       "text": "fe80::3c7a:8aff:fe12:3456",        "matches": ["fe80::3c7a:8aff:fe12:3456"]},
+      {"id": "ipv6_leading_colons",      "regex": "ipv6",       "text": "map ::ffff:c000:280",              "matches": ["::ffff:c000:280"]},
+      {"id": "ipv6_loopback_kept",       "regex": "ipv6",       "text": "lo ::1",                           "matches": []},
+      {"id": "ipv6_unspecified_kept",    "regex": "ipv6",       "text": "gw6 :: none",                      "matches": []},
+      {"id": "ipv6_prefix_length",       "regex": "ipv6",       "text": "2600:1700:abcd:1234::/64",         "matches": ["2600:1700:abcd:1234::"]},
+      {"id": "ipv6_ipv4_mapped",         "regex": "ipv6",       "text": "map ::ffff:192.168.5.4 ok",        "matches": ["::ffff:192.168.5.4"]},
+      {"id": "ipv6_ipv4_mapped_zero_padded", "regex": "ipv6",   "text": "map ::ffff:192.168.001.100 ok",    "matches": ["::ffff:192.168.001.100"]},
+      {"id": "ipv6_ipv4_mapped_bad_octet", "regex": "ipv6",     "text": "map ::ffff:192.168.1.999 ok",      "matches": []},
+      {"id": "ipv6_sentence_end",        "regex": "ipv6",       "text": "gateway is fe80::1a.",             "matches": ["fe80::1a"]},
+      {"id": "ipv6_all_digits",          "regex": "ipv6",       "text": "wan 2001:470:1::5 up",             "matches": ["2001:470:1::5"]},
+      {"id": "ipv6_zone_index",          "regex": "ipv6",       "text": "fe80::1%eth0",                     "matches": ["fe80::1"]},
+      {"id": "ipv6_in_json_string",      "regex": "ipv6",       "text": "{\"v6\": \"2600:1700::1a\"}",   "matches": ["2600:1700::1a"]},
+      {"id": "ipv6_clock_time",          "regex": "ipv6",       "text": "uptime 12:34:56",                  "matches": []},
+      {"id": "ipv6_mac_is_not",          "regex": "ipv6",       "text": "3C:7A:8A:12:34:56",                "matches": []},
+      {"id": "ipv6_glued_to_word",       "regex": "ipv6",       "text": "cm2600:1700::1a",                  "matches": []},
+      {"id": "ipv6_cpp_scope",           "regex": "ipv6",       "text": "std::string",                      "matches": []},
+      {"id": "private_ten",              "regex": "private_ip", "text": "lan 10.1.2.3 up",                  "matches": ["10.1.2.3"]},
+      {"id": "private_172",              "regex": "private_ip", "text": "172.16.5.4",                       "matches": ["172.16.5.4"]},
+      {"id": "private_192_168",          "regex": "private_ip", "text": "192.168.5.4",                      "matches": ["192.168.5.4"]},
+      {"id": "private_172_32_is_not",    "regex": "private_ip", "text": "172.32.0.1",                       "matches": []},
+      {"id": "private_glued_digit",      "regex": "private_ip", "text": "110.1.2.3",                        "matches": []},
+      {"id": "public_dns",               "regex": "public_ip",  "text": "dns 8.8.8.8",                      "matches": ["8.8.8.8"]},
+      {"id": "public_skips_private",     "regex": "public_ip",  "text": "10.1.2.3",                         "matches": []},
+      {"id": "public_skips_loopback",    "regex": "public_ip",  "text": "127.0.0.1",                        "matches": []},
+      {"id": "email_before_pipe",        "regex": "email",      "text": "a@example.com|next",               "matches": ["a@example.com"]},
+      {"id": "email_subdomains",         "regex": "email",      "text": "first.last@mail.example.co.uk",    "matches": ["first.last@mail.example.co.uk"]}
+    ]
+  },
+  "credential_value_action_cases": {
+    "_comment": "credential_value_action(value): what both tools do with a non-empty, unredacted value a response serves under a credential-named key. The fleet's firmware translation tables hold Yes/No buttons (kept) and prose UI strings (offered for review: a passphrase can hold spaces); anything else is redacted.",
+    "cases": [
+      {"id": "secret_token",       "value": "hunter2x",                    "action": "redact"},
+      {"id": "one_word_label",     "value": "Password",                    "action": "redact"},
+      {"id": "allcaps_label",      "value": "PASSWORD",                    "action": "redact"},
+      {"id": "yes_button",         "value": "Yes",                         "action": "keep"},
+      {"id": "no_button_lower",    "value": "no",                          "action": "keep"},
+      {"id": "status_padded",      "value": " No ",                        "action": "keep"},
+      {"id": "true_not_in_data",   "value": "true",                        "action": "redact"},
+      {"id": "prose_ui_string",    "value": "Enter the current password",  "action": "review"},
+      {"id": "two_words",          "value": "p w",                         "action": "review"},
+      {"id": "padded_token",       "value": " hunter2x ",                  "action": "redact"},
+      {"id": "bearer_credential",  "value": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig", "action": "redact"},
+      {"id": "basic_credential",   "value": "Basic YWRtaW46aHVudGVyMg==",  "action": "redact"},
+      {"id": "digest_lowercase",   "value": "digest username=\"a\", response=\"f00d\"", "action": "redact"},
+      {"id": "pem_block",          "value": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\n-----END CERTIFICATE-----", "action": "redact"},
+      {"id": "pem_block_without_end_line", "value": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ", "action": "redact"},
+      {"id": "pem_block_headers_before_body", "value": "-----BEGIN CERTIFICATE-----\nComment: device\n\nMIIBszCCAVmgAwIBAgIUQ", "action": "redact"},
+      {"id": "pem_block_flattened",      "value": "-----BEGIN CERTIFICATE----- MIIBszCCAVmgAwIBAgIUQ -----END CERTIFICATE-----", "action": "redact"},
+      {"id": "pem_complete_flattened_headers", "value": "-----BEGIN CERTIFICATE----- Comment: device cert Proc-Type: 4 MIIBszCCAVmgAwIBAgIUQ -----END CERTIFICATE-----", "action": "redact"},
+      {"id": "pem_complete_literal_newline_escapes", "value": "-----BEGIN CERTIFICATE-----\\nMIIBszCCAVmgAwIBAgIUQ\\n-----END CERTIFICATE-----", "action": "redact"},
+      {"id": "pem_complete_short_groups", "value": "-----BEGIN CERTIFICATE----- MIIBszCC AVmgAwIB AgIUQxyz ABCDefgh -----END CERTIFICATE-----", "action": "redact"},
+      {"id": "prose_naming_both_pem_lines", "value": "Paste everything from -----BEGIN CERTIFICATE----- to -----END CERTIFICATE-----", "action": "review"},
+      {"id": "prose_after_pem_header",   "value": "-----BEGIN CERTIFICATE----- paste the rest here", "action": "review"},
+      {"id": "prose_naming_scheme", "value": "Basic settings for the admin password", "action": "review"},
+      {"id": "scheme_then_word_basic",  "value": "Basic settings",           "action": "review"},
+      {"id": "scheme_then_word_bearer", "value": "Bearer token",             "action": "review"},
+      {"id": "scheme_then_word_oauth",  "value": "OAuth login",              "action": "review"},
+      {"id": "scheme_then_word_digest", "value": "Digest authentication",    "action": "review"},
+      {"id": "scheme_then_version",     "value": "oauth 2.0",                "action": "review"},
+      {"id": "basic_not_a_credential",  "value": "Basic Wi-Fi",              "action": "review"},
+      {"id": "prose_naming_pem",        "value": "Paste your -----BEGIN key here", "action": "review"},
+      {"id": "bearer_short_opaque",     "value": "Bearer 9f8e7d6c5b4a3210", "action": "redact"},
+      {"id": "negotiate_token",         "value": "Negotiate YIIGhgYGKwYBBQUCoIIGejCCBnagMDAu", "action": "redact"}
+    ]
+  },
+  "iter_json_strings_cases": {
+    "_comment": "iter_json_strings(parsed) yields every decoded string — object keys and string values, in arrays too, shadowed duplicates included — at any depth; numbers, booleans and null are not strings.",
+    "cases": [
+      {"id": "object",            "text": "{\"a\": \"x\", \"n\": 1}",                 "strings": ["a", "x", "n"]},
+      {"id": "array_of_mixed",    "text": "[\"x\", 2, null, [\"y\"], {\"k\": \"v\"}]", "strings": ["x", "y", "k", "v"]},
+      {"id": "escaped_markup",    "text": "{\"h\": \"\\u003cb\\u003e\"}",           "strings": ["h", "<b>"]},
+      {"id": "shadowed_duplicate", "text": "{\"p\": \"first\", \"p\": \"last\"}",    "strings": ["p", "last", "p", "first"]}
+    ]
+  },
+  "set_cookie_attribute_grammar_cases": {
+    "_comment": "RFC 6265 Set-Cookie attribute grammar (is_set_cookie_attribute): a segment a user agent would apply as an attribute.",
+    "cases": [
+      {
+        "id": "secure_flag",
+        "segment": " Secure",
+        "attribute": true
+      },
+      {
+        "id": "partitioned_flag_lowercase",
+        "segment": "partitioned",
+        "attribute": true
+      },
+      {
+        "id": "flag_with_a_value",
+        "segment": "Secure=abc123",
+        "attribute": false
+      },
+      {
+        "id": "path_from_root",
+        "segment": " Path=/isp",
+        "attribute": true
+      },
+      {
+        "id": "path_not_from_root",
+        "segment": "Path=s3cr3t",
+        "attribute": false
+      },
+      {
+        "id": "max_age_digits",
+        "segment": "Max-Age=3600",
+        "attribute": true
+      },
+      {
+        "id": "max_age_negative",
+        "segment": "max-age=-1",
+        "attribute": true
+      },
+      {
+        "id": "max_age_word",
+        "segment": "Max-Age=forever",
+        "attribute": false
+      },
+      {
+        "id": "samesite_enum",
+        "segment": "SameSite=Lax",
+        "attribute": true
+      },
+      {
+        "id": "samesite_other",
+        "segment": "SameSite=abc",
+        "attribute": false
+      },
+      {
+        "id": "priority_enum",
+        "segment": "Priority=High",
+        "attribute": true
+      },
+      {
+        "id": "expires_rfc1123",
+        "segment": "Expires=Wed, 21 Oct 2026 07:28:00 GMT",
+        "attribute": true
+      },
+      {
+        "id": "expires_netscape_dashes",
+        "segment": "expires=Thu, 01-Jan-1970 00:00:01 GMT",
+        "attribute": true
+      },
+      {
+        "id": "expires_asctime",
+        "segment": "Expires=Wed Oct 21 07:28:00 2026",
+        "attribute": true
+      },
+      {
+        "id": "expires_not_a_date",
+        "segment": "Expires=abc123",
+        "attribute": false
+      },
+      {
+        "id": "domain_with_dot",
+        "segment": "Domain=.example.com",
+        "attribute": true
+      },
+      {
+        "id": "domain_ip",
+        "segment": "Domain=192.168.100.1",
+        "attribute": true
+      },
+      {
+        "id": "domain_not_a_host",
+        "segment": "Domain=a b",
+        "attribute": false
+      },
+      {
+        "id": "empty_value",
+        "segment": "Path=",
+        "attribute": false
+      },
+      {
+        "id": "unknown_name",
+        "segment": "tracking=abc",
+        "attribute": false
+      }
+    ]
+  },
+  "cookie_segment_action_cases": {
+    "_comment": "cookie_segment_actions: per ;-segment of a cookie header, keep / value (the pair's value is cookie data) / token (a nameless cookie). One rule for the sanitizer and validate.",
+    "cases": [
+      {
+        "id": "request_pairs",
+        "value": "sid=abc; csrf=def",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "value"
+        ]
+      },
+      {
+        "id": "request_attribute_named_cookie",
+        "value": "path=s3cr3t",
+        "set_cookie": false,
+        "actions": [
+          "value"
+        ]
+      },
+      {
+        "id": "request_nameless_segment",
+        "value": "a=1; nameless",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "token"
+        ]
+      },
+      {
+        "id": "request_recorder_flags",
+        "value": "Secure; sid=abc; HttpOnly",
+        "set_cookie": false,
+        "actions": [
+          "keep",
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "request_blank_segment",
+        "value": "sid=abc;",
+        "set_cookie": false,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_pair_and_attributes",
+        "value": "sid=abc; Path=/; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_attributes_only",
+        "value": "Secure; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "keep",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_flag_named_cookie",
+        "value": "Secure=abc123; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_invalid_attribute_first",
+        "value": "Path=s3cr3t; HttpOnly",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_nameless_first",
+        "value": "COOKIE_1a2b3c4d; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "token",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_unreserved_trailing_pair",
+        "value": "sid=abc; tracking=def; Path=/",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_reserved_kept_by_name",
+        "value": "sid=abc; Expires=whenever",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_unknown_flag_kept",
+        "value": "sid=abc; VendorFlag",
+        "set_cookie": true,
+        "actions": [
+          "value",
+          "keep"
+        ]
+      },
+      {
+        "id": "set_cookie_metadata_first",
+        "value": "HttpOnly: true, Secure: true",
+        "set_cookie": true,
+        "actions": [
+          "token"
+        ]
+      }
     ]
   }
 }

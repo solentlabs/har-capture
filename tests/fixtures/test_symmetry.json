@@ -1,0 +1,3196 @@
+{
+  "_comment": "ADR-14 symmetry harness. Each row is a raw HAR (its entries) that validate must report (raw_findings: severity + reason substring) and that sanitize must clear: after sanitize_har, in every heuristic mode, validate reports nothing and no leaked string survives. 'patterns' names a built-in domain for both tools, or 'custom_patterns' is a patterns dict for both; 'pad_chars' prefixes the first entry's response body with that much filler. All values are synthetic.",
+  "symmetry_cases": [
+    {
+      "id": "authorization_basic_header",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Basic YWRtaW46cGFzc3dvcmQ="
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "request_cookie_header",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "sessionid=a8f5f167f44f4964e6c998dee827110c"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "a8f5f167f44f4964e6c998dee827110c"
+      ]
+    },
+    {
+      "id": "set_cookie_header",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "sessionid=a8f5f167f44f4964e6c998dee827110c; Path=/; HttpOnly"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "a8f5f167f44f4964e6c998dee827110c"
+      ]
+    },
+    {
+      "id": "form_password_param_and_text",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "params": [
+                {
+                  "name": "username",
+                  "value": "admin"
+                },
+                {
+                  "name": "password",
+                  "value": "hunter2hunter2"
+                }
+              ],
+              "text": "username=admin&password=hunter2hunter2"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive form field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "form_percent_encoded_field_name",
+      "_note": "A form field name is judged decoded, as validate decodes it",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "user%5Bpass%5D=hunter2hunter2&x=1"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive form field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_post_password",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"Username\": \"admin\", \"Password\": \"hunter2hunter2\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "custom_legacy_fields_patterns_key",
+      "_note": "A custom file's legacy fields.patterns key is an auto-redact list for both tools",
+      "custom_patterns": {
+        "fields": {
+          "patterns": [
+            "vendorpw"
+          ]
+        }
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"vendorpw\": \"hunter2hunter2\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "xml_post_password",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/xml/setter.xml",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "text/xml",
+              "text": "<Login><Username>admin</Username><Password>hunter2hunter2</Password></Login>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive XML element"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "xml_post_lone_surrogate",
+      "_note": "A lone surrogate elsewhere in an XML body does not switch off its field check",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/xml/setter.xml",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "text/xml",
+              "text": "<Login><Note>\ud800</Note><Password>hunter2hunter2</Password></Login>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive XML element"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "query_password_param",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/login.cgi?password=hunter2hunter2",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "password",
+                "value": "hunter2hunter2"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive query parameter"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "url_token_marker_with_referer",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/cmconnectionstatus.html?login_YWRtaW46cGFzc3dvcmQ=",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "login_YWRtaW46cGFzc3dvcmQ",
+                "value": ""
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/jquery.js",
+            "headers": [
+              {
+                "name": "Referer",
+                "value": "https://192.168.100.1/cmconnectionstatus.html?login_YWRtaW46cGFzc3dvcmQ="
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Base64-encoded credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ=",
+        "YWRtaW46cGFzc3dvcmQ"
+      ]
+    },
+    {
+      "id": "response_body_bare_credential",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/echo",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": "YWRtaW46cGFzc3dvcmQ="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Bare base64 credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "html_labeled_default_password",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<span class=\"readonlyLabel\">Default Password:</span><span class=\"value\">orange4213table</span>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password"
+        }
+      ],
+      "leaked": [
+        "orange4213table"
+      ]
+    },
+    {
+      "id": "html_mac_in_table",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>CM MAC</td><td>3C:7A:8A:12:34:56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "html_public_ip",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>WAN IP</td><td>73.12.34.56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "public IP"
+        }
+      ],
+      "leaked": [
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "html_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>Serial Number</td><td>ABC1234567</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "vendor_serial_in_pipe_blob",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<script>var tagValueList = '1.01|V6.01.03|7ZZ0000FAKE00|1|Denied';</script>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Vendor-format serial"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "html_mac_hyphen_layout",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>CM MAC</td><td>3C-7A-8A-12-34-56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C-7A-8A-12-34-56"
+      ]
+    },
+    {
+      "id": "json_body_mac_value",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"cm_status\": {\"hw\": \"3C:7A:8A:12:34:56\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "labeled_password_shaped_like_mac_placeholder",
+      "_note": "A bare 12-hex value starting 02 is not a placeholder outside a MAC-named field",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<span class=\"readonlyLabel\">Default Password:</span><span class=\"value\">02deadbeef12</span>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password"
+        }
+      ],
+      "leaked": [
+        "02deadbeef12"
+      ]
+    },
+    {
+      "id": "labeled_serial_shaped_like_mac_placeholder",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>Serial Number</td><td>021234567890</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "021234567890"
+      ]
+    },
+    {
+      "id": "url_credential_in_unparseable_url",
+      "_note": "urlparse rejects the URL; both tools split it by hand",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://[::1/login?YWRtaW46cGFzc3dvcmQ=",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Base64-encoded credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "hash_route_query_in_location_header",
+      "_note": "A hash-routed page carries its parameters after '#'",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://192.168.100.1/#/login?password=hunter2hunter2"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive query parameter"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "mac_glued_to_hex_letter",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>wanmac3C:7A:8A:12:34:56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "mac_glued_to_underscore_in_html",
+      "_note": "A MAC glued to an identifier is still a MAC",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>cm_mac_3C:7A:8A:12:34:56</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "mac_glued_to_letter_in_text",
+      "_note": "A MAC glued to an identifier is still a MAC",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/ifconfig.txt",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": "eth0 HWaddr3C:7A:8A:12:34:56 up"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "transport_html_fragment_with_colon",
+      "_note": "SB8200 fragment shape: was wiped to AUTH_",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/pageheaderA.htm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "PGRpdiBjbGFzcz0iaGRyIj48YSBocmVmPSJodHRwOi8vMTkyLjE2OC4xMDAuMS8iPlN0YXR1czwvYT4gM0M6N0E6OEE6MTI6MzQ6NTY8L2Rpdj4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "transport_hnap_markup_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/cgi-bin/statushelp",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "x-unknown",
+              "text": "PHRhYmxlPjx0cj48dGQ+U2VyaWFsIE51bWJlcjwvdGQ+PHRkPkFCQzEyMzQ1Njc8L3RkPjwvdHI+PC90YWJsZT4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "transport_misspelled_json_mime",
+      "_note": "Sercomm DM1000 shape",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/setup.cgi?todo=status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "applation/json",
+              "text": "eyJsYW5fbWFjIjogIjNDOjdBOjhBOjEyOjM0OjU2IiwgInN0YXR1cyI6ICJvayJ9",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "transport_double_wrapped_credential",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/echo",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "WVdSdGFXNDZjR0Z6YzNkdmNtUT0=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Bare base64 credential"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "transport_latin1_html",
+      "_note": "Capture writes a non-UTF-8 text page base64",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "PHA+Q2Fm6SAzQzo3QTo4QToxMjozNDo1NjwvcD4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "invalid_json_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "callback({\"cm\": \"3C:7A:8A:12:34:56\"})"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "form_urlencoded_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "cm=3C:7A:8A:12:34:56&status=ok"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "svg_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/img/status.svg",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "image/svg+xml",
+              "text": "<svg><text>3C:7A:8A:12:34:56</text></svg>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "octet_stream_text_body",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/octet-stream",
+              "text": "WAN MAC 3C:7A:8A:12:34:56"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "base64_json_body_payload",
+      "_note": "A body that is itself base64 JSON, no transport encoding",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/setup.cgi?todo=status",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "eyJsYW4iOiAiM0M6N0E6OEE6MTI6MzQ6NTYiLCAiY2giOiAxfQ=="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "query_json_payload_padded",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "data",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+      ]
+    },
+    {
+      "id": "query_json_payload_unpadded",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "data",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0"
+      ]
+    },
+    {
+      "id": "query_url_payload",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?next=aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "next",
+                "value": "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy"
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive query parameter"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy"
+      ]
+    },
+    {
+      "id": "declared_charset_mismatch",
+      "_note": "Declares UTF-8, carries a latin-1 byte: capture stores it base64",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html; charset=utf-8",
+              "text": "PHA+qSAzQzo3QTo4QToxMjozNDo1NjwvcD4=",
+              "encoding": "base64"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "base64_json_body_with_labeled_password",
+      "_note": "The wrapped text gets the whole dispatch",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/panel",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "eyJodG1sIjogIjxzcGFuIGNsYXNzPVwicmVhZG9ubHlMYWJlbFwiPkRlZmF1bHQgUGFzc3dvcmQ6PC9zcGFuPjxzcGFuIGNsYXNzPVwidmFsdWVcIj5vcmFuZ2U0MjEzdGFibGU8L3NwYW4+In0="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password"
+        }
+      ],
+      "leaked": [
+        "orange4213table"
+      ]
+    },
+    {
+      "id": "base64_url_body_with_ip_and_mac",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/where",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "aHR0cDovLzczLjEyLjM0LjU2LzNDOjdBOjhBOjEyOjM0OjU2L3N0YXR1cw=="
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        },
+        {
+          "severity": "warning",
+          "reason": "public IP"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_body_vendor_serial",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/info",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "",
+              "text": "{\"info\": \"7ZZ0000FAKE00\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Vendor-format serial"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "query_payload_under_identity_name",
+      "_note": "A payload wins over an identity-style name in both tools",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?login=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "login",
+                "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+      ]
+    },
+    {
+      "id": "post_param_json_payload",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/save",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "params": [
+                {
+                  "name": "data",
+                  "value": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0="
+      ]
+    },
+    {
+      "id": "post_text_json_payload",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/save",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0%3D"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "post_identity_name_with_credential",
+      "_note": "A credential value decides before an identity-style name, as in a query",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/goform/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "params": [
+                {
+                  "name": "user",
+                  "value": "YWRtaW46cGFzc3dvcmQ="
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Sensitive form field"
+        }
+      ],
+      "leaked": [
+        "YWRtaW46cGFzc3dvcmQ="
+      ]
+    },
+    {
+      "id": "html_serial_label_closed_before_colon",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p><b>Serial Number</b>: ABC1234567</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "location_userinfo_password",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://admin:Sup3rSecret99@192.168.100.1/status.html"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Sup3rSecret99"
+      ]
+    },
+    {
+      "id": "url_payload_userinfo_password",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/app.cgi?next=aHR0cDovL2FkbWluOlN1cDNyU2VjcmV0OTlAMTkyLjE2OC4xMDAuMS9zdGF0dXMuaHRtbA==",
+            "headers": [],
+            "queryString": [
+              {
+                "name": "next",
+                "value": "aHR0cDovL2FkbWluOlN1cDNyU2VjcmV0OTlAMTkyLjE2OC4xMDAuMS9zdGF0dXMuaHRtbA=="
+              }
+            ]
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Sup3rSecret99"
+      ]
+    },
+    {
+      "id": "userinfo_password_holding_at_sign",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://admin:p@ss99word@192.168.100.1/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "p@ss99word",
+        "ss99word"
+      ]
+    },
+    {
+      "id": "userinfo_email_username",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "http://ken@example.com:Pw123456x@192.168.100.1/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Pw123456x"
+      ]
+    },
+    {
+      "id": "userinfo_in_scheme_relative_location",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [
+              {
+                "name": "Location",
+                "value": "//admin:Pw123456x@192.168.100.1/status.html"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Password in URL userinfo"
+        }
+      ],
+      "leaked": [
+        "Pw123456x"
+      ]
+    },
+    {
+      "id": "sn_label_closed_before_colon",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p><b>SN</b>: 7ZZ0000FAKE00</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "serial_no_label",
+      "_note": "One label vocabulary for both tools",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial No: ABC1234567</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "serial_no_table_cell",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<tr><td>Serial No.:</td><td>ABC1234567</td></tr>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "bare_serial_label",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial: ABC1234567</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "bare_serial_table_cell",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<tr><td>Serial:</td><td>ABC1234567</td></tr>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "hnap_serial_in_text_html_json",
+      "_note": "HNAP answers JSON as text/html",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/HNAP1/",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "{\"GetStatusResponse\": {\"StatusSoftwareSerialNum\": \"4131N12345678\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "json_bare_mac_under_mac_key",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/cm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"CmMacAddress\": \"3C7A8A123456\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "3C7A8A123456"
+      ]
+    },
+    {
+      "id": "post_json_serial_key",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"serialNumber\": \"4131N12345678\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "response_json_credential_key",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wifi",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"wifi\": {\"passphrase\": \"orange4213table\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "orange4213table"
+      ]
+    },
+    {
+      "id": "json_body_global_ipv6",
+      "_note": "JSON values never had the HTML engine's IPv6 pass",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wan",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"wan6\": \"2600:1700:abcd:1234::1a\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "2600:1700:abcd:1234::1a"
+      ]
+    },
+    {
+      "id": "html_body_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<td>2600:1700:abcd:1234::1a</td>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "2600:1700:abcd:1234::1a"
+      ]
+    },
+    {
+      "id": "javascript_link_local_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/js/status.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var ll = 'fe80::3c7a:8aff:fe12:3456';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "fe80::3c7a:8aff:fe12:3456"
+      ]
+    },
+    {
+      "id": "json_key_mac",
+      "_note": "A client table keyed by MAC",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/clients",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"clients\": {\"3C:7A:8A:12:34:56\": {\"rssi\": -40}}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_key_public_ip",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/peers",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"73.12.34.56\": \"wan\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "public IP"
+        }
+      ],
+      "leaked": [
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_string_labeled_serial",
+      "_note": "Labeled serials were cleared only by the HTML engine",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/info",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"info\": \"Serial Number: ABC1234567\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "html_declared_json_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/HNAP1/",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "{\"GetInfoResponse\": {\"Info\": \"SN: 7ZZ0000FAKE00\"}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "7ZZ0000FAKE00"
+      ]
+    },
+    {
+      "id": "text_plain_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/log.txt",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": "boot ok\nSerial Number: ABC1234567\n"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "javascript_table_labeled_serial",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/js/info.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var row = '<td>Serial Number</td><td>ABC1234567</td>';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "serial number"
+        }
+      ],
+      "leaked": [
+        "ABC1234567"
+      ]
+    },
+    {
+      "id": "json_escaped_markup_password",
+      "_note": "Escaped markup is read in the decoded string",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/page",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"html\": \"\\u003ctd\\u003ePassword:\\u003c/td\\u003e\\u003ctd\\u003ehunter2x\\u003c/td\\u003e\", \"wan\": \"3C:7A:8A:12:34:56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password in a labeled field"
+        },
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "hunter2x",
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_duplicate_key_mac",
+      "_note": "json.loads keeps only the last duplicate",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/cm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\": \"N/A\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "post_text_plain_json_identity",
+      "_note": "POST JSON is JSON by content, as validate reads it",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "text/plain;charset=UTF-8",
+              "text": "{\"SetDevice\": {\"serialNumber\": \"4131N12345678\", \"cmMac\": \"3C7A8A123456\", \"Password\": \"hunter2x\"}}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "serial number in a JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "4131N12345678",
+        "3C7A8A123456",
+        "hunter2x"
+      ]
+    },
+    {
+      "id": "json_mac_past_depth_limit",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/deep",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"n\": {\"mac\": \"3C:7A:8A:12:34:56\"}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ]
+    },
+    {
+      "id": "json_ipv4_mapped_ipv6",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/v6",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"v6\": \"::ffff:73.12.34.56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "::ffff:73.12.34.56",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "json_duplicate_password",
+      "_note": "The shadowed first value must not pass through",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"hunter2hunter2\", \"password\": \"x\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_credential_last_word",
+      "_note": "credential names a credential as the last word of a key",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"userCredential\": \"s3cr3tpw99\", \"credential_encoding\": \"plain\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "s3cr3tpw99"
+      ]
+    },
+    {
+      "id": "json_response_translation_table",
+      "_note": "A served UI string under a credential-named key is offered for review, not reported; a served token is redacted",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"wifi_password\": \"hunter2hunter2\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_post_shadowed_flag_tier_value",
+      "_note": "A repeated review-tier key's shadowed value is dropped, not written back unreviewed",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/plain",
+              "text": ""
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "bobsmith"
+      ]
+    },
+    {
+      "id": "json_markup_across_strings",
+      "_note": "Markup split across JSON strings must not pair across them",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/page",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"a\": \"<b>Password:</b><i>x\", \"</i>\": 1, \"password\": \"hunter2hunter2\", \"wan\": \"73.12.34.56\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "73.12.34.56"
+      ]
+    },
+    {
+      "id": "post_form_mime_json",
+      "_note": "jQuery posts JSON.stringify under its form-urlencoded default",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/login",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded; charset=UTF-8",
+              "text": "{\"Login\": {\"Username\": \"admin\", \"Password\": \"hunter2hunter2\"}, \"cmMac\": \"3C7A8A123456\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        },
+        {
+          "severity": "error",
+          "reason": "MAC address in a JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "3C7A8A123456"
+      ]
+    },
+    {
+      "id": "post_soap_xml_password",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/soap",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/soap+xml",
+              "text": "<Login><Password>hunter2hunter2</Password></Login>"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive XML element"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "post_json_holding_zero_run",
+      "_note": "A zero run must not make the whole body look redacted",
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "https://192.168.100.1/api/set",
+            "headers": [],
+            "queryString": [],
+            "postData": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"hunter2hunter2\", \"color\": \"#000000\"}"
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2"
+      ]
+    },
+    {
+      "id": "json_password_shaped_like_placeholder",
+      "_note": "A real value shaped like a placeholder is not one",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/api/wifi",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"password\": \"TP_LINK_20231105\", \"wifi_password\": \"HOME_12345678\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive JSON field"
+        }
+      ],
+      "leaked": [
+        "TP_LINK_20231105",
+        "HOME_12345678"
+      ]
+    },
+    {
+      "id": "body_past_old_scan_limit",
+      "_note": "Sanitize used to skip string patterns past 1 MB",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/big.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "var cm = '3C:7A:8A:12:34:56';"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "MAC address"
+        }
+      ],
+      "leaked": [
+        "3C:7A:8A:12:34:56"
+      ],
+      "pad_chars": 1100000
+    },
+    {
+      "id": "html_serial_followed_by_at",
+      "_note": "A serial followed by @ and a host is a serial; only a whole email after the label is not",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>Serial Number: 4131N12345678@cm1</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Potential serial number"
+        }
+      ],
+      "leaked": [
+        "4131N12345678"
+      ]
+    },
+    {
+      "id": "json_ipv4_mapped_zero_padded",
+      "_note": "A zero-padded IPv4-mapped IPv6 address is one address, hashed whole",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "text": "{\"v6\": \"::ffff:192.168.001.100\"}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "IPv6 address"
+        }
+      ],
+      "leaked": [
+        "::ffff",
+        "192.168.001.100"
+      ]
+    },
+    {
+      "id": "certificate_colon_mac_subject",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          },
+          "_securityDetails": {
+            "protocol": "TLS 1.2",
+            "subjectName": "A4:56:30:12:34:56",
+            "issuer": "CableLabs Device Certification Authority",
+            "validFrom": 1500000000,
+            "validTo": 2000000000
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "TLS certificate name"
+        }
+      ],
+      "leaked": [
+        "A4:56:30:12:34:56"
+      ]
+    },
+    {
+      "id": "certificate_bare_hex_subject",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          },
+          "_securityDetails": {
+            "protocol": "TLS 1.2",
+            "subjectName": "0000AC123456",
+            "issuer": "HWROB Device Sub-CA 01",
+            "validFrom": 1500000000,
+            "validTo": 2000000000
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "TLS certificate name"
+        }
+      ],
+      "leaked": [
+        "0000AC123456"
+      ]
+    },
+    {
+      "id": "header_cookie_placeholder_beside_real_cookie",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "a=COOKIE_1a2b3c4d; sid=realsecret99"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "realsecret99"
+      ]
+    },
+    {
+      "id": "header_cookie_named_like_an_attribute",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "path=s3cr3tvalue"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "s3cr3tvalue"
+      ]
+    },
+    {
+      "id": "header_cookie_nameless_segment",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "a=1; namelesssecret9"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "namelesssecret9"
+      ]
+    },
+    {
+      "id": "header_set_cookie_named_like_a_flag",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "Secure=abc123secret; Path=/"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "abc123secret"
+      ]
+    },
+    {
+      "id": "header_set_cookie_unreserved_trailing_pair",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "sid=COOKIE_1a2b3c4d; Path=/; foo=barsecret9"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "barsecret9"
+      ]
+    },
+    {
+      "id": "header_authorization_tail_after_placeholder",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer AUTH_1a2b3c4d realsecret99"
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "realsecret99"
+      ]
+    },
+    {
+      "id": "header_proxy_authorization",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/status.html",
+            "headers": [
+              {
+                "name": "Proxy-Authorization",
+                "value": "Basic cHJveHk6cGFzcw=="
+              }
+            ],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<p>ok</p>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Sensitive header"
+        }
+      ],
+      "leaked": [
+        "cHJveHk6cGFzcw=="
+      ]
+    }
+  ]
+}

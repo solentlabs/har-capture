@@ -8,8 +8,26 @@ values without knowing the originals.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass, field
+
+from har_capture.patterns.redaction import is_mac_value, mac_layout
+
+_NON_HEX_RE = re.compile(r"[^0-9A-Fa-f]")
+
+
+def _mac_digest_input(mac: str) -> str:
+    """Canonical text a MAC is hashed from: its digits as uppercase colon pairs.
+
+    Every layout of one MAC reads the same, and the colon form is what every
+    release before 0.13.0 hashed, so a fixed salt keeps giving a colon MAC the
+    same placeholder. A value in no MAC layout is hashed as it was then.
+    """
+    if not is_mac_value(mac):
+        return mac.upper().replace("-", ":")
+    digits = _NON_HEX_RE.sub("", mac).upper()
+    return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
 
 
 @dataclass
@@ -20,7 +38,7 @@ class Hasher:
     allowing analysts to correlate redacted values without knowing the originals.
 
     Uses format-preserving hashes where possible:
-    - MAC addresses: 02:xx:xx:xx:xx:xx (locally administered)
+    - MAC addresses: 02:xx:xx:xx:xx:xx (locally administered, in the input's layout)
     - Private IPs: 10.255.x.x
     - Public IPs: 192.0.2.x (TEST-NET-1)
     - IPv6: 2001:db8::xxxx:xxxx (documentation prefix)
@@ -80,7 +98,9 @@ class Hasher:
             Raw SHA-256 hash bytes
         """
         salted = f"{self.salt}:{prefix}:{value}"
-        return hashlib.sha256(salted.encode("utf-8")).digest()
+        # surrogatepass: a JSON body can carry a lone surrogate (`"\ud800"`), and
+        # hashing it must not crash the run.
+        return hashlib.sha256(salted.encode("utf-8", "surrogatepass")).digest()
 
     def hash_value(self, value: str, prefix: str) -> str:
         """Generate a hashed placeholder for a value (non-format-preserving).
@@ -109,27 +129,36 @@ class Hasher:
     def hash_mac(self, mac: str) -> str:
         """Hash a MAC address (format-preserving).
 
-        Uses locally administered address range (02:xx:xx:xx:xx:xx).
-        The 02 prefix indicates a locally administered, unicast address.
+        The placeholder is in the locally administered range (first octet
+        ``02``: locally administered, unicast) and occupies the input's
+        layout — separator and grouping survive, so a consumer that parses
+        ``AABBCCDDEEFF`` or ``aabb.ccdd.eeff`` still parses the placeholder.
+        The hash is taken over the hex digits alone, so every layout of one
+        MAC correlates. A value in no MAC layout gets the colon form.
 
         Args:
-            mac: MAC address string (any format)
+            mac: MAC address string (any layout)
 
         Returns:
-            Format-preserving MAC like "02:a1:b2:c3:d4:e5" or "XX:XX:XX:XX:XX:XX" if no salt
+            Format-preserving MAC like "02:a1:b2:c3:d4:e5" in the input's
+            layout, or "XX:XX:XX:XX:XX:XX" if no salt
         """
         if self.salt is None:
             return "XX:XX:XX:XX:XX:XX"
 
-        # Normalize for consistent hashing
-        normalized = mac.upper().replace("-", ":")
-        cache_key = f"MAC:{normalized}"
+        separator = mac_layout(mac)
+        layout = ":" if separator is None else separator
+        normalized = _mac_digest_input(mac)
+        cache_key = f"MAC{layout}:{normalized}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
         hash_bytes = self._get_hash_bytes(normalized, "MAC")
-        # Use 02 prefix (locally administered bit set) + 5 bytes from hash
-        result = f"02:{hash_bytes[0]:02x}:{hash_bytes[1]:02x}:{hash_bytes[2]:02x}:{hash_bytes[3]:02x}:{hash_bytes[4]:02x}"
+        digits = "02" + hash_bytes[:5].hex()
+        if layout == ".":
+            result = f"{digits[:4]}.{digits[4:8]}.{digits[8:]}"
+        else:
+            result = layout.join(digits[i : i + 2] for i in range(0, 12, 2))
 
         self._cache[cache_key] = result
         return result

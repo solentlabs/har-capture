@@ -14,10 +14,13 @@ from har_capture.patterns.loader import (
     _cache_get,
     _cache_set,
     clear_pattern_cache,
+    compile_detectors,
     compile_pattern,
     compile_safe_value_patterns,
+    compile_script_variables,
     get_bloat_extensions,
     list_domains,
+    load_allowlist,
     load_capture_settings,
     load_json_file,
     load_pii_patterns,
@@ -103,6 +106,16 @@ class TestCacheLRU:
         for i in range(5, 25):
             assert _cache_get(f"key_{i}") == f"value_{i}"
 
+    def test_cache_set_existing_key_refreshes_order(self) -> None:
+        """Re-setting a key makes it most recently used, so an older key is evicted first."""
+        _cache_set("a", 1)
+        _cache_set("b", 2)
+        _cache_set("a", 3)
+        for i in range(19):
+            _cache_set(f"key_{i}", i)
+        assert _cache_get("b") is None
+        assert _cache_get("a") == 3
+
     def test_cache_lru_order(self) -> None:
         """Test LRU access order is maintained."""
         # Add 15 entries
@@ -179,7 +192,7 @@ class TestCustomPatternsLoading:
 
         A custom pattern file with ``\b`` instead of ``\\b`` parses to ASCII
         backspace, compiles silently, and matches nothing - exactly the silent
-        no-op behind issue #51. The loader should log a warning so the user
+        no-op. The loader should log a warning so the user
         has some diagnostic rather than a quiet PII leak.
         """
         import logging
@@ -251,6 +264,14 @@ class TestCompilePattern:
         """Test that invalid regex patterns return None instead of raising."""
         result = compile_pattern(pattern_def)
         assert result is None, f"{desc}: invalid regex should return None"
+
+    def test_invalid_regex_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A bad pattern compiled once per body warns once, not once per body."""
+        pattern_def = {"regex": "([", "replacement_prefix": "WARN_ONCE"}
+        with caplog.at_level("WARNING"):
+            for _ in range(3):
+                compile_pattern(pattern_def)
+        assert sum("WARN_ONCE" in record.getMessage() for record in caplog.records) == 1
 
     def test_valid_regex_returns_pattern(self) -> None:
         """Test that valid regex patterns compile successfully."""
@@ -456,6 +477,31 @@ class TestIncludePatterns:
         merged = merge_pattern_files([file_a, file_b])
         assert set(merged["include_patterns"]) == {"mac_address", "email"}
 
+    def test_merge_extends_script_variables(self, tmp_path: Path) -> None:
+        """merge_pattern_files extends script_variables kind by kind, and the merge compiles every name."""
+        file_a = tmp_path / "a.json"
+        file_a.write_text(json.dumps({"script_variables": {"password": [{"regex": "adminPw"}]}}))
+        file_b = tmp_path / "b.json"
+        file_b.write_text(
+            json.dumps(
+                {
+                    "script_variables": {
+                        "password": [{"regex": "userPw"}],
+                        "pipe_delimited": [{"regex": "statusBlob"}],
+                    }
+                }
+            )
+        )
+
+        sensitive = load_sensitive_patterns(merge_pattern_files([file_a, file_b]))
+        assert [
+            r.pattern.split("(?:")[1].split(")")[0] for r in compile_script_variables(sensitive, "password")
+        ] == [
+            "adminPw",
+            "userPw",
+        ]
+        assert len(compile_script_variables(sensitive, "pipe_delimited")) == 1
+
 
 class TestSensitivePatternsHeuristicsMerge:
     """Tests for heuristics.safe_value_patterns merging in load_sensitive_patterns."""
@@ -544,3 +590,161 @@ class TestCaptureSettingsCustomMerge:
             assert ".pfb" not in load_capture_settings()["bloat_extensions"]["fonts"]
         finally:
             clear_pattern_cache()
+
+
+# (desc, flags) — any collection of flag names is honoured, as the loader
+# honoured any iterable before; a lone name is a collection of one.
+_FLAG_FORMS = [
+    ("list", ["IGNORECASE"]),
+    ("tuple", ("IGNORECASE",)),
+    ("set", {"IGNORECASE"}),
+    ("lone_name", "IGNORECASE"),
+]
+
+
+@pytest.mark.parametrize(("desc", "flags"), _FLAG_FORMS, ids=[f[0] for f in _FLAG_FORMS])
+def test_compile_pattern_flag_forms(desc: str, flags: Any) -> None:
+    """Flags given as any collection of names (or one name) are honoured."""
+    compiled = compile_pattern({"regex": "abc", "flags": flags, "replacement_prefix": "F"})
+    assert compiled is not None and compiled.fullmatch("ABC"), desc
+
+
+def test_compile_pattern_accepts_compiled_regex() -> None:
+    """A pre-compiled regex keeps its own flags."""
+    import re
+
+    compiled = compile_pattern({"regex": re.compile("abc", re.IGNORECASE), "replacement_prefix": "P"})
+    assert compiled is not None and compiled.fullmatch("ABC")
+
+
+def test_non_string_regex_warns_per_pattern(caplog: pytest.LogCaptureFixture) -> None:
+    """Two different bad patterns with one prefix each warn once."""
+    with caplog.at_level("WARNING"):
+        for regex in (5, 6, 5):
+            compile_pattern({"regex": regex, "replacement_prefix": "SAMEPFX"})
+    assert sum("SAMEPFX" in record.getMessage() for record in caplog.records) == 2
+
+
+def test_dedicated_name_override_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    """Ignoring a custom definition of a dedicated built-in warns once, however often the patterns load."""
+    from har_capture.patterns import load_pii_patterns
+
+    custom = {"patterns": {"account_id": {"regex": "ACCT-\\d+", "replacement_prefix": "WARNONCE"}}}
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            load_pii_patterns(custom)
+    assert sum("account_id" in record.getMessage() for record in caplog.records) == 1
+
+
+MERGE_CASES = _LOADER_FIXTURE["merge_cases"]["cases"]
+MERGE_FILES_CASES = _LOADER_FIXTURE["merge_files_cases"]["cases"]
+DETECTOR_COMPILE_CASES = _LOADER_FIXTURE["detector_compile_cases"]["cases"]
+LIST_DOMAINS_CASES = _LOADER_FIXTURE["list_domains_cases"]["cases"]
+
+
+class TestCustomMerge:
+    """How custom files extend the built-ins, one merge rule per row."""
+
+    def setup_method(self) -> None:
+        """Clear cache before each test."""
+        clear_pattern_cache()
+
+    @pytest.mark.parametrize("case", MERGE_CASES, ids=[c["id"] for c in MERGE_CASES])
+    def test_loader_merge(self, case: dict) -> None:
+        """A custom dict extends the loader's built-in sections."""
+        loaded = (load_sensitive_patterns if case["loader"] == "sensitive" else load_allowlist)(
+            case["custom"]
+        )
+        for path, kind, value in case["expect"]:
+            node = loaded
+            for key in path:
+                node = node[key]
+            if kind == "contains":
+                assert value in node
+            elif kind == "equals":
+                assert node == value
+            else:
+                assert node != value
+
+    @pytest.mark.parametrize("case", MERGE_FILES_CASES, ids=[c["id"] for c in MERGE_FILES_CASES])
+    def test_merge_pattern_files(self, case: dict, tmp_path: Path) -> None:
+        """Files merge in order: sections taken whole, lists extended, dicts updated, others replaced."""
+        paths = []
+        for index, data in enumerate(case["files"]):
+            path = tmp_path / f"{index}.json"
+            path.write_text(json.dumps(data))
+            paths.append(path)
+        assert merge_pattern_files(paths) == case["merged"]
+
+    @pytest.mark.parametrize("case", DETECTOR_COMPILE_CASES, ids=[c["id"] for c in DETECTOR_COMPILE_CASES])
+    def test_compile_detectors(self, case: dict) -> None:
+        """Detector patterns compile as compile_pattern compiles them."""
+        (detector,) = compile_detectors(
+            {"heuristics": {"detectors": [{"category": "c", "patterns": case["patterns"]}]}}
+        )
+        samples = [sample for _, sample, _ in case["compiled"]]
+        assert [
+            [reason, sample, bool(regex.search(sample))]
+            for (regex, reason), sample in zip(detector.patterns, samples, strict=True)
+        ] == case["compiled"]
+
+    @pytest.mark.parametrize("case", LIST_DOMAINS_CASES, ids=[c["id"] for c in LIST_DOMAINS_CASES])
+    def test_list_domains(self, case: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unreadable domain files are skipped; a missing directory lists nothing."""
+        domains = tmp_path / "domains"
+        if case["files"] is not None:
+            domains.mkdir()
+            for name, text in case["files"].items():
+                (domains / name).write_text(text)
+        monkeypatch.setattr("har_capture.patterns.loader._get_domains_dir", lambda: domains)
+        assert [d["name"] for d in list_domains()] == case["names"]
+
+
+MALFORMED_CUSTOM_CASES = _LOADER_FIXTURE["malformed_custom_cases"]["cases"]
+
+
+class TestMalformedCustomPatterns:
+    """A malformed pattern file warns and skips the bad part; nothing raises."""
+
+    @pytest.mark.parametrize("case", MALFORMED_CUSTOM_CASES, ids=[c["id"] for c in MALFORMED_CUSTOM_CASES])
+    def test_no_crash(self, case: dict, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Every entry point accepts the file; the valid field pattern beside the bad section still redacts."""
+        import logging
+
+        from har_capture.sanitization import check_for_pii, sanitize_har, sanitize_html
+
+        clear_pattern_cache()
+        second = tmp_path / "custom.json"
+        second.write_text(json.dumps(case["custom"]))
+        base = case["custom"] if isinstance(case["custom"], dict) else {}
+        custom = {**base, "fields": {"auto_redact_patterns": ["vendorsecret"]}}
+        with caplog.at_level(logging.WARNING, logger="har_capture.patterns.loader"):
+            sanitize_html("<p>MAC aa:bb:cc:dd:ee:01</p>", salt=None, custom_patterns=custom)
+            check_for_pii("<p>MAC aa:bb:cc:dd:ee:01</p>", custom_patterns=custom)
+            har = {
+                "log": {
+                    "entries": [
+                        {
+                            "request": {
+                                "method": "POST",
+                                "url": "http://h/",
+                                "headers": [],
+                                "postData": {
+                                    "mimeType": "application/json",
+                                    "text": '{"vendorsecret": "abc12345"}',
+                                },
+                            },
+                            "response": {
+                                "status": 200,
+                                "headers": [],
+                                "content": {"mimeType": "text/html", "text": "x"},
+                            },
+                        }
+                    ]
+                }
+            }
+            out, _ = sanitize_har(har, salt=None, custom_patterns=custom)
+            merge_pattern_files([resolve_patterns_arg("network-device"), second])
+            load_capture_settings(second)
+        assert "abc12345" not in json.dumps(out["log"]["entries"])
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)

@@ -141,6 +141,12 @@ test(validation): add PII detection tests
    # One command to run everything CI's test jobs run (needs uv):
    ./scripts/ci-local.sh --matrix
 
+   # In VS Code, the same checks are tasks (Terminal → Run Task): "Full CI Validation",
+   # "Run Tests", "Lint", "Type Check (mypy)" and more; .vscode/launch.json has debug
+   # configurations for capture, sanitize, validate and the test suite. The tasks run
+   # tools from .venv/bin/ and need bash (Linux, macOS or WSL); on native Windows, use
+   # the commands below.
+
    # Or run each check separately:
    pre-commit run --all-files
    pytest

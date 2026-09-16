@@ -34,13 +34,35 @@ from pathlib import Path
 
 import pytest
 
+from har_capture.patterns.loader import load_pii_patterns
 from har_capture.patterns.redaction import (
+    EMAIL_RE,
+    IPV6_RE,
+    MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
     QueryCredential,
+    QueryPayload,
+    classify_identity_field,
+    credential_value_action,
+    decode_base64_payload,
+    decode_transport_body,
     find_query_credential,
+    find_query_payload,
     is_allowlisted,
     is_base64_credential,
+    is_constant_mac,
     is_fully_redacted,
+    is_ipv6_host_address,
+    is_mac_placeholder,
     is_redacted,
+    is_text_mime,
+    iter_json_strings,
+    iter_url_credentials,
+    mime_kind,
+    parse_json_container,
+    route_body,
+    split_url_password,
 )
 
 # Load test data from fixture
@@ -51,6 +73,172 @@ NON_REDACTED_VALUES = _FIXTURES["non_redacted_values"]
 CASE_INSENSITIVE_PAIRS = [tuple(group) for group in _FIXTURES["case_insensitive_pairs"]]
 QUERY_CREDENTIAL_CASES = _FIXTURES["query_credential_cases"]["cases"]
 BASE64_CREDENTIAL_PADDING_CASES = _FIXTURES["base64_credential_padding_cases"]["cases"]
+MAC_REGEX_CASES = _FIXTURES["mac_regex_cases"]["cases"]
+URL_CREDENTIAL_CASES = _FIXTURES["url_credential_cases"]["cases"]
+JSON_IDENTITY_KEY_CASES = _FIXTURES["json_identity_key_cases"]["cases"]
+TRANSPORT_BODY_CASES = _FIXTURES["transport_body_cases"]["cases"]
+BASE64_PAYLOAD_CASES = _FIXTURES["base64_payload_cases"]["cases"]
+TEXT_MIME_CASES = _FIXTURES["text_mime_cases"]["cases"]
+JSON_CONTAINER_CASES = _FIXTURES["json_container_cases"]["cases"]
+CONSTANT_MAC_CASES = _FIXTURES["constant_mac_cases"]["cases"]
+QUERY_PAYLOAD_CASES = _FIXTURES["query_payload_cases"]["cases"]
+URL_PASSWORD_CASES = _FIXTURES["url_password_cases"]["cases"]
+BODY_ROUTE_CASES = _FIXTURES["body_route_cases"]["cases"]
+MAC_PLACEHOLDER_CASES = _FIXTURES["mac_placeholder_cases"]["cases"]
+NETWORK_VALUE_REGEX_CASES = _FIXTURES["network_value_regex_cases"]["cases"]
+ITER_JSON_STRINGS_CASES = _FIXTURES["iter_json_strings_cases"]["cases"]
+CREDENTIAL_VALUE_ACTION_CASES = _FIXTURES["credential_value_action_cases"]["cases"]
+
+
+class TestMacRegex:
+    """MAC_RE is the one MAC definition for the sanitizer, the validator and check_for_pii."""
+
+    @pytest.mark.parametrize("case", MAC_REGEX_CASES, ids=[c["id"] for c in MAC_REGEX_CASES])
+    def test_matches(self, case: dict) -> None:
+        assert [m.group(0) for m in MAC_RE.finditer(case["text"])] == case["matches"]
+
+    def test_pii_json_mirrors_mac_re(self) -> None:
+        """check_for_pii reads pii.json; the pattern file must carry MAC_RE verbatim."""
+        assert load_pii_patterns()["patterns"]["mac_address"]["regex"] == MAC_RE.pattern
+
+
+class TestNetworkValueRegexes:
+    """One IP, IPv6 and email definition for both engines, validate and check_for_pii."""
+
+    _REGEXES = {"ipv6": IPV6_RE, "private_ip": PRIVATE_IP_RE, "public_ip": PUBLIC_IP_RE, "email": EMAIL_RE}
+
+    @pytest.mark.parametrize(
+        "case", NETWORK_VALUE_REGEX_CASES, ids=[c["id"] for c in NETWORK_VALUE_REGEX_CASES]
+    )
+    def test_matches(self, case: dict) -> None:
+        found = [m.group(0) for m in self._REGEXES[case["regex"]].finditer(case["text"])]
+        if case["regex"] == "ipv6":
+            found = [candidate for candidate in found if is_ipv6_host_address(candidate)]
+        assert found == case["matches"]
+
+    @pytest.mark.parametrize("name", ["private_ip", "public_ip", "ipv6", "email"])
+    def test_pii_json_mirrors_shared_regex(self, name: str) -> None:
+        """check_for_pii reads pii.json; the pattern file must carry the shared regex verbatim."""
+        assert load_pii_patterns()["patterns"][name]["regex"] == self._REGEXES[name].pattern
+
+
+class TestCredentialValueAction:
+    """credential_value_action: keep, review or redact a value served under a credential-named key."""
+
+    @pytest.mark.parametrize(
+        "case", CREDENTIAL_VALUE_ACTION_CASES, ids=[c["id"] for c in CREDENTIAL_VALUE_ACTION_CASES]
+    )
+    def test_action(self, case: dict) -> None:
+        assert credential_value_action(case["value"]) == case["action"]
+
+
+class TestIterJsonStrings:
+    """iter_json_strings yields the decoded strings both tools' text passes read."""
+
+    @pytest.mark.parametrize("case", ITER_JSON_STRINGS_CASES, ids=[c["id"] for c in ITER_JSON_STRINGS_CASES])
+    def test_strings(self, case: dict) -> None:
+        assert sorted(iter_json_strings(parse_json_container(case["text"]))) == sorted(case["strings"])
+
+
+class TestIterUrlCredentials:
+    """iter_url_credentials reads a request's whole query with find_query_credential."""
+
+    @pytest.mark.parametrize("case", URL_CREDENTIAL_CASES, ids=[c["id"] for c in URL_CREDENTIAL_CASES])
+    def test_credentials(self, case: dict) -> None:
+        assert [c.credential for c in iter_url_credentials(case["request"])] == case["credentials"]
+
+
+class TestClassifyIdentityField:
+    """A JSON key naming a serial or MAC, holding a value of that shape."""
+
+    @pytest.mark.parametrize("case", JSON_IDENTITY_KEY_CASES, ids=[c["id"] for c in JSON_IDENTITY_KEY_CASES])
+    def test_category(self, case: dict) -> None:
+        assert classify_identity_field(case["key"], case["value"]) == case["category"]
+
+
+class TestDecodeBase64Payload:
+    """decode_base64_payload tells a base64-wrapped JSON or URL payload from a credential."""
+
+    @pytest.mark.parametrize("case", BASE64_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_PAYLOAD_CASES])
+    def test_decoded(self, case: dict) -> None:
+        assert decode_base64_payload(case["value"]) == case["expected"]
+
+
+class TestMimeKind:
+    """mime_kind is the one mime vocabulary; is_text_mime is a kind being named."""
+
+    @pytest.mark.parametrize("case", TEXT_MIME_CASES, ids=[c["id"] for c in TEXT_MIME_CASES])
+    def test_kind(self, case: dict) -> None:
+        assert mime_kind(case["mime"]) == case["kind"]
+        assert is_text_mime(case["mime"]) is (case["kind"] is not None)
+
+
+class TestParseJsonContainer:
+    """parse_json_container accepts objects and arrays and never raises."""
+
+    @pytest.mark.parametrize("case", JSON_CONTAINER_CASES, ids=[c["id"] for c in JSON_CONTAINER_CASES])
+    def test_container(self, case: dict) -> None:
+        text = "[" * case["nesting"] + "]" * case["nesting"] if "nesting" in case else case["text"]
+        assert (parse_json_container(text) is not None) is case["is_container"]
+
+
+class TestIsConstantMac:
+    """is_constant_mac names the broadcast and zero constants in any layout."""
+
+    @pytest.mark.parametrize("case", CONSTANT_MAC_CASES, ids=[c["id"] for c in CONSTANT_MAC_CASES])
+    def test_constant(self, case: dict) -> None:
+        assert is_constant_mac(case["mac"]) is case["constant"]
+
+
+class TestBodyRoute:
+    """route_body is the one routing decision for the sanitizer and the validator."""
+
+    @pytest.mark.parametrize("case", BODY_ROUTE_CASES, ids=[c["id"] for c in BODY_ROUTE_CASES])
+    def test_route(self, case: dict) -> None:
+        route, data = route_body(case["mime"], case["text"])
+        assert route == case["route"]
+        assert (data is not None) is (route == "json")
+
+
+class TestIsMacPlaceholder:
+    """is_mac_placeholder recognizes hash_mac output in every layout."""
+
+    @pytest.mark.parametrize("case", MAC_PLACEHOLDER_CASES, ids=[c["id"] for c in MAC_PLACEHOLDER_CASES])
+    def test_placeholder(self, case: dict) -> None:
+        assert is_mac_placeholder(case["value"]) is case["placeholder"]
+
+
+class TestSplitUrlPassword:
+    """split_url_password finds a userinfo password and nothing else."""
+
+    @pytest.mark.parametrize("case", URL_PASSWORD_CASES, ids=[c["id"] for c in URL_PASSWORD_CASES])
+    def test_parts(self, case: dict) -> None:
+        parts = split_url_password(case["url"])
+        assert parts == (tuple(case["parts"]) if case["parts"] else None)
+        if parts:
+            assert "".join(parts) == case["url"]
+
+
+class TestFindQueryPayload:
+    """find_query_payload locates a base64 JSON or URL payload in one raw query segment."""
+
+    @pytest.mark.parametrize("case", QUERY_PAYLOAD_CASES, ids=[c["id"] for c in QUERY_PAYLOAD_CASES])
+    def test_payload(self, case: dict) -> None:
+        found = find_query_payload(case["segment"])
+        if case["encoded"] is None:
+            assert found is None
+        else:
+            assert found is not None
+            assert found == QueryPayload(case["prefix"], case["encoded"], found.text, case["quoted"])
+            assert found.text == decode_base64_payload(case["encoded"])
+
+
+class TestDecodeTransportBody:
+    """decode_transport_body returns a body's text, or None for binary."""
+
+    @pytest.mark.parametrize("case", TRANSPORT_BODY_CASES, ids=[c["id"] for c in TRANSPORT_BODY_CASES])
+    def test_decoded(self, case: dict) -> None:
+        assert decode_transport_body(case["content"]) == case["expected"]
 
 
 class TestBase64CredentialPadding:
@@ -343,25 +531,28 @@ class TestFormatPreservingInvalidRegex:
         assert not is_allowlisted("random_value", allowlist)
 
 
-class TestCookieAttributeMetadataDetection:
-    """Tests for is_cookie_attribute_metadata helper."""
+SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES = _FIXTURES["set_cookie_attribute_grammar_cases"]["cases"]
+COOKIE_SEGMENT_ACTION_CASES = _FIXTURES["cookie_segment_action_cases"]["cases"]
 
-    @pytest.mark.parametrize(
-        ("value", "expected", "desc"),
-        [
-            ("HttpOnly: true, Secure: true", True, "standard_metadata"),
-            ("SameSite=Lax", True, "samesite_attr"),
-            ("session=abc123", False, "normal_cookie"),
-            ("", False, "empty_string"),
-            ("   ", False, "whitespace_only"),
-        ],
-        ids=lambda x: x if isinstance(x, str) and "_" in x else "",
-    )
-    def test_cookie_attribute_metadata(self, value: str, expected: bool, desc: str) -> None:
-        """Test is_cookie_attribute_metadata with various inputs."""
-        from har_capture.patterns.redaction import is_cookie_attribute_metadata
 
-        assert is_cookie_attribute_metadata(value) == expected, desc
+@pytest.mark.parametrize(
+    "case", SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES, ids=[c["id"] for c in SET_COOKIE_ATTRIBUTE_GRAMMAR_CASES]
+)
+def test_set_cookie_attribute_grammar(case: dict) -> None:
+    """A segment is an attribute only in RFC 6265's grammar."""
+    from har_capture.patterns.redaction import is_set_cookie_attribute
+
+    assert is_set_cookie_attribute(case["segment"]) is case["attribute"]
+
+
+@pytest.mark.parametrize(
+    "case", COOKIE_SEGMENT_ACTION_CASES, ids=[c["id"] for c in COOKIE_SEGMENT_ACTION_CASES]
+)
+def test_cookie_segment_actions(case: dict) -> None:
+    """Each cookie-header segment is kept, or its value or whole token is cookie data."""
+    from har_capture.patterns.redaction import cookie_segment_actions
+
+    assert cookie_segment_actions(case["value"], set_cookie=case["set_cookie"]) == case["actions"]
 
 
 class TestCookieAttributeNameDetection:

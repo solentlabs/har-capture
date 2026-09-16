@@ -1,4 +1,63 @@
 {
+  "kept_or_unoffered_cases": {
+    "_comment": "Values sanitize keeps or does not offer for review, and inputs it skips without failing. Each entry runs through sanitize_har (FLAG, salt t) as the only entry of a HAR; absent/present are checked in the JSON output, not_offered against the flagged values; validate_errors is the validate error count on the sanitized output.",
+    "cases": [
+      {"id": "empty_cookie_value_kept", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": [{"name": "Cookie", "value": "a=; sid=s3cretvalue99"}]}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": ""}}},
+       "absent": ["s3cretvalue99"], "present": ["a=; sid=COOKIE_"], "not_offered": [], "validate_errors": 0},
+      {"id": "ssid_wholly_a_placeholder_not_offered", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "application/json", "text": "{\"ssid\": \"192.168.1.50\"}"}}},
+       "absent": ["192.168.1.50"], "present": ["10.255."], "not_offered": ["192.168.1.50", "10.255.154.80"], "validate_errors": 0},
+      {"id": "certificate_name_not_a_string", "entry": {"request": {"method": "GET", "url": "https://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": ""}}, "_securityDetails": {"subjectName": 5, "issuer": "aa:bb:cc:dd:ee:01"}},
+       "absent": ["aa:bb:cc:dd:ee:01"], "present": ["\"subjectName\": 5"], "not_offered": [], "validate_errors": 0},
+      {"id": "key_label_placeholder_not_offered", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": "<script>x = {key: 'PASS_a1b2c3d4'};</script>"}}},
+       "absent": [], "present": ["PASS_a1b2c3d4"], "not_offered": ["PASS_a1b2c3d4"], "validate_errors": 0}
+    ]
+  },
+
+  "har_type_cases": {
+    "_comment": "The type boundary sanitize_har, validate_har and analyze_har_file share (check_har_types): a field present with a non-null value has its HAR 1.2 type; null is accepted only where both tools read it as absent. set: the path in base_har to replace (a string key or list index); delete: remove the key instead; error_path: the HarValidationError path, or null when the HAR is accepted. 0 of 26,253 CMM fleet entries break the rule.",
+    "base_har": {"log": {"version": "1.2", "creator": {"name": "t", "version": "1"}, "pages": [{"id": "p", "title": "Status"}],
+      "_har_capture": {"sanitization": {"review": "none_flagged"}},
+      "entries": [{
+        "request": {"method": "POST", "url": "http://192.168.100.1/login?x=1",
+          "headers": [{"name": "Cookie", "value": "a=b"}], "cookies": [{"name": "a", "value": "b"}], "queryString": [{"name": "x", "value": "1"}],
+          "postData": {"mimeType": "application/x-www-form-urlencoded", "text": "user=admin", "params": [{"name": "user", "value": "admin"}]}},
+        "response": {"status": 200, "headers": [{"name": "Set-Cookie", "value": "s=1"}], "cookies": [{"name": "s", "value": "1"}],
+          "content": {"mimeType": "text/html", "text": "<p>ok</p>"}}}]}},
+    "cases": [
+      {"id": "root_not_object",        "set": [],                                                      "value": [],     "error_path": "root"},
+      {"id": "log_null",               "set": ["log"],                                                 "value": null,   "error_path": "log"},
+      {"id": "entries_string",         "set": ["log", "entries"],                                      "value": "x",    "error_path": "log.entries"},
+      {"id": "har_capture_list",       "set": ["log", "_har_capture"],                                 "value": [],     "error_path": "log._har_capture"},
+      {"id": "page_title_number",      "set": ["log", "pages", 0, "title"],                            "value": 5,      "error_path": "log.pages[0].title"},
+      {"id": "entry_string",           "set": ["log", "entries", 0],                                   "value": "x",    "error_path": "log.entries[0]"},
+      {"id": "entry_null",             "set": ["log", "entries", 0],                                   "value": null,   "error_path": "log.entries[0]"},
+      {"id": "request_null",           "set": ["log", "entries", 0, "request"],                        "value": null,   "error_path": "log.entries[0].request"},
+      {"id": "response_list",          "set": ["log", "entries", 0, "response"],                       "value": [],     "error_path": "log.entries[0].response"},
+      {"id": "url_null",               "set": ["log", "entries", 0, "request", "url"],                 "value": null,   "error_path": "log.entries[0].request.url"},
+      {"id": "request_headers_null",   "set": ["log", "entries", 0, "request", "headers"],             "value": null,   "error_path": "log.entries[0].request.headers"},
+      {"id": "header_item_string",     "set": ["log", "entries", 0, "request", "headers", 0],          "value": "x",    "error_path": "log.entries[0].request.headers[0]"},
+      {"id": "header_value_null",      "set": ["log", "entries", 0, "request", "headers", 0, "value"], "value": null,   "error_path": "log.entries[0].request.headers[0].value"},
+      {"id": "cookie_value_number",    "set": ["log", "entries", 0, "request", "cookies", 0, "value"], "value": 5,      "error_path": "log.entries[0].request.cookies[0].value"},
+      {"id": "query_item_string",      "set": ["log", "entries", 0, "request", "queryString", 0],      "value": "x",    "error_path": "log.entries[0].request.queryString[0]"},
+      {"id": "post_data_string",       "set": ["log", "entries", 0, "request", "postData"],            "value": "x",    "error_path": "log.entries[0].request.postData"},
+      {"id": "post_text_number",       "set": ["log", "entries", 0, "request", "postData", "text"],    "value": 5,      "error_path": "log.entries[0].request.postData.text"},
+      {"id": "params_null",            "set": ["log", "entries", 0, "request", "postData", "params"],  "value": null,   "error_path": "log.entries[0].request.postData.params"},
+      {"id": "param_name_null",        "set": ["log", "entries", 0, "request", "postData", "params", 0, "name"], "value": null, "error_path": "log.entries[0].request.postData.params[0].name"},
+      {"id": "post_mime_type_null",    "set": ["log", "entries", 0, "request", "postData", "mimeType"], "value": null, "error_path": "log.entries[0].request.postData.mimeType"},
+      {"id": "response_headers_number","set": ["log", "entries", 0, "response", "headers"],            "value": 5,      "error_path": "log.entries[0].response.headers"},
+      {"id": "content_null",           "set": ["log", "entries", 0, "response", "content"],            "value": null,   "error_path": "log.entries[0].response.content"},
+      {"id": "content_text_bool",      "set": ["log", "entries", 0, "response", "content", "text"],    "value": true,   "error_path": "log.entries[0].response.content.text"},
+      {"id": "query_string_null_ok",   "set": ["log", "entries", 0, "request", "queryString"],         "value": null,   "error_path": null},
+      {"id": "cookies_null_ok",        "set": ["log", "entries", 0, "response", "cookies"],            "value": null,   "error_path": null},
+      {"id": "post_data_null_ok",      "set": ["log", "entries", 0, "request", "postData"],            "value": null,   "error_path": null},
+      {"id": "post_text_null_ok",      "set": ["log", "entries", 0, "request", "postData", "text"],    "value": null,   "error_path": null},
+      {"id": "cookie_value_null_ok",   "set": ["log", "entries", 0, "request", "cookies", 0, "value"], "value": null,   "error_path": null},
+      {"id": "content_text_null_ok",   "set": ["log", "entries", 0, "response", "content", "text"],    "value": null,   "error_path": null},
+      {"id": "request_absent_ok",      "set": ["log", "entries", 0, "request"],  "delete": true,       "error_path": null},
+      {"id": "log_absent_ok",          "set": ["log"],                           "delete": true,       "error_path": null}
+    ]
+  },
+
   "sensitive_field_cases": [
     {"field_name": "password",          "expected": true,  "id": "password_exact"},
     {"field_name": "Password",          "expected": true,  "id": "password_capitalized"},
@@ -56,6 +115,10 @@
     {"field_name": "session_key",       "expected": false, "id": "session_key_not_detected"},
     {"field_name": "credential",        "expected": true,  "id": "credential"},
     {"field_name": "credentials",       "expected": true,  "id": "credentials"},
+    {"field_name": "userCredential",    "expected": true,  "id": "credential_last_word_camel"},
+    {"field_name": "user_credentials",  "expected": true,  "id": "credentials_last_word_snake"},
+    {"field_name": "credential_encoding", "expected": false, "id": "credential_encoding_names_an_encoding"},
+    {"field_name": "credentialType",    "expected": false, "id": "credential_type_names_a_kind"},
     {"field_name": "private_key",       "expected": true,  "id": "private_key"},
     {"field_name": "privateKey",        "expected": true,  "id": "private_key_camel"},
     {"field_name": "nonce",             "expected": false, "id": "nonce_not_detected"},
@@ -98,7 +161,7 @@
     {"header_name": "X-Auth-Token",        "header_value": "token123456",                "expected_contains": "[REDACTED]",              "id": "auth_token"},
     {"header_name": "X-Access-Token",      "header_value": "access123",                  "expected_contains": "access123",               "id": "access_token_not_detected"},
     {"header_name": "X-Session-Token",     "header_value": "session456",                 "expected_contains": "session456",              "id": "session_token_not_detected"},
-    {"header_name": "Proxy-Authorization", "header_value": "Basic cHJveHk6cGFzcw==",     "expected_contains": "Basic cHJveHk6cGFzcw==",  "id": "proxy_auth_not_detected"},
+    {"header_name": "Proxy-Authorization", "header_value": "Basic cHJveHk6cGFzcw==",     "expected_contains": "Basic [REDACTED]",        "id": "proxy_auth_credential_redacted"},
     {"header_name": "X-Hub-Signature",     "header_value": "sha1=abc123def456",          "expected_contains": "sha1=abc123def456",       "id": "hub_signature_not_detected"},
     {"header_name": "X-Signature",         "header_value": "hmac-sha256=xyz789",         "expected_contains": "hmac-sha256=xyz789",      "id": "signature_not_detected"},
     {"header_name": "Cookie",              "header_value": "session=abc123",             "expected_contains": "session=[REDACTED]",      "id": "cookie_session"},
@@ -129,7 +192,17 @@
     {"header_name": "Set-Cookie", "header_value": "sid=s3cr3t; Path=/; VendorFlag",                                             "expected": "sid=[REDACTED]; Path=/; VendorFlag",                                   "id": "unknown_valueless_flag_preserved"},
     {"header_name": "Set-Cookie", "header_value": "opaquevaluewithnoequals",                                                    "expected": "[REDACTED]",                                                           "id": "no_cookie_pair_redacts_whole_value"},
     {"header_name": "Cookie",     "header_value": "path=/notanattribute; sid=s3cr3t",                                           "expected": "path=[REDACTED]; sid=[REDACTED]",                                      "id": "request_cookie_named_path_still_redacted"},
-    {"header_name": "Cookie",     "header_value": "sid=s3cr3t; csrf=deadbeef",                                                  "expected": "sid=[REDACTED]; csrf=[REDACTED]",                                      "id": "request_cookie_all_pairs_redacted"}
+    {"header_name": "Cookie",     "header_value": "sid=s3cr3t; csrf=deadbeef",                                                  "expected": "sid=[REDACTED]; csrf=[REDACTED]",                                      "id": "request_cookie_all_pairs_redacted"},
+    {"header_name": "Set-Cookie", "header_value": "Secure=abc123; Path=/", "expected": "Secure=[REDACTED]; Path=/", "id": "first_segment_named_like_a_flag_is_the_cookie"},
+    {"header_name": "Set-Cookie", "header_value": "Path=s3cr3t; HttpOnly", "expected": "Path=[REDACTED]; HttpOnly", "id": "first_segment_named_like_an_attribute_is_the_cookie"},
+    {"header_name": "Set-Cookie", "header_value": "Secure; HttpOnly", "expected": "Secure; HttpOnly", "id": "attributes_only_kept"},
+    {"header_name": "Set-Cookie", "header_value": "Path=/; Max-Age=3600; SameSite=Lax; Expires=Wed, 21-Oct-2026 07:28:00 GMT; Domain=.example.com; Secure", "expected": "Path=/; Max-Age=3600; SameSite=Lax; Expires=Wed, 21-Oct-2026 07:28:00 GMT; Domain=.example.com; Secure", "id": "attributes_only_with_valid_values_kept"},
+    {"header_name": "Set-Cookie", "header_value": "COOKIE_1a2b3c4d; Path=/; HttpOnly", "expected": "[REDACTED]; Path=/; HttpOnly", "id": "nameless_first_segment_redacted_attributes_kept"},
+    {"header_name": "Set-Cookie2", "header_value": "sid=s3cr3t; Path=/", "expected": "sid=[REDACTED]; Path=/", "id": "set_cookie2_is_a_set_cookie"},
+    {"header_name": "Cookie", "header_value": "a=1; nameless", "expected": "a=[REDACTED]; [REDACTED]", "id": "request_cookie_nameless_segment_redacted"},
+    {"header_name": "Cookie", "header_value": "sid=s3cr3t; Secure", "expected": "sid=[REDACTED]; Secure", "id": "request_cookie_flag_kept"},
+    {"header_name": "Cookie", "header_value": "Secure; HttpOnly", "expected": "Secure; HttpOnly", "id": "request_cookie_only_flags_kept"},
+    {"header_name": "Proxy-Authorization", "header_value": "Basic YWxhZGRpbjpvcGVuc2VzYW1l", "expected": "Basic [REDACTED]", "id": "proxy_authorization_scheme_kept_credential_redacted"}
   ],
   "over_matching_cases": [
     {"field_name": "keyboard",      "expected": false, "id": "keyboard_not_matched"},
@@ -566,6 +639,437 @@
       {"id": "location_keyed_credential",      "header": "Location", "url": "https://192.168.100.1/home.html?token=YWRtaW46cHc=",          "leaked_forms": ["YWRtaW46cHc"]},
       {"id": "redirect_url_password_param",    "header": "redirectURL", "url": "/home.html?password=hunter22",                            "leaked_forms": ["hunter22"]},
       {"id": "redirect_url_login_credential",  "header": "redirectURL", "url": "https://192.168.100.1/s.html?login_YWRtaW46cHc=",      "leaked_forms": ["YWRtaW46cHc"]}
+    ]
+  },
+  "transport_encoded_body_cases": {
+    "_comment": "Response bodies through _sanitize_response_content. A transport-encoded (encoding: base64) body is decoded first and handled as the text it carries, then written back as plain text with 'encoding' dropped; binary stays base64 and untouched. expect_encoding is the 'encoding' left on the content (null: none). absent must not survive, present must; text_equals pins the whole output, text_suffix its end. Bodies without encoding exercise the sniff for mime types that do not route themselves.",
+    "cases": [
+      {"id": "sb8200_fragment_with_colon",                    "_note": "Transport-encoded HTML fragment whose text has a colon: was wiped to AUTH_",                     "content": {"text": "PGRpdiBjbGFzcz0iaGRyIj48YSBocmVmPSJodHRwOi8vMTkyLjE2OC4xMDAuMS8iPlN0YXR1czwvYT4gTUFDOiAzQzo3QTo4QToxMjozNDo1NjwvZGl2Pg==", "mimeType": "application/octet-stream", "encoding": "base64"}, "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["<div class=\"hdr\">", "http://192.168.100.1/", "Status"]},
+      {"id": "fragment_without_colon",                        "_note": "Survived before, but no sanitizer pass reached it",                                              "content": {"text": "PGRpdiBpZD0iaGRyIj5TZXJpYWwgTnVtYmVyIDxiPkFCQzEyMzQ1Njc8L2I+PC9kaXY+", "mimeType": "application/octet-stream", "encoding": "base64"},                                                     "expect_encoding": null,     "absent": ["ABC1234567"],                          "present": ["<div id=\"hdr\">"]},
+      {"id": "dm1000_applation_json",                         "content": {"text": "eyJsYW5fbWFjIjogIjNDOjdBOjhBOjEyOjM0OjU2IiwgInN0YXR1cyI6ICJvayIsICJwYXNzd29yZCI6ICJodW50ZXIyaHVudGVyMiJ9", "mimeType": "applation/json", "encoding": "base64"},                           "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56", "hunter2hunter2"], "present": ["\"status\": \"ok\""]},
+      {"id": "hnap_x_unknown_json",                           "content": {"text": "eyJHZXRTdGF0dXNSZXNwb25zZSI6IHsiU3RhdHVzU29mdHdhcmVNYWMiOiAiM0M6N0E6OEE6MTI6MzQ6NTYifX0=", "mimeType": "x-unknown", "encoding": "base64"},                                                "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["\"GetStatusResponse\""]},
+      {"id": "hnap_x_unknown_markup",                         "content": {"text": "PHRhYmxlPjx0cj48dGQ+U2VyaWFsIE51bWJlcjwvdGQ+PHRkPkFCQzEyMzQ1Njc8L3RkPjwvdHI+PC90YWJsZT4=", "mimeType": "x-unknown", "encoding": "base64"},                                                "expect_encoding": null,     "absent": ["ABC1234567"],                          "present": ["<td>Serial Number</td>"]},
+      {"id": "double_wrapped_echoed_credential",              "_note": "The body is base64(user:pass) inside transport base64",                                          "content": {"text": "WVdSdGFXNDZjR0Z6YzNkdmNtUT0=", "mimeType": "application/octet-stream", "encoding": "base64"},                                                                                             "expect_encoding": null,     "absent": ["YWRtaW46cGFzc3dvcmQ="],                "present": ["AUTH_"]},
+      {"id": "latin1_text_html_undeclared",                   "_note": "_patch_missing_bodies base64-encodes a text body that is not UTF-8",                             "content": {"text": "PHA+Q2Fm6SAzQzo3QTo4QToxMjozNDo1NjwvcD4=", "mimeType": "text/html", "encoding": "base64"},                                                                                                "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["Café"]},
+      {"id": "woff2_binary_untouched",                        "content": {"text": "d09GMgABAAAAABI0//4=", "mimeType": "font/woff2", "encoding": "base64"},                                                                                                                   "expect_encoding": "base64", "absent": [],                                      "present": [],                                                               "text_equals": "d09GMgABAAAAABI0//4="},
+      {"id": "already_wiped_placeholder",                     "_note": "An earlier release wiped the body to AUTH_ and kept encoding: base64, which no decoder accepts", "content": {"text": "AUTH_0123abcd", "mimeType": "application/octet-stream", "encoding": "base64"},                                                                                                            "expect_encoding": null,     "absent": [],                                      "present": [],                                                               "text_equals": "AUTH_0123abcd"},
+      {"id": "invalid_json_as_application_json",              "content": {"text": "callback({\"cm\": \"3C:7A:8A:12:34:56\"})", "mimeType": "application/json"},                                                                                                              "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["callback("]},
+      {"id": "form_urlencoded_response",                      "content": {"text": "cm=3C:7A:8A:12:34:56&status=ok", "mimeType": "application/x-www-form-urlencoded"},                                                                                                        "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["&status=ok"]},
+      {"id": "svg_xml",                                       "content": {"text": "<svg><text>3C:7A:8A:12:34:56</text></svg>", "mimeType": "image/svg+xml"},                                                                                                                 "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["<svg><text>"]},
+      {"id": "octet_stream_plain_text",                       "content": {"text": "WAN MAC 3C:7A:8A:12:34:56", "mimeType": "application/octet-stream"},                                                                                                                      "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["WAN MAC "]},
+      {"id": "script_constant_macs_kept",                     "_note": "Broadcast and zero MACs are protocol constants scripts compare against",                         "content": {"text": "if (mac == 'ff:ff:ff:ff:ff:ff' || mac == '00:00:00:00:00:00') { show('3C:7A:8A:12:34:56'); }", "mimeType": "application/javascript"},                                                     "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["'ff:ff:ff:ff:ff:ff'", "'00:00:00:00:00:00'"]},
+      {"id": "json_body_without_pii_byte_identical",          "content": {"text": "{\n  \"status\": \"ok\",\n  \"ch\": [1, 2]\n}", "mimeType": "application/json"},                                                                                                          "expect_encoding": null,     "absent": [],                                      "present": [],                                                               "text_equals": "{\n  \"status\": \"ok\",\n  \"ch\": [1, 2]\n}"},
+      {"id": "json_body_keeps_compact_spacing_and_non_ascii", "content": {"text": "{\"city\":\"Zürich\",\"mac\":\"3C:7A:8A:12:34:56\"}", "mimeType": "application/json"},                                                                                                    "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["{\"city\":\"Zürich\",\"mac\":\""]},
+      {"id": "declared_utf8_with_stray_latin1_byte",          "_note": "Capture stores a page base64 when its bytes are not UTF-8, whatever it declares",                "content": {"text": "PHA+qSAzQzo3QTo4QToxMjozNDo1NjwvcD4=", "mimeType": "text/html; charset=utf-8", "encoding": "base64"},                                                                                     "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["<p>© "]},
+      {"id": "base64_json_body_without_pii_byte_identical",   "content": {"text": "eyJzdGF0dXMiOiAib2siLCAiY2giOiAxfQ==", "mimeType": ""},                                                                                                                                   "expect_encoding": null,     "absent": [],                                      "present": [],                                                               "text_equals": "eyJzdGF0dXMiOiAib2siLCAiY2giOiAxfQ=="},
+      {"id": "json_body_keeps_two_space_indent",              "content": {"text": "{\n  \"mac\": \"3C:7A:8A:12:34:56\",\n  \"ch\": 1\n}", "mimeType": "application/json"},                                                                                                   "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["{\n  \"mac\": \"", "\",\n  \"ch\": 1\n}"]},
+      {"id": "json_body_unrecognized_layout_default_spacing", "content": {"text": "{\t\"mac\":\t\"3C:7A:8A:12:34:56\"}", "mimeType": "application/json"},                                                                                                                    "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["{\"mac\": \""]},
+      {"id": "text_x_json_body",                              "content": {"text": "{\"password\":\"hunter2hunter2\",\"ch\":1}", "mimeType": "text/x-json"},                                                                                                                  "expect_encoding": null,     "absent": ["hunter2hunter2"],                      "present": ["\"ch\":1"]},
+      {"id": "constant_mac_under_mac_key_kept",               "content": {"text": "{\"mac\":\"00:00:00:00:00:00\",\"lan\":\"3C:7A:8A:12:34:56\"}", "mimeType": "application/json"},                                                                                          "expect_encoding": null,     "absent": ["3C:7A:8A:12:34:56"],                   "present": ["\"mac\":\"00:00:00:00:00:00\""]},
+      {"id": "json_body_php_escaped_slashes_and_newline",     "content": {"text": "{\"url\":\"http:\\/\\/192.168.100.1\\/s\",\"wan\":\"73.12.34.56\"}\n", "mimeType": "application/json"},                                                                                   "expect_encoding": null,     "absent": ["73.12.34.56"],                         "present": ["{\"url\":\"http:\\/\\/192.168.100.1\\/s\",\"wan\":\"192.0.2."], "text_suffix": "\"}\n"}
+    ]
+  },
+  "base64_query_payload_cases": {
+    "_comment": "A query value (or bare segment) that is base64 of a JSON object/array or a URL is a payload, not a credential, whatever its padding: it is decoded, sanitized inside, and re-encoded — unpadded only where the original visibly stripped padding, percent-encoded where it was — or left byte-identical when nothing inside needed redacting. A payload wins over an identity-style name, as in validate. leaked must not survive in the URL, the queryString array, or the decoded payload; decoded_present must appear in the decoded payload.",
+    "cases": [
+      {"id": "keyed_json_payload_padded",             "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",                     "leaked": ["hunter2hunter2"], "decoded_present": ["\"page\":1"],                                     "unchanged": false, "unpadded_output": false, "percent_encoded_output": false},
+      {"id": "keyed_json_payload_unpadded",           "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0",                      "leaked": ["hunter2hunter2"], "decoded_present": ["\"page\":1"],                                     "unchanged": false, "unpadded_output": true,  "percent_encoded_output": false},
+      {"id": "keyed_url_payload",                     "segment": "next=aHR0cDovLzE5Mi4xNjguMTAwLjEvbG9naW4uY2dpP3Bhc3N3b3JkPWh1bnRlcjJodW50ZXIy", "leaked": ["hunter2hunter2"], "decoded_present": ["http://192.168.100.1/login.cgi?password=FIELD_"], "unchanged": false, "unpadded_output": false, "percent_encoded_output": false},
+      {"id": "payload_without_secrets_unchanged",     "segment": "data=eyJwYWdlIjoxLCJsYW5nIjoiZW4ifQ==",                                         "leaked": [],                 "decoded_present": [],                                                 "unchanged": true,  "unpadded_output": false, "percent_encoded_output": false},
+      {"id": "url_payload_without_secrets_unchanged", "segment": "next=aHR0cDovLzE5Mi4xNjguMTAwLjEvaW5kZXguaHRtbD9wYWdlPTI=",                     "leaked": [],                 "decoded_present": [],                                                 "unchanged": true,  "unpadded_output": false, "percent_encoded_output": false},
+      {"id": "bare_json_payload",                     "segment": "eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",                          "leaked": ["hunter2hunter2"], "decoded_present": ["\"page\":1"],                                     "unchanged": false, "unpadded_output": false, "percent_encoded_output": false},
+      {"id": "keyed_json_payload_percent_encoded",    "segment": "data=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0%3D",                   "leaked": ["hunter2hunter2"], "decoded_present": ["\"page\":1"],                                     "unchanged": false, "unpadded_output": false, "percent_encoded_output": true},
+      {"id": "identity_named_json_payload",           "segment": "login=eyJwYXNzd29yZCI6Imh1bnRlcjJodW50ZXIyIiwicGFnZSI6MX0=",                    "leaked": ["hunter2hunter2"], "decoded_present": ["\"page\":1"],                                     "unchanged": false, "unpadded_output": false, "percent_encoded_output": false}
+    ]
+  },
+  "deep_nesting_cases": {
+    "_comment": "JSON nested past the parser's recursion limit, on every surface that parses JSON: sanitize and validate must both finish. The test builds each surface from its id.",
+    "cases": [
+      {"id": "query_payload"},
+      {"id": "body_payload"},
+      {"id": "octet_stream_body"},
+      {"id": "json_body"},
+      {"id": "post_json_body"}
+    ]
+  },
+  "json_identity_body_cases": {
+    "_comment": "JSON bodies through the sanitizer: a key that names a serial or MAC (classify_identity_field) and holds a value of that shape is redacted — SERIAL_<hash>, or a MAC placeholder in the value's own layout — and nothing else under such a key is. A body is JSON when its text parses as a JSON object or array, whatever type it declares (HNAP answers as text/html). absent must not survive; present must. pad prefixes that many characters of filler, for a body past the old 1 MB scan limit.",
+    "cases": [
+      {"id": "hnap_serial_in_text_html",            "mime": "text/html",              "text": "{\"GetStatusResponse\": {\"StatusSoftwareSerialNum\": \"4131N12345678\", \"StatusSoftwareHdVer\": \"1.0\"}}", "absent": ["4131N12345678"],     "present": ["\"StatusSoftwareSerialNum\": \"SERIAL_", "\"StatusSoftwareHdVer\": \"1.0\""]},
+      {"id": "bare_hex_mac_camel_key",              "mime": "application/json",       "text": "{\"CmMacAddress\": \"3C7A8A123456\"}",                                                                        "absent": ["3C7A8A123456"],      "present": ["{\"CmMacAddress\": \"02"]},
+      {"id": "glued_lowercase_serial_key",          "mime": "application/json",       "text": "{\"cmserialnumber\": \"4131N12345678\"}",                                                                     "absent": ["4131N12345678"],     "present": ["\"SERIAL_"]},
+      {"id": "dotted_mac_key",                      "mime": "application/json",       "text": "{\"hw_addr\": \"3c7a.8a12.3456\"}",                                                                           "absent": ["3c7a.8a12.3456"],    "present": ["{\"hw_addr\": \"02"]},
+      {"id": "mac_key_holding_label",               "mime": "application/json",       "text": "{\"mac_address\": \"MAC Address\"}",                                                                          "absent": [],                    "present": ["\"mac_address\": \"MAC Address\""]},
+      {"id": "serial_key_holding_placeholder_dash", "mime": "application/json",       "text": "{\"serialNumber\": \"-\"}",                                                                                   "absent": [],                    "present": ["\"serialNumber\": \"-\""]},
+      {"id": "mac_filter_flag_kept",                "mime": "application/json",       "text": "{\"MacAddressFilterEnabled\": \"true\"}",                                                                     "absent": [],                    "present": ["\"MacAddressFilterEnabled\": \"true\""]},
+      {"id": "i18n_serial_label_kept",              "mime": "application/json",       "text": "{\"PAGE_STATUS_SYSTEM_SERIAL_NUMBER\": \"Seriennummer\"}",                                                    "absent": [],                    "present": ["Seriennummer"]},
+      {"id": "ssid_key_flag_only",                  "mime": "application/json",       "text": "{\"ssid_24g\": \"HomeNet-5G\", \"ch\": 6}",                                                                   "absent": [],                    "present": ["\"ssid_24g\": \"HomeNet-5G\""]},
+      {"id": "json_in_text_plain",                  "mime": "text/plain",             "text": "{\"serial\": \"4131N12345678\"}",                                                                             "absent": ["4131N12345678"],     "present": ["\"SERIAL_"]},
+      {"id": "large_text_body_scanned",             "mime": "application/javascript", "text": "var cm = '3C:7A:8A:12:34:56';",                                                                               "absent": ["3C:7A:8A:12:34:56"], "present": ["var cm = '02:"],                                                              "pad": 1100000}
+    ]
+  },
+  "value_pass_body_cases": {
+    "_comment": "JSON values, JSON keys and plain-text bodies get the same format-preserving value passes as the HTML engine (MAC, private and public IPv4, IPv6, email), from the same shared regexes, and its labeled-serial passes on the raw text; nest_lists wraps the body in that many arrays, past the key rules' depth; the IPv6 constants :: and ::1 stay in both. Keys are sanitized as text because a client table keyed by MAC or address is a PII shape validate reports. absent must not survive; present must.",
+    "cases": [
+      {"id": "json_global_ipv6",           "mime": "application/json",       "text": "{\"wan6\": \"2600:1700:abcd:1234::1a\"}",                  "absent": ["2600:1700:abcd:1234::1a"],   "present": ["{\"wan6\": \"2001:db8::"]},
+      {"id": "json_link_local_ipv6_inline", "mime": "application/json",      "text": "{\"ll\": \"addr fe80::3c7a:8aff:fe12:3456/64\"}",           "absent": ["fe80::3c7a:8aff:fe12:3456"], "present": ["{\"ll\": \"addr 2001:db8::", "/64\"}"]},
+      {"id": "html_declared_json_ipv6",    "mime": "text/html",              "text": "{\"GetStatusResponse\": {\"Ipv6\": \"2600:1700::1a\"}}",   "absent": ["2600:1700::1a"],             "present": ["\"Ipv6\": \"2001:db8::"]},
+      {"id": "javascript_ipv6",            "mime": "application/javascript", "text": "var v6 = '2600:1700:abcd:1234::1a';",                      "absent": ["2600:1700:abcd:1234::1a"],   "present": ["var v6 = '2001:db8::"]},
+      {"id": "json_ten_private_ip",        "mime": "application/json",       "text": "{\"lan\": \"10.1.2.3\"}",                                   "absent": ["10.1.2.3"],                  "present": ["{\"lan\": \"10.255."]},
+      {"id": "text_ten_private_ip",        "mime": "text/plain",             "text": "lan 10.1.2.3 up",                                           "absent": ["10.1.2.3"],                  "present": ["lan 10.255."]},
+      {"id": "json_gateway_ip_kept",       "mime": "application/json",       "text": "{\"gw\": \"10.0.0.1\"}",                                    "absent": [],                            "present": ["{\"gw\": \"10.0.0.1\"}"]},
+      {"id": "json_email_before_pipe",     "mime": "application/json",       "text": "{\"list\": \"a@example.com|next\"}",                        "absent": ["a@example.com"],             "present": ["@redacted.invalid|next\"}"]},
+      {"id": "json_clock_time_kept",       "mime": "application/json",       "text": "{\"uptime\": \"12:34:56\"}",                                "absent": [],                            "present": ["{\"uptime\": \"12:34:56\"}"]},
+      {"id": "json_ipv6_constants_kept",   "mime": "application/json",       "text": "{\"gw6\": \"::\", \"lo\": \"::1\"}",                         "absent": [],                            "present": ["{\"gw6\": \"::\", \"lo\": \"::1\"}"]},
+      {"id": "html_ipv6_constants_kept",   "mime": "text/html",              "text": "<td>::</td><td>::1</td>",                                   "absent": [],                            "present": ["<td>::</td><td>::1</td>"]},
+      {"id": "json_mac_key",               "mime": "application/json",       "text": "{\"clients\": {\"3C:7A:8A:12:34:56\": {\"rssi\": -40}}}",   "absent": ["3C:7A:8A:12:34:56"],         "present": ["{\"clients\": {\"02:", "{\"rssi\": -40}"]},
+      {"id": "json_public_ip_key",         "mime": "application/json",       "text": "{\"73.12.34.56\": \"wan\"}",                                "absent": ["73.12.34.56"],               "present": ["{\"192.0.2.", "\": \"wan\"}"]},
+      {"id": "json_labeled_serial",        "mime": "application/json",       "text": "{\"info\": \"Serial Number: ABC1234567\"}",                  "absent": ["ABC1234567"],                "present": ["{\"info\": \"Serial Number: SERIAL_"]},
+      {"id": "text_labeled_serial",        "mime": "text/plain",             "text": "boot ok\nSerial Number: ABC1234567\n",                     "absent": ["ABC1234567"],                "present": ["Serial Number: SERIAL_"]},
+      {"id": "json_serial_label_no_digit", "mime": "application/json",       "text": "{\"info\": \"Serial Number: pending\"}",                     "absent": [],                            "present": ["{\"info\": \"Serial Number: pending\"}"]},
+      {"id": "json_empty_password_kept",   "mime": "application/json",       "text": "{\"Password\": \"\"}",                                      "absent": ["FIELD_"],                    "present": ["{\"Password\": \"\"}"]},
+      {"id": "json_field_placeholder_kept", "mime": "application/json",      "text": "{\"LoginPassword\": \"FIELD_51456ee6\"}",                   "absent": [],                            "present": ["{\"LoginPassword\": \"FIELD_51456ee6\"}"]},
+      {"id": "json_password_holding_xxx",  "mime": "application/json",       "text": "{\"Password\": \"myXXXpassword\"}",                         "absent": ["myXXXpassword"],             "present": ["{\"Password\": \"FIELD_"]},
+      {"id": "json_mac_keys_collide",      "mime": "application/json",       "text": "{\"AA:BB:CC:DD:EE:01\": 1, \"aa:bb:cc:dd:ee:01\": 2}",       "absent": ["AA:BB:CC:DD:EE:01", "aa:bb:cc:dd:ee:01"], "present": ["\": 1", "\": 2"]},
+      {"id": "json_three_mac_keys_collide", "mime": "application/json",      "text": "{\"AA:BB:CC:DD:EE:01\": 1, \"aa:bb:cc:dd:ee:01\": 2, \"Aa:Bb:Cc:Dd:Ee:01\": 3}", "absent": ["dd:ee:01", "Dd:Ee:01"], "present": ["\": 1", "~2\": 2", "~3\": 3"]},
+      {"id": "json_mac_in_deep_lists",     "mime": "application/json",       "text": "{\"m\": \"3C:7A:8A:12:34:56\", \"n\": 1}",                    "absent": ["3C:7A:8A:12:34:56"],         "present": ["{\"m\": \"02:", "\"n\": 1}"], "nest_lists": 55},
+      {"id": "json_ipv4_mapped_ipv6",      "mime": "application/json",       "text": "{\"v6\": \"::ffff:192.168.5.4\"}",                          "absent": ["::ffff", "192.168.5.4", "10.255.", ".255."], "present": ["{\"v6\": \"2001:db8::"]},
+      {"id": "json_invalid_octet_kept",    "mime": "application/json",       "text": "{\"ip\": \"192.168.1.999\"}",                               "absent": [],                            "present": ["{\"ip\": \"192.168.1.999\"}"]},
+      {"id": "html_invalid_octet_kept",    "mime": "text/html",              "text": "<td>192.168.1.999</td>",                                    "absent": [],                            "present": ["<td>192.168.1.999</td>"]},
+      {"id": "post_style_json_in_text",    "mime": "text/plain",             "text": "{\"Password\": \"hunter2x\"}",                              "absent": ["hunter2x"],                  "present": ["{\"Password\": \"FIELD_"]},
+      {"id": "json_duplicate_password",    "mime": "application/json",       "text": "{\"password\": \"hunter2x\", \"password\": \"FIELD_abcd1234\"}", "absent": ["hunter2x"],                  "present": ["\"password\": \"FIELD_abcd1234\""]},
+      {"id": "json_markup_across_strings", "mime": "application/json",       "text": "{\"html\": \"<b>Password:</b><i>x\", \"ch\": 6, \"serialNumber\": \"4131N12345678\", \"note\": \"</i>\"}", "absent": ["4131N12345678"], "present": ["\"html\": \"<b>Password:</b><i>x\"", "\"ch\": 6", "\"note\": \"</i>\""]},
+      {"id": "json_escaped_markup_only",   "mime": "application/json",       "text": "{\"html\": \"\\u003cspan\\u003ePassword:\\u003c\\/span\\u003e\\n\\u003cspan\\u003ehunter2x\\u003c\\/span\\u003e\"}", "absent": ["hunter2x"], "present": ["PASS_"]},
+      {"id": "json_lone_surrogate_password", "mime": "application/json",     "text": "{\"password\": \"\\ud800x\"}",                               "absent": ["\\ud800x"],                  "present": ["\"password\": \"FIELD_"]},
+      {"id": "html_lone_surrogate_label",  "mime": "text/html",              "text": "<span>Password:</span><span>ab\ud800c</span>",               "absent": ["ab\ud800c"],                 "present": ["<span>Password:</span><span>PASS_"]},
+      {"id": "json_nesting_past_bound",    "mime": "application/json",       "text": "{\"m\": \"3C:7A:8A:12:34:56\"}",                              "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"m\": \"02:"], "nest_lists": 995},
+      {"id": "json_wifi_password_prefix_shaped", "mime": "application/json", "text": "{\"wifi_password\": \"WIFI_Home2024\"}",                    "absent": ["WIFI_Home2024"],             "present": ["\"wifi_password\": \"FIELD_"]},
+      {"id": "json_password_zero_run",     "mime": "application/json",       "text": "{\"password\": \"00000000\"}",                                "absent": ["00000000"],                  "present": ["\"password\": \"FIELD_"]},
+      {"id": "json_static_placeholder_kept", "mime": "application/json",     "text": "{\"password\": \"***FIELD***\"}",                             "absent": [],                            "present": ["{\"password\": \"***FIELD***\"}"]},
+      {"id": "html_zero_padded_private_ip", "mime": "text/html",             "text": "<p>192.168.001.100</p>",                                    "absent": ["192.168.001.100"],           "present": ["<p>10.255."]},
+      {"id": "html_ipv4_mapped_ipv6",      "mime": "text/html",              "text": "<td>::ffff:192.168.5.4</td>",                               "absent": ["::ffff", "192.168.5.4", ".255."], "present": ["<td>2001:db8::"]},
+      {"id": "html_ipv4_mapped_zero_padded", "mime": "text/html",            "text": "<td>::ffff:192.168.001.100</td>",                           "absent": ["::ffff", "192.168.001.100", ".255."], "present": ["<td>2001:db8::"]},
+      {"id": "json_ipv4_mapped_zero_padded", "mime": "application/json",     "text": "{\"v6\": \"::ffff:192.168.001.100\"}",                      "absent": ["::ffff", "192.168.001.100", ".255."], "present": ["{\"v6\": \"2001:db8::"]},
+      {"id": "json_static_key_collision",  "mime": "application/json",       "text": "{\"3C:7A:8A:12:34:56\": \"a\", \"XX:XX:XX:XX:XX:XX\": \"b\"}", "absent": ["3C:7A:8A:12:34:56"],        "present": ["\"a\"", "\"b\""], "salt": null},
+      {"id": "json_placeholder_lookalikes", "mime": "application/json",     "text": "{\"a_password\": \"TP_LINK_20231105\", \"b_password\": \"Z9_ffffffff\", \"c_password\": \"***A1_B***\"}", "absent": ["TP_LINK_20231105", "Z9_ffffffff", "***A1_B***"], "present": ["\"a_password\": \"FIELD_"]},
+      {"id": "json_duplicate_keys_nothing_to_do", "mime": "application/json", "text": "{\n    \"ch\": 6,\n    \"ch\": 6,\n    \"name\": \"caf\\u00e9\"\n}", "absent": [],                    "present": ["{\n    \"ch\": 6,\n    \"ch\": 6,\n    \"name\": \"caf\\u00e9\"\n}"]},
+      {"id": "text_sn_before_ssid_select", "mime": "text/plain",             "text": "S/N <select id=\"mac_ssid\"><option value=\"1\">XFSETUP-9210</option></select>", "absent": ["WIFI_"],                     "present": ["SERIAL_"]},
+      {"id": "html_account_id_keeps_tag",  "mime": "text/html",              "text": "<p>Account ID: 998877</p>",                                 "absent": ["998877"],                    "present": ["<p>Account ID: ACCOUNT_", "</p>"]},
+      {"id": "html_serial_label_then_email", "mime": "text/html",            "text": "<p>Serial Number bob@example.com</p>",                      "absent": ["bob@example.com"],           "present": ["<p>Serial Number user_"]},
+      {"id": "html_serial_followed_by_at", "mime": "text/html",              "text": "<p>Serial Number: 4131N12345678@cm1</p>",                   "absent": ["4131N12345678"],             "present": ["<p>Serial Number: SERIAL_", "@cm1</p>"]},
+      {"id": "text_serial_followed_by_at", "mime": "text/plain",             "text": "SN: 4131N12345678@cm1",                                     "absent": ["4131N12345678"],             "present": ["SN: SERIAL_", "@cm1"]},
+      {"id": "json_shadowed_object_value", "mime": "application/json",       "text": "{\"cfg\": {\"password\": \"hunter2x\", \"n\": [1]}, \"cfg\": {\"a\": 1}}", "absent": ["hunter2x"], "present": ["\"cfg\": {\"a\": 1}"]},
+      {"id": "json_shadowed_nested_nothing", "mime": "application/json",     "text": "{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}",                "absent": [],                            "present": ["{\"cfg\": {\"a\": [1]}, \"cfg\": {\"a\": 1}}"]},
+      {"id": "json_plain_keys_kept",       "mime": "application/json",       "text": "{\"Password\": \"x\", \"ch\": 6}",                          "absent": [],                            "present": ["{\"Password\": ", "\"ch\": 6}"]},
+      {"id": "json_credential_last_word_only", "mime": "application/json",   "text": "{\"credential_encoding\": \"plain\", \"userCredential\": \"s3cr3tpw99\"}", "absent": ["s3cr3tpw99"], "present": ["{\"credential_encoding\": \"plain\", \"userCredential\": \"FIELD_"]}
+    ]
+  },
+  "custom_preserved_gateway_cases": {
+    "_comment": "A caller's preserved_gateway_ips (custom_patterns) are kept on every route, not only the HTML engine's: the string patterns resolve them from the same per-call scope.",
+    "custom_patterns": {"preserved_gateway_ips": ["10.1.1.1"]},
+    "cases": [
+      {"id": "html_route", "mime": "text/html",        "text": "<td>10.1.1.1</td>",   "present": "10.1.1.1"},
+      {"id": "json_route", "mime": "application/json", "text": "{\"gw\": \"10.1.1.1\"}", "present": "10.1.1.1"},
+      {"id": "text_route", "mime": "text/plain",       "text": "gw 10.1.1.1",         "present": "10.1.1.1"},
+      {"id": "post_json",  "mime": "application/json", "text": "{\"gw\": \"10.1.1.1\"}", "present": "10.1.1.1", "via": "post"},
+      {"id": "check_for_pii", "mime": "",              "text": "gw 10.1.1.1",         "present": "10.1.1.1", "via": "check_for_pii"}
+    ]
+  },
+  "no_collector_body_cases": {
+    "_comment": "_sanitize_response_content called without a collector (the library's lowest-level entry): every pass still runs and writes its static placeholder.",
+    "cases": [
+      {"id": "text_mac",   "mime": "text/plain",       "text": "mac 3C:7A:8A:12:34:56",           "present": "mac ***MAC***"},
+      {"id": "text_ipv6",  "mime": "text/plain",       "text": "wan 2600:1700::1a",               "present": "wan ***IPV6***"},
+      {"id": "json_email", "mime": "application/json", "text": "{\"c\": \"a@example.com\"}",     "present": "{\"c\": \"***EMAIL***\"}"},
+      {"id": "json_shadowed_flag_tier", "mime": "application/json", "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}", "present": "{\"username\": \"admin\"}"}
+    ]
+  },
+  "post_text_cases": {
+    "_comment": "sanitize_post_data on postData.text: urlencoded and XML by type, JSON by content whatever the type, any other text through the string patterns. absent must not survive; present must.",
+    "cases": [
+      {"id": "json_as_text_plain",  "mime": "text/plain;charset=UTF-8", "text": "{\"serialNumber\": \"4131N12345678\", \"Password\": \"hunter2x\"}", "absent": ["4131N12345678", "hunter2x"], "present": ["\"serialNumber\": \"SERIAL_", "\"Password\": \"FIELD_"]},
+      {"id": "json_without_mime",   "mime": "",                         "text": "{\"cmMac\": \"3C7A8A123456\"}",                                  "absent": ["3C7A8A123456"],              "present": ["{\"cmMac\": \"02"]},
+      {"id": "json_nothing_to_do",  "mime": "application/json",         "text": "{\n  \"ch\": 6\n}",                                              "absent": [],                            "present": ["{\n  \"ch\": 6\n}"]},
+      {"id": "form_mime_json",      "mime": "application/x-www-form-urlencoded", "text": "{\"Password\": \"a=b\", \"ch\": 6, \"Note\": \"x\"}",       "absent": ["a=b"],                       "present": ["\"Password\": \"FIELD_", "\"ch\": 6, \"Note\": \"x\"}"]},
+      {"id": "json_mime_unparseable", "mime": "application/json",         "text": "{\"mac\": \"3C:7A:8A:12:34:56\", \"mac\":",                     "absent": ["3C:7A:8A:12:34:56"],         "present": ["\"mac\": \"02:"]},
+      {"id": "xml_lone_surrogate",  "mime": "text/xml",                 "text": "<a><password>\ud800x</password></a>",                            "absent": ["\ud800x"],                  "present": ["<a><password>FIELD_"]},
+      {"id": "plain_text_mac",      "mime": "text/plain",               "text": "mac=3C:7A:8A:12:34:56 wan 73.12.34.56",                          "absent": ["3C:7A:8A:12:34:56", "73.12.34.56"], "present": ["mac=02:"]},
+      {"id": "json_shadowed_flag_tier", "mime": "application/json",       "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}",            "absent": ["bobsmith"],                  "present": ["{\"username\": \"admin\"}"]},
+      {"id": "form_percent_encoded_name", "mime": "application/x-www-form-urlencoded", "text": "user%5Bpass%5D=s3cretValue9&p%61ssword=hunter2x&x=1", "absent": ["s3cretValue9", "hunter2x"], "present": ["user%5Bpass%5D=FIELD_", "p%61ssword=FIELD_", "&x=1"]},
+      {"id": "labeled_values_hasher_only", "mime": "text/plain",           "text": "Serial Number: 4131N12345678 <span>Password:</span><span>hunter2x</span>", "absent": ["4131N12345678", "hunter2x"], "present": ["Serial Number: SERIAL_", "<span>Password:</span><span>PASS_"]}
+    ]
+  },
+  "empty_value_cases": {
+    "_comment": "An empty value under a credential name, header or cookie is kept and not counted: there is nothing to hide, and a placeholder would invent a value the capture never sent (an empty default password). The JSON route always kept it; the form, query, cookie and header routes wrote a placeholder. The last row is the other side of the rule. check: [path into the sanitized request, expected value, or a prefix ending in '*'].",
+    "cases": [
+      {"id": "form_params",       "request": {"postData": {"params": [{"name": "loginName", "value": "admin"}, {"name": "loginPassword", "value": ""}]}}, "check": [["postData", "params", 1, "value"], ""]},
+      {"id": "form_text",         "request": {"postData": {"mimeType": "application/x-www-form-urlencoded", "text": "loginName=admin&loginPassword="}}, "check": [["postData", "text"], "loginName=admin&loginPassword="]},
+      {"id": "query_array",       "request": {"queryString": [{"name": "password", "value": ""}]},                                        "check": [["queryString", 0, "value"], ""]},
+      {"id": "query_url",         "request": {"url": "http://192.168.100.1/login.cgi?password=&page=1"},                                  "check": [["url"], "http://192.168.100.1/login.cgi?password=&page=1"]},
+      {"id": "cookie_array",      "request": {"cookies": [{"name": "sessionid", "value": ""}]},                                          "check": [["cookies", 0, "value"], ""]},
+      {"id": "authorization",     "request": {"headers": [{"name": "Authorization", "value": ""}]},                                      "check": [["headers", 0, "value"], ""]},
+      {"id": "non_empty_redacted", "request": {"postData": {"params": [{"name": "loginPassword", "value": "x1"}]}},                      "check": [["postData", "params", 0, "value"], "FIELD_*"], "counted": true}
+    ]
+  },
+  "cross_route_correlation_cases": {
+    "_comment": "One value in bodies of every route gets one placeholder: the engines share regexes, validity rules, pass order and hasher, so a consumer can follow it across the capture. template holds {v}; placeholder is the regex its replacement must match, in every body; a case's own bodies replace the shared ones (a value two passes could claim: a MAC after a serial label, an address in a credential's element).",
+    "cases": [
+      {"id": "mac",         "value": "3C:7A:8A:12:34:56",  "placeholder": "02(?::[0-9a-f]{2}){5}"},
+      {"id": "private_ip",  "value": "192.168.5.4",        "placeholder": "10\\.255\\.\\d{1,3}\\.\\d{1,3}"},
+      {"id": "ipv4_mapped", "value": "::ffff:192.168.5.4", "placeholder": "2001:db8::[0-9a-f]{1,4}:[0-9a-f]{1,4}"},
+      {"id": "mac_after_serial_label", "value": "3C-7A-8A-12-34-56", "placeholder": "02(?:-[0-9a-f]{2}){5}", "bodies": [
+        {"mime": "text/html",        "template": "<p>Serial Number: {v}</p>"},
+        {"mime": "application/json", "template": "{\"v\": \"Serial Number: {v}\"}"},
+        {"mime": "text/plain",       "template": "Serial Number: {v}"}]},
+      {"id": "private_ip_in_password_element", "value": "192.168.1.5", "placeholder": "10\\.255\\.\\d{1,3}\\.\\d{1,3}", "bodies": [
+        {"mime": "text/html",        "template": "<span>Password:</span><span>{v}</span>"},
+        {"mime": "application/json", "template": "{\"v\": \"<span>Password:</span><span>{v}</span>\"}"},
+        {"mime": "text/plain",       "template": "<span>Password:</span><span>{v}</span>"}]},
+      {"id": "public_ip_in_ssid_element", "value": "73.12.34.56", "placeholder": "192\\.0\\.2\\.\\d{1,3}", "bodies": [
+        {"mime": "text/html",        "template": "<span>SSID:</span><span>{v}</span>"},
+        {"mime": "application/json", "template": "{\"v\": \"<span>SSID:</span><span>{v}</span>\"}"},
+        {"mime": "text/plain",       "template": "<span>SSID:</span><span>{v}</span>"}]}
+    ],
+    "bodies": [
+      {"mime": "text/html",        "template": "<td>{v}</td>"},
+      {"mime": "application/json", "template": "{\"v\": \"{v}\"}"},
+      {"mime": "text/plain",       "template": "v {v} end"}
+    ]
+  },
+  "served_credential_cases": {
+    "_comment": "A value served under a credential-named key in a response's JSON (credential_value_action): Yes/No kept, prose offered for review (flagged, kept) with the string patterns still applied inside, anything else redacted. A submitted value (a POST) is redacted whatever its shape, and so is served prose the review cannot reach (inside a base64-wrapped body). via: response | post; decode_base64 decodes the sanitized body before the checks; flagged: regexes the values offered for review must match — each is the text as the output holds it, after the string patterns, so choosing to redact it in the review removes it.",
+    "cases": [
+      {"id": "response_translation_table", "via": "response", "mime": "application/json", "text": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\", \"wifi_password\": \"hunter2x\"}", "absent": ["hunter2x"], "present": ["\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\"", "\"ADM_SHOW_PASSWORD\": \"Yes\"", "\"PAGE_DEVICE_PASSWORD_TITLE\": \"FIELD_", "\"wifi_password\": \"FIELD_"], "flagged": ["^Set\\ a\\ new\\ password$"]},
+      {"id": "response_prose_keeps_string_patterns", "via": "response", "mime": "application/json", "text": "{\"password_hint\": \"Open 192.168.1.50 to reset it\"}", "absent": ["192.168.1.50"], "present": ["\"password_hint\": \"Open 10.255."], "flagged": ["^Open 10\\.255\\.\\d{1,3}\\.\\d{1,3} to reset it$"]},
+      {"id": "post_prose_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"correct horse battery staple\"}", "absent": ["correct horse"], "present": ["\"password\": \"FIELD_"], "flagged": []},
+      {"id": "post_yes_submitted", "via": "post", "mime": "application/json", "text": "{\"password\": \"Yes\"}", "absent": ["\"Yes\""], "present": ["\"password\": \"FIELD_"], "flagged": []},
+      {"id": "response_base64_prose_redacted", "via": "response", "mime": "text/plain", "decode_base64": true, "text": "eyJwYXNzd29yZCI6ICJTZXQgYSBuZXcgcGFzc3dvcmQifQ==", "absent": ["Set a new password"], "present": ["\"password\": \"FIELD_"], "flagged": []}
+    ]
+  },
+  "pattern_file_route_cases": {
+    "_comment": "The pattern-file pass (the HTML engine's pass 0: every pii.json pattern without a pass of its own, custom ones included) runs on every route \u2014 text bodies, each decoded JSON string and key, and POST text \u2014 as CUSTOM_PATTERNS.md promises, and a domain's include_patterns holds on every route. POST text takes the text-body passes (labeled serials among them). via: response | post; custom_patterns applies to the call.",
+    "cases": [
+      {"id": "custom_in_json_value", "via": "response", "mime": "application/json", "text": "{\"c\": \"CUST-A1B2C3D4\"}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"c\": \"CUSTID_"]},
+      {"id": "custom_in_json_key", "via": "response", "mime": "application/json", "text": "{\"CUST-A1B2C3D4\": 1}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"CUSTID_"]},
+      {"id": "custom_in_script", "via": "response", "mime": "text/javascript", "text": "var c = 'CUST-A1B2C3D4';", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["var c = 'CUSTID_"]},
+      {"id": "custom_in_post_json", "via": "post", "mime": "application/json", "text": "{\"c\": \"CUST-A1B2C3D4\"}", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["{\"c\": \"CUSTID_"]},
+      {"id": "custom_in_post_text", "via": "post", "mime": "text/plain", "text": "customer CUST-A1B2C3D4", "custom_patterns": {"patterns": {"customer_id": {"regex": "CUST-[A-Z0-9]{8}", "replacement_prefix": "CUSTID"}}}, "absent": ["CUST-A1B2C3D4"], "present": ["customer CUSTID_"]},
+      {"id": "card_excluded_by_domain", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "custom_patterns": {"include_patterns": ["mac_address"]}, "absent": [], "present": ["card 4111111111111111"]},
+      {"id": "card_in_text_body", "via": "response", "mime": "text/plain", "text": "card 4111111111111111", "absent": ["4111111111111111"], "present": ["card CC_"]},
+      {"id": "labeled_serial_in_post_text", "via": "post", "mime": "text/plain", "text": "Serial Number: 4131N12345678", "absent": ["4131N12345678"], "present": ["Serial Number: SERIAL_"]}
+    ]
+  },
+  "echoed_credential_cases": {
+    "_comment": "Credentials a capture submits and echoes. A served value under a credential-named key that equals a credential some request submits (POST JSON, form data, params, query) is redacted in place, whatever its shape and however its body escapes it; nothing is replaced by substring beyond Pass 1b's eligibility bar, and a review item is withdrawn only when its value no longer survives anywhere readable. entries: [via, mime, body] in capture order (via post | response | url, where body is the request URL); gone: must survive in no readable string; present: must remain in the output; offered: must still be flagged for review.",
+    "cases": [
+      {"id": "post_then_served_echo", "entries": [["post", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"], ["response", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"]], "gone": ["correct horse battery staple"], "present": [], "offered": []},
+      {"id": "served_echo_then_post", "entries": [["response", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"], ["post", "application/json", "{\"wifi_password\": \"correct horse battery staple\"}"]], "gone": ["correct horse battery staple"], "present": [], "offered": []},
+      {"id": "php_escaped_echo", "entries": [["post", "application/json", "{\"wifi_password\": \"my/home net 7\"}"], ["response", "application/json", "{\"wifi_password\": \"my\\/home net 7\"}"]], "gone": ["my/home net 7"], "present": [], "offered": []},
+      {"id": "form_submitted_echo", "entries": [["post", "application/x-www-form-urlencoded", "wifi_password=my+home+net+7"], ["response", "application/json", "{\"wifi_password\": \"my home net 7\"}"]], "gone": ["my home net 7"], "present": [], "offered": []},
+      {"id": "echo_rewritten_by_text_passes", "entries": [["post", "application/json", "{\"wifi_password\": \"me@home.net rocks 42\"}"], ["response", "application/json", "{\"wifi_password\": \"me@home.net rocks 42\"}"]], "gone": ["rocks 42"], "present": [], "offered": []},
+      {"id": "short_password_not_replaced_elsewhere", "entries": [["post", "application/json", "{\"password\": \"my home\"}"], ["response", "application/json", "{\"wifi_password\": \"my home\"}"], ["response", "text/html", "<p>Welcome to my home network</p>"]], "gone": [], "present": ["Welcome to my home network"], "offered": []},
+      {"id": "escaped_copy_keeps_review_item", "entries": [["post", "application/json", "{\"password\": \"abc/def1234567890xyz\", \"token\": \"tok1234567890abcdef\"}"], ["url", "", "http://192.168.0.1/session/tok1234567890abcdef"], ["response", "application/json", "{\"username\": \"abc\\/def1234567890xyz\"}"]], "gone": [], "present": [], "offered": ["abc/def1234567890xyz"], "gone_after_review": ["abc/def1234567890xyz", "abc\\/def1234567890xyz"]},
+      {"id": "served_prose_alone_offered", "entries": [["response", "application/json", "{\"PAGE_SET_PASSWORD\": \"Set a new password\"}"]], "gone": [], "present": ["Set a new password"], "offered": ["Set a new password"]},
+      {"id": "status_word_echo_kept", "entries": [["post", "application/json", "{\"PasswordEnable\": \"Yes\"}"], ["response", "application/json", "{\"PasswordEnable\": \"Yes\"}"]], "gone": [], "present": ["Yes"], "offered": []},
+      {"id": "form_status_word_echo_kept", "entries": [["post", "application/x-www-form-urlencoded", "token_required=No"], ["response", "application/json", "{\"PasswordRequired\": \"No\"}"]], "gone": [], "present": ["No"], "offered": []}
+    ]
+  },
+  "entry_security_details_cases": {
+    "_comment": "ADR-17: TLS certificate names on a HAR entry (_securityDetails.subjectName and issuer). A name that is a MAC in any layout (a CableLabs modem certificate's colon MAC, an HWROB device CA's bare 12-hex ID), or a colon/hyphen MAC inside a name, is hashed in place in its own layout with hash_mac, so it correlates with the same MAC elsewhere. A non-empty self-signed name holding no MAC is offered for review (device_name, LOW), once per distinct value. protocol, validFrom, validTo and the entry's serverIPAddress are kept. details: the _securityDetails object; expect: field -> regex its output must fully match; flagged: [value, category, confidence]; macs: the mac_address count. All values are synthetic.",
+    "cases": [
+      {
+        "id": "cablelabs_colon_subject",
+        "details": {
+          "protocol": "TLS 1.2",
+          "subjectName": "A4:56:30:12:34:56",
+          "issuer": "CableLabs Device Certification Authority",
+          "validFrom": 1500000000,
+          "validTo": 2000000000
+        },
+        "expect": {
+          "protocol": "^TLS 1\\.2$",
+          "subjectName": "^02(:[0-9a-f]{2}){5}$",
+          "issuer": "^CableLabs Device Certification Authority$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "hwrob_bare_hex_subject",
+        "details": {
+          "subjectName": "0000AC123456",
+          "issuer": "HWROB Device Sub-CA 01"
+        },
+        "expect": {
+          "subjectName": "^02[0-9a-f]{10}$",
+          "issuer": "^HWROB Device Sub-CA 01$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "hyphen_mac_inside_name",
+        "details": {
+          "subjectName": "CM a4-56-30-12-34-56",
+          "issuer": "Vendor CA"
+        },
+        "expect": {
+          "subjectName": "^CM 02(-[0-9a-f]{2}){5}$"
+        },
+        "flagged": [],
+        "macs": 1
+      },
+      {
+        "id": "self_signed_mac_subject",
+        "details": {
+          "subjectName": "A4:56:30:12:34:56",
+          "issuer": "A4:56:30:12:34:56"
+        },
+        "expect": {
+          "subjectName": "^02(:[0-9a-f]{2}){5}$",
+          "issuer": "^02(:[0-9a-f]{2}){5}$"
+        },
+        "flagged": [],
+        "macs": 2
+      },
+      {
+        "id": "self_signed_model_name_offered",
+        "details": {
+          "subjectName": "CM1234",
+          "issuer": "CM1234"
+        },
+        "expect": {
+          "subjectName": "^CM1234$",
+          "issuer": "^CM1234$"
+        },
+        "flagged": [
+          [
+            "CM1234",
+            "device_name",
+            "low"
+          ]
+        ],
+        "macs": 0
+      },
+      {
+        "id": "localhost_localdomain_kept",
+        "details": {
+          "subjectName": "localhost.localdomain",
+          "issuer": "localhost.localdomain"
+        },
+        "expect": {
+          "subjectName": "^localhost\\.localdomain$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "empty_names_kept",
+        "details": {
+          "subjectName": "",
+          "issuer": ""
+        },
+        "expect": {
+          "subjectName": "^$",
+          "issuer": "^$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "ca_issued_hostname_kept",
+        "details": {
+          "subjectName": "www.example.com",
+          "issuer": "Example Issuing CA"
+        },
+        "expect": {
+          "subjectName": "^www\\.example\\.com$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "self_signed_redacted_value_not_offered",
+        "details": {
+          "subjectName": "***REDACTED***",
+          "issuer": "***REDACTED***"
+        },
+        "expect": {
+          "subjectName": "^\\*\\*\\*REDACTED\\*\\*\\*$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "own_placeholder_kept",
+        "details": {
+          "subjectName": "02a1b2c3d4e5",
+          "issuer": "HWROB Device Sub-CA 01"
+        },
+        "expect": {
+          "subjectName": "^02a1b2c3d4e5$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "constant_mac_kept",
+        "details": {
+          "subjectName": "00:00:00:00:00:00",
+          "issuer": "Vendor CA"
+        },
+        "expect": {
+          "subjectName": "^00:00:00:00:00:00$"
+        },
+        "flagged": [],
+        "macs": 0
+      },
+      {
+        "id": "validity_and_server_ip_kept",
+        "details": {
+          "protocol": "TLS 1.3",
+          "subjectName": "www.example.com",
+          "issuer": "Example Issuing CA",
+          "validFrom": 1700000000,
+          "validTo": 1800000000
+        },
+        "server_ip": "192.168.100.1",
+        "expect": {
+          "protocol": "^TLS 1\\.3$"
+        },
+        "flagged": [],
+        "macs": 0
+      }
+    ]
+  },
+  "flag_label_cases": {
+    "_comment": "The review item for a value takes the label (category, confidence) of its highest-confidence occurrence (the first, on a tie), whatever the entry order, and counts each occurrence once. A field's flag on its whole value takes over only a flag raised inside that same value (a username that is exactly a phone number), never one from another occurrence. entries: [via, mime, body] as in echoed_credential_cases; flagged: [value, category, confidence, occurrences] per item.",
+    "cases": [
+      {"id": "other_occurrence_keeps_its_label", "entries": [["url", "", "http://192.168.0.1/api/sk-abcdefghijklmnop1234/status"], ["response", "application/json", "{\"username\": \"sk-abcdefghijklmnop1234\"}"]], "flagged": [["sk-abcdefghijklmnop1234", "api_key", "high", 2]]},
+      {"id": "first_occurrence_labels_on_equal_or_lower_confidence", "entries": [["response", "application/json", "{\"username\": \"John Smith\"}"], ["response", "application/json", "{\"wifi_passphrase\": \"John Smith\"}"]], "flagged": [["John Smith", "field", "medium", 2]]},
+      {"id": "higher_confidence_occurrence_labels_the_item", "entries": [["response", "application/json", "{\"wifi_passphrase\": \"John Smith\"}"], ["response", "application/json", "{\"username\": \"John Smith\"}"]], "flagged": [["John Smith", "field", "medium", 2]]},
+      {"id": "api_key_seen_first_as_username", "entries": [["response", "application/json", "{\"username\": \"sk-abcdefghijklmnop1234\"}"], ["url", "", "http://192.168.0.1/api/sk-abcdefghijklmnop1234/status"]], "flagged": [["sk-abcdefghijklmnop1234", "api_key", "high", 2]]},
+      {"id": "whole_value_phone_counted_once", "entries": [["response", "application/json", "{\"username\": \"555-123-4567\"}"]], "flagged": [["555-123-4567", "field", "medium", 1]]},
+      {"id": "whole_value_phone_twice", "entries": [["response", "application/json", "{\"username\": \"555-123-4567\"}"], ["response", "application/json", "{\"username\": \"555-123-4567\"}"]], "flagged": [["555-123-4567", "field", "medium", 2]]}
+    ]
+  },
+  "flag_reachability_cases": {
+    "_comment": "Every value the JSON walker offers for review is flagged as the output holds it (after the string patterns), so choosing to redact it in the review removes it. text: a response JSON body; flagged: [category, regex] per value offered. gone_after_review: text that must not survive once every offered value is redacted \u2014 an outer value is replaced before the inner one it contains.",
+    "cases": [
+      {"id": "flag_tier_field_with_address", "text": "{\"username\": \"bob at 192.168.1.5\"}", "flagged": [["field", "^bob at 10\\.255\\.\\d{1,3}\\.\\d{1,3}$"]]},
+      {"id": "ssid_with_email", "text": "{\"ssid\": \"Net of bob@example.com\"}", "flagged": [["wifi_ssid", "^Net of user_[0-9a-f]+@redacted\\.invalid$"]]},
+      {"id": "served_prose_with_email", "text": "{\"wifi_passphrase\": \"admin@home.net rocks 42\"}", "flagged": [["credential", "^user_[0-9a-f]+@redacted\\.invalid rocks 42$"]]},
+      {"id": "flag_tier_field_holding_phone", "text": "{\"username\": \"bob 555-123-4567\"}", "flagged": [["phone", "^555-123-4567$"], ["field", "^bob 555-123-4567$"]], "gone_after_review": ["bob"]},
+      {"id": "flag_tier_value_wholly_our_placeholder", "text": "{\"username\": \"bob@example.com\"}", "flagged": []},
+      {"id": "flag_tier_value_is_a_phone", "text": "{\"username\": \"555-123-4567\"}", "flagged": [["field", "^555-123-4567$"]]}
+    ]
+  },
+  "ssid_safe_value_cases": {
+    "_comment": "A network name under a JSON SSID key is offered for review unless a safe-value pattern the call's patterns carry (built-in, domain or custom) recognizes it. patterns: a built-in domain name or a custom patterns dict (or null); flagged: the values offered.",
+    "cases": [
+      {"id": "band_name_domain_safe", "text": "{\"ssid\": \"5GHz\"}", "patterns": "network-device", "flagged": []},
+      {"id": "custom_safe_pattern", "text": "{\"ssid\": \"Lab-Net-7\"}", "patterns": {"heuristics": {"safe_value_patterns": [{"regex": "^Lab-Net-\\d+$"}]}}, "flagged": []},
+      {"id": "network_name_offered", "text": "{\"ssid\": \"HomeNet-5G\"}", "patterns": "network-device", "flagged": ["HomeNet-5G"]}
     ]
   }
 }

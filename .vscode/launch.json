@@ -1,0 +1,78 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Capture: Device",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "har_capture",
+      "args": [
+        "get",
+        "${input:deviceIp}",
+        "--patterns",
+        "${input:patterns}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Sanitize: HAR File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "har_capture",
+      "args": [
+        "sanitize",
+        "${input:harFile}",
+        "--patterns",
+        "${input:patterns}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Validate: HAR File",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "har_capture",
+      "args": [
+        "validate",
+        "${input:harFile}",
+        "--patterns",
+        "${input:patterns}"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Run Tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": [
+        "--no-cov"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "deviceIp",
+      "type": "promptString",
+      "description": "Device IP or hostname",
+      "default": "192.168.0.1"
+    },
+    {
+      "id": "harFile",
+      "type": "promptString",
+      "description": "Path to HAR file",
+      "default": "${workspaceFolder}/test.har"
+    },
+    {
+      "id": "patterns",
+      "type": "promptString",
+      "description": "Pattern set(s) for --patterns (e.g. network-device, base, or a JSON path)",
+      "default": "network-device"
+    }
+  ]
+}

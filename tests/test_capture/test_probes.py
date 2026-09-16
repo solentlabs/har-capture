@@ -37,6 +37,7 @@ from har_capture.capture.probes import (
     probe_auth_challenge,
     probe_head_support,
     probe_icmp,
+    run_auth_probe,
     run_probes,
 )
 
@@ -462,6 +463,26 @@ class TestProbeIcmp:
 
         assert result["reachable"] is True
         assert result["latency_ms"] == 1.0
+
+
+class TestRunAuthProbe:
+    """run_auth_probe sends the one request the CLI allows itself (ADR-2)."""
+
+    @patch("har_capture.capture.probes.probe_icmp")
+    @patch("har_capture.capture.probes.probe_head_support")
+    @patch("har_capture.capture.probes.probe_auth_challenge")
+    def test_auth_challenge_only(
+        self, mock_auth: MagicMock, mock_head: MagicMock, mock_icmp: MagicMock
+    ) -> None:
+        mock_auth.return_value = {"probe": "auth_challenge", "status_code": 401}
+
+        result = run_auth_probe("http://192.168.1.1/", timeout=4)
+
+        assert set(result) == {"ran_at", "target_url", "auth_challenge"}
+        assert result["target_url"] == "http://192.168.1.1/"
+        mock_auth.assert_called_once_with("http://192.168.1.1/", timeout=4)
+        mock_head.assert_not_called()
+        mock_icmp.assert_not_called()
 
 
 class TestRunProbes:

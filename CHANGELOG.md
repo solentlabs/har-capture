@@ -7,6 +7,143 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-16
+
+### Security
+
+- **IPv6 addresses and `10.x.x.x` private addresses in JSON and text bodies are redacted.** Every earlier release left
+  them: 960 IPv6 addresses (478 global, 482 EUI-64 link-local, which embed the device MAC) and 197 `10.x.x.x` addresses
+  across the cable_modem_monitor fleet. `validate` gains an IPv6 warning.
+
+- **A MAC in a TLS certificate name is redacted.** Every cable modem certificate names the modem by its MAC in
+  `_securityDetails.subjectName` (8,391 fleet entries), and no release read that field. The MAC is hashed in its own
+  layout and `validate` reports an unredacted one as an error. A self-signed certificate name is offered for review;
+  protocol, validity dates and `serverIPAddress` are kept.
+
+- **A serial or MAC under any JSON key naming it is redacted.** HNAP's `StatusSoftwareSerialNum` and a bare-hex
+  `CmMacAddress` were left raw because only five exact key names were recognized. A labeled serial (`Serial Number: X`)
+  in a JSON string, script or text body is redacted too — `validate` reported it and only the HTML engine removed it.
+
+- **A labeled password or token inside a JavaScript string is redacted.** `password=\"…\"` in a `document.write` string,
+  and password inputs, SSID inputs and CSRF meta tags written with escaped quotes, kept the secret; a form field whose
+  name is percent-encoded (`user%5Bpass%5D`) was reported by `validate` and kept by sanitize.
+
+- **`validate` checks each cookie and credential on its own.** A placeholder in one cookie
+  (`a=COOKIE_…; sid=realsecret99`) or before a credential's tail (`Bearer AUTH_… secret`) no longer clears the whole
+  header. A request cookie named like an attribute (`path=s3cr3t`), a nameless cookie beside named ones,
+  `Proxy-Authorization` (scheme kept) and `Set-Cookie2` are redacted, and reported when left.
+
+- **A password in a URL's userinfo (`http://user:<password>@host`) is redacted and reported.**
+
+- **The bundled `network-device` pattern file carried a real modem serial number in a comment.** It is replaced with a
+  synthetic value.
+
+### Fixed
+
+- **Transport-encoded response bodies are sanitized as the text they carry.** Bodies the recorder stored as base64 —
+  SB8200 HTML fragments served as `application/octet-stream` — were wiped to `AUTH_<hash>` when they held a colon and
+  passed unscanned when they did not (cable_modem_monitor#213). They are now decoded, sanitized and written back as
+  plain text; binary bodies stay as recorded.
+
+- **Bodies whose type says nothing about their text are sanitized.** `octet-stream`, `x-unknown`, form data, SVG,
+  `application/javascript`, `text/x-json`, JSON under a `text/html` or `text/plain` type, and POST bodies of any type
+  are routed by content. Bodies over 1 MB are no longer skipped by the text path.
+
+- **Capture completeness counts every credential submission.** JSON logins at any depth, `PUT`/`PATCH` logins, URL
+  credentials and Basic/Digest `Authorization` headers count; an empty password (HNAP's challenge phase) does not. The
+  SB8200 PHP firmware logs in with a JSON `PUT` and was told "No POST requests were captured … Re-record"; it now gets
+  the refused-login nudge.
+
+- **`run_capture_workflow(headless=True)` without a timeout no longer hangs forever.** It and `capture_device_har` raise
+  `ValueError` before sending anything. `run_capture_workflow` passes `custom_patterns` and `interactive` on to the
+  capture, so a workflow capture is sanitized with its domain patterns.
+
+- **A capture whose sanitization fails keeps the raw file.** Exceeding the sanitize size limit or a sanitizer error
+  deleted the raw capture and reported success; the capture now fails and names the kept file with the
+  `har-capture sanitize` command that finishes it.
+
+- **`har-capture get` without a terminal no longer tries to prompt.** It records `no_tty` and warns with the flagged
+  count; `sanitize` does the same and still writes its review report. Choosing "skip" in the review marks every item
+  skipped.
+
+- **The interactive review no longer corrupts the HAR when a short value is redacted.** Redacting `1` rewrote every `1`
+  in the file (14 fleet captures). The review replaces values inside strings only, never keys or numbers, offers no
+  value under three characters, and reaches percent-encoded and JSON-escaped copies.
+
+- **A HAR field of the wrong type no longer crashes sanitize, validate or the completeness check.** An entry that is not
+  an object, `request: null` or `headers: null` raises `HarValidationError` naming the field. `har-capture validate`
+  reports a file it cannot read (invalid JSON, corrupt gzip, a field of the wrong type) as one error and checks the
+  rest.
+
+- **Sanitize and `validate` agree.** `validate` reported values no sanitize run cleared — a MAC glued to an identifier
+  (`cm_mac_<MAC>`), `application/soap+xml` passwords, a labeled serial outside HTML — and sanitize now clears each; the
+  validator stops reporting firmware names and version strings as serials, and reports a table-cell serial once.
+
+- **Empty credential values are kept.** An empty cookie, form field or `Authorization` header became a placeholder the
+  capture never sent (5,323 empty cookies across the fleet).
+
+- **Sanitizing an already-sanitized HAR keeps its `_sanitized_credentials` annotation**, the only record of a URL-token
+  login.
+
+- **`har-capture validate` and `sanitize` no longer crash** on a URL `urlparse` rejects, JSON nested past the parser's
+  limit, a lone surrogate, or an invalid custom regex.
+
+- **A malformed pattern file warns instead of crashing.** A section, list or entry of the wrong type
+  (`"heuristics": null`, a string where a detector pattern object belongs, a non-integer `min_length`) is skipped with a
+  warning and the rest of the file applies.
+
+- **Pipe-delimited values (`tagValueList`) keep their spacing.** The pass trimmed every value it rejoined, rewriting 19
+  Netgear captures with nothing redacted.
+
+- **Linear time on adversarial markup.** Runs of unclosed `<input>` tags and long word runs made several passes
+  quadratic or cubic (40 KB of unclosed password inputs took three minutes).
+
+### Added
+
+- **A sanitized HAR records how its interactive review ended** (`log._har_capture.sanitization.review`: `completed`,
+  `skipped`, `cancelled`, `no_tty`, `none_flagged`), so a recipient can tell a reviewed capture from one nobody looked
+  at.
+
+- **`check_for_pii` reads JSON credential fields by name** (`credential_field`), with the sanitizer's field names and
+  custom `fields` patterns — a plain password under a `password` key passed it.
+
+- **Pattern files can name script variables.** `script_variables.password` and `script_variables.pipe_delimited` list
+  the `var NAME = '…'` variables the HTML engine reads.
+
+### Changed (BREAKING)
+
+- **Completeness codes are renamed.** `no_post_requests` → `no_credential_submission`, `single_credential_post` →
+  `single_credential_submission`; `CaptureCompletenessReport.credential_post_counts` → `credential_submission_counts`
+  (and `credential_post_count` → `credential_submission_count`); `post_count` is removed.
+
+- **Vendor script variables are read only through a pattern file.** Motorola's `CurrentPw…` and Netgear's
+  `tagValueList`-style variables are listed in `network-device`'s `script_variables`; output with
+  `--patterns network-device` is unchanged, and `--patterns base` no longer reads them. `pii.json`'s `motorola_password`
+  is removed; `check_for_pii` reports these as `script_password`.
+
+- **Public API changes.** `validation.MAC_PATTERN` is the shared `MAC_RE` with no capture group;
+  `COOKIE_ATTRIBUTES_ONLY`, `is_cookie_attribute_metadata` and `cli.interactive.capture_html_context` are removed;
+  `capture_pipe_context` moves to `sanitization.html`; `is_cookie_attributes_only` means valid RFC 6265 attributes only.
+  New exports include `check_har_types`, `record_review`, `ReviewOutcome`, `run_auth_probe`,
+  `require_timeout_when_headless`, `check_security_details`, `decode_transport_body`, `route_body` and
+  `compile_script_variables`.
+
+### Changed
+
+- **MAC placeholders keep the input's layout** (`02-xx-…`, `02xxxxxxxxxx`, `02xx.xxxx.xxxx`); a colon MAC keeps its
+  exact placeholder under a fixed salt. Broadcast and zero MACs, and the IPv6 constants `::` and `::1`, are kept.
+
+- **Redaction judges a served value by its shape.** Under a credential-named key, `Yes`/`No` is kept, prose is offered
+  for review (1,220 firmware translation strings across the fleet) and anything else is redacted; a credential the
+  capture submits is redacted wherever it is served back. A label or placeholder under a serial key
+  (`"serialNumber": "-"`) is kept, and labeled serials require a digit (132 fleet false redactions stop).
+
+- **JSON with nothing to redact is written back byte-identical**, and changed JSON keeps its layout where it can.
+
+- **A bare `key` label's value is offered for review** instead of auto-redacted (all 44 fleet matches were JavaScript);
+  a Set-Cookie holding only valid attributes (`Secure; HttpOnly`) is kept; `validate` matches sensitive header names
+  exactly (`X-Cookie-Consent` is not reported).
+
 ## [0.12.6] - 2026-09-12
 
 ### Fixed
@@ -1254,6 +1391,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.4]: https://github.com/solentlabs/har-capture/compare/v0.12.3...v0.12.4
 [0.12.5]: https://github.com/solentlabs/har-capture/compare/v0.12.4...v0.12.5
 [0.12.6]: https://github.com/solentlabs/har-capture/compare/v0.12.5...v0.12.6
+[0.13.0]: https://github.com/solentlabs/har-capture/compare/v0.12.6...v0.13.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1281,4 +1419,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.12.6...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.0...HEAD

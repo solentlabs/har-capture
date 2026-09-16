@@ -31,6 +31,22 @@ class RedactionStatus(Enum):
     USER_SKIPPED = "skipped"  # User chose to keep
 
 
+class ReviewOutcome(Enum):
+    """How the interactive review of flagged values ended.
+
+    Recorded in a sanitized HAR's ``log._har_capture.sanitization.review``,
+    so whoever receives the file can tell a reviewed capture from one whose
+    flagged values nobody looked at. Absent means no review was recorded:
+    a library caller that never ran one, or a release before 0.13.0.
+    """
+
+    COMPLETED = "completed"  # The user decided every item (redacting any, all or none)
+    SKIPPED = "skipped"  # The user chose to keep every flagged value as it is
+    CANCELLED = "cancelled"  # The user left the review without deciding
+    NO_TTY = "no_tty"  # No terminal to prompt in; nobody was asked
+    NONE_FLAGGED = "none_flagged"  # Nothing was offered for review
+
+
 class HeuristicMode(Enum):
     """Controls handling of heuristically-detected suspicious values.
 

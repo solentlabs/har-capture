@@ -71,6 +71,24 @@ def har_directory(tmp_path: Path) -> Path:
 # =============================================================================
 
 
+UNREADABLE_FILE_CASES = _FIXTURES["unreadable_file_cases"]["cases"]
+
+
+class TestValidateUnreadableFile:
+    """A file validate cannot read is reported as an error, and the scan continues."""
+
+    @pytest.mark.parametrize("case", UNREADABLE_FILE_CASES, ids=[c["id"] for c in UNREADABLE_FILE_CASES])
+    def test_reported_and_scan_continues(self, case: dict, tmp_path: Path) -> None:
+        """The unreadable file is one [ERROR] with its reason; the clean file beside it is still checked."""
+        (tmp_path / case["filename"]).write_bytes((case["content"] * case.get("repeat", 1)).encode("latin-1"))
+        _write_fixture_har(tmp_path, "clean_har", "clean.har")
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
+        assert result.exit_code == 1, result.output
+        assert case["reason"] in result.output
+        assert "[OK]" in result.output and "clean.har" in result.output
+        assert "Summary: 1 errors" in result.output
+
+
 class TestValidateBasic:
     """Basic validate command tests."""
 
@@ -189,7 +207,7 @@ class TestCompletenessReporting:
 
     This is the intake path: contributor HARs reach the project through
     `validate`, not through a capture this tool performed, so the gaps have
-    to surface here (cable_modem_monitor #120).
+    to surface here.
     """
 
     _COMPLETENESS = json.loads(
@@ -204,12 +222,12 @@ class TestCompletenessReporting:
 
     def test_single_file_shows_summary_and_warnings(self, tmp_path: Path) -> None:
         """Test a single-file run prints the coverage block and the gaps."""
-        har = self._write(tmp_path, "mid_session_and_no_post", "mid.har")
+        har = self._write(tmp_path, "mid_session_and_no_submission", "mid.har")
 
         result = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
 
         assert "Capture coverage:" in result.output
-        assert "POST requests: 0" in result.output
+        assert "Credential submissions: 0" in result.output
         assert result.output.count("WARNING:") == 2
 
     def test_complete_capture_reports_no_warnings(self, tmp_path: Path) -> None:
@@ -227,7 +245,7 @@ class TestCompletenessReporting:
         Gaps report missing evidence, not a leak, so they must stay out of
         the finding counts that drive the exit code.
         """
-        har = self._write(tmp_path, "no_post_requests", "gaps.har")
+        har = self._write(tmp_path, "no_credential_submission", "gaps.har")
 
         plain = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
         strict = runner.invoke(app, ["validate", str(har), "--patterns", "base", "--strict"])
@@ -238,8 +256,8 @@ class TestCompletenessReporting:
 
     def test_directory_scan_suppresses_summary(self, tmp_path: Path) -> None:
         """Test multi-file scans print warnings only, keeping pre-commit quiet."""
-        self._write(tmp_path, "mid_session_and_no_post", "a.har")
-        self._write(tmp_path, "no_post_requests", "b.har")
+        self._write(tmp_path, "mid_session_and_no_submission", "a.har")
+        self._write(tmp_path, "no_credential_submission", "b.har")
 
         result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
 
@@ -262,7 +280,7 @@ class TestCompletenessReporting:
 
     def test_single_file_and_dir_of_one_render_differently(self, tmp_path: Path) -> None:
         """Test the summary follows invocation mode, not how many files matched."""
-        har = self._write(tmp_path, "mid_session_and_no_post", "only.har")
+        har = self._write(tmp_path, "mid_session_and_no_submission", "only.har")
 
         direct = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
         scanned = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])

@@ -14,12 +14,9 @@ This module has ZERO third-party dependencies (stdlib + har_capture only).
 
 from __future__ import annotations
 
-import base64
-import contextlib
-import json
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,19 +28,44 @@ from har_capture.patterns.loader import (
     match_vendor_serial,
 )
 from har_capture.patterns.redaction import (
+    CERTIFICATE_NAME_FIELDS,
+    JSON_MAX_DEPTH,
+    KNOWN_AUTH_SCHEMES,
+    MAC_RE,
+    SET_COOKIE_HEADERS,
     URL_VALUED_HEADERS,
+    annotated_url_credential_entries,
+    certificate_name_macs,
+    cookie_segment_actions,
+    credential_value_action,
+    decode_base64_payload,
+    decode_transport_body,
     find_query_credential,
+    find_query_payload,
+    ipv6_host_spans,
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
-    is_cookie_attribute_metadata,
+    is_constant_mac,
     is_fully_redacted,
+    is_mac_placeholder,
+    iter_json_strings,
+    json_members,
+    mime_kind,
+    parse_json_container,
+    parse_xml,
     query_param_segment,
+    split_url_password,
+    unredacted_identity,
+    url_query,
 )
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
+from har_capture.sanitization.har import check_har_types
 from har_capture.sanitization.html import (
+    SERIAL_LABEL_HINT_RE,
+    SERIAL_LABEL_RE,
     SIBLING_PASSWORD_RE,
     SIBLING_SSID_RE,
     SSID_ATTRIBUTE_RE,
@@ -54,32 +76,11 @@ from har_capture.sanitization.html import (
 from har_capture.validation.completeness import load_har
 
 # Cookie attribute-only values (not actual session data)
-COOKIE_ATTRIBUTES_ONLY: list[str] = [
-    r"^(Secure\s*;?\s*)+$",
-    r"^(HttpOnly\s*;?\s*)+$",
-    r"^(Secure|HttpOnly)(\s*;\s*(Secure|HttpOnly))*\s*;?\s*$",
-    r"^$",
-]
+MAC_PATTERN = MAC_RE
 
-# MAC address pattern (not anonymized)
-MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
-
-# Serial number patterns (manufacturer-specific)
-# Tag chains `(?:<[^>]*>\s*)*` tolerate whitespace between tags so serials whose
-# label and value sit in sibling elements (Technicolor .jst span pairs) are caught.
-# The label-anchored patterns require: `(?!ize)` after `serial` so jquery's
-# `serialize:`/`serializeArray:` methods don't match, and a digit in the value
-# so prose/code words after the label (`serialize: function`) don't match —
-# vendor serials always carry digits.
-SERIAL_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"serial(?!ize)[^:]*:\s*(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
-    re.compile(r"SN[:\s]+(?:<[^>]*>\s*)*(?=[A-Z0-9]*[0-9])[A-Z0-9]{8,}", re.IGNORECASE),
-    # Serial numbers in HTML table cells (label in one td, value in next td)
-    re.compile(
-        r"(?:Serial\s*Number|SerialNum|SN|S/N)\s*(?:</\w+>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*([A-Za-z0-9\-]{8,})",
-        re.IGNORECASE,
-    ),
-]
+# Labeled serials: the sanitizer's own pattern (pass 2), so every labeled
+# serial reported here is one a sanitize run removes.
+SERIAL_PATTERNS: list[re.Pattern[str]] = [SERIAL_LABEL_RE]
 
 # Public IP pattern (not private ranges)
 IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
@@ -93,21 +94,26 @@ IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
 KNOWN_DEFAULT_USERNAMES: frozenset[str] = frozenset({"admin"})
 
 
-def _load_sensitive_headers(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
-    """Load sensitive header names from patterns.
+def _load_header_sets(
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    """Load the sanitizer's three sensitive-header sets, lowercased: full, cookie and scheme redact.
+
+    Names are matched exactly, as the sanitizer matches them: a header whose
+    name only contains one (``X-Cookie-Consent``) is not one the sanitizer
+    rewrites, so it is not reported.
 
     Args:
         custom_patterns: Optional path to custom patterns file
 
     Returns:
-        List of sensitive header names
+        The ``full_redact``, ``cookie_redact`` and ``scheme_redact`` names
     """
-    sensitive = load_sensitive_patterns(custom_patterns)
-    headers = sensitive.get("headers", {})
-    result = list(headers.get("full_redact", []))
-    result.extend(headers.get("cookie_redact", []))
-    result.extend(headers.get("scheme_redact", []))
-    return result
+    headers = load_sensitive_patterns(custom_patterns).get("headers", {})
+    return tuple(  # type: ignore[return-value]
+        frozenset(str(name).lower() for name in headers.get(key, []))
+        for key in ("full_redact", "cookie_redact", "scheme_redact")
+    )
 
 
 def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[str]:
@@ -126,9 +132,6 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
     fields = sensitive.get("fields", {})
     # Combine both tiers for validation — pre-commit should catch all sensitive fields
     patterns: list[str] = fields.get("auto_redact_patterns", []) + fields.get("flag_patterns", [])
-    # Fallback for legacy format
-    if not patterns:
-        patterns = fields.get("patterns", [])
     return patterns
 
 
@@ -192,10 +195,6 @@ def _compile_field_tiers(custom_patterns: str | dict[str, Any] | None = None) ->
     fields = sensitive.get("fields", {})
     auto: list[str] = fields.get("auto_redact_patterns", [])
     flag: list[str] = fields.get("flag_patterns", [])
-    # Fallback for legacy format — legacy files predate the tier split, so
-    # their patterns keep the stricter (error) treatment.
-    if not auto and not flag:
-        auto = fields.get("patterns", [])
     return _FieldTiers(
         auto_redact=tuple(re.compile(p, re.IGNORECASE) for p in auto),
         flag=tuple(re.compile(p, re.IGNORECASE) for p in flag),
@@ -238,22 +237,51 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
 
 
 def is_cookie_attributes_only(value: str) -> bool:
-    """Check if a cookie value contains only attributes (no actual session data).
+    """Check if a Set-Cookie value holds only attributes (no cookie).
 
-    When HARs are sanitized, cookie values may be stripped leaving just
-    attributes like 'Secure; HttpOnly'. These are safe to commit.
-    Also detects serialized attribute metadata like 'HttpOnly: true, Secure: true'.
+    True when every segment is a valid RFC 6265 attribute
+    (``is_set_cookie_attribute``): ``Secure; HttpOnly``, ``Path=/; Max-Age=0``.
+    ``Path=s3cr3t; HttpOnly`` is a cookie named ``Path``, and serialized
+    metadata (``HttpOnly: true, Secure: true``) is not attribute syntax.
 
     Args:
-        value: Cookie value to check
+        value: Set-Cookie value to check
 
     Returns:
-        True if cookie contains only attributes
+        True if the value carries no cookie data
     """
-    stripped = value.strip()
-    if any(re.match(pattern, stripped, re.IGNORECASE) for pattern in COOKIE_ATTRIBUTES_ONLY):
-        return True
-    return is_cookie_attribute_metadata(stripped)
+    return all(action == "keep" for action in cookie_segment_actions(value, set_cookie=True))
+
+
+def _cookie_header_data(value: str, *, set_cookie: bool) -> list[str]:
+    """The cookie data in a cookie header, one entry per segment ``cookie_segment_actions`` marks as data."""
+    data = []
+    for segment, action in zip(
+        value.split(";"), cookie_segment_actions(value, set_cookie=set_cookie), strict=True
+    ):
+        if action == "value":
+            data.append(segment.partition("=")[2].strip())
+        elif action == "token":
+            data.append(segment.strip())
+    return [item for item in data if item]
+
+
+def _header_secret(name: str, value: str, header_sets: tuple[frozenset[str], ...]) -> list[str] | None:
+    """The secret parts of a sensitive header as the sanitizer rewrites them; None for a header it leaves.
+
+    A cookie header's data segments; for an Authorization-style header the
+    credential after a recognized scheme, else the whole value; for any
+    other sensitive header the whole value.
+    """
+    full, cookie, scheme = header_sets
+    if name in cookie:
+        return _cookie_header_data(value, set_cookie=name in SET_COOKIE_HEADERS)
+    if name in scheme:
+        parts = value.strip().split(None, 1)
+        return [parts[1] if len(parts) == 2 and parts[0].lower() in KNOWN_AUTH_SCHEMES else value]
+    if name in full:
+        return [value]
+    return None
 
 
 def is_private_ip(ip: str) -> bool:
@@ -352,10 +380,18 @@ def _check_query_param(
     ``seen`` suppresses a repeat of the same finding: the URL string and the
     ``queryString`` array are one query recorded twice.
     """
+    # The sanitizer's decision order (_classify_query_param): a credential,
+    # then a credential-named parameter, then a base64 payload — checked inside,
+    # never flagged by name — and only then an identity-named parameter.
     credential = find_query_credential(segment)
     classified = None
     if credential is None and not is_blank_query_value(value) and not is_redacted(value, custom_patterns):
         classified = _classify_field_finding(name, value, field_tiers)
+    payload = None
+    if credential is None and (classified is None or classified[0] != "error"):
+        payload = find_query_payload(segment)
+        if payload is not None:
+            classified = None
 
     if credential is not None:
         key: tuple[str, str] = ("credential", credential.credential)
@@ -380,11 +416,59 @@ def _check_query_param(
             value=truncate(value),
             reason=f"Sensitive query parameter matching '{matched.pattern}'",
         )
+    elif payload is not None:
+        _check_query_payload(payload.text, name, location, findings, custom_patterns, field_tiers, seen)
+        return
     else:
         return
     if key not in seen:
         seen.add(key)
         findings.append(finding)
+
+
+def _payload_findings(
+    text: str,
+    name: str,
+    location: str,
+    custom_patterns: str | dict[str, Any] | None,
+    field_tiers: _FieldTiers,
+) -> list[Finding]:
+    """Check inside a base64 JSON or URL payload, as the sanitizer sanitizes inside it.
+
+    A JSON payload is checked like a JSON body, a URL payload like any URL.
+    Only errors are kept: inside a payload Pass 1 is final, so an
+    identity-style field there is never offered for review, and a warning
+    about it would have no remedy.
+    """
+    inner: list[Finding] = []
+    data = parse_json_container(text)
+    if data is not None:
+        path = f"'{name}' payload" if name else "payload"
+        check_json_fields(data, location, inner, path, custom_patterns, _field_tiers=field_tiers)
+    else:
+        check_url(text, location, inner, custom_patterns, field_tiers=field_tiers)
+    return [finding for finding in inner if finding.severity == "error"]
+
+
+def _check_query_payload(
+    text: str,
+    name: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    field_tiers: _FieldTiers,
+    seen: set[tuple[str, str]],
+) -> None:
+    """Report the findings inside a query payload once per query.
+
+    Findings are keyed by field and value, so the URL string and the
+    ``queryString`` array — one payload recorded twice — report it once.
+    """
+    for finding in _payload_findings(text, name, location, custom_patterns, field_tiers):
+        key = ("payload", f"{finding.field}={finding.value}")
+        if key not in seen:
+            seen.add(key)
+            findings.append(finding)
 
 
 def check_url(
@@ -410,14 +494,25 @@ def check_url(
         field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
         seen: Findings already reported for the same request, to skip repeats
     """
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.query:
+    userinfo = split_url_password(url)
+    if userinfo is not None and not is_redacted(userinfo[1], custom_patterns):
+        findings.append(
+            Finding(
+                severity="error",
+                location=location,
+                field="URL userinfo",
+                value=truncate(userinfo[1]),
+                reason="Password in URL userinfo",
+            )
+        )
+    query = url_query(url)
+    if not query:
         return
     tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
     reported = seen if seen is not None else set()
     # Raw segments, not parse_qsl: it treats '=' as a key/value separator and
     # would strip base64 padding.
-    for segment in parsed.query.split("&"):
+    for segment in query.split("&"):
         key, sep, raw_value = segment.partition("=")
         name = urllib.parse.unquote_plus(key)
         value = urllib.parse.unquote_plus(raw_value) if sep else ""
@@ -458,6 +553,45 @@ def check_query_string(
             )
 
 
+def check_security_details(
+    details: Any,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> None:
+    """Check an entry's TLS certificate names for a MAC (ADR-17).
+
+    ``_securityDetails.subjectName`` and ``issuer`` are a device identity
+    field: a MAC there in any layout (``certificate_name_macs``, shared with
+    the sanitizer) is an error unless it is a MAC placeholder — recognized
+    here, where the value is known to be a MAC — or allowlisted. A self-signed
+    name is not reported: the sanitizer only offers it for review.
+
+    Args:
+        details: The entry's ``_securityDetails`` value
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional custom patterns for the allowlist check
+    """
+    if not isinstance(details, dict):
+        return
+    for field in CERTIFICATE_NAME_FIELDS:
+        name = details.get(field)
+        if not isinstance(name, str):
+            continue
+        for mac in dict.fromkeys(certificate_name_macs(name)):
+            if not (is_mac_placeholder(mac) or check_if_redacted(mac, custom_patterns)):
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field=f"_securityDetails.{field}",
+                        value=mac,
+                        reason="MAC address in a TLS certificate name",
+                    )
+                )
+
+
 def check_headers(
     headers: list[dict[str, str]],
     location: str,
@@ -472,31 +606,26 @@ def check_headers(
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
     """
-    sensitive_headers = _load_sensitive_headers(custom_patterns)
+    header_sets = _load_header_sets(custom_patterns)
 
     for header in headers:
-        name = header.get("name", "").lower()
+        name = str(header.get("name", "")).lower()
         value = header.get("value", "")
-
-        if not value or is_redacted(value, custom_patterns):
+        if not isinstance(value, str) or not value:
             continue
-
-        # Special handling for cookie headers - check if only attributes remain
-        if "cookie" in name and is_cookie_attributes_only(value):
-            continue
-
-        for sensitive in sensitive_headers:
-            if sensitive.lower() in name:
-                findings.append(
-                    Finding(
-                        severity="error",
-                        location=location,
-                        field=header.get("name", ""),
-                        value=truncate(value),
-                        reason=f"Sensitive header '{sensitive}' with non-redacted value",
-                    )
+        # Each secret part is checked on its own, so a placeholder in one
+        # cookie or before a credential's tail no longer clears the header.
+        secrets = _header_secret(name, value, header_sets)
+        if secrets and any(not is_fully_redacted(secret, custom_patterns) for secret in secrets):
+            findings.append(
+                Finding(
+                    severity="error",
+                    location=location,
+                    field=header.get("name", ""),
+                    value=truncate(value),
+                    reason=f"Sensitive header '{name}' with non-redacted value",
                 )
-                break
+            )
 
 
 def _classify_field_finding(
@@ -536,8 +665,7 @@ def _check_form_params(
     factory-default usernames suppressed. In a login-shaped form (any field
     name matches a sensitive pattern), a base64-decodable value in an
     unrecognized field is a warning — the backstop for vendor credential
-    fields the patterns don't know yet (the Sercomm/Hitron ``pws`` class,
-    cable_modem_monitor issue #92).
+    fields the patterns don't know yet (the Sercomm/Hitron ``pws`` class).
 
     Args:
         pairs: Form (name, value) pairs
@@ -553,8 +681,13 @@ def _check_form_params(
         if not value or is_redacted(value, custom_patterns):
             continue
 
+        # The sanitizer's order: a credential-named field, then a base64
+        # payload (checked inside), then an identity-named field.
         classified = _classify_field_finding(name, value, field_tiers)
-        if classified is not None:
+        payload = find_query_payload(value) if classified is None or classified[0] != "error" else None
+        if payload is not None and not payload.prefix.strip("?"):
+            findings.extend(_payload_findings(payload.text, name, location, custom_patterns, field_tiers))
+        elif classified is not None:
             severity, matched = classified
             findings.append(
                 Finding(
@@ -605,8 +738,15 @@ def check_post_data(
 
     # Check text (raw body — form-urlencoded, JSON, or XML)
     text = post_data.get("text", "")
-    if text and not is_redacted(text, custom_patterns):
+    # The whole-string form: `is_redacted` matches its allowlist families
+    # with `re.search`, so a `#000000` anywhere in a body would skip it.
+    if text and not is_fully_redacted(text, custom_patterns):
         mime_type = post_data.get("mimeType", "")
+        # JSON by content first, whatever the type, as the sanitizer reads it.
+        json_data = parse_json_container(text)
+        if json_data is not None:
+            check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
+            return
         if "application/x-www-form-urlencoded" in mime_type:
             # The text copy is checked independently of params — a sanitizer
             # that redacts one copy but not the other must still be caught.
@@ -619,12 +759,8 @@ def check_post_data(
                     text_pairs.append((urllib.parse.unquote_plus(name), urllib.parse.unquote_plus(val)))
             _check_form_params(text_pairs, location + " (body)", findings, field_tiers, custom_patterns)
             return
-        try:
-            json_data = json.loads(text)
-            check_json_fields(json_data, location + " (body)", findings, custom_patterns=custom_patterns)
-        except json.JSONDecodeError:
-            if "xml" in mime_type:
-                _check_xml_fields(text, location + " (body)", findings, custom_patterns)
+        if mime_kind(mime_type) == "markup":
+            _check_xml_fields(text, location + " (body)", findings, custom_patterns)
 
 
 def _check_xml_fields(
@@ -643,13 +779,10 @@ def _check_xml_fields(
         findings: List to append findings to
         custom_patterns: Optional path to custom patterns file
     """
-    import xml.etree.ElementTree as ET
-
     field_tiers = _compile_field_tiers(custom_patterns)
 
-    try:
-        root = ET.fromstring(text)  # noqa: S314
-    except ET.ParseError:
+    root = parse_xml(text)
+    if root is None:
         return
 
     for elem in root.iter():
@@ -691,6 +824,21 @@ def _check_xml_fields(
                 )
 
 
+# A JSON field whose key names a device identity and whose value has that
+# identity's shape (classify_identity_field, the sanitizer's own predicate) is
+# an error: the key states what the value is (ADR-13 determinism).
+_IDENTITY_REASONS = {
+    "serial_number": "Device serial number in a JSON field",
+    "mac_address": "MAC address in a JSON field",
+}
+
+
+def _identity_finding(key: str, value: str, custom_patterns: str | dict[str, Any] | None) -> str | None:
+    """Return the reason to report an identity field, or None when it is clean (``unredacted_identity``)."""
+    identity = unredacted_identity(key, value, custom_patterns)
+    return None if identity is None else _IDENTITY_REASONS[identity]
+
+
 def check_json_fields(
     data: dict[str, Any] | list[Any],
     location: str,
@@ -699,6 +847,7 @@ def check_json_fields(
     custom_patterns: str | dict[str, Any] | None = None,
     _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
+    _served: bool = False,
 ) -> None:
     """Recursively check JSON for sensitive fields.
 
@@ -710,31 +859,52 @@ def check_json_fields(
         custom_patterns: Optional path to custom patterns file
         _field_tiers: Pre-compiled field patterns split by tier. Internal use only.
         _depth: Current recursion depth. Internal use only.
+        _served: The JSON is a response body, where a credential-named value
+            the sanitizer keeps or offers for review (``credential_value_action``)
+            is not reported. Internal use only.
     """
-    if _depth > 50:
+    if _depth > JSON_MAX_DEPTH:
         return
 
     if _field_tiers is None:
         _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
-        for key, value in data.items():
+        for key, value in json_members(data):
             current_path = f"{path}.{key}" if path else key
 
-            # Skip empty or redacted values
-            if isinstance(value, str) and value and not is_redacted(value, custom_patterns):
-                classified = _classify_field_finding(key, value, _field_tiers)
-                if classified is not None:
-                    severity, pattern = classified
-                    findings.append(
-                        Finding(
-                            severity=severity,
-                            location=location,
-                            field=current_path,
-                            value=truncate(value),
-                            reason=f"Sensitive JSON field matching '{pattern.pattern}'",
-                        )
+            identity_reason = (
+                _identity_finding(key, value, custom_patterns) if isinstance(value, str) else None
+            )
+            if identity_reason is not None:
+                findings.append(
+                    Finding(
+                        severity="error",
+                        location=location,
+                        field=current_path,
+                        value=truncate(value),
+                        reason=identity_reason,
                     )
+                )
+            # A sensitive name holding a value that is neither empty nor redacted
+            # (the name is tested first: the allowlist check is the costly one)
+            elif (
+                isinstance(value, str)
+                and value
+                and (classified := _classify_field_finding(key, value, _field_tiers)) is not None
+                and not is_redacted(value, custom_patterns)
+                and not (_served and classified[0] == "error" and credential_value_action(value) != "redact")
+            ):
+                severity, pattern = classified
+                findings.append(
+                    Finding(
+                        severity=severity,
+                        location=location,
+                        field=current_path,
+                        value=truncate(value),
+                        reason=f"Sensitive JSON field matching '{pattern.pattern}'",
+                    )
+                )
 
             # Recurse
             if isinstance(value, dict | list):
@@ -746,6 +916,7 @@ def check_json_fields(
                     custom_patterns,
                     _field_tiers=_field_tiers,
                     _depth=_depth + 1,
+                    _served=_served,
                 )
 
     elif isinstance(data, list):
@@ -759,6 +930,7 @@ def check_json_fields(
                     custom_patterns,
                     _field_tiers=_field_tiers,
                     _depth=_depth + 1,
+                    _served=_served,
                 )
 
 
@@ -770,6 +942,7 @@ def check_content(
     *,
     has_sanitized_url_credential: bool = False,
     serial_detectors: list[Any] | None = None,
+    field_tiers: _FieldTiers | None = None,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -788,6 +961,7 @@ def check_content(
             ``high_confidence_serial_detectors``), applied delimiter-aware to
             candidate tokens. ``None`` compiles them from ``custom_patterns``;
             ``validate_har`` pre-compiles once per file.
+        field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
     """
     # `content` is a whole response body, so the whole-string form is required.
     # `is_redacted` matches its allowlist families with `re.search` — right for
@@ -796,12 +970,17 @@ def check_content(
     # minified CSS) or a literal `XXX` / `REDACTED` anywhere in the body was
     # enough to skip every content check for that entry. 209 of 750 committed
     # fleet entries were being skipped this way, including an XB10 page
-    # carrying a plaintext default Wi-Fi password (issue #194).
+    # carrying a plaintext default Wi-Fi password.
     if not content or is_fully_redacted(content, custom_patterns):
         return
 
     stripped = content.strip()
-    if (
+    # A base64-wrapped JSON or URL payload is data, checked as the text it
+    # wraps — the sanitizer sanitizes inside it rather than replacing it.
+    payload = decode_base64_payload(stripped)
+    if payload is not None:
+        content = payload
+    elif (
         not has_sanitized_url_credential
         and is_base64_credential(stripped)
         and not is_redacted(stripped, custom_patterns)
@@ -817,15 +996,66 @@ def check_content(
         )
         return
 
+    # A body the sanitizer routes as JSON (route_body: it parses as a JSON
+    # object or array, whatever its type) gets its field rules checked here:
+    # identity keys and credential-named keys, the ones it redacts. Identity-
+    # style names (username, login) are only flagged by the sanitizer and
+    # are mostly translation-bundle keys in responses, so they are not
+    # reported — a warning no sanitize run clears.
+    field_macs: set[str] = set()
+    data = parse_json_container(content)
+    if data is not None:
+        tiers = field_tiers if field_tiers is not None else _compile_field_tiers(custom_patterns)
+        start = len(findings)
+        check_json_fields(
+            data, location, findings, "", custom_patterns, _field_tiers=replace(tiers, flag=()), _served=True
+        )
+        field_macs = {f.value for f in findings[start:] if f.reason == _IDENTITY_REASONS["mac_address"]}
+
+    if serial_detectors is None:
+        serial_detectors = _compile_serial_detectors(custom_patterns)
+    # A JSON body is read one decoded string at a time — every value and key,
+    # at any depth — as the sanitizer reads it: escapes (`\u003c`) hide no
+    # markup, and no match runs from one string into the next.
+    texts = iter_json_strings(data) if data is not None else (content,)
+    seen_serials: set[str] = set()
+    for text in texts:
+        _scan_text(text, location, findings, custom_patterns, serial_detectors, field_macs, seen_serials)
+
+
+def _scan_text(
+    text: str,
+    location: str,
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    serial_detectors: list[Any],
+    field_macs: set[str],
+    seen_serials: set[str],
+) -> None:
+    """Run the content text checks on one text: a whole body, or one decoded JSON string.
+
+    Args:
+        text: The text to scan
+        location: Location string for findings
+        findings: List to append findings to
+        custom_patterns: Optional custom patterns
+        serial_detectors: Compiled high-confidence vendor serial detectors
+        field_macs: MACs already reported as identity fields of this body
+        seen_serials: Vendor serials already reported for this body
+    """
+    # Each check first tests a character or word its pattern cannot match
+    # without — most decoded JSON strings need none of the regexes.
+    has_colon = ":" in text
+    has_tag = "<" in text
+
     # Check for MAC addresses
-    for match in MAC_PATTERN.finditer(content):
+    for match in MAC_PATTERN.finditer(text) if has_colon or "-" in text else ():
         mac = match.group(0)
-        # Skip if it looks anonymized
-        if mac.upper() in ("00:00:00:00:00:00", "AA:BB:CC:DD:EE:FF", "00:11:22:33:44:55"):
+        if mac in field_macs:
             continue
-        # Skip if all same byte (likely placeholder)
-        parts = mac.upper().replace("-", ":").split(":")
-        if len(set(parts)) == 1:
+        # Documentation examples, and one byte repeated (broadcast, zero): the
+        # sanitizer leaves the constants too, since scripts compare against them.
+        if is_constant_mac(mac) or mac.upper() in ("AA:BB:CC:DD:EE:FF", "00:11:22:33:44:55"):
             continue
         # Skip if it matches hash pattern
         if is_redacted(mac, custom_patterns):
@@ -842,9 +1072,9 @@ def check_content(
         )
 
     # Check for serial numbers
-    for pattern in SERIAL_PATTERNS:
-        for match in pattern.finditer(content):
-            value = match.group(0)
+    for pattern in SERIAL_PATTERNS if SERIAL_LABEL_HINT_RE.search(text) else ():
+        for match in pattern.finditer(text):
+            value = match.group(match.lastindex or 0)
             if not is_redacted(value, custom_patterns):
                 findings.append(
                     Finding(
@@ -868,14 +1098,18 @@ def check_content(
     # deterministic matches: the label states outright that the value is a
     # password, so an unredacted match is a known credential leak, not a maybe.
     # This is the gate that blessed a contributor's real Wi-Fi password on its
-    # way to a public issue (issue #194). The SSID is a warning — it identifies
+    # way to a public issue tracker. The SSID is a warning — it identifies
     # the network rather than authenticating to it.
     for sibling_pattern, sibling_severity, sibling_reason in (
-        (SIBLING_PASSWORD_RE, "error", "Plaintext password in a labeled field"),
-        (SIBLING_SSID_RE, "warning", "Wi-Fi network name (SSID) in a labeled field"),
-        (SSID_ATTRIBUTE_RE, "warning", "Wi-Fi network name (SSID) in an SSID-named element"),
+        (
+            (SIBLING_PASSWORD_RE, "error", "Plaintext password in a labeled field"),
+            (SIBLING_SSID_RE, "warning", "Wi-Fi network name (SSID) in a labeled field"),
+            (SSID_ATTRIBUTE_RE, "warning", "Wi-Fi network name (SSID) in an SSID-named element"),
+        )
+        if has_tag
+        else ()
     ):
-        for match in sibling_pattern.finditer(content):
+        for match in sibling_pattern.finditer(text):
             value = match.group(2)
             if is_structural_value_sensitive(value, custom_patterns):
                 findings.append(
@@ -888,7 +1122,7 @@ def check_content(
                     )
                 )
 
-    for option_value, _offset in iter_ssid_option_values(content, custom_patterns):
+    for option_value, _offset in iter_ssid_option_values(text, custom_patterns) if has_tag else ():
         findings.append(
             Finding(
                 severity="warning",
@@ -903,15 +1137,12 @@ def check_content(
     # the sanitizer's redact_vendor_serials pass: the same high-confidence
     # serial_number detectors applied to the same token extraction, so what
     # the sanitizer auto-redacts, validate errors on when found unredacted.
-    # (CM2500 round 1: the serial inside RouterStatus.htm's tagValueList had
-    # no label for SERIAL_PATTERNS to anchor on, and validate blessed the
+    # (A Netgear serial inside RouterStatus.htm's tagValueList has no label
+    # for SERIAL_PATTERNS to anchor on; without this, validate blessed that
     # leak.) Severity is error: a vendor-format match is a known serial
     # layout, not a maybe.
-    if serial_detectors is None:
-        serial_detectors = _compile_serial_detectors(custom_patterns)
     if serial_detectors:
-        seen_serials: set[str] = set()
-        for token_match in VENDOR_SERIAL_TOKEN_RE.finditer(content):
+        for token_match in VENDOR_SERIAL_TOKEN_RE.finditer(text):
             token = token_match.group(0)
             if token in seen_serials:
                 continue
@@ -933,8 +1164,11 @@ def check_content(
     # the dotted-quad pattern but are not host addresses — the sanitizer
     # preserves all of them, so flagging them here puts cosmetic noise on
     # every healthy capture.
-    for match in IP_PATTERN.finditer(content):
+    ipv6_spans = ipv6_host_spans(text)
+    for match in IP_PATTERN.finditer(text) if "." in text else ():
         ip = match.group(1)
+        if any(start <= match.start() < end for start, end in ipv6_spans):
+            continue  # the IPv4 tail of an IPv4-mapped IPv6 address, reported as IPv6
         if (
             not is_private_ip(ip)
             and not ip.startswith(("255.", "0."))
@@ -949,6 +1183,23 @@ def check_content(
                     field="content",
                     value=ip,
                     reason="Potential public IP address",
+                )
+            )
+
+    # IPv6 addresses: every one the sanitizer's IPv6 pass rewrites (the same
+    # IPV6_RE candidates is_ipv6_host_address accepts), in every body route — a
+    # link-local EUI-64 address embeds the device's MAC. Its placeholders
+    # (the 2001:db8:: documentation prefix, the static "::") are allowlisted.
+    for start, end in ipv6_spans:
+        address = text[start:end]
+        if not is_redacted(address, custom_patterns):
+            findings.append(
+                Finding(
+                    severity="warning",
+                    location=location,
+                    field="content",
+                    value=address,
+                    reason="Potential IPv6 address",
                 )
             )
 
@@ -979,6 +1230,7 @@ def validate_har(
     field_tiers = _compile_field_tiers(custom_patterns)
 
     har_data = load_har(har_path)
+    check_har_types(har_data)
 
     log = har_data.get("log", {})
     entries = log.get("entries", [])
@@ -986,11 +1238,7 @@ def validate_har(
     # Entries whose URL credentials were sanitized by har-capture — the sanitizer
     # already applied the server-token preservation heuristic to their response
     # bodies, so re-running the bare base64 check here would be a false positive.
-    url_cred_entry_indices: set[int] = {
-        loc["entry_index"]
-        for loc in log.get("_har_capture", {}).get("_sanitized_credentials", [])
-        if isinstance(loc, dict) and isinstance(loc.get("entry_index"), int)
-    }
+    url_cred_entry_indices = annotated_url_credential_entries(log)
 
     for i, entry in enumerate(entries):
         request = entry.get("request", {})
@@ -1044,18 +1292,22 @@ def validate_har(
         # Check POST data
         check_post_data(request.get("postData"), f"{location} (request)", findings, custom_patterns)
 
+        check_security_details(
+            entry.get("_securityDetails"), f"{location} (certificate)", findings, custom_patterns
+        )
+
         # Check response content
         content_data = response.get("content", {})
-        text = content_data.get("text", "")
 
         # Handle $fixture references (skip - content is in separate file)
         if "$fixture" in content_data:
             continue
 
-        # Handle base64 encoded content
-        if content_data.get("encoding") == "base64" and text:
-            with contextlib.suppress(Exception):
-                text = base64.b64decode(text).decode("utf-8", errors="replace")
+        # The sanitizer's own decoder: a transport-encoded body is checked as
+        # the text it carries, and binary is left alone by both tools.
+        text = decode_transport_body(content_data)
+        if text is None:
+            continue
 
         check_content(
             text,
@@ -1064,11 +1316,16 @@ def validate_har(
             custom_patterns,
             has_sanitized_url_credential=(i in url_cred_entry_indices),
             serial_detectors=serial_detectors,
+            field_tiers=field_tiers,
         )
 
     return findings
 
 
 # Legacy exports for backwards compatibility
-SENSITIVE_HEADERS: list[str] = _load_sensitive_headers()
+SENSITIVE_HEADERS: list[str] = [
+    name
+    for key in ("full_redact", "cookie_redact", "scheme_redact")
+    for name in load_sensitive_patterns().get("headers", {}).get(key, [])
+]
 SENSITIVE_FIELDS: list[str] = _load_sensitive_fields()

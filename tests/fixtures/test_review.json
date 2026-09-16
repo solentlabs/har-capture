@@ -1,0 +1,35 @@
+{
+  "_comment": "Recording the interactive review's outcome in a sanitized HAR (sanitization.review). The HAR holds one flagged value, a username offered for review; each case sets that item's status and records an outcome. value_kept says whether the value survives in the written file.",
+  "sanitized_har": {
+    "log": {
+      "version": "1.2",
+      "creator": {"name": "har-capture", "version": "test"},
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "postData": {"mimeType": "application/x-www-form-urlencoded", "text": "username=alice-home&pwd=FIELD_1a2b3c4d"}
+          },
+          "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": "<p>Owner: alice-home</p>"}}
+        }
+      ],
+      "_har_capture": {
+        "sanitization": {"tool": "har-capture", "heuristics": "flag", "user_redacted": 0, "user_skipped": 0, "flagged_total": 1}
+      }
+    }
+  },
+  "flagged_value": "alice-home",
+  "record_review_cases": [
+    {"id": "completed_redacted", "outcome": "completed", "status": "user",    "user_redacted": 1, "user_skipped": 0, "value_kept": false},
+    {"id": "completed_kept",     "outcome": "completed", "status": "skipped", "user_redacted": 0, "user_skipped": 1, "value_kept": true},
+    {"id": "skipped",            "outcome": "skipped",   "status": "skipped", "user_redacted": 0, "user_skipped": 1, "value_kept": true},
+    {"id": "cancelled",          "outcome": "cancelled", "status": "flagged", "user_redacted": 0, "user_skipped": 0, "value_kept": true},
+    {"id": "no_tty",             "outcome": "no_tty",    "status": "flagged", "user_redacted": 0, "user_skipped": 0, "value_kept": true}
+  ],
+  "pass1_review_cases": [
+    {"id": "nothing_flagged", "text": "status=1",           "review": "none_flagged"},
+    {"id": "flagged_pending", "text": "username=alice-home", "review": null}
+  ]
+}

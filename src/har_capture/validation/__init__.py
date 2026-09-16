@@ -18,8 +18,8 @@ from har_capture.validation.artifacts import (
 )
 from har_capture.validation.completeness import (
     MID_SESSION_CAPTURE,
-    NO_POST_REQUESTS,
-    SINGLE_CREDENTIAL_POST,
+    NO_CREDENTIAL_SUBMISSION,
+    SINGLE_CREDENTIAL_SUBMISSION,
     CaptureCompletenessReport,
     CompletenessWarning,
     analyze_capture_completeness,
@@ -27,7 +27,6 @@ from har_capture.validation.completeness import (
     load_har,
 )
 from har_capture.validation.secrets import (
-    COOKIE_ATTRIBUTES_ONLY,
     MAC_PATTERN,
     SENSITIVE_FIELDS,
     SENSITIVE_HEADERS,
@@ -36,6 +35,7 @@ from har_capture.validation.secrets import (
     check_headers,
     check_json_fields,
     check_post_data,
+    check_security_details,
     is_cookie_attributes_only,
     is_private_ip,
     is_redacted,
@@ -54,10 +54,9 @@ __all__ = [
     "CaptureCompletenessReport",
     "CompletenessWarning",
     "MID_SESSION_CAPTURE",
-    "NO_POST_REQUESTS",
-    "SINGLE_CREDENTIAL_POST",
+    "NO_CREDENTIAL_SUBMISSION",
+    "SINGLE_CREDENTIAL_SUBMISSION",
     # PII leak detection
-    "COOKIE_ATTRIBUTES_ONLY",
     "MAC_PATTERN",
     "SENSITIVE_FIELDS",
     "SENSITIVE_HEADERS",
@@ -66,6 +65,7 @@ __all__ = [
     "check_headers",
     "check_json_fields",
     "check_post_data",
+    "check_security_details",
     "is_cookie_attributes_only",
     "is_private_ip",
     "is_redacted",

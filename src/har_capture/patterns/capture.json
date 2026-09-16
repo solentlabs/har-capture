@@ -26,7 +26,7 @@
     ]
   },
   "password_fields": {
-    "_comment": "POST-parameter name substrings (case-insensitive regexes) that mark a request as a credential submission. Used by capture-completeness validation to count login attempts; deliberately narrower than sensitive.json auto_redact_patterns (token/secret fields ride along on every form and would inflate the count).",
+    "_comment": "Field-name substrings (case-insensitive regexes) that mark a POST/PUT/PATCH body as a credential submission when the field holds a non-empty value: form params, urlencoded text and JSON keys. Used by capture-completeness validation to count login attempts; deliberately narrower than sensitive.json auto_redact_patterns (token/secret fields ride along on every form and would inflate the count).",
     "name_patterns": [
       "pass(?:word|wd|phrase)?",
       "pwd",

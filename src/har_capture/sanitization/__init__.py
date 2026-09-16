@@ -8,6 +8,7 @@ Exports:
     - sanitize_har: Remove PII from HAR data
     - sanitize_har_file: Sanitize a HAR file on disk
     - check_for_pii: Detect potential PII in content
+    - record_review: Apply and record the interactive review in a sanitized file
     - SanitizationReport: Report of sanitization operations
     - RedactionCollector: Collector for tracking redactions
 """
@@ -23,6 +24,7 @@ from har_capture.sanitization.har import (
     HarValidationError,
     appears_sanitized,
     apply_user_redactions,
+    check_har_types,
     is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
@@ -40,7 +42,13 @@ from har_capture.sanitization.report import (
     ConfidenceLevel,
     FlaggedValue,
     RedactionStatus,
+    ReviewOutcome,
     SanitizationReport,
+)
+from har_capture.sanitization.review import (
+    StaleCompressedError,
+    record_review,
+    write_compressed_copy,
 )
 
 __all__ = [
@@ -56,8 +64,13 @@ __all__ = [
     "is_sensitive_field",
     "is_flaggable_field",
     "validate_har_structure",
+    "check_har_types",
     "apply_user_redactions",
     "appears_sanitized",
+    # Recording the review in a sanitized file
+    "record_review",
+    "write_compressed_copy",
+    "StaleCompressedError",
     "SENSITIVE_HEADERS",
     "SENSITIVE_FIELD_PATTERNS",
     # Size limits and errors
@@ -69,5 +82,6 @@ __all__ = [
     "FlaggedValue",
     "ConfidenceLevel",
     "RedactionStatus",
+    "ReviewOutcome",
     "RedactionCollector",
 ]

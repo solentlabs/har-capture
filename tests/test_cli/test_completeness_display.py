@@ -33,13 +33,15 @@ def _report(fixture_key: str) -> Any:
 
 # fmt: off
 RENDER_CASES = [
-    # (fixture_key,             summary, expected_present,                                          expected_absent,                    warnings, desc)
-    ("mid_session_and_no_post", True,    ["Capture coverage:", "Requests:      1", "GET 1",
-                                          "POST requests: 0", "sessionid"],                         [],                                 2,        "gaps_with_summary"),
-    ("clean_login_flow",        True,    ["Capture coverage:", "POST requests: 2",
-                                          "1 response(s) set a cookie"],                            ["WARNING:"],                       0,        "clean_with_summary"),
-    ("mid_session_and_no_post", False,   ["WARNING:"],                                              ["Capture coverage:", "Requests:"], 2,        "gaps_summary_suppressed"),
-    ("clean_login_flow",        False,   [],                                                        ["Capture coverage:", "WARNING:"],  0,        "clean_summary_suppressed"),
+    # (fixture_key,                   summary, expected_present,                                           expected_absent,                    warnings, desc)
+    ("mid_session_and_no_submission", True,    ["Capture coverage:", "Requests:               1", "GET 1",
+                                                "Credential submissions: 0", "sessionid"],                 ["POST requests:"],                 2,        "gaps_with_summary"),
+    ("clean_login_flow",              True,    ["Capture coverage:", "POST 3", "Credential submissions: 2",
+                                                "1 response(s) set a cookie"],                             ["WARNING:"],                       0,        "clean_with_summary"),
+    ("put_json_login",                True,    ["PUT 2", "Credential submissions: 1",
+                                                "Only one credential submission"],                         ["No credential submission"],       1,        "put_login_counted"),
+    ("mid_session_and_no_submission", False,   ["WARNING:"],                                               ["Capture coverage:", "Requests:"], 2,        "gaps_summary_suppressed"),
+    ("clean_login_flow",              False,   [],                                                         ["Capture coverage:", "WARNING:"],  0,        "clean_summary_suppressed"),
 ]
 # fmt: on
 

@@ -28,8 +28,8 @@ def _get_browser_install_dir(browser: str = "chromium") -> Path | None:
     layout varies (``chrome-linux64/chrome``, ``chrome-win64/chrome.exe``,
     ``chrome-mac/Chromium.app/Contents/MacOS/Chromium``, etc.) and changes
     between versions. Hand-rolling a per-platform lookup table is fragile
-    — issue #50 was caused by a Linux-only mapping ``chrome-linux64/chrome``
-    being checked on Windows, where the binary lives at
+    — a Linux-only mapping ``chrome-linux64/chrome`` checked on Windows
+    reports Chromium missing, where the binary lives at
     ``chrome-win/chrome.exe``. The ``<browser>-<revision>/`` directory is
     the stable Playwright install marker across platforms.
 
@@ -97,7 +97,7 @@ def check_browser_installed(browser: str = "chromium") -> bool:
         return False
 
     # Primary check: install directory exists and is non-empty. Platform-
-    # agnostic by design — see _get_browser_install_dir docstring (issue #50).
+    # agnostic by design — see _get_browser_install_dir docstring.
     try:
         install_dir = _get_browser_install_dir(browser)
         if install_dir is not None and install_dir.is_dir() and any(install_dir.iterdir()):

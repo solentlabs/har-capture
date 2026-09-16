@@ -1,0 +1,78 @@
+{
+  "_comment": "Hasher fixtures: salt modes, and each hash method's output format and correlation.",
+  "create_cases": {
+    "_comment": "Hasher.create(salt): 'auto'/'random' mint a 32-hex salt; None selects static placeholders; any other string is used as given.",
+    "cases": [
+      {"id": "auto_generates_random_salt", "salt": "auto",    "expected": "random_hex"},
+      {"id": "random_is_alias_for_auto",   "salt": "random",  "expected": "random_hex"},
+      {"id": "none_selects_static_mode",   "salt": null,      "expected": null},
+      {"id": "custom_salt_preserved",      "salt": "my-salt", "expected": "my-salt"},
+      {"id": "empty_string_is_a_salt",     "salt": "",        "expected": ""}
+    ]
+  },
+  "hash_mac_format_cases": {
+    "_comment": "hash_mac keeps the input's layout: separator and grouping survive, the first octet becomes the locally administered 02, hex is lowercase. A value in no MAC layout gets the colon form.",
+    "cases": [
+      {"id": "colon_upper",      "input": "3C:7A:8A:12:34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "colon_lower",      "input": "3c:7a:8a:12:34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "hyphen",           "input": "3C-7A-8A-12-34-56", "output_re": "^02(-[0-9a-f]{2}){5}$"},
+      {"id": "bare_upper",       "input": "3C7A8A123456",      "output_re": "^02[0-9a-f]{10}$"},
+      {"id": "bare_lower",       "input": "3c7a8a123456",      "output_re": "^02[0-9a-f]{10}$"},
+      {"id": "dotted",           "input": "3c7a.8a12.3456",    "output_re": "^02[0-9a-f]{2}\\.[0-9a-f]{4}\\.[0-9a-f]{4}$"},
+      {"id": "mixed_separators", "input": "3C:7A-8A:12-34:56", "output_re": "^02(:[0-9a-f]{2}){5}$"},
+      {"id": "not_a_mac_layout", "input": "N/A",               "output_re": "^02(:[0-9a-f]{2}){5}$"}
+    ]
+  },
+  "hash_mac_normalization_cases": {
+    "_comment": "Every layout of one MAC hashes to the same digits, so correlation survives a device writing the same MAC two ways. Separators and case are not part of the identity.",
+    "cases": [
+      {"id": "one_mac_every_layout", "inputs": ["3C:7A:8A:12:34:56", "3c:7a:8a:12:34:56", "3C-7A-8A-12-34-56", "3C7A8A123456", "3c7a.8a12.3456"]},
+      {"id": "mixed_separators",     "inputs": ["3C:7A-8A:12-34:56", "3C:7A:8A:12:34:56"]}
+    ]
+  },
+  "hash_mac_stable_cases": {
+    "_comment": "A fixed salt gives a colon or hyphen MAC the same digits every release: the digest is taken over the uppercase colon form, as before 0.13.0. The expected values are what 0.12.6 wrote for the colon input.",
+    "cases": [
+      {"id": "colon_input_matches_0_12", "salt": "fixed", "input": "AA:BB:CC:DD:EE:FF", "expected": "02:df:f0:2a:db:05"},
+      {"id": "hyphen_input_same_digits", "salt": "fixed", "input": "aa-bb-cc-dd-ee-ff", "expected": "02-df-f0-2a-db-05"},
+      {"id": "bare_input_same_digits",   "salt": "fixed", "input": "AABBCCDDEEFF",      "expected": "02dff02adb05"}
+    ]
+  },
+  "hash_ip_cases": {
+    "_comment": "hash_ip keeps IPv4 form in a reserved range: private → 10.255.x.x, public → 192.0.2.x.",
+    "cases": [
+      {"id": "private_192_168",   "ip": "192.168.1.1", "is_private": true,  "prefix": "10.255."},
+      {"id": "private_10",        "ip": "10.0.0.1",    "is_private": true,  "prefix": "10.255."},
+      {"id": "private_172_16",    "ip": "172.16.0.1",  "is_private": true,  "prefix": "10.255."},
+      {"id": "public_google_dns", "ip": "8.8.8.8",     "is_private": false, "prefix": "192.0.2."},
+      {"id": "public_cloudflare", "ip": "1.1.1.1",     "is_private": false, "prefix": "192.0.2."}
+    ]
+  },
+  "hash_ipv6_cases": {
+    "_comment": "hash_ipv6 writes into the 2001:db8::/32 documentation prefix.",
+    "cases": [
+      {"id": "link_local",   "ip": "fe80::1"},
+      {"id": "google_dns",   "ip": "2001:4860:4860::8888"},
+      {"id": "localhost",    "ip": "::1"},
+      {"id": "unique_local", "ip": "fd00::1234:5678"}
+    ]
+  },
+  "hash_email_cases": {
+    "_comment": "hash_email writes user_<hash>@redacted.invalid.",
+    "cases": [
+      {"id": "standard",             "email": "user@example.com"},
+      {"id": "uppercase",            "email": "USER@EXAMPLE.COM"},
+      {"id": "plus_tag_multi_label", "email": "test.user+tag@domain.co.uk"},
+      {"id": "minimal",              "email": "a@b.c"}
+    ]
+  },
+  "hash_value_cases": {
+    "_comment": "hash_value writes PREFIX_<8 hex> with a salt and ***PREFIX*** without.",
+    "cases": [
+      {"id": "serial",      "value": "ABC123",       "prefix": "SERIAL"},
+      {"id": "token",       "value": "secret-token", "prefix": "TOKEN"},
+      {"id": "password",    "value": "password123",  "prefix": "PASS"},
+      {"id": "empty_value", "value": "",             "prefix": "EMPTY"}
+    ]
+  }
+}

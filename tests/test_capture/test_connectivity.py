@@ -904,8 +904,7 @@ class TestTargetPath:
     """target_path — the user-facing "your path was ignored" signal.
 
     _strip_protocol silently drops the path; the CLI uses target_path to
-    warn instead of capturing the wrong page (a bare-root capture cost a
-    wasted CM2500 run on 2026-08-19).
+    warn instead of capturing the wrong page.
     """
 
     # fmt: off

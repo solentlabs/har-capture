@@ -24,28 +24,28 @@ Dependencies:
 from __future__ import annotations
 
 import base64
+import copy
 import json
+import re
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from har_capture.patterns import Hasher
+from har_capture.patterns import Hasher, decode_base64_payload, parse_json_container, query_param_segment
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.har import (
     HarValidationError,
-    _decode_base64_json,
     _detect_client_side_cookies,
     _embed_sanitization_metadata,
-    _extract_url_credential,
     _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
+    _sanitize_body_string,
     _sanitize_form_urlencoded,
     _sanitize_headers,
     _sanitize_json_recursive,
-    _sanitize_string_patterns,
     _scan_url_credentials,
     apply_user_redactions,
     is_flaggable_field,
@@ -237,9 +237,9 @@ class TestSchemeRedactBranch:
         """A single token with no scheme/credential split → full redact."""
         assert sanitize_header_value("Authorization", "SoloToken") == "[REDACTED]"
 
-    def test_empty_value_full_redacts(self) -> None:
-        """An empty Authorization value is fully redacted (no token to preserve)."""
-        assert sanitize_header_value("Authorization", "") == "[REDACTED]"
+    def test_empty_value_kept(self) -> None:
+        """An empty Authorization value is kept: there is nothing to hide."""
+        assert sanitize_header_value("Authorization", "") == ""
 
     def test_lowercase_header_name_still_matches(self) -> None:
         """Header-name matching is case-insensitive."""
@@ -509,28 +509,16 @@ COMPILE_FIELD_PATTERN_CASES = [
         ["deployenv"],
     ),
     (
-        "legacy_patterns_key_only",
-        {"fields": {"patterns": ["legacytok"]}},
-        ["legacytok"],
-        None,
-    ),
-    (
-        "hardcoded_fallback_when_fields_empty",
-        {"fields": {}},
-        ["password", "secret", "token", "key", "auth"],
-        None,
-    ),
-    (
-        "hardcoded_fallback_when_fields_missing_entirely",
-        {},
-        ["password", "secret", "token"],
+        "no_flag_patterns",
+        {"fields": {"auto_redact_patterns": ["vendorpw"]}},
+        ["vendorpw"],
         None,
     ),
 ]
 
 
 class TestCompileSensitiveFieldPatterns:
-    """Direct coverage for :func:`_compile_sensitive_field_patterns` legacy paths."""
+    """Direct coverage for :func:`_compile_sensitive_field_patterns`."""
 
     @pytest.mark.parametrize(
         ("desc", "sensitive_data", "auto_matches", "flag_matches"),
@@ -775,7 +763,7 @@ class TestContextVarIsolatesThreads:
 
 
 # -----------------------------------------------------------------------------
-# Header-set custom_patterns coverage (0.7.1 fix)
+# Header-set custom_patterns coverage
 # -----------------------------------------------------------------------------
 
 
@@ -1108,7 +1096,7 @@ class TestFullHarSanitization:
                         "response": {
                             "status": 200,
                             "headers": [],
-                            "content": {"text": "MAC: AA:AA:AA:AA:AA:AA", "mimeType": "text/html"},
+                            "content": {"text": "MAC: 3C:7A:8A:12:34:56", "mimeType": "text/html"},
                         },
                     },
                     {
@@ -1116,15 +1104,15 @@ class TestFullHarSanitization:
                         "response": {
                             "status": 200,
                             "headers": [],
-                            "content": {"text": "MAC: BB:BB:BB:BB:BB:BB", "mimeType": "text/html"},
+                            "content": {"text": "MAC: 3C:7A:8A:12:34:57", "mimeType": "text/html"},
                         },
                     },
                 ],
             }
         }
         result, _ = sanitize_har(har_data, salt=None)
-        assert "AA:AA:AA:AA:AA:AA" not in result["log"]["entries"][0]["response"]["content"]["text"]
-        assert "BB:BB:BB:BB:BB:BB" not in result["log"]["entries"][1]["response"]["content"]["text"]
+        assert "3C:7A:8A:12:34:56" not in result["log"]["entries"][0]["response"]["content"]["text"]
+        assert "3C:7A:8A:12:34:57" not in result["log"]["entries"][1]["response"]["content"]["text"]
 
     def test_handles_missing_log(self) -> None:
         """Test handling of missing log key."""
@@ -1261,29 +1249,12 @@ class TestResponseContentFallback:
         content = result["response"]["content"]["text"]
         assert expected_redacted not in content, f"{desc}: PII should be redacted"
 
-    def test_base64_content_skipped(self) -> None:
-        """Test base64-encoded content is not pattern-sanitized."""
-        entry = {
-            "request": {"method": "GET", "url": "http://test/", "headers": []},
-            "response": {
-                "status": 200,
-                "headers": [],
-                "content": {
-                    "text": "MTkyLjE2OC4xLjEwMA==",
-                    "mimeType": "application/octet-stream",
-                    "encoding": "base64",
-                },
-            },
-        }
-        result = sanitize_entry(entry, salt=None)
-        assert result["response"]["content"]["text"] == "MTkyLjE2OC4xLjEwMA=="
-
 
 class TestNestedJSONSanitization:
-    """Tests for _sanitize_json_text handling nested objects."""
+    """Tests for POST JSON bodies with nested objects."""
 
     def test_nested_sensitive_fields_in_post_data(self) -> None:
-        """Test _sanitize_json_text now handles nested sensitive fields."""
+        """Nested sensitive fields in a POST JSON body are redacted."""
         post_data = {
             "mimeType": "application/json",
             "text": '{"data": {"password": "secret", "nested": {"token": "abc123"}}}',
@@ -1309,9 +1280,9 @@ class TestIPValidation:
         self, input_text: str, should_contain: str | None, desc: str
     ) -> None:
         """Test IP validation rejects invalid octets in string patterns."""
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
-        result = _sanitize_string_patterns(input_text)
+        result = _sanitize_body_string(input_text)
         if should_contain:
             assert should_contain in result, f"{desc}: invalid IP should be preserved"
         else:
@@ -1352,9 +1323,9 @@ class TestSSNAndCreditCardPatterns:
     )
     def test_financial_pii_detection(self, input_text: str, should_redact: bool, desc: str) -> None:
         """Test credit card auto-redaction and SSN preservation (flagged only)."""
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
-        result = _sanitize_string_patterns(input_text)
+        result = _sanitize_body_string(input_text)
         if should_redact:
             # Extract the value that should be redacted
             original_numbers = [w for w in input_text.split() if any(c.isdigit() for c in w)]
@@ -1393,11 +1364,11 @@ class TestFlaggingBehavior:
         """Test SSN patterns are flagged for review, not auto-redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("SSN: 123-45-6789", collector=collector)
+        result = _sanitize_body_string("SSN: 123-45-6789", collector=collector)
         assert "123-45-6789" in result, "SSN should be preserved in output"
         assert any(f.category == "ssn" for f in collector.flagged), "SSN should be in flagged list"
 
@@ -1563,11 +1534,11 @@ class TestPhoneNumberPatterns:
         """Test phone number patterns are flagged for review, not auto-redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert expected_phone in result, f"{desc}: phone number should be preserved in output"
         assert any(f.category == "phone" for f in collector.flagged), f"{desc}: phone should be flagged"
 
@@ -1595,11 +1566,11 @@ class TestPhoneNumberPatterns:
         """Test non-phone patterns are not flagged."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        _sanitize_string_patterns(input_text, collector=collector)
+        _sanitize_body_string(input_text, collector=collector)
         assert not any(f.category == "phone" for f in collector.flagged), f"{desc}: should not flag as phone"
 
 
@@ -1634,11 +1605,11 @@ class TestPublicIpSanitization:
         """Test public IPs are redacted in string patterns."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         # Extract the IP from input to verify it's gone
         import re
 
@@ -1669,11 +1640,11 @@ class TestPublicIpSanitization:
         """Test non-gateway private IPs are redacted."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert input_text not in result, f"{desc}: private IP should be redacted"
 
     @pytest.mark.parametrize(
@@ -1685,11 +1656,11 @@ class TestPublicIpSanitization:
         """Test common gateway IPs are preserved (not redacted)."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns(input_text, collector=collector)
+        result = _sanitize_body_string(input_text, collector=collector)
         assert input_text in result, f"{desc}: gateway IP should be preserved"
 
     def test_public_ip_in_json_response(self) -> None:
@@ -1718,11 +1689,11 @@ class TestPublicIpSanitization:
         """Test that public IP redactions are recorded in collector."""
         from har_capture.patterns import Hasher
         from har_capture.sanitization.collector import RedactionCollector
-        from har_capture.sanitization.har import _sanitize_string_patterns
+        from har_capture.sanitization.har import _sanitize_body_string
 
         hasher = Hasher.create(None)
         collector = RedactionCollector(hasher=hasher)
-        _sanitize_string_patterns("WAN: 73.158.42.197", collector=collector)
+        _sanitize_body_string("WAN: 73.158.42.197", collector=collector)
         assert collector.auto_redacted_counts.get("public_ip", 0) > 0, "Should record public_ip redaction"
 
 
@@ -2283,6 +2254,22 @@ SANITIZE_HAR_SANITIZED_CRED_CASES = [
     ([_ENTRY([{"name": "Cookie", "value": "session=abc"}], [])],               [],
      "cookie_only_not_a_url_cred"),
 ]
+
+# A re-sanitized file: entry 1 held the credential, now AUTH_ in its URL.
+_SANITIZED_TOKEN_ENTRIES = [
+    {"request": {"url": "https://device.local/", "headers": [], "queryString": []}},
+    {"request": {"url": "https://device.local/status.html?login_AUTH_1a2b3c4d", "headers": [], "queryString": []}},
+]
+_ANNOTATED = {"entry_index": 1, "location": "url_query_param"}
+RESANITIZE_ANNOTATION_CASES = [
+    # (prior annotation,                         entries,                                          expected, desc)
+    ([_ANNOTATED],                               _SANITIZED_TOKEN_ENTRIES,                         [1],      "prior_kept"),
+    ([_ANNOTATED],                               _CRED_BARE_URL + _SANITIZED_TOKEN_ENTRIES[1:],   [0, 1],   "prior_merged_with_new"),
+    ([{"entry_index": 0, "location": "url_query_param"}], _CRED_BARE_URL,                           [0],      "prior_same_as_new_once"),
+    ([{"entry_index": 7}, {"entry_index": "1"}, {"entry_index": True}, "x", {"entry_index": -1}],
+                                                 _SANITIZED_TOKEN_ENTRIES,                         [],       "malformed_or_out_of_range_dropped"),
+    ("not-a-list",                               _SANITIZED_TOKEN_ENTRIES,                         [],       "non_list_prior_ignored"),
+]
 # fmt: on
 
 
@@ -2341,9 +2328,25 @@ class TestSanitizedCredentialAnnotation:
         result_url = result["log"]["entries"][1]["request"]["url"]
         assert "YWRtaW46cGFzcw==" not in result_url
 
+    @pytest.mark.parametrize(
+        ("prior", "entries", "expected", "desc"),
+        RESANITIZE_ANNOTATION_CASES,
+        ids=[c[3] for c in RESANITIZE_ANNOTATION_CASES],
+    )
+    def test_prior_annotation_kept(self, prior: list, entries: list, expected: list[int], desc: str) -> None:
+        """A sanitized file's annotation survives sanitizing it again.
+
+        The second run cannot recognize the ``AUTH_`` placeholder the first
+        wrote, so the prior entries are kept alongside any it finds itself.
+        """
+        har = {"log": {"entries": entries, "_har_capture": {"_sanitized_credentials": prior}}}
+        result, _ = sanitize_har(har, salt="test")
+        creds = result["log"]["_har_capture"]["_sanitized_credentials"]
+        assert creds == [{"entry_index": i, "location": "url_query_param"} for i in expected], desc
+
 
 # =============================================================================
-# Server-Token Preservation: _extract_url_credential / _is_echoed_credential
+# Server-Token Preservation: _is_echoed_credential
 # =============================================================================
 
 # URL cred: admin:pass → YWRtaW46cGFzcw==
@@ -2360,85 +2363,6 @@ _NON_UTF8_CREDENTIAL = base64.b64encode(b"\xff\xfe").decode()
 _NO_COLON_CREDENTIAL = base64.b64encode(b"simple").decode()
 
 # fmt: off
-EXTRACT_URL_CREDENTIAL_CASES = [
-    # (request_dict, expected_credential, desc)
-    (
-        {"url": f"https://d.local/login?{_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "bare_cred_in_url",
-    ),
-    (
-        {"url": f"https://d.local/login?token={_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "cred_as_param_value_in_url",
-    ),
-    (
-        {"url": f"https://d.local/status.html?login_{_ADMIN_PASS_RAW}", "queryString": []},
-        _ADMIN_PASS_RAW,
-        "prefixed_cred_in_url",
-    ),
-    (
-        {"url": "", "queryString": [{"name": f"login_{_ADMIN_PASS_RAW.rstrip('=')}", "value": "="}]},
-        _ADMIN_PASS_RAW,
-        "prefixed_cred_split_by_query_parser",
-    ),
-    (
-        {"url": "https://d.local/status", "queryString": []},
-        None,
-        "no_cred_in_url",
-    ),
-    # Bare segment without '=' that isn't a credential
-    (
-        {"url": "https://d.local/page?debug", "queryString": []},
-        None,
-        "bare_non_cred_segment_no_eq",
-    ),
-    # key=value pair where the value isn't a credential
-    (
-        {"url": "https://d.local/page?format=json", "queryString": []},
-        None,
-        "key_value_non_cred_value",
-    ),
-    # Non-string url
-    (
-        {"url": 9000, "queryString": []},
-        None,
-        "non_string_url",
-    ),
-    (
-        {"url": "", "queryString": [{"name": "token", "value": _ADMIN_PASS_RAW}]},
-        _ADMIN_PASS_RAW,
-        "cred_in_querystring_value",
-    ),
-    (
-        {"url": "", "queryString": [{"name": _ADMIN_PASS_RAW, "value": ""}]},
-        _ADMIN_PASS_RAW,
-        "cred_as_querystring_name",
-    ),
-    # Non-dict entry in queryString
-    (
-        {"url": "", "queryString": ["not-a-dict"]},
-        None,
-        "non_dict_querystring_entry",
-    ),
-    # Empty value and a name that isn't a credential
-    (
-        {"url": "", "queryString": [{"name": "format", "value": ""}]},
-        None,
-        "non_cred_name_empty_value",
-    ),
-    (
-        {"url": "", "queryString": []},
-        None,
-        "empty_request",
-    ),
-    (
-        {"url": "https://d.local/page", "queryString": None},
-        None,
-        "null_querystring",
-    ),
-]
-
 IS_ECHOED_CRED_CASES = [
     # (body, url_credential, expected, desc)
     (_ADMIN_PASS_RAW, _ADMIN_PASS_RAW, True,  "exact_match"),
@@ -2489,18 +2413,6 @@ SERVER_TOKEN_PRESERVATION_CASES = [
     ),
 ]
 # fmt: on
-
-
-class TestUrlCredentialExtraction:
-    """Tests for _extract_url_credential."""
-
-    @pytest.mark.parametrize(
-        ("request_dict", "expected", "desc"),
-        EXTRACT_URL_CREDENTIAL_CASES,
-        ids=[c[2] for c in EXTRACT_URL_CREDENTIAL_CASES],
-    )
-    def test_extract_url_credential(self, request_dict: dict, expected: str | None, desc: str) -> None:
-        assert _extract_url_credential(request_dict) == expected, desc
 
 
 class TestIsEchoedCredential:
@@ -2680,12 +2592,6 @@ class TestUrlValuedHeaders:
 
 # ── base64-encoded response bodies & credential values ───────────────────────
 # base64(user:pass) strings are opaque credentials; base64(JSON) is a payload.
-_B64_OBJECT = base64.b64encode(b'{"a": 1, "b": {"c": 2}}').decode()
-_B64_ARRAY = base64.b64encode(b'[{"x": 1}, {"y": 2}]').decode()
-_B64_SCALAR_NUM = base64.b64encode(b"42").decode()
-_B64_SCALAR_STR = base64.b64encode(b'"just-a-string"').decode()
-_B64_NON_JSON = base64.b64encode(b"admin:password").decode()
-_B64_NON_UTF8 = base64.b64encode(b"\xff\xfe\xfa\xfb").decode()
 _B64_USERPASS = base64.b64encode(b"admin:hunter2").decode()
 
 # base64-JSON object/array each carry a MAC that must be redacted *in place*;
@@ -2697,19 +2603,6 @@ _B64_JSON_ARRAY_PII = base64.b64encode(
 _B64_OPAQUE_CRED = base64.b64encode(b"admin:supersecret").decode()
 
 # fmt: off
-DECODE_BASE64_JSON_CASES = [
-    # (value, is_structured, desc)
-    (_B64_OBJECT,      True,  "base64_json_object"),
-    (_B64_ARRAY,       True,  "base64_json_array"),
-    (_B64_SCALAR_NUM,  False, "base64_json_scalar_number"),
-    (_B64_SCALAR_STR,  False, "base64_json_scalar_string"),
-    (_B64_NON_JSON,    False, "base64_non_json_colon_string"),
-    (_B64_NON_UTF8,    False, "base64_non_utf8_bytes"),
-    ('{"a": 1}',       False, "plain_json_not_base64"),
-    ("<html></html>",  False, "html_not_base64"),
-    ("",               False, "empty_string"),
-]
-
 RESPONSE_BASE64_BODY_CASES = [
     # (body, structure_preserved, desc)
     (_B64_JSON_OBJECT_PII, True,  "base64_json_object_preserved"),
@@ -2762,13 +2655,12 @@ def _entry_with_response_body(body: str) -> dict[str, Any]:
 
 
 class TestBase64JsonResponseStructure:
-    """Base64-encoded JSON response bodies keep structure; opaque tokens collapse.
+    """A body that is itself base64 JSON keeps its structure; an opaque token collapses.
 
-    Some devices (e.g. the Sercomm DM1000) return data as raw base64-encoded JSON
-    from ``setup.cgi?todo=...`` endpoints with an empty Content-Type. The decoded
-    body is colon-bearing, so the opaque-credential heuristic used to collapse the
-    whole payload into a single ``AUTH_`` token, destroying every field name and
-    the JSON shape. Structure (not PII) must survive — only values are redacted.
+    The decoded body is colon-bearing, so the opaque-credential guard would
+    collapse the whole payload into a single ``AUTH_`` token, destroying every
+    field name and the JSON shape. Structure (not PII) must survive — only
+    values are redacted.
     """
 
     @pytest.mark.parametrize(
@@ -2806,22 +2698,6 @@ class TestBase64JsonResponseStructure:
         assert decoded["downstream"][0] == {"channel": 1, "power": "-7.0", "snr": "38.5"}
         assert decoded["lan_mac"] != "AA:BB:CC:DD:EE:FF"  # value-pattern redaction
         assert decoded["password"] != "hunter2"  # sensitive field-name redaction
-
-
-class TestDecodeBase64Json:
-    """Unit tests for the _decode_base64_json payload-vs-secret discriminator."""
-
-    @pytest.mark.parametrize(
-        ("value", "is_structured", "desc"),
-        DECODE_BASE64_JSON_CASES,
-        ids=[c[2] for c in DECODE_BASE64_JSON_CASES],
-    )
-    def test_decode_base64_json(self, value: str, is_structured: bool, desc: str) -> None:
-        result = _decode_base64_json(value)
-        if is_structured:
-            assert isinstance(result, dict | list), desc
-        else:
-            assert result is None, desc
 
 
 class TestBase64CredentialInFields:
@@ -2862,8 +2738,8 @@ class TestBase64CredentialInFields:
         param = accessor(result)
         assert param == {"name": "format", "value": "json"}, desc
 
-    def test_malformed_querystring_entries_skipped(self) -> None:
-        """Non-dict and name-less queryString entries are left untouched, not errored."""
+    def test_malformed_querystring_entries(self) -> None:
+        """A non-object queryString item is rejected at the type boundary; a name- or value-less one is left untouched."""
         entry = {
             "request": {
                 "method": "GET",
@@ -2873,11 +2749,15 @@ class TestBase64CredentialInFields:
             },
             "response": {"status": 200, "headers": [], "content": {}},
         }
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt=None)
+        assert raised.value.path == "entry.request.queryString[0]"
+        entry["request"]["queryString"] = entry["request"]["queryString"][1:]
         result = sanitize_entry(entry, salt=None)
-        assert result["request"]["queryString"] == ["not-a-dict", {"label": "x"}]
+        assert result["request"]["queryString"] == [{"label": "x"}]
 
-    def test_malformed_cookie_entries_skipped(self) -> None:
-        """Non-dict and value-less request cookies are left untouched, not errored."""
+    def test_malformed_cookie_entries(self) -> None:
+        """A non-object cookies item is rejected at the type boundary; a name- or value-less one is left untouched."""
         entry = {
             "request": {
                 "method": "GET",
@@ -2887,8 +2767,12 @@ class TestBase64CredentialInFields:
             },
             "response": {"status": 200, "headers": [], "content": {}},
         }
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt=None)
+        assert raised.value.path == "entry.request.cookies[0]"
+        entry["request"]["cookies"] = entry["request"]["cookies"][1:]
         result = sanitize_entry(entry, salt=None)
-        assert result["request"]["cookies"] == ["not-a-dict", {"name": "n"}]
+        assert result["request"]["cookies"] == [{"name": "n"}]
 
     def test_request_without_url_is_tolerated(self) -> None:
         """A request with no 'url' key skips URL sanitization without erroring."""
@@ -2931,8 +2815,8 @@ class TestBase64CredentialInFields:
         """The same secret gets the same FIELD placeholder in params and text.
 
         The text copy is percent-encoded ('=' padding becomes %3D); hashing
-        must run on the decoded value so both copies correlate (issue #92
-        capture shape).
+        must run on the decoded value so both copies correlate (the
+        Sercomm/Hitron pws capture shape).
         """
         from har_capture.patterns import Hasher
 
@@ -2958,7 +2842,7 @@ class TestLoginShapedBase64Heuristic:
     """Login-shaped-form base64 heuristic: flag for review, never auto-redact.
 
     The backstop for vendor credential fields the name patterns don't know
-    yet (issue #92 class).
+    yet (the Sercomm/Hitron pws class).
     """
 
     _B64_BARE_PASSWORD = base64.b64encode(b"example-not-real").decode()
@@ -3134,21 +3018,6 @@ class TestWebStorageSanitization:
         assert check(meta), f"Assertion failed for case: {desc}"
 
 
-class TestSanitizeJsonTextLogging:
-    """Tests for _sanitize_json_text debug logging."""
-
-    def test_sanitize_json_text_invalid_json_logs_debug(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Non-JSON text logs debug message."""
-        import logging
-
-        from har_capture.sanitization.har import _sanitize_json_text
-
-        with caplog.at_level(logging.DEBUG):
-            result = _sanitize_json_text("<html>not json</html>")
-        assert result == "<html>not json</html>"
-        assert "Non-JSON" in caplog.text
-
-
 # =============================================================================
 # Sanitization Metadata Embedding
 # =============================================================================
@@ -3189,6 +3058,9 @@ _REQUIRED_METADATA_KEYS = frozenset(
         "user_skipped",
         "flagged_total",
         "warnings",
+        # Written by Pass 1 only when nothing is flagged (none_flagged), as in
+        # every report below; test_review.py covers a report awaiting review.
+        "review",
     }
 )
 
@@ -3574,10 +3446,10 @@ class TestCookieHeaderNoNameValuePairs:
 #
 # fmt: off
 COOKIE_ATTR_CASES = [
-    # Attribute metadata (should be redacted as non-cookie data)
+    # Serialized attribute metadata is not attribute syntax: redacted as cookie data
     ("Set-Cookie", "HttpOnly: true, Secure: true",      True,  "attribute_metadata_set_cookie"),
     ("Cookie",     "HttpOnly: true, Secure: true",      True,  "attribute_metadata_cookie"),
-    ("Set-Cookie", "Secure",                            True,  "bare_secure_attribute"),
+    ("Set-Cookie", "Secure",                            False, "bare_secure_is_attributes_only"),
     # Normal cookies (should be redacted as cookie values)
     ("Set-Cookie", "session_id=abc123; HttpOnly; Secure", True,  "normal_set_cookie_with_attrs"),
     ("Cookie",     "session=abc123",                    True,  "normal_cookie"),
@@ -3613,6 +3485,98 @@ class TestCookieAttributeMetadata:
 # =============================================================================
 # Pre-existing Coverage Gaps
 # =============================================================================
+
+
+HAR_TYPE = _HAR_FIXTURE["har_type_cases"]
+
+
+def _har_with(case: dict) -> object:
+    """``base_har`` with the case's path replaced by its value, or deleted."""
+    har: object = copy.deepcopy(HAR_TYPE["base_har"])
+    *parents, last = case["set"] or [None]
+    if last is None:
+        return case["value"]
+    node = har
+    for key in parents:
+        node = node[key]  # type: ignore[index]
+    if case.get("delete"):
+        del node[last]  # type: ignore[union-attr]
+    else:
+        node[last] = case["value"]  # type: ignore[index]
+    return har
+
+
+class TestHarTypes:
+    """sanitize_har, validate_har and analyze_har_file share one type boundary."""
+
+    # ┌───────────────────────────────┬─────────────────┬─────────────────────────────────────────────┐
+    # │ field replaced                │ value           │ result                                      │
+    # ├───────────────────────────────┼─────────────────┼─────────────────────────────────────────────┤
+    # │ a field a walker reads        │ wrong HAR type  │ HarValidationError naming the field's path  │
+    # │ queryString, postData, …      │ null            │ accepted: read as absent                    │
+    # │ request, log                  │ (deleted)       │ accepted                                    │
+    # └───────────────────────────────┴─────────────────┴─────────────────────────────────────────────┘
+    @pytest.mark.parametrize("case", HAR_TYPE["cases"], ids=[c["id"] for c in HAR_TYPE["cases"]])
+    def test_boundary(self, case: dict, tmp_path: Path) -> None:
+        """Each tool rejects the same malformed field with the same path, or accepts the HAR."""
+        from har_capture.validation import validate_har
+        from har_capture.validation.completeness import analyze_har_file
+
+        har = _har_with(case)
+        har_file = tmp_path / "t.har"
+        har_file.write_text(json.dumps(har))
+        calls = {
+            "sanitize": lambda: sanitize_har(copy.deepcopy(har), salt="t"),  # type: ignore[arg-type]
+            "validate": lambda: validate_har(har_file),
+            "analyze": lambda: analyze_har_file(har_file),
+        }
+        for tool, call in calls.items():
+            if case["error_path"] is None:
+                call()
+                continue
+            with pytest.raises(HarValidationError) as raised:
+                call()
+            assert raised.value.path == case["error_path"], tool
+
+    ENTRY_CASES = [
+        c for c in HAR_TYPE["cases"] if c["set"][:3] == ["log", "entries", 0] and len(c["set"]) > 3
+    ]
+
+    @pytest.mark.parametrize("case", ENTRY_CASES, ids=[c["id"] for c in ENTRY_CASES])
+    def test_sanitize_entry(self, case: dict) -> None:
+        """sanitize_entry checks its entry against the same table, paths starting at ``entry``."""
+        entry = _har_with(case)["log"]["entries"][0]  # type: ignore[index]
+        if case["error_path"] is None:
+            sanitize_entry(entry, salt="t")
+            return
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt="t")
+        assert raised.value.path == case["error_path"].replace("log.entries[0]", "entry")
+
+
+KEPT_OR_UNOFFERED_CASES = _HAR_FIXTURE["kept_or_unoffered_cases"]["cases"]
+
+
+class TestKeptOrUnoffered:
+    """Values sanitize keeps or does not offer, and inputs it skips without failing."""
+
+    @pytest.mark.parametrize("case", KEPT_OR_UNOFFERED_CASES, ids=[c["id"] for c in KEPT_OR_UNOFFERED_CASES])
+    def test_case(self, case: dict, tmp_path: Path) -> None:
+        """Output holds and lacks the listed text, nothing listed is offered, and validate agrees."""
+        from har_capture.validation import validate_har
+
+        har = {"log": {"entries": [case["entry"]]}}
+        out, report = sanitize_har(har, salt="t", heuristics=HeuristicMode.FLAG)
+        text = json.dumps(out)
+        for value in case["absent"]:
+            assert value not in text
+        for value in case["present"]:
+            assert value in text
+        offered = {f.original_value for f in report.flagged}
+        assert not offered & set(case["not_offered"])
+        path = tmp_path / "s.har"
+        path.write_text(text)
+        assert sum(f.severity == "error" for f in validate_har(path)) == case["validate_errors"]
 
 
 class TestValidateHarStructure:
@@ -3745,15 +3709,15 @@ class TestJsonRecursiveSanitization:
 
 
 class TestStringPatternSanitization:
-    """Tests for _sanitize_string_patterns edge cases."""
+    """Tests for _sanitize_body_string edge cases (the string patterns)."""
 
     def test_empty_string_returns_empty(self) -> None:
         """Test empty string is returned unchanged."""
-        assert _sanitize_string_patterns("") == ""
+        assert _sanitize_body_string("") == ""
 
     def test_mac_without_hasher(self) -> None:
         """Test MAC replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF")
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF")
         assert "AA:BB:CC:DD:EE:FF" not in result
         assert "***MAC***" in result
 
@@ -3762,12 +3726,12 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, None)
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF", hasher, None)
         assert "AA:BB:CC:DD:EE:FF" not in result
 
     def test_public_ip_without_hasher(self) -> None:
         """Test public IP replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("DNS: 8.8.8.8")
+        result = _sanitize_body_string("DNS: 8.8.8.8")
         assert "8.8.8.8" not in result
         assert "***IP***" in result
 
@@ -3776,12 +3740,12 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, None)
+        result = _sanitize_body_string("DNS: 8.8.8.8", hasher, None)
         assert "8.8.8.8" not in result
 
     def test_email_without_hasher(self) -> None:
         """Test email replacement uses placeholder when no hasher."""
-        result = _sanitize_string_patterns("Contact: admin@example.com")
+        result = _sanitize_body_string("Contact: admin@example.com")
         assert "admin@example.com" not in result
         assert "***EMAIL***" in result
 
@@ -3790,7 +3754,7 @@ class TestStringPatternSanitization:
         from har_capture.patterns import Hasher
 
         hasher = Hasher.create("test")
-        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, None)
+        result = _sanitize_body_string("Contact: admin@example.com", hasher, None)
         assert "admin@example.com" not in result
 
     def test_credit_card_luhn_valid(self) -> None:
@@ -3801,13 +3765,13 @@ class TestStringPatternSanitization:
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
         # Visa test number that passes Luhn
-        result = _sanitize_string_patterns("Card: 4111111111111111", hasher, collector)
+        result = _sanitize_body_string("Card: 4111111111111111", hasher, collector)
         assert "4111111111111111" not in result
 
     def test_credit_card_luhn_invalid(self) -> None:
         """Test invalid credit card number (fails Luhn) is preserved."""
         # Visa-format but fails Luhn check
-        result = _sanitize_string_patterns("Number: 4111111111111112", None, None)
+        result = _sanitize_body_string("Number: 4111111111111112", None, None)
         assert "4111111111111112" in result
 
     def test_string_patterns_with_collector_records_mac(self) -> None:
@@ -3817,7 +3781,7 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("Device MAC: AA:BB:CC:DD:EE:FF", hasher, collector)
+        result = _sanitize_body_string("Device MAC: AA:BB:CC:DD:EE:FF", hasher, collector)
         assert "AA:BB:CC:DD:EE:FF" not in result
         assert collector.auto_redacted_counts.get("mac_address", 0) > 0
 
@@ -3828,13 +3792,13 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("DNS: 8.8.8.8", hasher, collector)
+        result = _sanitize_body_string("DNS: 8.8.8.8", hasher, collector)
         assert "8.8.8.8" not in result
         assert collector.auto_redacted_counts.get("public_ip", 0) > 0
 
     def test_string_patterns_version_string_not_treated_as_public_ip(self) -> None:
         """Test version-like string matching public IP regex is preserved."""
-        result = _sanitize_string_patterns("Version: 5.7.1.5", None, None)
+        result = _sanitize_body_string("Version: 5.7.1.5", None, None)
         assert "5.7.1.5" in result, "Version string should not be treated as a public IP"
 
     def test_string_patterns_with_collector_records_email(self) -> None:
@@ -3844,7 +3808,7 @@ class TestStringPatternSanitization:
 
         hasher = Hasher.create("test")
         collector = RedactionCollector(hasher=hasher)
-        result = _sanitize_string_patterns("Contact: admin@example.com", hasher, collector)
+        result = _sanitize_body_string("Contact: admin@example.com", hasher, collector)
         assert "admin@example.com" not in result
         assert collector.auto_redacted_counts.get("email", 0) > 0
 
@@ -4068,7 +4032,7 @@ class TestApplyUserRedactions:
 
         The metadata is written before any review decision exists, so a
         reviewed artifact otherwise reports user_redacted: 0 forever
-        (observed on the CM2500 contributor capture, 2026-08-19).
+        (a reviewed CM2500 capture reported it).
         """
         har_data = {
             "log": {
@@ -4136,35 +4100,6 @@ class TestApplyUserRedactions:
             result = apply_user_redactions(har_data, report)
         assert isinstance(result, dict), "Should return valid result despite error"
 
-    def test_json_decode_error_after_replacement(self) -> None:
-        """Test HarValidationError raised if json.loads fails after replacement."""
-        from unittest.mock import patch
-
-        har_data = {"log": {"entries": [{"note": "target_value"}]}}
-        report = SanitizationReport(
-            input_file="",
-            output_file="",
-            salt="test",
-            flagged=[
-                FlaggedValue(
-                    original_value="target_value",
-                    category="test",
-                    confidence="HIGH",
-                    context="ctx",
-                    reason="test",
-                    status=RedactionStatus.USER_REDACTED,
-                ),
-            ],
-        )
-        with (
-            patch(
-                "har_capture.sanitization.har.json.loads",
-                side_effect=json.JSONDecodeError("broken", "", 0),
-            ),
-            pytest.raises(HarValidationError, match="Failed to parse HAR"),
-        ):
-            apply_user_redactions(har_data, report)
-
 
 # =============================================================================
 # XML POST Data Sanitization
@@ -4204,10 +4139,8 @@ class TestVendorSerialTextContentRouting:
     """Vendor-format serials auto-redact in non-HTML text content.
 
     Netgear pipe-delimited blobs also appear in JS files served as
-    text/javascript (utility.js on the CM2500), which route through the
-    string-pattern fallback, not the HTML engine. The vendor-serial scan
-    runs there too — and outside the string-pattern perf length guard,
-    so serial coverage never depends on body size.
+    text/javascript (utility.js on the CM2500), which take the text path,
+    not the HTML engine. The vendor-serial scan runs there too.
     """
 
     def _entry(self, text: str) -> dict:
@@ -4231,7 +4164,7 @@ class TestVendorSerialTextContentRouting:
         assert "SERIAL_" in content_text
 
     def test_serial_redacted_even_in_large_js_file(self) -> None:
-        """The scan is not subject to the string-pattern length guard."""
+        """A large script body gets the scan too (the text path has no length guard)."""
         from har_capture.patterns.loader import resolve_patterns_arg
 
         patterns = str(resolve_patterns_arg("network-device"))
@@ -4245,35 +4178,28 @@ class TestVendorSerialTextContentRouting:
         result = sanitize_entry(entry, salt="test")
         assert "7ZZ0000FAKE00" in result["response"]["content"]["text"]
 
-    def test_no_collector_skips_serial_scan(self) -> None:
-        """Without a collector/hasher the scan is skipped, not crashed."""
+    def test_no_collector_redacts_with_static_placeholder(self) -> None:
+        """Without a collector or hasher the scan still runs, with a static placeholder."""
         from har_capture.patterns.loader import resolve_patterns_arg
         from har_capture.sanitization.har import _sanitize_response_content
 
         patterns = str(resolve_patterns_arg("network-device"))
         content = {"mimeType": "text/javascript", "text": "var x = '7ZZ0000FAKE00';"}
         _sanitize_response_content(content, collector=None, custom_patterns=patterns)
-        assert "7ZZ0000FAKE00" in content["text"]
+        assert content["text"] == "var x = '***SERIAL***';"
 
 
-class TestStringPatternLengthGuard:
-    """The perf length guard must sit far above real firmware assets.
+class TestStringPatternsAnySize:
+    """Text is scanned whatever its size, as validate scans it.
 
-    At 10,000 chars it silently exempted the CM2500's 33 KB utility.js
-    from MAC/IP/email scans; it now guards at 1 MB.
+    A length guard exempted the CM2500's 33 KB utility.js at 10,000 chars,
+    and later every body over 1 MB, from MAC/IP/email scans.
     """
 
-    def test_macs_redacted_in_firmware_sized_text(self) -> None:
-        """A ~30 KB body — skipped by the old guard — is scanned."""
-        text = "// filler\n" * 3000 + "device 3C:E4:B0:11:22:33 online"
-        result = _sanitize_string_patterns(text)
-        assert "3C:E4:B0:11:22:33" not in result
-
-    def test_over_one_megabyte_still_skipped(self) -> None:
-        """The guard still exists — bodies over 1 MB pass through unscanned."""
-        text = "x" * 1_000_001 + " 3C:E4:B0:11:22:33"
-        result = _sanitize_string_patterns(text)
-        assert "3C:E4:B0:11:22:33" in result
+    @pytest.mark.parametrize("filler", [30_000, 1_000_001], ids=["firmware_sized", "over_one_megabyte"])
+    def test_macs_redacted(self, filler: int) -> None:
+        text = "x" * filler + " device 3C:E4:B0:11:22:33 online"
+        assert "3C:E4:B0:11:22:33" not in _sanitize_body_string(text)
 
 
 class TestSerialDetectorResolverCache:
@@ -4689,3 +4615,549 @@ class TestPropagationEncodedValues:
 
         assert har["log"]["entries"][0]["request"]["url"] == "/a/FIELD_bbbbbbbb/b/FIELD_bbbbbbbb"
         assert count == 2
+
+
+TRANSPORT_ENCODED_BODY_CASES = _HAR_FIXTURE["transport_encoded_body_cases"]["cases"]
+BASE64_QUERY_PAYLOAD_CASES = _HAR_FIXTURE["base64_query_payload_cases"]["cases"]
+
+
+class TestTransportEncodedBodies:
+    """A transport-encoded body is sanitized as the text it carries and written back as text."""
+
+    @pytest.mark.parametrize(
+        "case", TRANSPORT_ENCODED_BODY_CASES, ids=[c["id"] for c in TRANSPORT_ENCODED_BODY_CASES]
+    )
+    def test_body(self, case: dict) -> None:
+        entry = _entry_with_response_body("")
+        entry["response"]["content"] = dict(case["content"])
+        content = sanitize_entry(entry, salt="transport")["response"]["content"]
+
+        assert content.get("encoding") == case["expect_encoding"]
+        for leaked in case["absent"]:
+            assert leaked not in content["text"]
+        for kept in case["present"]:
+            assert kept in content["text"]
+        if "text_equals" in case:
+            assert content["text"] == case["text_equals"]
+        if "text_suffix" in case:
+            assert content["text"].endswith(case["text_suffix"])
+
+    def test_user_redaction_reaches_transport_body(self) -> None:
+        """Pass 2's find-and-replace reaches a value flagged inside a transport-encoded body."""
+        phone = "555-123-4567"
+        entry = _entry_with_response_body(base64.b64encode(f"Support line: {phone}".encode()).decode())
+        entry["response"]["content"].update({"mimeType": "application/octet-stream", "encoding": "base64"})
+        sanitized, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="pass2", heuristics=HeuristicMode.FLAG
+        )
+        flagged = [item for item in report.flagged if item.original_value == phone]
+        assert flagged
+        for item in flagged:
+            item.status = RedactionStatus.USER_REDACTED
+
+        redacted = apply_user_redactions(sanitized, report)
+
+        assert phone not in json.dumps(redacted)
+
+
+def _payload_request(segment: str) -> dict[str, Any]:
+    """A GET whose query is one segment, recorded in the URL and (decoded) the queryString array."""
+    name, sep, value = urllib.parse.unquote_plus(segment).partition("=")
+    return {
+        "request": {
+            "method": "GET",
+            "url": f"https://192.168.100.1/app.cgi?{segment}",
+            "headers": [],
+            "queryString": [{"name": name, "value": value if sep else ""}],
+        },
+        "response": {"status": 200, "headers": [], "content": {}},
+    }
+
+
+def _decoded_payloads(request: dict[str, Any]) -> list[str]:
+    """The payload text in the URL and in the queryString array, decoded."""
+    segment = urllib.parse.unquote(urllib.parse.urlparse(request["url"]).query)
+    array = query_param_segment(request["queryString"][0])
+    return [decode_base64_payload(s.partition("=")[2] or s) or "" for s in (segment, array)]
+
+
+class TestBase64QueryPayloads:
+    """A base64 JSON or URL query payload is sanitized inside, whatever its padding."""
+
+    @pytest.mark.parametrize(
+        "case", BASE64_QUERY_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_QUERY_PAYLOAD_CASES]
+    )
+    def test_payload(self, case: dict) -> None:
+        raw = _payload_request(case["segment"])
+        request = sanitize_entry(raw, salt="payload")["request"]
+
+        if case["unchanged"]:
+            assert request["url"] == raw["request"]["url"]
+            assert request["queryString"] == raw["request"]["queryString"]
+            return
+        assert "AUTH_" not in request["url"]
+        rewritten = urllib.parse.urlparse(request["url"]).query
+        assert ("%" in rewritten) is case["percent_encoded_output"]
+        encoded = urllib.parse.unquote(rewritten).partition("=")[2] or urllib.parse.unquote(rewritten)
+        if case["unpadded_output"]:
+            assert "=" not in encoded
+        else:
+            assert len(encoded) % 4 == 0
+        decoded = _decoded_payloads(request)
+        for text in decoded:
+            for leaked in case["leaked"]:
+                assert leaked not in text
+            for kept in case["decoded_present"]:
+                assert kept in text
+        # The URL and the array carry the same payload.
+        assert decoded[0] == decoded[1]
+
+    @pytest.mark.parametrize(
+        "case", BASE64_QUERY_PAYLOAD_CASES, ids=[c["id"] for c in BASE64_QUERY_PAYLOAD_CASES]
+    )
+    def test_validate_agrees(self, case: dict, tmp_path: Path) -> None:
+        raw = {"log": {"entries": [_payload_request(case["segment"])]}}
+        if case["leaked"]:
+            _assert_validate_agrees(raw, tmp_path)
+        else:
+            raw_file = tmp_path / "raw.har"
+            raw_file.write_text(json.dumps(raw))
+            assert validate_har(raw_file) == []
+
+    def test_nothing_inside_is_offered_for_review(self) -> None:
+        """Pass 2 cannot reach a value stored base64, so none is flagged from inside a payload."""
+        payload = base64.b64encode(b'{"username": "jdoe-reviewer", "page": 1}').decode()
+        _, report = sanitize_har(
+            {"log": {"entries": [_payload_request(f"data={payload}")]}},
+            salt="payload",
+            heuristics=HeuristicMode.FLAG,
+        )
+        assert [item for item in report.flagged if item.original_value == "jdoe-reviewer"] == []
+
+
+DEEP_NESTING_CASES = _HAR_FIXTURE["deep_nesting_cases"]["cases"]
+_DEEP = "[" * 20000 + "]" * 20000
+
+
+def _deep_nesting_entry(surface: str) -> dict[str, Any]:
+    """One entry carrying JSON nested past the parser's recursion limit on ``surface``."""
+    wrapped = base64.b64encode(_DEEP.encode()).decode()
+    entry = _payload_request(f"d={wrapped}" if surface == "query_payload" else "page=1")
+    content = entry["response"]["content"]
+    if surface == "body_payload":
+        content.update({"text": wrapped, "mimeType": ""})
+    elif surface == "octet_stream_body":
+        content.update({"text": _DEEP, "mimeType": "application/octet-stream"})
+    elif surface == "json_body":
+        content.update({"text": _DEEP, "mimeType": "application/json"})
+    elif surface == "post_json_body":
+        entry["request"]["postData"] = {"mimeType": "application/json", "text": _DEEP}
+    return entry
+
+
+class TestHostileNesting:
+    """JSON nested past the parser's limit is text that does not parse, never a crash."""
+
+    @pytest.mark.parametrize("case", DEEP_NESTING_CASES, ids=[c["id"] for c in DEEP_NESTING_CASES])
+    def test_both_tools_finish(self, case: dict, tmp_path: Path) -> None:
+        sanitized, _ = sanitize_har({"log": {"entries": [_deep_nesting_entry(case["id"])]}}, salt="deep")
+        har_file = tmp_path / "deep.har"
+        har_file.write_text(json.dumps(sanitized))
+        validate_har(har_file)
+
+
+JSON_IDENTITY_BODY_CASES = _HAR_FIXTURE["json_identity_body_cases"]["cases"]
+VALUE_PASS_BODY_CASES = _HAR_FIXTURE["value_pass_body_cases"]["cases"]
+CUSTOM_GATEWAY = _HAR_FIXTURE["custom_preserved_gateway_cases"]
+NO_COLLECTOR_BODY_CASES = _HAR_FIXTURE["no_collector_body_cases"]["cases"]
+POST_TEXT_CASES = _HAR_FIXTURE["post_text_cases"]["cases"]
+CORRELATION = _HAR_FIXTURE["cross_route_correlation_cases"]
+SERVED_CREDENTIAL_CASES = _HAR_FIXTURE["served_credential_cases"]["cases"]
+PATTERN_FILE_ROUTE_CASES = _HAR_FIXTURE["pattern_file_route_cases"]["cases"]
+ECHOED_CREDENTIAL_CASES = _HAR_FIXTURE["echoed_credential_cases"]["cases"]
+FLAG_REACHABILITY_CASES = _HAR_FIXTURE["flag_reachability_cases"]["cases"]
+FLAG_LABEL_CASES = _HAR_FIXTURE["flag_label_cases"]["cases"]
+ENTRY_SECURITY_DETAILS_CASES = _HAR_FIXTURE["entry_security_details_cases"]["cases"]
+SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
+EMPTY_VALUE_CASES = _HAR_FIXTURE["empty_value_cases"]["cases"]
+
+
+class TestJsonIdentityBodies:
+    """A key naming a serial or MAC is redacted when its value has that shape, in any JSON body."""
+
+    @pytest.mark.parametrize(
+        "case", JSON_IDENTITY_BODY_CASES, ids=[c["id"] for c in JSON_IDENTITY_BODY_CASES]
+    )
+    def test_body(self, case: dict) -> None:
+        text = case["text"]
+        if "pad" in case:
+            text = "var pad = '" + "x" * case["pad"] + "'; " + text
+        entry = _entry_with_response_body(text)
+        entry["response"]["content"]["mimeType"] = case["mime"]
+        out = sanitize_entry(entry, salt="identity")["response"]["content"]["text"]
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
+    def test_ssid_key_offered_for_review(self) -> None:
+        """A network name under an SSID-named key is flagged, not redacted."""
+        entry = _entry_with_response_body('{"ssid_24g": "HomeNet-5G"}')
+        entry["response"]["content"]["mimeType"] = "application/json"
+        _, report = sanitize_har({"log": {"entries": [entry]}}, salt="ssid", heuristics=HeuristicMode.FLAG)
+        assert [(f.original_value, f.category) for f in report.flagged] == [("HomeNet-5G", "wifi_ssid")]
+
+    @pytest.mark.parametrize("case", POST_TEXT_CASES, ids=[c["id"] for c in POST_TEXT_CASES])
+    def test_post_text(self, case: dict) -> None:
+        """POST text is JSON by content, and any other text gets the string patterns."""
+        out = sanitize_post_data({"mimeType": case["mime"], "text": case["text"]}, Hasher.create("post"))[
+            "text"
+        ]
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
+    def test_post_json_identity_redacted(self) -> None:
+        """The same key rule applies to a JSON POST body."""
+        post = {"mimeType": "application/json", "text": '{"StatusSoftwareSerialNum": "4131N12345678"}'}
+        assert "4131N12345678" not in sanitize_post_data(post, Hasher.create("post"))["text"]
+
+
+class TestEmptyValues:
+    """An empty credential value is kept on every route, as the JSON route keeps it."""
+
+    @pytest.mark.parametrize("case", EMPTY_VALUE_CASES, ids=[c["id"] for c in EMPTY_VALUE_CASES])
+    def test_empty_value(self, case: dict) -> None:
+        request = {"method": "POST", "url": "http://192.168.100.1/login", "headers": [], "cookies": []}
+        request.update(copy.deepcopy(case["request"]))
+        entry = {"request": request, "response": {"status": 200, "headers": [], "content": {"text": ""}}}
+        result, report = sanitize_har({"log": {"entries": [entry]}}, salt="empty")
+
+        node: Any = result["log"]["entries"][0]["request"]
+        path, expected = case["check"]
+        for step in path:
+            node = node[step]
+        if expected.endswith("*"):
+            assert node.startswith(expected[:-1])
+        else:
+            assert node == expected
+        assert bool(report.auto_redacted_counts) == case.get("counted", False)
+
+
+class TestValuePassBodies:
+    """JSON values, JSON keys and text bodies get the HTML engine's value passes."""
+
+    @pytest.mark.parametrize("case", NO_COLLECTOR_BODY_CASES, ids=[c["id"] for c in NO_COLLECTOR_BODY_CASES])
+    def test_without_collector(self, case: dict) -> None:
+        from har_capture.sanitization.har import _sanitize_response_content
+
+        content = {"mimeType": case["mime"], "text": case["text"]}
+        _sanitize_response_content(content)
+        assert content["text"] == case["present"]
+
+    @pytest.mark.parametrize("case", CUSTOM_GATEWAY["cases"], ids=[c["id"] for c in CUSTOM_GATEWAY["cases"]])
+    def test_custom_preserved_gateway(self, case: dict) -> None:
+        custom = CUSTOM_GATEWAY["custom_patterns"]
+        if case.get("via") == "post":
+            post = {"mimeType": case["mime"], "text": case["text"]}
+            out = sanitize_post_data(post, Hasher.create("values"), custom_patterns=custom)["text"]
+        elif case.get("via") == "check_for_pii":
+            from har_capture.sanitization.html import check_for_pii
+
+            assert check_for_pii(case["text"], custom_patterns=custom) == []
+            return
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+            out = sanitize_entry(entry, salt="values", custom_patterns=custom)["response"]["content"]["text"]
+        assert case["present"] in out
+
+    def test_ssid_custom_allowlist(self) -> None:
+        """A network name the caller's allowlist names is not offered for review."""
+        entry = _entry_with_response_body('{"ssid": "Lab-Net-01"}')
+        entry["response"]["content"]["mimeType"] = "application/json"
+        custom = {"static_placeholders": {"values": ["Lab-Net-01"]}}
+        _, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="s", custom_patterns=custom, heuristics=HeuristicMode.FLAG
+        )
+        assert [f.category for f in report.flagged] == []
+
+    @pytest.mark.parametrize("case", CORRELATION["cases"], ids=[c["id"] for c in CORRELATION["cases"]])
+    def test_cross_route_correlation(self, case: dict) -> None:
+        """One value gets one placeholder in HTML, JSON and text bodies."""
+        entries = []
+        for body in case.get("bodies", CORRELATION["bodies"]):
+            entry = _entry_with_response_body(body["template"].replace("{v}", case["value"]))
+            entry["response"]["content"]["mimeType"] = body["mime"]
+            entries.append(entry)
+        sanitized, _ = sanitize_har({"log": {"entries": entries}}, salt="correlate")
+        per_body = [
+            set(re.findall(case["placeholder"], entry["response"]["content"]["text"]))
+            for entry in sanitized["log"]["entries"]
+        ]
+        assert all(per_body), per_body
+        assert len(set().union(*per_body)) == 1, per_body
+
+    @pytest.mark.parametrize("case", VALUE_PASS_BODY_CASES, ids=[c["id"] for c in VALUE_PASS_BODY_CASES])
+    def test_body(self, case: dict) -> None:
+        depth = case.get("nest_lists", 0)
+        entry = _entry_with_response_body("[" * depth + case["text"] + "]" * depth)
+        entry["response"]["content"]["mimeType"] = case["mime"]
+        out = sanitize_entry(entry, salt=case.get("salt", "values"))["response"]["content"]["text"]
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
+
+class TestServedCredentialValues:
+    """A value a response serves under a credential-named key is judged by its shape; a submitted one is not."""
+
+    @pytest.mark.parametrize("case", SERVED_CREDENTIAL_CASES, ids=[c["id"] for c in SERVED_CREDENTIAL_CASES])
+    def test_value(self, case: dict) -> None:
+        if case["via"] == "post":
+            entry = {
+                "request": {
+                    "method": "POST",
+                    "url": "http://192.168.0.1/api",
+                    "headers": [],
+                    "postData": {"mimeType": case["mime"], "text": case["text"]},
+                },
+                "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/plain"}},
+            }
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+        sanitized, report = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="served", heuristics=HeuristicMode.FLAG
+        )
+        out_entry = sanitized["log"]["entries"][0]
+        out = (
+            out_entry["request"]["postData"]["text"]
+            if case["via"] == "post"
+            else out_entry["response"]["content"]["text"]
+        )
+        if case.get("decode_base64"):
+            out = base64.b64decode(out).decode("utf-8")
+
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+        # Each flagged value is the text as written to the output, so the
+        # review's find-and-replace can reach it.
+        flagged = sorted(f.original_value for f in report.flagged)
+        assert len(flagged) == len(case["flagged"])
+        assert all(
+            re.fullmatch(pattern, value)
+            for pattern, value in zip(sorted(case["flagged"]), flagged, strict=True)
+        )
+        # Offered, not pre-selected: the review pre-selects medium-confidence credentials.
+        assert all((f.category, f.confidence.value) == ("credential", "low") for f in report.flagged)
+        for item in report.flagged:
+            item.status = RedactionStatus.USER_REDACTED
+        redacted = json.dumps(apply_user_redactions(sanitized, report))
+        assert all(json.dumps(value)[1:-1] not in redacted for value in flagged)
+
+
+class TestPatternFilePassOnEveryRoute:
+    """The pattern-file pass and the text-body passes reach every route, POST text included."""
+
+    @pytest.mark.parametrize(
+        "case", PATTERN_FILE_ROUTE_CASES, ids=[c["id"] for c in PATTERN_FILE_ROUTE_CASES]
+    )
+    def test_route(self, case: dict) -> None:
+        if case["via"] == "post":
+            entry = {
+                "request": {
+                    "method": "POST",
+                    "url": "http://192.168.0.1/api",
+                    "headers": [],
+                    "postData": {"mimeType": case["mime"], "text": case["text"]},
+                },
+                "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/plain"}},
+            }
+        else:
+            entry = _entry_with_response_body(case["text"])
+            entry["response"]["content"]["mimeType"] = case["mime"]
+        sanitized, _ = sanitize_har(
+            {"log": {"entries": [entry]}}, salt="routes", custom_patterns=case.get("custom_patterns")
+        )
+        out_entry = sanitized["log"]["entries"][0]
+        out = (
+            out_entry["request"]["postData"]["text"]
+            if case["via"] == "post"
+            else out_entry["response"]["content"]["text"]
+        )
+        for leaked in case["absent"]:
+            assert leaked not in out
+        for kept in case["present"]:
+            assert kept in out
+
+
+def _readable_strings(node: Any) -> list[str]:
+    """Every string in a HAR, and every decoded string of a body that is JSON."""
+    found: list[str] = []
+    stack = [node]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            found.append(item)
+            parsed = parse_json_container(item)
+            if parsed is not None:
+                stack.append(parsed)
+    return found
+
+
+def _entries_from_rows(rows: list[list[str]]) -> list[dict[str, Any]]:
+    """HAR entries from fixture rows ``[via, mime, body]``: via is post, url (body is the URL) or response."""
+    entries = []
+    for via, mime, body in rows:
+        if via == "post":
+            entries.append(
+                {
+                    "request": {
+                        "method": "POST",
+                        "url": "http://192.168.0.1/api",
+                        "headers": [],
+                        "postData": {"mimeType": mime, "text": body},
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {"text": "", "mimeType": "text/plain"},
+                    },
+                }
+            )
+        elif via == "url":
+            entry = _entry_with_response_body("")
+            entry["request"]["url"] = body
+            entries.append(entry)
+        else:
+            entry = _entry_with_response_body(body)
+            entry["response"]["content"]["mimeType"] = mime
+            entries.append(entry)
+    return entries
+
+
+class TestEchoedCredentials:
+    """A submitted credential is redacted where a response echoes it, and only there."""
+
+    @pytest.mark.parametrize("case", ECHOED_CREDENTIAL_CASES, ids=[c["id"] for c in ECHOED_CREDENTIAL_CASES])
+    def test_echo(self, case: dict) -> None:
+        entries = _entries_from_rows(case["entries"])
+        sanitized, report = sanitize_har(
+            {"log": {"entries": entries}}, salt="echo", heuristics=HeuristicMode.FLAG
+        )
+        readable = _readable_strings(sanitized["log"]["entries"])
+        offered = [f.original_value for f in report.flagged]
+        for secret in case["gone"]:
+            assert not any(secret in text for text in readable)
+            assert secret not in offered
+        for kept in case["present"]:
+            assert any(kept in text for text in readable)
+        for value in case["offered"]:
+            assert value in offered
+        if "gone_after_review" in case:
+            for item in report.flagged:
+                item.status = RedactionStatus.USER_REDACTED
+            reviewed = _readable_strings(apply_user_redactions(sanitized, report)["log"]["entries"])
+            for text in case["gone_after_review"]:
+                assert not any(text in readable_text for readable_text in reviewed)
+
+
+@pytest.mark.parametrize(
+    "case", ENTRY_SECURITY_DETAILS_CASES, ids=[c["id"] for c in ENTRY_SECURITY_DETAILS_CASES]
+)
+def test_certificate_names(case: dict) -> None:
+    """A MAC in a TLS certificate name is hashed in its layout; a self-signed name is offered; the rest is kept."""
+    entry = _entry_with_response_body("")
+    entry["_securityDetails"] = dict(case["details"])
+    if "server_ip" in case:
+        entry["serverIPAddress"] = case["server_ip"]
+    sanitized, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="cert", heuristics=HeuristicMode.FLAG
+    )
+    out = sanitized["log"]["entries"][0]
+    details = out["_securityDetails"]
+    for field, pattern in case["expect"].items():
+        assert re.fullmatch(pattern, details[field]), field
+    for field in ("validFrom", "validTo"):
+        assert details.get(field) == case["details"].get(field)
+    assert [[f.original_value, f.category, f.confidence.value] for f in report.flagged] == case["flagged"]
+    assert report.auto_redacted_counts.get("mac_address", 0) == case["macs"]
+    assert out.get("serverIPAddress") == case.get("server_ip")
+
+
+def test_certificate_name_mac_correlates_with_body_mac() -> None:
+    """A certificate's bare-hex MAC gets the digits the same MAC gets in a body, in its own layout."""
+    entry = _entry_with_response_body("CM MAC: A4:56:30:12:34:56")
+    entry["_securityDetails"] = {"subjectName": "A45630123456", "issuer": "Vendor Device CA"}
+    sanitized, _ = sanitize_har({"log": {"entries": [entry]}}, salt="cert")
+    out = sanitized["log"]["entries"][0]
+    body_mac = re.search(r"02(?::[0-9a-f]{2}){5}", out["response"]["content"]["text"])
+    assert body_mac is not None
+    assert out["_securityDetails"]["subjectName"] == body_mac.group(0).replace(":", "")
+
+
+@pytest.mark.parametrize("case", FLAG_LABEL_CASES, ids=[c["id"] for c in FLAG_LABEL_CASES])
+def test_review_item_label_and_count(case: dict) -> None:
+    """A review item keeps the label its first occurrence gave it, and counts each occurrence once."""
+    _, report = sanitize_har(
+        {"log": {"entries": _entries_from_rows(case["entries"])}}, salt="label", heuristics=HeuristicMode.FLAG
+    )
+    found = [[f.original_value, f.category, f.confidence.value, f.occurrences] for f in report.flagged]
+    assert found == case["flagged"]
+
+
+@pytest.mark.parametrize("case", FLAG_REACHABILITY_CASES, ids=[c["id"] for c in FLAG_REACHABILITY_CASES])
+def test_flagged_json_value_is_reachable_by_review(case: dict) -> None:
+    """A JSON value offered for review is the output's text, so a user redaction removes it."""
+    entry = _entry_with_response_body(case["text"])
+    entry["response"]["content"]["mimeType"] = "application/json"
+    sanitized, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="reach", heuristics=HeuristicMode.FLAG
+    )
+    assert len(report.flagged) == len(case["flagged"])
+    for (category, pattern), item in zip(case["flagged"], report.flagged, strict=True):
+        assert item.category == category
+        assert re.fullmatch(pattern, item.original_value)
+        item.status = RedactionStatus.USER_REDACTED
+    redacted = json.dumps(apply_user_redactions(sanitized, report))
+    assert all(json.dumps(item.original_value)[1:-1] not in redacted for item in report.flagged)
+    assert all(text not in redacted for text in case.get("gone_after_review", []))
+
+
+@pytest.mark.parametrize("case", SSID_SAFE_VALUE_CASES, ids=[c["id"] for c in SSID_SAFE_VALUE_CASES])
+def test_json_ssid_review_honors_safe_values(case: dict) -> None:
+    """A JSON SSID-key value a safe-value pattern recognizes is not offered for review."""
+    from har_capture.patterns.loader import resolve_patterns_arg
+
+    patterns = case["patterns"]
+    custom = str(resolve_patterns_arg(patterns)) if isinstance(patterns, str) else patterns
+    entry = _entry_with_response_body(case["text"])
+    entry["response"]["content"]["mimeType"] = "application/json"
+    _, report = sanitize_har(
+        {"log": {"entries": [entry]}}, salt="ssid", custom_patterns=custom, heuristics=HeuristicMode.FLAG
+    )
+    assert [f.original_value for f in report.flagged] == case["flagged"]
+
+
+def test_call_patterns_resolved_once_per_har(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A sanitize_har call resolves its custom patterns once, not once per entry."""
+    import har_capture.sanitization.har as har_module
+
+    calls = []
+    resolve = har_module._resolve_call_patterns
+    monkeypatch.setattr(har_module, "_resolve_call_patterns", lambda cp: calls.append(cp) or resolve(cp))
+    custom = {"patterns": {"c": {"regex": "CUST-[0-9]{4}", "replacement_prefix": "C"}}}
+    entries = [_entry_with_response_body('{"a": "CUST-1234"}') for _ in range(3)]
+    sanitize_har({"log": {"entries": entries}}, salt="once", custom_patterns=custom)
+    assert len(calls) == 1

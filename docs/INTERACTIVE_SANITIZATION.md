@@ -27,7 +27,8 @@ Sanitization happens in **two passes**:
 ### Pass 2: Apply User Decisions
 
 - You review flagged values and decide which to redact
-- Selected values are redacted via global find-replace
+- Selected values are redacted everywhere a string holds them, escaped and percent-encoded copies included
+- Values under three characters are never offered: replacing one everywhere would rewrite unrelated text
 - Salt is preserved to ensure consistent hashing across both passes
 
 ## Flagging Heuristics
@@ -159,14 +160,24 @@ The report contains:
 
 ### Non-TTY Environment (CI/CD)
 
-When no terminal is available, flagged values are written to a report file instead of prompting:
+When no terminal is available, flagged values are written to a report file instead of prompting, and the sanitized file
+records that nobody reviewed them:
 
 ```bash
 har-capture sanitize device.har --patterns network-device 2>&1
 # Note: No terminal detected. Writing flagged values to report instead.
-# Sanitized: device.sanitized.har
+#   Recorded review: no_tty
+# WARNING: 3 flagged value(s) were NOT reviewed: there is no terminal to prompt in. ...
 # Report: device.har.review.json
 ```
+
+`har-capture get` without a terminal does the same but writes no report file: the raw capture never persists on disk.
+
+### Recorded Outcome
+
+Every sanitized file says how its review ended, in `log._har_capture.sanitization.review`: `completed`, `skipped`,
+`cancelled`, `no_tty` or `none_flagged` (absent when no review was recorded). Check it before relying on a file someone
+else sanitized — `skipped`, `cancelled` and `no_tty` mean its flagged values were never redacted.
 
 ## Edge Cases Handled
 

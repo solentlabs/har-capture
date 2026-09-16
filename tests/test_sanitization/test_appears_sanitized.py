@@ -22,9 +22,17 @@ Dependencies:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from har_capture.sanitization.har import appears_sanitized
+
+_FIXTURES = json.loads(
+    (Path(__file__).parent.parent / "fixtures" / "test_appears_sanitized.json").read_text()
+)
+REDACTION_PATTERN_CASES = _FIXTURES["redaction_pattern_cases"]["cases"]
 
 # =============================================================================
 # Test Data Tables
@@ -72,28 +80,6 @@ APPEARS_SANITIZED_CASES = [
     ),
 ]
 
-REDACTION_PATTERN_CASES = [
-    # (pattern_example, expected_detected, description)
-    ("MAC_a1b2c3d4", True, "mac_hash"),
-    ("PASS_12345678", True, "pass_hash"),
-    ("TOKEN_abcdef12", True, "token_hash"),
-    ("SERIAL_fedcba98", True, "serial_hash"),
-    ("WIFI_11223344", True, "wifi_hash"),
-    ("DEVICE_aabbccdd", True, "device_hash"),
-    ("***MAC***", True, "star_mac"),
-    ("***PASSWORD***", True, "star_password"),
-    ("02:00:00:00:00:01", True, "locally_administered_mac"),
-    ("10.255.1.2", True, "rfc5737_ip_10"),
-    ("192.0.2.123", True, "rfc5737_ip_192"),
-    ("user_12345678@redacted.invalid", True, "redacted_email"),
-    # Note: XX:XX:XX:XX:XX:XX is not in the appears_sanitized patterns (only hashed MACs 02:xx:xx...)
-    # Non-matches
-    ("normal text", False, "normal_text"),
-    ("12:34:56:78:9A:BC", False, "real_mac"),
-    ("192.168.1.1", False, "private_ip"),
-    ("XX:XX:XX:XX:XX:XX", False, "masked_mac_not_detected"),  # Not in pattern list
-]
-
 THRESHOLD_VARIATION_CASES = [
     # (count_in_file, threshold, expected_sanitized, description)
     (5, 10, False, "count_5_threshold_10"),
@@ -137,22 +123,18 @@ class TestAppearsSanitized:
 class TestRedactionPatternDetection:
     """Tests for individual redaction pattern detection."""
 
-    @pytest.mark.parametrize(
-        ("pattern_example", "expected_detected", "desc"),
-        REDACTION_PATTERN_CASES,
-        ids=[c[2] for c in REDACTION_PATTERN_CASES],
-    )
-    def test_pattern_detection(self, pattern_example: str, expected_detected: bool, desc: str) -> None:
-        """Test individual redaction patterns are detected."""
-        # Create HAR with 15 copies to ensure it exceeds default threshold
-        har_data = {"content": " ".join([pattern_example] * 15)}
+    @pytest.mark.parametrize("case", REDACTION_PATTERN_CASES, ids=[c["id"] for c in REDACTION_PATTERN_CASES])
+    def test_pattern_detection(self, case: dict) -> None:
+        """Each placeholder shape is counted, or not, on its own."""
+        # 15 copies clear the default threshold of 10
+        har_data = {"content": " ".join([case["text"]] * 15)}
         is_sanitized, count = appears_sanitized(har_data, threshold=10)
 
-        if expected_detected:
-            assert count >= 15, f"{desc}: pattern should be detected"
+        if case["detected"]:
+            assert count >= 15
             assert is_sanitized is True
         else:
-            assert count < 10, f"{desc}: pattern should not be detected as sanitized"
+            assert count < 10
 
 
 class TestThresholdVariation:

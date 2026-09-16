@@ -61,6 +61,22 @@ FLAG_VALUE_CONFIDENCE_CASES = [
     (ConfidenceLevel.MEDIUM, "medium"),
     (ConfidenceLevel.LOW, "low"),
 ]
+
+# A field's flag on its whole value (supersede_since, from the mark taken
+# before its traversal). Steps: ("mark",), ("drop",), or ("flag", category,
+# confidence, whole_value_flag). Expected: (category, confidence, occurrences).
+_H, _M, _L = ConfidenceLevel.HIGH, ConfidenceLevel.MEDIUM, ConfidenceLevel.LOW
+SUPERSEDE_CASES = [
+    ("inner_flag_taken_over",           [("mark",), ("flag", "phone", _L, False), ("flag", "field", _M, True)],   ("field", _M, 1)),
+    ("confidence_never_lowered",        [("mark",), ("flag", "phone", _H, False), ("flag", "field", _M, True)],   ("field", _H, 1)),
+    ("other_occurrence_keeps_its_flag", [("flag", "api_key", _H, False), ("mark",), ("flag", "field", _M, True)], ("api_key", _H, 2)),
+    ("earlier_flag_counted_once",       [("flag", "api_key", _H, False), ("mark",), ("flag", "phone", _M, False),
+                                         ("flag", "field", _M, True)],                                             ("api_key", _H, 2)),
+    ("higher_confidence_occurrence_relabels", [("flag", "field", _M, False), ("mark",), ("flag", "api_key", _H, False)], ("api_key", _H, 2)),
+    ("lower_confidence_occurrence_keeps",     [("flag", "api_key", _H, False), ("mark",), ("flag", "field", _L, False)], ("api_key", _H, 2)),
+    ("reflagged_after_drop_is_new",      [("flag", "api_key", _H, False), ("drop",), ("mark",),
+                                         ("flag", "field", _L, True)],                                             ("field", _L, 1)),
+]
 # fmt: on
 
 
@@ -137,27 +153,21 @@ class TestRedactionCollectorFlagging:
         assert collector.flagged[0].occurrences == 5
         assert collector.flagged[0].original_value == "repeated-value"
 
-    def test_flag_value_keeps_first_context(self) -> None:
-        """Test flag_value keeps the first context when deduplicating."""
+    @pytest.mark.parametrize(
+        ("second", "expected_context"),
+        [(ConfidenceLevel.HIGH, "SECOND CONTEXT"), (ConfidenceLevel.MEDIUM, "FIRST CONTEXT")],
+        ids=["more_confident_relabels", "equal_confidence_keeps_first"],
+    )
+    def test_flag_value_label_from_most_confident_occurrence(
+        self, second: ConfidenceLevel, expected_context: str
+    ) -> None:
+        """A repeated value takes the label of its most confident occurrence; on a tie the first stays."""
         collector = RedactionCollector(hasher=Hasher.create("test-salt"))
-
-        collector.flag_value(
-            value="test-val",
-            category="cat",
-            confidence=ConfidenceLevel.MEDIUM,
-            context="FIRST CONTEXT",
-            reason="reason",
-        )
-        collector.flag_value(
-            value="test-val",
-            category="cat",
-            confidence=ConfidenceLevel.HIGH,  # Different confidence
-            context="SECOND CONTEXT",  # Different context
-            reason="different reason",
-        )
+        collector.flag_value("test-val", "cat", ConfidenceLevel.MEDIUM, "FIRST CONTEXT", "reason")
+        collector.flag_value("test-val", "cat", second, "SECOND CONTEXT", "different reason")
 
         assert len(collector.flagged) == 1
-        assert collector.flagged[0].context == "FIRST CONTEXT"
+        assert collector.flagged[0].context == expected_context
         assert collector.flagged[0].occurrences == 2
 
     @pytest.mark.parametrize(
@@ -176,6 +186,44 @@ class TestRedactionCollectorFlagging:
             reason="reason",
         )
         assert collector.flagged[0].confidence.value == expected_value
+
+    @pytest.mark.parametrize(
+        ("steps", "expected"), [c[1:] for c in SUPERSEDE_CASES], ids=[c[0] for c in SUPERSEDE_CASES]
+    )
+    def test_whole_value_flag_supersedes_only_its_own_occurrence(
+        self, steps: list[tuple], expected: tuple[str, ConfidenceLevel, int]
+    ) -> None:
+        """A field's whole-value flag takes over only a flag raised inside its traversal, counted once."""
+        collector = RedactionCollector(hasher=Hasher.create("test-salt"))
+        mark = 0
+        for step in steps:
+            if step[0] == "mark":
+                mark = collector.flag_mark()
+            elif step[0] == "drop":
+                collector.drop_flagged({"555-123-4567"})
+            else:
+                _, category, confidence, whole_value = step
+                collector.flag_value(
+                    "555-123-4567",
+                    category,
+                    confidence,
+                    "ctx",
+                    "reason",
+                    supersede_since=mark if whole_value else None,
+                )
+        [item] = collector.flagged
+        assert (item.category, item.confidence, item.occurrences) == expected
+
+    @pytest.mark.parametrize(
+        ("value", "offered"),
+        [("1", False), ("OK", False), (" a ", False), ("abc", True)],
+        ids=["digit", "two", "padded", "three"],
+    )
+    def test_trivial_values_not_offered(self, value: str, offered: bool) -> None:
+        """A value under three characters identifies no one; replacing it everywhere would wreck unrelated text."""
+        collector = RedactionCollector(hasher=Hasher.create("test-salt"))
+        collector.flag_value(value, "field", ConfidenceLevel.MEDIUM, "ctx", "reason")
+        assert bool(collector.flagged) is offered
 
     def test_flag_value_default_status(self) -> None:
         """Test flagged values have FLAGGED status by default."""

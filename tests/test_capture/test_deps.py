@@ -116,8 +116,8 @@ class TestGetBrowserInstallDir:
                 result = _get_browser_install_dir("chromium")
 
             # Returns the <browser>-<revision>/ directory itself, NOT a per-
-            # platform binary path inside it. Issue #50 traced back to a
-            # hardcoded chrome-linux64/chrome path being checked on Windows;
+            # platform binary path inside it. A hardcoded
+            # chrome-linux64/chrome path checked on Windows misses the install;
             # the directory marker is the platform-agnostic install signal.
             assert result is not None
             assert result.name == "chromium-1200"
@@ -311,7 +311,7 @@ class TestCheckBrowserInstalled:
         mock_home: MagicMock,
         mock_check_pw: MagicMock,
     ) -> None:
-        """End-to-end regression for issue #50.
+        """End-to-end regression for a Windows-layout Chromium install.
 
         Constructs a fake Playwright cache containing only a Windows-style
         binary (``chrome-win64/chrome.exe``) under the ``chromium-<rev>/``
@@ -349,7 +349,7 @@ class TestCheckBrowserInstalled:
                 result = check_browser_installed("chromium")
 
             assert result is True, (
-                "Issue #50 regression: Windows-layout install dir (chrome-win64/chrome.exe "
+                "Windows-layout install dir (chrome-win64/chrome.exe "
                 "only, no Linux binary) should be detected as installed via the directory "
                 "marker. If this fails, the per-platform binary-path lookup has crept back in."
             )

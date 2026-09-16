@@ -48,7 +48,7 @@ src/har_capture/patterns/
 ```
 
 **Input:** `Customer: CUST-A1B2C3D4` **Output:** `Customer: CUSTID_e5f6a7b8` (salted hash) **Output (no-salt):**
-`Customer: CUSTID_REDACTED`
+`Customer: ***CUSTID***`
 
 ## Pattern Fields
 
@@ -60,8 +60,19 @@ src/har_capture/patterns/
 ### Optional Fields
 
 - **`description`** (string): Human-readable description
-- **`case_sensitive`** (boolean): Case-sensitive matching (default: false)
-- **`flags`** (array): Regex flags (e.g., `["IGNORECASE", "MULTILINE"]`)
+- **`flags`** (array): Python `re` flag names (e.g., `["IGNORECASE", "MULTILINE"]`); `IGNORECASE`, `MULTILINE` and
+  `DOTALL` are honoured by both `sanitize` and `check_for_pii`. Matching is case-sensitive unless `IGNORECASE` is given.
+- **`value_group`** (integer, `check_for_pii` only): the capture group holding the value, which is judged against the
+  allowlist instead of the whole match (so a sanitized `Label: PREFIX_<hash>` is clean). A group the match does not
+  have, or that did not take part, falls back to the whole match.
+- **`require_hex_letter`** (boolean, `check_for_pii` only): report a match only if it contains a hex letter (`a`–`f`)
+
+A custom pattern may replace a built-in by name (`ssn`, `credit_card_visa`), except one the sanitizer applies with a
+pass of its own (`mac_address`, `serial_number`, `account_id`, the address and email patterns, the HTML engine's labeled
+patterns): that definition is ignored with a warning. A pattern whose regex does not compile, or is not a string, is
+skipped with one warning, and a `flags` entry that is not a flag name is ignored with a warning; the rest of the run
+continues. `flags` may also be a single name (`"IGNORECASE"`) or, from Python, any collection of names; a pre-compiled
+`re.Pattern` keeps its own flags.
 
 ### JSON-vs-Regex Escape Trap
 
@@ -129,14 +140,21 @@ sanitize_har_file("capture.har", custom_patterns=patterns_dict)
 
 ## Extending Sensitive Field Detection
 
-The examples above extend `pii.patterns` — value-based regexes that match anywhere in content (e.g. a customer-ID string
-format). Field-level redaction is a separate pass: when sanitizing form bodies, JSON bodies, XML elements,
-`postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field name** against two regex sets
-loaded from `sensitive.json`:
+The examples above extend `pii.patterns` — value-based regexes that match anywhere in body text: HTML, each JSON string
+and key, scripts and other text bodies, and POST text (e.g. a customer-ID string format). Form fields and URL query
+values are judged by their field names instead. Field-level redaction is a separate pass: when sanitizing form bodies,
+JSON bodies, XML elements, `postData.params`, or inline `localStorage.setItem` calls, the engine checks the **field
+name** against two regex sets loaded from `sensitive.json`:
 
 - **`fields.auto_redact_patterns`** — field names that trigger automatic redaction of the associated value (100%
   confidence, e.g. `password`, `secret`, `token`).
 - **`fields.flag_patterns`** — field names that flag the value for interactive review (e.g. `username`, `account_id`).
+
+`check_for_pii` reads the same `fields` names: in a JSON fixture, a value under an `auto_redact_patterns` name that is
+neither empty nor already redacted is reported as `credential_field` — unless it is a button word (`Yes`, `No`) or
+prose, which the sanitizer keeps or offers for review in a response. Name a credential field there rather than writing a
+`pii` regex that pairs a key with its value — a JSON fixture is read one decoded string at a time, so such a regex never
+matches in one.
 
 To add a field name that the built-ins don't recognize — the way Sercomm/Hitron's `pws` was before it was promoted to a
 built-in, or a product-specific token name — use the same `custom_patterns` kwarg with the `fields` schema. The examples
@@ -431,7 +449,7 @@ Alternatively, use the Python API which accepts pattern dictionaries that can be
 ### Pattern Not Matching
 
 1. **Check regex syntax**: Test with online regex tools
-1. **Check case sensitivity**: Add `"case_sensitive": false`
+1. **Check case sensitivity**: Add `"flags": ["IGNORECASE"]`
 1. **Check escaping**: Ensure special chars are escaped
 1. **Inspect what was detected**: `har-capture sanitize capture.har --patterns my_patterns.json --report report.json`
    and review the JSON report

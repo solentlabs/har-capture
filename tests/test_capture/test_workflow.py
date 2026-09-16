@@ -26,8 +26,12 @@ Dependencies:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from har_capture.capture.browser import require_timeout_when_headless
 from har_capture.capture.workflow import (
     AuthResult,
     BrowserCheckResult,
@@ -40,6 +44,7 @@ from har_capture.capture.workflow import (
     check_browser_phase,
     check_connectivity_phase,
     check_session_phase,
+    run_auth_probe_phase,
     run_capture_phase,
     run_capture_workflow,
     run_probes_phase,
@@ -910,10 +915,14 @@ class TestRunCaptureWorkflow:
             include_media=True,
             headless=True,
             timeout=60,
+            custom_patterns={"fields": {"auto_redact_patterns": ["vendorpw"]}},
+            interactive=False,
         )
 
         mock_capture.assert_called_once()
         call_kwargs = mock_capture.call_args[1]
+        assert call_kwargs["custom_patterns"] == {"fields": {"auto_redact_patterns": ["vendorpw"]}}
+        assert call_kwargs["interactive"] is False
         assert call_kwargs["ip"] == "192.168.1.1"
         assert call_kwargs["output"] == output_path
         assert call_kwargs["browser"] == "firefox"
@@ -1107,3 +1116,96 @@ class TestRunCaptureWorkflowMinimal:
         )
 
         mock_session.assert_not_called()
+
+
+# =============================================================================
+# Headless capture needs a timeout (D3)
+# =============================================================================
+
+# ┌──────────┬─────────┬────────┬────────────────────────────────────────┐
+# │ headless │ timeout │ raises │ description                            │
+# └──────────┴─────────┴────────┴────────────────────────────────────────┘
+#
+# With no window nobody can close the browser, so a headless capture with no
+# timeout waited forever. The rule is checked before any work starts.
+#
+# fmt: off
+HEADLESS_TIMEOUT_CASES = [
+    # (headless, timeout, raises, description)
+    (True,  None, True,  "headless_without_timeout"),
+    (True,  0,    False, "headless_zero_timeout"),
+    (True,  30,   False, "headless_with_timeout"),
+    (False, None, False, "interactive_waits_for_close"),
+    (False, 30,   False, "visible_with_timeout"),
+]
+# fmt: on
+
+
+class TestHeadlessRequiresTimeout:
+    """``require_timeout_when_headless`` and both entry points that enforce it."""
+
+    @pytest.mark.parametrize(
+        ("headless", "timeout", "raises", "description"),
+        HEADLESS_TIMEOUT_CASES,
+        ids=[c[3] for c in HEADLESS_TIMEOUT_CASES],
+    )
+    def test_rule(self, headless: bool, timeout: int | None, raises: bool, description: str) -> None:
+        if raises:
+            with pytest.raises(ValueError, match="timeout"):
+                require_timeout_when_headless(headless, timeout)
+        else:
+            require_timeout_when_headless(headless, timeout)
+
+    @patch("har_capture.capture.connectivity.check_device_connectivity")
+    @patch("har_capture.capture.deps.check_browser_installed")
+    def test_workflow_raises_before_any_phase(self, mock_browser: MagicMock, mock_conn: MagicMock) -> None:
+        """The workflow fails fast: no browser check, no request to the device."""
+        with pytest.raises(ValueError, match="timeout"):
+            run_capture_workflow("192.168.1.1", headless=True)
+
+        mock_browser.assert_not_called()
+        mock_conn.assert_not_called()
+
+    @patch("har_capture.capture.browser.check_playwright")
+    def test_capture_device_har_raises_before_launch(self, mock_check_pw: MagicMock) -> None:
+        from har_capture.capture.browser import capture_device_har
+
+        with pytest.raises(ValueError, match="timeout"):
+            capture_device_har("192.168.1.1", headless=True)
+
+        mock_check_pw.assert_not_called()
+
+
+# =============================================================================
+# run_auth_probe_phase — the CLI's one probe
+# =============================================================================
+
+
+class TestRunAuthProbePhase:
+    """With credentials the CLI probes only the auth challenge (ADR-2, ADR-3)."""
+
+    @patch("har_capture.capture.probes.probe_icmp")
+    @patch("har_capture.capture.probes.probe_head_support")
+    @patch("har_capture.capture.probes.probe_auth_challenge")
+    def test_only_auth_challenge_probed(
+        self, mock_auth: MagicMock, mock_head: MagicMock, mock_icmp: MagicMock
+    ) -> None:
+        mock_auth.return_value = {"probe": "auth_challenge", "status_code": 401}
+
+        result = run_auth_probe_phase("http://192.168.1.1/")
+
+        assert result.phase == "auth_probe"
+        data: dict[str, Any] = result.probe_data
+        assert set(data) == {"ran_at", "target_url", "auth_challenge"}
+        assert data["auth_challenge"]["status_code"] == 401
+        mock_head.assert_not_called()
+        mock_icmp.assert_not_called()
+
+    @patch("har_capture.capture.probes.probe_auth_challenge", return_value={})
+    def test_updates_existing_result(self, mock_auth: MagicMock) -> None:
+        existing = CaptureWorkflowResult(connectivity=ConnectivityResult(ok=True, target_url="http://t/"))
+
+        result = run_auth_probe_phase("http://t/", timeout=3, result=existing)
+
+        assert result is existing
+        mock_auth.assert_called_once_with("http://t/", timeout=3)

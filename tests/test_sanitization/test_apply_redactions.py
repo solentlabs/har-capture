@@ -106,6 +106,19 @@ STATUS_HANDLING_CASES = [
     (RedactionStatus.FLAGGED, False, "flagged_not_applied"),
     (RedactionStatus.AUTO_REDACTED, False, "auto_redacted_not_applied_again"),
 ]
+
+# A value the user redacts is replaced inside string values only — never a
+# key, a number or other JSON structure — in every form a HAR string carries
+# it. (value, body text holding it in that form)
+ENCODED_FORM_CASES = [
+    ("jo+x@ex.com",          "user%5Bemail%5D=jo%2Bx%40ex.com",              "form_body_plus_encoded"),
+    ('"jo smith"',           "login_user=%22jo+smith%22",                     "form_body_quotes_percent_encoded"),
+    ("a/b c",                "https://192.168.0.1/?q=a%2Fb%20c",               "query_percent_encoded"),
+    ("a/b c",                "https://192.168.0.1/a/b%20c",                    "path_percent_encoded_slash_kept"),
+    ("abc/def1234567890xyz", '{"username": "abc\\/def1234567890xyz"}',     "json_body_php_escaped_slash"),
+    ("café123",              '{"n": "caf\\u00e9123"}',                     "json_body_ascii_escaped"),
+    ('say "hi" 99',          '{"m": "say \\"hi\\" 99"}',                  "json_body_escaped_quotes"),
+]
 # fmt: on
 
 
@@ -460,6 +473,18 @@ class TestErrorHandling:
         with pytest.raises(HarValidationError, match=expected_error):
             apply_user_redactions(har_data, report)  # type: ignore
 
+    def test_every_item_failing_leaves_har_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When hashing fails for every chosen value, nothing is replaced and the HAR is returned intact."""
+        from har_capture.patterns import Hasher
+
+        def fail(self: Hasher, value: str, category: str) -> str:
+            raise ValueError("boom")
+
+        monkeypatch.setattr(Hasher, "hash_sensitive_value", fail)
+        har_data = {"log": {"entries": [], "content": "SSID: TestNetwork"}}
+        report = create_report_with_flagged([("TestNetwork", "wifi_ssid", RedactionStatus.USER_REDACTED)])
+        assert apply_user_redactions(har_data, report) == har_data
+
     def test_malformed_json_serialization(self) -> None:
         """Test handling of data that can't be serialized."""
         from har_capture.sanitization.har import HarValidationError
@@ -516,6 +541,44 @@ class TestErrorHandling:
         result_str = json.dumps(result)
         assert "value1" not in result_str
         assert "value2" not in result_str
+
+
+class TestReplacementReach:
+    """A user redaction reaches every form a HAR string holds the value in, and nothing structural."""
+
+    @pytest.mark.parametrize(
+        ("value", "text", "desc"), ENCODED_FORM_CASES, ids=[c[2] for c in ENCODED_FORM_CASES]
+    )
+    def test_encoded_form_replaced(self, value: str, text: str, desc: str) -> None:
+        har_data = {"log": {"entries": [{"response": {"content": {"text": text}}}]}}
+        report = create_report_with_flagged([(value, "field", RedactionStatus.USER_REDACTED)])
+        out = apply_user_redactions(har_data, report)["log"]["entries"][0]["response"]["content"]["text"]
+        assert report.flagged[0].redacted_value in out, desc
+        assert out != text, desc
+
+    def test_keys_and_numbers_untouched(self) -> None:
+        """A redacted value equal to a HAR key or a number's digits changes only string values."""
+        har_data = {
+            "log": {
+                "entries": [
+                    {
+                        "request": {"headers": [{"name": "X-Name", "value": "name"}]},
+                        "response": {"status": 200, "content": {"size": 200, "text": "code 200"}},
+                    }
+                ]
+            }
+        }
+        report = create_report_with_flagged(
+            [
+                ("name", "field", RedactionStatus.USER_REDACTED),
+                ("200", "field", RedactionStatus.USER_REDACTED),
+            ]
+        )
+        entry = apply_user_redactions(har_data, report)["log"]["entries"][0]
+        placeholders = {item.original_value: item.redacted_value for item in report.flagged}
+        assert entry["request"]["headers"] == [{"name": "X-Name", "value": placeholders["name"]}]
+        assert entry["response"]["status"] == 200
+        assert entry["response"]["content"] == {"size": 200, "text": f"code {placeholders['200']}"}
 
 
 class TestLogOutputSecurity:

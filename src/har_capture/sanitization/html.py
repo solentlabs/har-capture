@@ -20,28 +20,49 @@ PII Categories Removed:
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
+import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
 
 from har_capture.patterns import (
     Hasher,
+    compile_pattern,
     is_allowlisted,
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.redaction import is_redacted
+from har_capture.patterns.loader import DEDICATED_PASS_PATTERNS, compile_script_variables
+from har_capture.patterns.redaction import (
+    EMAIL_DOMAIN,
+    EMAIL_LOCAL_PART,
+    EMAIL_RE,
+    IPV6_RE,
+    JSON_MAX_DEPTH,
+    MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
+    credential_value_action,
+    ipv6_host_spans,
+    is_constant_mac,
+    is_ipv6_host_address,
+    is_redacted,
+    luhn_valid,
+    route_body,
+    unredacted_identity,
+)
 
 if TYPE_CHECKING:
     from typing import Any
 
     from har_capture.sanitization.collector import RedactionCollector
-    from har_capture.sanitization.report import HeuristicMode
+    from har_capture.sanitization.report import ConfidenceLevel, HeuristicMode
 else:
     from har_capture.sanitization.collector import RedactionCollector
-    from har_capture.sanitization.report import HeuristicMode
+    from har_capture.sanitization.report import ConfidenceLevel, HeuristicMode
 
 
 # Serial number pattern for pipe-delimited values (SN-XXXXX, S/N-XXXXX)
@@ -52,8 +73,44 @@ _PIPE_SERIAL_RE = re.compile(r"^(?:SN|S/N|S-N)[-_][A-Za-z0-9]{5,}$", re.IGNORECA
 # Already-redacted hash pattern for pipe-delimited values (MAC_a1b2c3d4, SERIAL_deadbeef)
 _ALREADY_REDACTED_HASH_RE = re.compile(r"^[A-Z_]+_[a-f0-9]{8}$")
 
-# MAC address pattern for pipe-delimited values (exact match)
-_PIPE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
+
+# The attributes inside a tag: an attribute's quoted value (a quote right after
+# `=`, JS-escaped `\"` included) may hold `<` or `>` (an
+# `onkeyup="if(v.length<8)…"` handler); anything else stops at either, and at
+# a quote. A quote opens a value only right after `=`, so script is not read as
+# a tag: a `'<input …'` string in script cannot start a match that pairs the
+# code's string quotes and walks on to a later `value=`. Unquoted values may
+# hold anything but those (`onfocus=clear()`, `style=a:b;`). Each quoted value
+# is bounded, so one stray quote cannot run a match across the document; a tag
+# with a stray quote, or a quoted value over 2,048 characters, is not read.
+# An unquoted "anything but `>`" run made a series of unclosed tags quadratic
+# (cubic with two runs in one tag); a test pins its absence.
+_TAG_UNIT = r"""(?:=\s*\\?"[^"]{0,2048}"|=\s*\\?'[^']{0,2048}'|[^<>"'])"""
+_TAG_RUN = _TAG_UNIT + "*"
+
+
+def _tag_run_to(anchor: str) -> str:
+    """A tag run that stops at the first ``anchor`` and cannot pass it.
+
+    A regex with two runs around an anchor (`<input RUN type=password RUN
+    value=`) otherwise retries the second run from every copy of the anchor
+    in one unclosed tag: quadratic (56 KB took five seconds). Stopping at the
+    first copy tries it once. Python 3.10 has no atomic groups, and a capture
+    group would renumber the groups every caller reads.
+    """
+    return r"(?:(?!" + anchor + r")" + _TAG_UNIT + r")*"
+
+
+# An attribute value as its own group. Quoted, it runs to the quote that
+# opened it (a JS-escaped `\"` included), so `value="ab'cd"` is one value —
+# but it does not start with the other quote: `value="' + $("#pw").val()` is
+# script building the markup, not a value; a
+# backslash run belongs to it only before an ordinary character, so the run
+# that escapes the closing quote stays outside. Unquoted, it stops at
+# whitespace or the tag's `>`, so the markup after the tag survives.
+_ATTR_VALUE = (
+    r"""((?<=")(?!')(?:[^"\\]|\\+(?=[^"\\]))+|(?<=')(?!")(?:[^'\\]|\\+(?=[^'\\]))+|(?<!["'\\])[^\s"'\\>]+)"""
+)
 
 
 # Sibling-element label/value pairs where the value occupies its OWN element.
@@ -63,7 +120,7 @@ _PIPE_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$")
 #     <span class="readonlyLabel">Default Password:</span>
 #     <span class="value">orange4213table</span>
 #
-# Passes 2/2b/2d reach their values with a bare tag chain `(?:<[^>]*>\s*)*`,
+# Passes 2 and 2d reach their values with a bare tag chain (`<` _TAG_RUN `>`),
 # but a bare chain is too loose for credential labels: its `\s*` also runs
 # through ordinary prose, so gateway help text such as
 #
@@ -111,8 +168,8 @@ def _sibling_label_value_pattern(labels: str, separators: str = ":") -> re.Patte
     separator_class = "[" + "".join(re.escape(c) for c in separators) + "]"
     return re.compile(
         r"((?:" + labels + r")\s*(?:\([^)]{0,24}\))?\s*" + separator_class + r"\s*"
-        r"</[a-zA-Z][^>]*>\s*"  # label element closes
-        r"<[a-zA-Z][^>]*>\s*)"  # value element opens
+        r"</[a-zA-Z]" + _TAG_RUN + r">\s*"  # label element closes
+        r"<[a-zA-Z]" + _TAG_RUN + r">\s*)"  # value element opens
         r"([^<>\s]+)"  # value: the element's entire text, one token
         r"(?=\s*</)",  # value element closes
         re.IGNORECASE,
@@ -142,11 +199,14 @@ SIBLING_SSID_RE = _sibling_label_value_pattern(r"ssid|network\s*name|wi-?fi\s*ne
 # and `<th>` stays excluded because a column heading is not a value
 # ("Source SSID Index").
 _SSID_ATTRIBUTE_HELPER_SUFFIX = r"(?:help|label|desc|descr|description|title|tip|hint|note|msg|message|text|error|caption|legend|head|header)"
-SSID_ATTRIBUTE_RE = re.compile(
-    r"(<(?!th[\s>])[a-zA-Z][\w-]*[^>]*\b(?:class|id)\s*=\s*[\"'][^\"']*"
+_SSID_ATTRIBUTE = (
+    r"\b(?:class|id)\s*=\s*\\*[\"'][^\"'<>\\]*"
     r"(?:ssid|wifi_ntwrk|wifi[-_]?network|priwifinet|wireless[-_]?name)"
     r"(?![-_]?" + _SSID_ATTRIBUTE_HELPER_SUFFIX + r")"
-    r"[^\"']*[\"'][^>]*>\s*)"
+    r"[^\"'<>\\]*\\*[\"']"
+)
+SSID_ATTRIBUTE_RE = re.compile(
+    r"(<(?!th[\s>])[a-zA-Z][\w-]*" + _tag_run_to(_SSID_ATTRIBUTE) + _SSID_ATTRIBUTE + _TAG_RUN + r">\s*)"
     r"([^<>\s]+)"  # value: the element's entire text, one token
     r"(?=\s*</)",
     re.IGNORECASE,
@@ -156,16 +216,222 @@ SSID_ATTRIBUTE_RE = re.compile(
 # has no label and no attribute of its own here — only the enclosing control
 # identifies it:
 #     <select name="mac_ssid" id="mac_ssid"><option value="17">XFSETUP-9210</option></select>
+_SSID_SELECT_ATTRIBUTE = r"\b(?:name|id|class)\s*=\s*\\*[\"'][^\"'<>\\]*ssid[^\"'<>\\]*\\*[\"']"
 SSID_SELECT_RE = re.compile(
-    r"<select\b[^>]*\b(?:name|id|class)\s*=\s*[\"'][^\"']*ssid[^\"']*[\"'][^>]*>.*?</select>",
+    r"<select\b" + _tag_run_to(_SSID_SELECT_ATTRIBUTE) + _SSID_SELECT_ATTRIBUTE + _TAG_RUN + r">"
+    r"(?:(?!<select\b).)*?</select>",
     re.IGNORECASE | re.DOTALL,
 )
 # Group 1 is the opening tag, group 2 the option text. An option whose `value`
 # attribute is empty is a chooser placeholder ("-- Select --"), never a network.
 SSID_OPTION_RE = re.compile(
-    r"(<option\b(?![^>]*\bvalue\s*=\s*[\"']\s*[\"'])[^>]*>\s*)([^<>\s]+)(?=\s*</option>)",
+    r"(<option\b(?!"
+    + _TAG_RUN
+    + r"\bvalue\s*=\s*\\*[\"']\s*\\*[\"'])"
+    + _TAG_RUN
+    + r">\s*)([^<>\s]+)(?=\s*</option>)",
     re.IGNORECASE,
 )
+
+
+# Labeled serials: pass 2 (label then value, inline, in a sibling element, or
+# in the next table cell — `</td><td>` is one more hop of the tag chain).
+# Defined once and imported by
+# `validation/secrets.py`; `pii.json`'s serial_number regex carries
+# SERIAL_LABEL_RE verbatim (a test pins the two). So the sanitizer, `validate`
+# and `check_for_pii` share one label vocabulary and one value rule, and
+# `validate` never reports a labeled serial no sanitize run removes.
+#
+# The tag chain (`<` _TAG_RUN `>`, repeated) tolerates whitespace between tags, so
+# sibling-element pairs match (Technicolor .jst renders
+# <span>Serial Number:</span>\n<span class="value">\nVALUE</span>), and the
+# label's own closing tags may precede its separator (<b>Serial Number</b>:).
+# The value must carry a digit, as every real serial does: without it the
+# passes redacted words in label position ("SN Status", "Serial Number:
+# Disabled"). An email's local part is not a serial (the email pass's
+# `user_<hash>@redacted.invalid` would otherwise read as one), but only a
+# whole email is excluded: a serial followed by `@host` (`4131N12345678@cm1`)
+# is still a serial. The chain hops only tags, so a following row's label
+# text stops it: a row whose serial is a template placeholder never lends the
+# next row's value. A bare `Serial` or `Serial ID` label counts only with a
+# separator after it (`Serial:`), so prose naming a serial port or number is
+# not a label.
+_SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
+_SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?!" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN + r")[a-zA-Z0-9\-_]{5,}"
+SERIAL_LABEL_RE = re.compile(
+    r"\b("
+    + _SERIAL_LABELS
+    + r")\b(\s*(?:</\w+>\s*)*[.:\s=]*(?:<"
+    + _TAG_RUN
+    + r">\s*)*)("
+    + _SERIAL_VALUE
+    + r")",
+    re.IGNORECASE,
+)
+# Every SERIAL_LABEL_RE label holds one of these; a text without one cannot
+# match, so the costlier pattern is skipped.
+SERIAL_LABEL_HINT_RE = re.compile(r"s/?n|serial", re.IGNORECASE)
+
+# Account/subscriber IDs: pass 3. Group 1 runs from the label through its
+# separator, any tags opening the value's element (`Account ID: <b>`) and an
+# opening quote, kept as written; group 2 is the value, which stops at a tag,
+# a quote, `&` or `;`, so the markup, script or query around it survives. `pii.json`'s account_id regex carries it verbatim (a test pins the
+# two), so check_for_pii reports what this pass replaces.
+ACCOUNT_LABEL_RE = re.compile(
+    r"((?:Account|Subscriber|Customer|Device)\s*(?:ID|Number)\s*[:\s=]+(?:<" + _TAG_RUN + r">\s*)*[\"']?)"
+    r"([^\s<>\"'&;]+)",
+    re.IGNORECASE,
+)
+
+# WPS PINs (pass 2d), password inputs (pass 8) and CSRF meta tags (pass 10).
+# `pii.json` carries each verbatim (a test pins them), so check_for_pii reports
+# what these passes replace. An attribute's quote may be JS-escaped, at any
+# depth (`\"`, `\\\"`: a `document.write` string, itself in a JSON body); a
+# password input's or CSRF token's value group is _ATTR_VALUE, and group 3 is
+# its closing quote.
+_QUOTE = r"(?:\\*[\"'])?"
+WPS_PIN_LABEL_RE = re.compile(
+    r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<"
+    + _TAG_RUN
+    + r">\s*)*)(\d{8})\b",
+    re.IGNORECASE,
+)
+_PASSWORD_TYPE = rf"type={_QUOTE}password"
+_CSRF_NAME = rf"name={_QUOTE}csrf-token"
+PASSWORD_INPUT_RE = re.compile(
+    rf"(<input{_tag_run_to(_PASSWORD_TYPE)}{_PASSWORD_TYPE}{_QUOTE}{_TAG_RUN}value={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
+    re.IGNORECASE,
+)
+CSRF_META_RE = re.compile(
+    rf"(<meta{_tag_run_to(_CSRF_NAME)}{_CSRF_NAME}{_QUOTE}{_TAG_RUN}content={_QUOTE}){_ATTR_VALUE}({_QUOTE})",
+    re.IGNORECASE,
+)
+
+# Labeled passwords (pass 7) and session tokens (pass 9): group 1 is the
+# label, group 2 the separator and any opening quote (kept as written), group 3
+# the value. The value stops at a quote however deeply it is escaped, so in
+# `password=\"hunter2x\"` it is `hunter2x`, not a lone backslash with the
+# secret left after it. A backslash run belongs to the value only when an
+# ordinary character follows it, so a run before the closing quote stays in
+# place and the string around the value still closes. `pii.json` carries both
+# verbatim.
+_LABELED_VALUE_CHAR = r"""(?:[^"'<>\s\\]|\\+(?=[^"'<>\s\\]))"""
+# Group 2 is the separator — spacing entities included (`Password:&nbsp;x`), so
+# `Password:&nbsp;&nbsp;</td>` has no value to take — then an opening quote, or
+# for an unquoted value a check that it is not code: a negation (`!0`), an
+# entity, or a call (`c.getPasswordField(`, `function(e,t,n)`). Minified
+# script supplies those after `password:` and `cookie=` (181 fleet matches,
+# none a credential); a quoted value is data and is always taken.
+_SPACING_ENTITY = r"&(?:nbsp|ensp|emsp|thinsp|#160|#x[aA]0);"
+_LABELED_SEPARATOR = (
+    r"(\s*[=:]\s*(?:" + _SPACING_ENTITY + r"\s*)*(?:\\*[\"']|(?![!&]|[A-Za-z_$][\w$]*(?:\.[\w$]+)*\()))"
+)
+# `key` counts as a credential label only glued to a word (`wifikey`,
+# `wifi0_wpapsk_key`, `passkey`). A bare `key` is a script variable as often
+# as a label (all 44 unredacted fleet matches are JavaScript assignments), so
+# its value is offered for review instead (KEY_FIELD_RE).
+PASSWORD_FIELD_RE = re.compile(
+    r"(password|passphrase|psk|wpa[0-9]*key|(?<=[A-Za-z0-9_])key)"
+    + _LABELED_SEPARATOR
+    + r"("
+    + _LABELED_VALUE_CHAR
+    + r"+)",
+    re.IGNORECASE,
+)
+KEY_FIELD_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])(key)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"+)",
+    re.IGNORECASE,
+)
+SESSION_TOKEN_RE = re.compile(
+    r"(session|token|auth|cookie)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"{20,})",
+    re.IGNORECASE,
+)
+
+
+# Of the patterns with a pass of their own (DEDICATED_PASS_PATTERNS), the ones
+# whose pass only the HTML engine runs. On a JSON or text
+# route their regexes match source code (`key:!0`, `auth = sign(...)`) far more
+# than values, so check_for_pii reports them only in content the sanitizer
+# routes to the HTML engine.
+HTML_ONLY_PATTERNS = frozenset(
+    {
+        "wps_pin",
+        "account_id",
+        "password_field",
+        "password_input",
+        "session_token",
+        "csrf_token",
+        "config_path",
+    }
+)
+
+
+def pattern_file_patterns(
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> list[tuple[str, re.Pattern[str], str]]:
+    """The pattern file's patterns pass 0 applies, as ``(name, regex, prefix)``.
+
+    Every pattern without a pass of its own (``DEDICATED_PASS_PATTERNS``) —
+    the number patterns and any custom one — compiled by ``compile_pattern``;
+    a domain's include_patterns holds. Resolve once per call and pass the
+    list to ``redact_pattern_file_matches`` for each text.
+    """
+    return [
+        (name, regex, definition.get("replacement_prefix", "CUSTOM"))
+        for name, regex, definition in _compiled_pii_patterns(load_pii_patterns(custom_patterns))
+        if name not in DEDICATED_PASS_PATTERNS
+    ]
+
+
+def redact_pattern_file_matches(
+    text: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    patterns: Sequence[tuple[str, re.Pattern[str], str]],
+) -> str:
+    """Apply the pattern file's patterns that have no pass of their own (pass 0).
+
+    Every route runs it — the HTML engine first of all its passes, and the
+    JSON and text routes on each text they sanitize — so a custom pattern
+    matches anywhere in content. A match is hashed with its pattern's
+    prefix, except the built-in number patterns, which keep one rule on every
+    route: a card-shaped number (``credit_card_*``) only when it passes the
+    Luhn check, and an SSN-shaped one is offered for review, never hashed.
+
+    Args:
+        text: Text to sanitize
+        hasher: Hasher for placeholder generation
+        collector: Collector for redaction counts and review flags
+        patterns: ``pattern_file_patterns()`` for the call's custom patterns
+
+    Returns:
+        The text with pattern matches replaced
+    """
+    for name, regex, prefix in patterns:
+        text = regex.sub(_pattern_file_replacer(name, prefix, hasher, collector), text)
+    return text
+
+
+def _pattern_file_replacer(
+    name: str, prefix: str, hasher: Hasher, collector: RedactionCollector
+) -> Callable[[re.Match[str]], str]:
+    def replace(match: re.Match[str]) -> str:
+        value = match.group(0)
+        if name.startswith("credit_card_") and not luhn_valid(value):
+            return value
+        if name == "ssn":
+            collector.flag_value(
+                value,
+                "ssn",
+                ConfidenceLevel.MEDIUM,
+                match.string[max(0, match.start() - 20) : match.end() + 20],
+                "Possible SSN pattern (###-##-####)",
+            )
+            return value
+        collector.record_auto_redaction(name)
+        return hasher.hash_generic(value, prefix)
+
+    return replace
 
 
 def is_structural_value_sensitive(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
@@ -231,6 +497,22 @@ def iter_ssid_option_values(
                 yield value, base + option_match.start(2)
 
 
+def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
+    """The review context for one pipe-delimited value: its neighbours, the value marked ``>>>value<<<``.
+
+    Args:
+        values: Every value of the pipe-delimited string
+        index: Position of the flagged value
+        window: Neighbours to keep on each side
+
+    Returns:
+        The values within ``window`` of ``index``, joined by ``|``
+    """
+    start = max(0, index - window)
+    end = min(len(values), index + window + 1)
+    return "|".join(f">>>{values[i]}<<<" if i == index else values[i] for i in range(start, end))
+
+
 def _sanitize_pipe_value(
     value: str,
     *,
@@ -285,7 +567,9 @@ def _sanitize_pipe_value(
 
     # AUTO-REDACT: Known reliable patterns
     # MAC addresses
-    if _PIPE_MAC_RE.match(value):
+    if MAC_RE.fullmatch(value):
+        if is_constant_mac(value):
+            return value
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(value)
 
@@ -309,8 +593,6 @@ def _sanitize_pipe_value(
                 collector.record_auto_redaction(category)
                 return hasher.hash_sensitive_value(value, category)
             if heuristics == HeuristicMode.FLAG:
-                from har_capture.cli.interactive import capture_pipe_context
-
                 context = capture_pipe_context(all_values or [], value_index)
                 collector.flag_value(
                     value,
@@ -322,6 +604,40 @@ def _sanitize_pipe_value(
 
     # Preserve value (either not flagged, or flagged for review)
     return value
+
+
+def redact_labeled_serials(
+    text: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> str:
+    """Redact serials a label names — HTML engine pass 2, for every body.
+
+    ``SERIAL_LABEL_RE``: ``Serial Number: VALUE``, the label closed by tags
+    before its separator, the value in a sibling element or the next table
+    cell. The label, separator and tag run are re-emitted verbatim, so only the
+    value is replaced. The value class holds no quote or backslash, so the
+    pass is safe on raw JSON text as well as markup and script — the text
+    ``validate`` scans with the same patterns.
+
+    Args:
+        text: Body text (markup, JSON or plain text)
+        hasher: Hasher for the ``SERIAL_<hash>`` placeholder
+        collector: Collector to record redactions
+        custom_patterns: Optional custom patterns for the allowlist check
+
+    Returns:
+        The text with labeled serial values replaced
+    """
+
+    def replace_serial(match: re.Match[str]) -> str:
+        if is_redacted(match.group(3), custom_patterns):
+            return match.group(0)
+        collector.record_auto_redaction("serial_number")
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'SERIAL')}"
+
+    return SERIAL_LABEL_RE.sub(replace_serial, text)
 
 
 def redact_vendor_serials(
@@ -369,6 +685,23 @@ def redact_vendor_serials(
         return hasher.hash_generic(token, "SERIAL")
 
     return VENDOR_SERIAL_TOKEN_RE.sub(replace_serial_token, content)
+
+
+def is_private_ip_in_range(ip: str) -> bool:
+    """Check a ``PRIVATE_IP_RE`` match names an address: every octet 255 or less.
+
+    The private ranges' first octets (10, 172, 192) are never version
+    strings, so ``is_valid_ip_address``'s heuristic does not apply; and a
+    zero-padded octet (``192.168.001.100``, which ``ipaddress`` rejects) is
+    still an address as devices print it. ``192.168.1.999`` is not.
+
+    Args:
+        ip: Dotted quad matched by ``PRIVATE_IP_RE``
+
+    Returns:
+        True if every octet is in range
+    """
+    return all(int(octet) <= 255 for octet in ip.split("."))
 
 
 def is_valid_ip_address(value: str) -> bool:
@@ -548,51 +881,9 @@ def _sanitize_html_impl(
     from har_capture.sanitization.har import is_sensitive_field
     from har_capture.sanitization.heuristics import analyze_value
 
-    # 0. Custom patterns (apply first so they take precedence over built-in patterns)
-    # Skip built-in patterns that have dedicated replacement logic below
-    BUILTIN_PATTERNS = {
-        "mac_address",
-        "serial_number",
-        "wps_pin",
-        "account_id",
-        "private_ip",
-        "public_ip",
-        "ipv6",
-        "email",
-        "password_field",
-        "password_input",
-        "session_token",
-        "csrf_token",
-        "config_path",
-        "motorola_password",
-    }
-
-    for pattern_name, pattern_def in pii.get("patterns", {}).items():
-        # Skip built-in patterns with special handling
-        if pattern_name in BUILTIN_PATTERNS:
-            continue
-
-        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
-            continue
-
-        regex = pattern_def["regex"]
-        prefix = pattern_def.get("replacement_prefix", "CUSTOM")
-
-        # Handle regex flags
-        flags = 0
-        if "flags" in pattern_def:
-            for flag_name in pattern_def["flags"]:
-                if flag_name == "IGNORECASE":
-                    flags |= re.IGNORECASE
-
-        def make_replacer(prefix: str, pname: str) -> Any:
-            def replace_custom(match: re.Match[str]) -> str:
-                collector.record_auto_redaction(pname)
-                return hasher.hash_generic(match.group(0), prefix)
-
-            return replace_custom
-
-        html = re.sub(regex, make_replacer(prefix, pattern_name), html, flags=flags)
+    # 0. The pattern file's other patterns, custom ones included (apply first
+    # so they take precedence over the built-in passes).
+    html = redact_pattern_file_matches(html, hasher, collector, pattern_file_patterns(custom_patterns))
 
     # 0b. Web Storage setItem() calls in inline <script> blocks
     # Catches: localStorage.setItem("key", "value") and sessionStorage.setItem("key", "value")
@@ -648,59 +939,24 @@ def _sanitize_html_impl(
     # `02:aa:bb:cc:dd:ee` is a legitimate locally-administered MAC and
     # `10.255.62.183` a legitimate private address — skipping them to buy
     # cosmetic stability would leak real values. They stay non-idempotent by
-    # design; ADR-12 puts the burden of proof on redacting less, not more.
+    # design: the guard would pass a real address through, a named leak.
     # 1. MAC Addresses (various formats: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX)
     def replace_mac(match: re.Match[str]) -> str:
+        if is_constant_mac(match.group(0)):
+            return match.group(0)
         collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0))
 
-    html = re.sub(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b", replace_mac, html)
+    html = MAC_RE.sub(replace_mac, html)
 
-    # 2. Serial Numbers (various label formats)
-    # The tag chain `(?:<[^>]*>\s*)*` tolerates whitespace between tags so
-    # label/value pairs in sibling elements match (Technicolor .jst renders
-    # <span>Serial Number:</span>\n<span class="value">\nVALUE</span>).
-    # The separator + tag run is captured and re-emitted verbatim so redaction
-    # replaces only the value and preserves the surrounding markup.
-    def replace_serial(match: re.Match[str]) -> str:
-        if is_redacted(match.group(3), custom_patterns):
-            return match.group(0)
-        collector.record_auto_redaction("serial_number")
-        label = match.group(1)
-        sep = match.group(2)
-        serial = match.group(3)
-        return f"{label}{sep}{hasher.hash_generic(serial, 'SERIAL')}"
-
-    html = re.sub(
-        r"\b(Serial\s*Number|SerialNum|SN|S/N)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})",
-        replace_serial,
-        html,
-        flags=re.IGNORECASE,
-    )
-
-    # 2b. Serial numbers in HTML table cells (label in one <td>, value in next <td>)
-    # Handles: <td>...<strong>Serial Number</strong>...</td>\s*<td>VALUE</td>
-    def replace_serial_table(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
-            return match.group(0)
-        collector.record_auto_redaction("serial_number")
-        prefix = match.group(1)
-        serial = match.group(2)
-        hashed = hasher.hash_generic(serial, "SERIAL")
-        return f"{prefix}{hashed}"
-
-    html = re.sub(
-        r"(<td[^>]*>\s*(?:<[^>]*>\s*)*(?:Serial\s*Number|SerialNum|SN|S/N)\b\s*(?:<[^>]*>\s*)*</td>\s*<td[^>]*>\s*(?:<[^>]*>\s*)*)([a-zA-Z0-9\-_]{5,})(?=\s*(?:<[^>]*>\s*)*</td>)",
-        replace_serial_table,
-        html,
-        flags=re.IGNORECASE,
-    )
+    # 2. Labeled serials, inline, in sibling elements and table cells (redact_labeled_serials).
+    html = redact_labeled_serials(html, hasher, collector, custom_patterns)
 
     # 2d. WPS / pairing / default PIN — 8-digit value anchored by a known label.
     # Pure-digit values can't be flagged heuristically (the universal `^\d+$`
     # safe pattern would have to be relaxed, drowning the review UI in counter
     # noise). The label is what makes the regex layer's 100% confidence bar
-    # achievable. See issue #47 and docs/ARCHITECTURE.md § Confidence boundary.
+    # achievable. See docs/ARCHITECTURE.md § Confidence boundary.
     # Tag chain and separator handling mirror pass 2: whitespace-tolerant
     # sibling-element matching, with the separator + tag run preserved.
     def replace_wps_pin(match: re.Match[str]) -> str:
@@ -712,12 +968,7 @@ def _sanitize_html_impl(
         pin = match.group(3)
         return f"{label}{sep}{hasher.hash_generic(pin, 'PIN')}"
 
-    html = re.sub(
-        r"(WPS[\s_-]*PIN|PIN[\s_-]*Code|Pairing[\s_-]*PIN|Default[\s_-]*PIN)\b(\s*[:\s=]*(?:<[^>]*>\s*)*)(\d{8})\b",
-        replace_wps_pin,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = WPS_PIN_LABEL_RE.sub(replace_wps_pin, html)
 
     # 2c. JavaScript serial number variables
     # Matches: names containing serial+number/num/no (e.g., serialNumber, serial_num, SerialNo)
@@ -734,7 +985,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'SERIAL')}{quote2}"
 
     html = re.sub(
-        r'(\w*serial[-_]?(?:num(?:ber)?|no)\w*|\w+serial)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*serial[-_]?(?:num(?:ber)?|no)|\w+serial\b)(\w+(?:-(?:num(?:ber)?|no)\w*)?)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_serial,
         html,
         flags=re.IGNORECASE,
@@ -744,55 +995,52 @@ def _sanitize_html_impl(
     # Netgear firmware ships the serial inside pipe-delimited blobs
     # (RouterStatus.htm tagValueList) where no label exists for passes 2-2c
     # to anchor on, and FLAG-mode review is the only thing between the raw
-    # serial and the shared artifact (CM2500 round-1 leak, 2026-08-19). A
+    # serial and the shared artifact (a CM2500 capture shipped it that way). A
     # high-confidence serial_number detector asserts a vendor layout tight
     # enough for the scanner pipeline's 100%-confidence bar, so those
     # formats auto-redact here. Token extraction bounds the match at
     # delimiters; a serial-shaped substring of a longer token never fires.
     html = redact_vendor_serials(html, compiled_detectors, hasher, collector)
 
-    # 3. Account/Subscriber IDs
+    # 3. Account/Subscriber IDs (ACCOUNT_LABEL_RE). The label, separator and
+    # any tags before the value are kept as written and only the value is
+    # replaced, so the markup around it survives. A value the allowlist
+    # recognizes is kept — check_for_pii's test, so the two agree.
     def replace_account(match: re.Match[str]) -> str:
-        prefix = match.group(1)
-        suffix = match.group(2)
-        value = match.group(3)
-
-        # Skip if value is already redacted (contains "_" indicating a hash prefix like TEST_xxxxx)
-        if "_" in value and re.match(r"^[A-Z]+_[a-f0-9]+$", value):
-            return match.group(0)  # Return unchanged
-
+        value = match.group(2)
+        if is_redacted(value, custom_patterns):
+            return match.group(0)
         collector.record_auto_redaction("account")
-        return f"{prefix} {suffix}: {hasher.hash_generic(match.group(0), 'ACCOUNT')}"
+        return f"{match.group(1)}{hasher.hash_generic(value, 'ACCOUNT')}"
 
-    html = re.sub(
-        r"(Account|Subscriber|Customer|Device)\s*(ID|Number)\s*[:\s=]+(\S+)",
-        replace_account,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = ACCOUNT_LABEL_RE.sub(replace_account, html)
 
-    # 4. Private IP addresses (keep common gateway IPs for context)
+    # 6. IPv6 Addresses (full and compressed) — run ahead of passes 4 and 5, so
+    # an IPv4-mapped address (`::ffff:1.2.3.4`) is hashed as one address. A
+    # candidate that is not a host address (the clock time "12:34:56", `::`,
+    # `::1`) stays.
+    def replace_ipv6(match: re.Match[str]) -> str:
+        text: str = match.group(0)
+        if not is_ipv6_host_address(text):
+            return text
+        collector.record_auto_redaction("ipv6")
+        return hasher.hash_ipv6(text)
+
+    html = IPV6_RE.sub(replace_ipv6, html)
+
+    # 4. Private IP addresses (keep common gateway IPs for context). A match
+    # with an octet over 255 (`192.168.1.999`) is not an address and stays,
+    # as on the string-pattern path (is_private_ip_in_range).
     preserved_ips = set(pii.get("preserved_gateway_ips", []))
 
     def replace_private_ip(match: re.Match[str]) -> str:
         ip = match.group(0)
-        if ip in preserved_ips:
+        if ip in preserved_ips or not is_private_ip_in_range(ip):
             return ip
-        # Private IP regex only matches 10.x/172.16-31.x/192.168.x — all have
-        # first octets (10, 172, 192) that pass is_valid_ip_address() unconditionally,
-        # so no version-string check is needed here (unlike public IPs in pass 5).
         collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True)
 
-    html = re.sub(
-        r"\b(?:"
-        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"  # 10.x.x.x
-        r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|"  # 172.16-31.x.x
-        r"192\.168\.\d{1,3}\.\d{1,3}"  # 192.168.x.x
-        r")\b",
-        replace_private_ip,
-        html,
-    )
+    html = PRIVATE_IP_RE.sub(replace_private_ip, html)
 
     # 5. Public IP addresses (any non-private, non-localhost IP)
     def replace_public_ip(match: re.Match[str]) -> str:
@@ -803,55 +1051,27 @@ def _sanitize_html_impl(
         collector.record_auto_redaction("public_ip")
         return hasher.hash_ip(ip, is_private=False)
 
-    html = re.sub(
-        r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
-        r"(?!127\.)(?!0\.)(?!255\.)"
-        r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-        r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b",
-        replace_public_ip,
-        html,
-    )
-
-    # 6. IPv6 Addresses (full and compressed) - strict validation
-    def replace_ipv6(match: re.Match[str]) -> str:
-        text: str = match.group(0)
-        # Skip if it looks like a MAC address (6 groups of 2 hex chars)
-        if re.match(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", text, re.IGNORECASE):
-            return text
-        # Use strict validation via ipaddress module
-        try:
-            ipaddress.IPv6Address(text)
-            collector.record_auto_redaction("ipv6")
-            return hasher.hash_ipv6(text)
-        except ipaddress.AddressValueError:
-            # Not a valid IPv6 address (e.g., time format "12:34:56")
-            return text
-
-    # Match potential IPv6 addresses including compressed forms like ::1
-    # Use (?<![:\w]) instead of \b to handle addresses starting with ::
-    html = re.sub(
-        r"(?<![:\w])([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![:\w])",
-        replace_ipv6,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = PUBLIC_IP_RE.sub(replace_public_ip, html)
 
     # 7. Passwords/Passphrases in HTML forms or text
     def replace_password(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
+        if is_redacted(match.group(3), custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("password")
-        label = match.group(1)
-        return f"{label}={hasher.hash_generic(match.group(2), 'PASS')}"
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'PASS')}"
 
-    html = re.sub(
-        r'(password|passphrase|psk|key|wpa[0-9]*key)\s*[=:]\s*["\'\\]?([^"\'<>\s]+)',
-        replace_password,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = PASSWORD_FIELD_RE.sub(replace_password, html)
+
+    # 7-key. A bare `key` label: offered for review, never replaced here.
+    for match in KEY_FIELD_RE.finditer(html):
+        if not is_redacted(match.group(3), custom_patterns):
+            collector.flag_value(
+                match.group(3),
+                "credential",
+                ConfidenceLevel.LOW,
+                match.group(0)[:80],
+                "Value after a bare 'key' label: a key or a script variable",
+            )
 
     # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>)
     def replace_ssid_text(match: re.Match[str]) -> str:
@@ -881,7 +1101,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'PASS')}{quote2}"
 
     html = re.sub(
-        r'(\w*password\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*password)(\w+)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_password,
         html,
         flags=re.IGNORECASE,
@@ -898,7 +1118,7 @@ def _sanitize_html_impl(
     #
     # A default Wi-Fi password printed on the device sticker is a live
     # credential, not device metadata: XB7/XB10 captures reached a public issue
-    # with it in plain text (issue #194). The default SSID is redacted
+    # with it in plain text. The default SSID is redacted
     # alongside it — the pair together identifies the household's network, and
     # the SSID is what makes the password usable.
     html = redact_structural_credentials(html, hasher, collector, custom_patterns)
@@ -912,12 +1132,7 @@ def _sanitize_html_impl(
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
 
-    html = re.sub(
-        r'(<input[^>]*type=["\'\\]?password["\'\\]?[^>]*value=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
-        replace_password_input,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = PASSWORD_INPUT_RE.sub(replace_password_input, html)
 
     # 8b. SSID input fields (input following SSID label)
     # Matches: <label>...SSID...</label><input value="...">
@@ -931,7 +1146,7 @@ def _sanitize_html_impl(
         return f"{prefix}{value_start}{hasher.hash_generic(match.group(3), 'WIFI')}{value_end}"
 
     html = re.sub(
-        r'(<label>[^<]*SSID[^<]*</label>\s*<input[^>]*)(value=["\'\\]?)([^"\'\\>]+)(["\'\\]?)',
+        rf"""(<label>[^<]*SSID[^<]*</label>\s*<input{_TAG_RUN})(value={_QUOTE})([^"'\\>]+)({_QUOTE})""",
         replace_ssid_input,
         html,
         flags=re.IGNORECASE,
@@ -939,18 +1154,12 @@ def _sanitize_html_impl(
 
     # 9. Session tokens/cookies (long alphanumeric strings)
     def replace_token(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
+        if is_redacted(match.group(3), custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("token")
-        label = match.group(1)
-        return f"{label}={hasher.hash_generic(match.group(2), 'TOKEN')}"
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'TOKEN')}"
 
-    html = re.sub(
-        r'(session|token|auth|cookie)\s*[=:]\s*["\'\\]?([^"\'<>\s]{20,})',
-        replace_token,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = SESSION_TOKEN_RE.sub(replace_token, html)
 
     # 10. CSRF tokens in meta tags
     def replace_csrf(match: re.Match[str]) -> str:
@@ -961,12 +1170,7 @@ def _sanitize_html_impl(
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'CSRF')}{suffix}"
 
-    html = re.sub(
-        r'(<meta[^>]*name=["\'\\]?csrf-token["\'\\]?[^>]*content=["\'\\]?)([^"\'\\]+)(["\'\\]?)',
-        replace_csrf,
-        html,
-        flags=re.IGNORECASE,
-    )
+    html = CSRF_META_RE.sub(replace_csrf, html)
 
     # 11. Email addresses (RFC 5321 simplified)
     def replace_email(match: re.Match[str]) -> str:
@@ -974,11 +1178,7 @@ def _sanitize_html_impl(
         return hasher.hash_email(match.group(0))
 
     # Pattern supports: user@domain.tld, user.name+tag@sub.domain.co.uk
-    html = re.sub(
-        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b",
-        replace_email,
-        html,
-    )
+    html = EMAIL_RE.sub(replace_email, html)
 
     # 12. Config file paths (may contain ISP/customer identifiers)
     def replace_config(match: re.Match[str]) -> str:
@@ -995,41 +1195,45 @@ def _sanitize_html_impl(
         flags=re.IGNORECASE,
     )
 
-    # 13. Motorola JavaScript password variables
-    def replace_motorola_pw(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
+    # 13. Password script variables a pattern file names (script_variables.password)
+    def replace_script_password(match: re.Match[str]) -> str:
+        value = match.group("script_value")
+        if is_redacted(value, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("password")
-        prefix = match.group(1)
-        suffix = match.group(3)
-        return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
+        return f"{match.group('script_head')}{hasher.hash_generic(value, 'PASS')}{match.group('script_tail')}"
 
-    html = re.sub(
-        r"(var\s+Current(?:Pw|Password)[A-Za-z]*\s*=\s*['\"])([^'\"]+)(['\"])",
-        replace_motorola_pw,
-        html,
-        flags=re.IGNORECASE,
-    )
+    for variable_re in compile_script_variables(sensitive, "password"):
+        html = variable_re.sub(replace_script_password, html)
 
-    # 14. WiFi credentials and device names in Netgear tagValueList
+    # 14. Pipe-delimited script variables a pattern file names
+    # (script_variables.pipe_delimited): Wi-Fi credentials and device names
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
-    def sanitize_tag_value_list(match: re.Match[str]) -> str:
-        """Sanitize pipe-delimited values in tagValueList.
+    def sanitize_pipe_variable(match: re.Match[str]) -> str:
+        """Sanitize a pipe-delimited script variable's values.
 
-        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``,
-        and reassembles.
+        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``
+        without its surrounding whitespace, and reassembles with that
+        whitespace written back: the blob's spacing is not the pass's to change.
         """
-        prefix = match.group(1)
-        values_str = match.group(2)
-        suffix = match.group(3)
+        prefix = match.group("script_head")
+        values_str = match.group("script_value")
+        suffix = match.group("script_tail")
 
         values = values_str.split("|")
         sanitized_values: list[str] = []
+        written: list[str] = []
 
         for val in values:
+            stripped = val.strip()
+            if not stripped:
+                sanitized_values.append(stripped)
+                written.append(val)
+                continue
+            start = val.index(stripped)
             result = _sanitize_pipe_value(
-                val.strip(),
+                stripped,
                 hasher=hasher,
                 collector=collector,
                 safe_values=safe_values,
@@ -1041,23 +1245,14 @@ def _sanitize_html_impl(
                 all_values=values,
             )
             sanitized_values.append(result)
+            written.append(val[:start] + result + val[start + len(stripped) :])
 
-        return prefix + "|".join(sanitized_values) + suffix
+        return prefix + "|".join(written) + suffix
 
-    html = re.sub(
-        r"(var\s+tagValueList\s*=\s*['\"])([^'\"]+)(['\"])",
-        sanitize_tag_value_list,
-        html,
-    )
+    for variable_re in compile_script_variables(sensitive, "pipe_delimited"):
+        html = variable_re.sub(sanitize_pipe_variable, html)
 
-    # 15. Other pipe-delimited variables (connectedDevices, deviceList, systemInfo, etc.)
-    html = re.sub(
-        r"(var\s+(?:(?:connected)?[Dd]evice(?:s|List)?|(?:system|wifi|network|modem|router|wan|lan)[Ii]nfo)\s*=\s*['\"])([^'\"]+)(['\"])",
-        sanitize_tag_value_list,
-        html,
-    )
-
-    # 16. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
+    # 15. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
     def replace_js_ssid(match: re.Match[str]) -> str:
         if is_redacted(match.group(4), custom_patterns):
             return match.group(0)
@@ -1069,7 +1264,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'WIFI')}{quote2}"
 
     html = re.sub(
-        r'(\w*ssid\w*)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
+        r'\b(?=\w*ssid)(\w+)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
         replace_js_ssid,
         html,
         flags=re.IGNORECASE,
@@ -1127,20 +1322,175 @@ def redact_structural_credentials(
     return SSID_SELECT_RE.sub(replace_select, content)
 
 
+def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[str]) -> bool:
+    """Check if the sanitizer's pass for a built-in pii.json pattern rewrites a match.
+
+    Args:
+        pattern_name: The pii.json pattern that matched
+        value: The matched text
+        preserved_ips: The gateway addresses the private-IP pass keeps
+
+    Returns:
+        False for a match the sanitizer keeps on purpose, True otherwise
+    """
+    if pattern_name == "mac_address":
+        return not is_constant_mac(value)
+    if pattern_name == "private_ip":
+        return value not in preserved_ips and is_private_ip_in_range(value)
+    if pattern_name == "public_ip":
+        return is_valid_ip_address(value)
+    if pattern_name == "ipv6":
+        return is_ipv6_host_address(value)
+    if pattern_name.startswith("credit_card_"):
+        return luhn_valid(value)
+    # An SSN-shaped number is offered for review, never hashed.
+    return pattern_name != "ssn"
+
+
+# The tokens of a JSON document that locate its strings: a string literal
+# (escapes included), a bracket, a colon or a comma.
+_JSON_TOKEN_RE = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"|[{}\[\]:,]')
+
+
+def _iter_json_literals(content: str) -> Iterator[tuple[str, int, str | None, int]]:
+    """Yield every string literal of a JSON document, in document order.
+
+    As ``(decoded, offset, key, depth)``: ``key`` is the member's key when
+    the literal is an object member's value, else None, and ``depth`` is the
+    nesting depth of the container holding it, the root's members at 0. Only
+    for text that parsed as JSON, where every quote outside a literal opens
+    one, so one scan finds each literal once — a repeated value at each of
+    its offsets, however it is escaped.
+    """
+    depth = -1
+    last_string: str | None = None
+    key: str | None = None
+    for match in _JSON_TOKEN_RE.finditer(content):
+        lexeme = match.group()
+        if lexeme[0] == '"':
+            decoded = json.loads(lexeme) if "\\" in lexeme else lexeme[1:-1]
+            yield decoded, match.start(), key, depth
+            last_string, key = decoded, None
+        elif lexeme == ":":
+            key = last_string
+        else:
+            key = None
+            if lexeme in "{[":
+                depth += 1
+            elif lexeme in "}]":
+                depth -= 1
+
+
+def _line_numbers(content: str) -> Callable[[int], int]:
+    """Map an offset in ``content`` to its 1-based line, by bisecting the newline offsets."""
+    newlines = [match.start() for match in re.finditer("\n", content)]
+    return lambda offset: bisect.bisect_left(newlines, offset) + 1
+
+
+def _compiled_pii_patterns(pii: dict[str, Any]) -> list[tuple[str, re.Pattern[str], dict[str, Any]]]:
+    """The pii.json patterns as ``(name, regex, definition)``, compiled by ``compile_pattern``.
+
+    The HTML engine's pass 0 compiles custom patterns the same way, so every
+    named flag holds in both; an entry that is not a pattern, or whose regex
+    does not compile, is skipped.
+    """
+    compiled = []
+    for name, definition in pii.get("patterns", {}).items():
+        if isinstance(definition, dict) and "regex" in definition:
+            regex = compile_pattern(definition)
+            if regex is not None:
+                compiled.append((name, regex, definition))
+    return compiled
+
+
+def _match_value(match: re.Match[str], value_group: object) -> str:
+    """The group a pattern names as its value; the whole match when the match has no such group or it did not take part."""
+    if (
+        isinstance(value_group, int)
+        and not isinstance(value_group, bool)
+        and 0 <= value_group <= match.re.groups
+    ) or (isinstance(value_group, str) and value_group in match.re.groupindex):
+        value = match.group(value_group)
+        if value is not None:
+            return value
+    return match.group(0)
+
+
+def _fixture_text_findings(
+    text: str,
+    patterns: list[tuple[str, re.Pattern[str], dict[str, Any]]],
+    allowlist: dict[str, Any],
+    preserved_ips: frozenset[str],
+    custom_patterns: str | dict[str, Any] | None,
+) -> Iterator[tuple[str, str, int]]:
+    """Yield ``(pattern, match, offset)`` for each finding ``check_for_pii`` reports in one text.
+
+    ``patterns`` holds only the patterns the text's route runs (see
+    ``HTML_ONLY_PATTERNS``).
+    """
+    # Labeled default credentials in sibling-element label/value pairs. These
+    # live as compiled patterns rather than pii.json entries because the pass-0
+    # generic replacer substitutes the whole match, which would flatten the
+    # label markup this pattern deliberately preserves. Sharing the compiled
+    # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
+    # and this CI fixture gate — from drifting apart.
+    for sibling_pattern, sibling_name in (
+        (SIBLING_PASSWORD_RE, "default_password_label"),
+        (SIBLING_SSID_RE, "default_ssid_label"),
+        (SSID_ATTRIBUTE_RE, "ssid_attribute"),
+    ):
+        for match in sibling_pattern.finditer(text):
+            # is_structural_value_sensitive() runs is_redacted() over the
+            # same loaded allowlist, so no separate allowlist check.
+            if is_structural_value_sensitive(match.group(2), custom_patterns):
+                yield sibling_name, match.group(2), match.start(2)
+
+    for option_value, option_offset in iter_ssid_option_values(text, custom_patterns):
+        yield "ssid_select_option", option_value, option_offset
+
+    # An IPv4-mapped IPv6 address is one address, which the sanitizer hashes
+    # whole: its IPv4 tail is not reported again as IPv4.
+    ipv6_spans = ipv6_host_spans(text)
+
+    for pattern_name, regex, pattern_def in patterns:
+        for match in regex.finditer(text):
+            matched_text = match.group(0)
+            # The allowlist judges the value, not the label around it: a
+            # sanitized `Serial Number: SERIAL_<hash>` is clean.
+            if is_allowlisted(_match_value(match, pattern_def.get("value_group", 0)), allowlist):
+                continue
+            if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
+                continue
+            # A match the sanitizer's own pass keeps is not reported: it has
+            # no remediation. A constant MAC (broadcast, zero), a preserved
+            # gateway address, a version string in dotted-quad shape, and an
+            # IPv6 candidate that is not a host address (a MAC, a clock time,
+            # `::`, `::1`) all stay in sanitized output.
+            if not _sanitizer_rewrites(pattern_name, matched_text, preserved_ips):
+                continue
+            if pattern_name in ("private_ip", "public_ip") and any(
+                start <= match.start() < end for start, end in ipv6_spans
+            ):
+                continue
+            yield pattern_name, matched_text, match.start()
+
+
 def check_for_pii(
     content: str,
     filename: str = "",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Check content for potential PII that should be sanitized.
 
     This function is intended for CI/PR validation to catch unsanitized
-    fixtures before they are committed.
+    fixtures before they are committed. It reports only what a sanitize run
+    clears, reading what the sanitizer reads: a JSON fixture one decoded
+    string (value or key) at a time, any other content whole.
 
     Args:
-        content: Text content to check (HTML, etc.)
+        content: Text content to check (HTML, JSON, script)
         filename: Optional filename for context in warnings
-        custom_patterns: Optional path to custom patterns JSON file
+        custom_patterns: Optional custom patterns (file path or dict)
 
     Returns:
         List of dicts with 'pattern', 'match', 'line', and 'filename' for each PII found
@@ -1151,79 +1501,64 @@ def check_for_pii(
         'mac_address'
     """
     pii = load_pii_patterns(custom_patterns)
+    # Read as the sanitizer reads a body with no type: JSON by content, `<`
+    # opens markup, anything else is text; the HTML engine's own patterns
+    # count only where it would run.
+    route = route_body("", content)[0]
+    patterns = [
+        entry
+        for entry in _compiled_pii_patterns(pii)
+        if route == "html" or entry[0] not in HTML_ONLY_PATTERNS
+    ]
+    if route == "html":
+        # Pass 13's password variables, named by the pattern files.
+        patterns.extend(
+            ("script_password", regex, {"value_group": "script_value"})
+            for regex in compile_script_variables(load_sensitive_patterns(custom_patterns), "password")
+        )
     allowlist = load_allowlist(custom_patterns)
+    preserved_ips = frozenset(pii.get("preserved_gateway_ips", []))
+    line_of = _line_numbers(content)
     findings: list[dict[str, Any]] = []
 
-    # Labeled default credentials in sibling-element label/value pairs. These
-    # live as compiled patterns rather than pii.json entries because the pass-0
-    # generic replacer substitutes the whole match, which would flatten the
-    # label markup this pattern deliberately preserves. Sharing the compiled
-    # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
-    # and this CI fixture gate — from drifting apart (issue #194).
-    for sibling_pattern, sibling_name in (
-        (SIBLING_PASSWORD_RE, "default_password_label"),
-        (SIBLING_SSID_RE, "default_ssid_label"),
-        (SSID_ATTRIBUTE_RE, "ssid_attribute"),
-    ):
-        for match in sibling_pattern.finditer(content):
-            value = match.group(2)
-            # No separate allowlist check: is_structural_value_sensitive()
-            # already runs is_redacted(), and both resolve to the same
-            # _check_patterns() over the same loaded allowlist.
-            if not is_structural_value_sensitive(value, custom_patterns):
+    def report(pattern: str, value: str, offset: int) -> None:
+        findings.append({"pattern": pattern, "match": value, "line": line_of(offset), "filename": filename})
+
+    if route != "json":
+        for pattern, value, offset in _fixture_text_findings(
+            content, patterns, allowlist, preserved_ips, custom_patterns
+        ):
+            report(pattern, value, offset)
+        return findings
+
+    # A JSON fixture is read one decoded string at a time, each reported on
+    # the line its literal starts on. Its fields, down to the depth the
+    # sanitizer's key rules reach, are judged as the sanitizer judges them: a
+    # value under a credential-named key (the sanitizer's own field names,
+    # custom ones included) that is neither empty nor allowlisted, then a
+    # serial or MAC under a key naming it (validate's identity predicate). A
+    # value the text passes already reported is not reported twice.
+    from har_capture.sanitization.har import _field_patterns_scope, is_sensitive_field
+
+    identity_fields: list[tuple[str, str, int]] = []
+    with _field_patterns_scope(custom_patterns):
+        for text, offset, key, depth in _iter_json_literals(content):
+            for pattern, value, _ in _fixture_text_findings(
+                text, patterns, allowlist, preserved_ips, custom_patterns
+            ):
+                report(pattern, value, offset)
+            if key is None or depth > JSON_MAX_DEPTH:
                 continue
-            findings.append(
-                {
-                    "pattern": sibling_name,
-                    "match": value,
-                    "line": content.count("\n", 0, match.start(2)) + 1,
-                    "filename": filename,
-                }
-            )
+            if is_sensitive_field(key):
+                # A fixture is served content: judged as a response's value.
+                if text and not is_allowlisted(text, allowlist) and credential_value_action(text) == "redact":
+                    identity_fields.append(("credential_field", text, offset))
+            elif (category := unredacted_identity(key, text, custom_patterns)) is not None:
+                identity_fields.append((category, text, offset))
 
-    for option_value, option_offset in iter_ssid_option_values(content, custom_patterns):
-        findings.append(
-            {
-                "pattern": "ssid_select_option",
-                "match": option_value,
-                "line": content.count("\n", 0, option_offset) + 1,
-                "filename": filename,
-            }
-        )
-
-    for pattern_name, pattern_def in pii.get("patterns", {}).items():
-        if not isinstance(pattern_def, dict) or "regex" not in pattern_def:
-            continue
-
-        regex = pattern_def["regex"]
-        flags = 0
-        if "flags" in pattern_def:
-            for flag_name in pattern_def["flags"]:
-                if flag_name == "IGNORECASE":
-                    flags |= re.IGNORECASE
-
-        matches = re.finditer(regex, content, flags)
-        for match in matches:
-            matched_text = match.group(0)
-
-            # Skip if it's an allowlisted placeholder
-            if is_allowlisted(matched_text, allowlist):
-                continue
-
-            # For IPv6 pattern, skip if it doesn't contain hex letters (a-f)
-            if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
-                continue
-
-            # Find line number
-            line_num = content.count("\n", 0, match.start()) + 1
-
-            findings.append(
-                {
-                    "pattern": pattern_name,
-                    "match": matched_text,
-                    "line": line_num,
-                    "filename": filename,
-                }
-            )
-
+    reported = {(f["pattern"], f["match"]) for f in findings}
+    for category, value, offset in identity_fields:
+        if (category, value) not in reported:
+            reported.add((category, value))
+            report(category, value, offset)
     return findings

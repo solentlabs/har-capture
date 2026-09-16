@@ -1,7 +1,11 @@
-"""The commit hooks, CI and the local CI mirror run the same tools on the same inputs.
+"""The shared developer tooling agrees with itself and with the code.
 
-See docs/CODE_REVIEW.md, "Quality Gates". Each rule here spans two or three
-config files that change independently, so it is checked rather than trusted.
+The commit hooks, CI and the local CI mirror run the same tools on the same
+inputs (docs/CODE_REVIEW.md, "Quality Gates"), and the shared VS Code tasks and
+launch configs call the CLI and tools the way they currently exist. Each rule
+spans config files that change independently, so it is checked rather than
+trusted. The library packages' import boundary (ARCHITECTURE, Code
+Organization rule 3) is checked the same way.
 """
 
 from __future__ import annotations
@@ -67,3 +71,124 @@ def test_local_mirror_covers_the_ci_matrix() -> None:
     assert ci_versions is not None
     assert mirror_versions is not None
     assert re.findall(r'"([^"]+)"', ci_versions.group(1)) == mirror_versions.group(1).split()
+
+
+# ── Shared VS Code tasks and launch configs ──────────────────────────────────
+# They are developer tools other contributors run, so every har-capture call in
+# them must parse against the current CLI, and every `python -m` module must be
+# installed by the dev profile.
+
+_VSCODE = _ROOT / ".vscode"
+_CLI_MODULES = {"har_capture", "har_capture.cli.main"}
+
+
+def _vscode(name: str) -> dict[str, Any]:
+    return json.loads((_VSCODE / name).read_text())
+
+
+def _with_inputs(args: list[str], inputs: list[dict[str, Any]]) -> list[str]:
+    """Replace ``${input:id}`` with that input's default, as VS Code would prefill it."""
+    defaults = {i["id"]: i.get("default", "") for i in inputs}
+    return [re.sub(r"\$\{input:(\w+)\}", lambda m: defaults[m.group(1)], a) for a in args]
+
+
+def _cli_invocations() -> list[tuple[str, list[str]]]:
+    calls = []
+    tasks = _vscode("tasks.json")
+    for task in tasks["tasks"]:
+        if task["command"].endswith("/har-capture"):
+            calls.append(
+                (f"task: {task['label']}", _with_inputs(task.get("args", []), tasks.get("inputs", [])))
+            )
+    launch = _vscode("launch.json")
+    for config in launch["configurations"]:
+        if config.get("module") in _CLI_MODULES:
+            calls.append(
+                (f"launch: {config['name']}", _with_inputs(config["args"], launch.get("inputs", [])))
+            )
+    return calls
+
+
+CLI_INVOCATIONS = _cli_invocations()
+
+
+def _test_id(where: str) -> str:
+    return re.sub(r"[^\x20-\x7e]", "", where).replace("  ", " ").strip()
+
+
+def test_every_cli_use_is_parse_checked() -> None:
+    """A task or config that calls the CLI some other way would dodge the parse test."""
+    covered = {where for where, _ in CLI_INVOCATIONS}
+    uses = [
+        f"task: {t['label']}"
+        for t in _vscode("tasks.json")["tasks"]
+        if re.search(r"har.capture", json.dumps(t))
+    ]
+    uses += [
+        f"launch: {c['name']}"
+        for c in _vscode("launch.json")["configurations"]
+        if re.search(r"har.capture", json.dumps(c))
+    ]
+    assert uses, "no task or launch config calls the CLI"
+    assert set(uses) == covered
+
+
+@pytest.mark.parametrize(("where", "argv"), CLI_INVOCATIONS, ids=[_test_id(c[0]) for c in CLI_INVOCATIONS])
+def test_vscode_cli_invocation_parses(where: str, argv: list[str]) -> None:
+    """Parse, don't run: an unknown option or a missing required one fails here.
+
+    ``--patterns`` is required by the commands themselves (``require_patterns``),
+    not by the parser, so that check is applied to the parsed value too.
+    """
+    typer = pytest.importorskip("typer")
+    from har_capture.cli._patterns_resolver import require_patterns
+    from har_capture.cli.main import app
+
+    group = typer.main.get_command(app)
+    parent = group.context_class(group, info_name="har-capture")
+    command = group.get_command(parent, argv[0])
+    assert command is not None, f"{where}: no command {argv[0]!r}"
+    ctx = command.make_context(argv[0], argv[1:], parent=parent)
+    if "patterns" in ctx.params:
+        require_patterns(ctx.params["patterns"])
+
+
+def test_vscode_python_modules_are_installed() -> None:
+    import importlib.util
+
+    commands = [t["command"] for t in _vscode("tasks.json")["tasks"]]
+    modules = {m for c in commands for m in re.findall(r"\bpython3? -m ([\w.]+)", c)} - {"venv"}
+    modules |= {c["module"] for c in _vscode("launch.json")["configurations"] if "module" in c}
+    missing = sorted(m for m in modules if importlib.util.find_spec(m) is None)
+    assert missing == []
+
+
+# ── Library layering ─────────────────────────────────────────────────────────
+# ARCHITECTURE Code Organization rule 3: the core library has no CLI
+# dependency. A lazy import inside a function counts too.
+
+_LIBRARY_PACKAGES = ["patterns", "sanitization", "validation", "capture"]
+
+
+def library_cli_imports(package_dir: Path) -> list[str]:
+    """Every ``har_capture.cli`` import in a package, as ``file:line``."""
+    import ast
+
+    found = []
+    for path in sorted(package_dir.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = (
+                [a.name for a in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+            if any(n == "har_capture.cli" or n.startswith("har_capture.cli.") for n in names):
+                found.append(f"{path.name}:{node.lineno}")
+    return found
+
+
+@pytest.mark.parametrize("package", _LIBRARY_PACKAGES)
+def test_library_does_not_import_cli(package: str) -> None:
+    assert library_cli_imports(_ROOT / "src" / "har_capture" / package) == []

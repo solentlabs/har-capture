@@ -10,8 +10,10 @@ Reuses PII patterns from html.py for consistency.
 from __future__ import annotations
 
 import base64
+import contextlib
 import contextvars
 import copy
+import functools
 import json
 import logging
 import re
@@ -23,29 +25,70 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
+    CERTIFICATE_NAME_FIELDS,
+    EMAIL_RE,
+    IPV6_RE,
+    JSON_MAX_DEPTH,
+    KNOWN_AUTH_SCHEMES,
+    MAC_RE,
+    PRIVATE_IP_RE,
+    PUBLIC_IP_RE,
+    SET_COOKIE_HEADERS,
     URL_VALUED_HEADERS,
     Hasher,
+    JsonObjectWithDuplicates,
     QueryCredential,
+    QueryPayload,
+    annotated_url_credential_entries,
+    certificate_name_macs,
+    classify_identity_field,
+    cookie_segment_actions,
+    credential_value_action,
+    decode_base64_payload,
+    decode_transport_body,
     find_query_credential,
+    find_query_payload,
+    is_allowlisted,
     is_base64_credential,
     is_base64_decodable_text,
     is_blank_query_value,
-    is_cookie_attribute_metadata,
-    is_cookie_attribute_name,
+    is_constant_mac,
+    is_fully_redacted,
+    is_ipv6_host_address,
+    is_mac_placeholder,
+    is_redacted,
+    is_ssid_key,
+    iter_json_strings,
+    iter_url_credentials,
+    json_members,
+    load_allowlist,
+    load_pii_patterns,
     load_sensitive_patterns,
+    mime_kind,
+    parse_json_container,
+    parse_xml,
     query_param_segment,
+    route_body,
+    split_url_password,
+    split_url_query,
 )
+from har_capture.patterns.loader import compile_safe_value_patterns
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
+    SERIAL_LABEL_HINT_RE,
+    is_private_ip_in_range,
     is_valid_ip_address,
+    pattern_file_patterns,
+    redact_labeled_serials,
+    redact_pattern_file_matches,
     redact_structural_credentials,
     redact_vendor_serials,
     sanitize_html,
 )
-from har_capture.sanitization.report import ConfidenceLevel
+from har_capture.sanitization.report import ConfidenceLevel, ReviewOutcome
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
     from har_capture.sanitization.report import HeuristicMode, SanitizationReport
 else:
@@ -54,7 +97,7 @@ else:
 _LOGGER = logging.getLogger(__name__)
 
 # Maximum recursion depth for JSON sanitization to prevent stack overflow
-_MAX_RECURSION_DEPTH = 50
+_MAX_RECURSION_DEPTH = JSON_MAX_DEPTH
 
 # Default maximum HAR file size (100 MB)
 DEFAULT_MAX_HAR_SIZE = 100 * 1024 * 1024
@@ -150,6 +193,133 @@ def validate_har_structure(har_data: dict[str, Any], *, strict: bool = False) ->
     return warnings
 
 
+@dataclass(frozen=True)
+class _HarField:
+    """The HAR 1.2 type of one field the walkers read, and what it holds."""
+
+    kind: type
+    nullable: bool = False
+    fields: tuple[tuple[str, _HarField], ...] = ()
+    items: _HarField | None = None
+
+
+_HAR_TYPE_NAMES: dict[type, str] = {dict: "an object", list: "an array", str: "a string"}
+_STRING = _HarField(str)
+_OPTIONAL_STRING = _HarField(str, nullable=True)
+_HEADER = _HarField(dict, fields=(("name", _STRING), ("value", _STRING)))
+_PAIR = _HarField(dict, fields=(("name", _OPTIONAL_STRING), ("value", _OPTIONAL_STRING)))
+_PAIRS = _HarField(list, nullable=True, items=_PAIR)
+_POST_DATA = _HarField(
+    dict,
+    nullable=True,
+    fields=(
+        ("mimeType", _STRING),
+        ("text", _OPTIONAL_STRING),
+        (
+            "params",
+            _HarField(list, items=_HarField(dict, fields=(("name", _STRING), ("value", _OPTIONAL_STRING)))),
+        ),
+    ),
+)
+_CONTENT = _HarField(
+    dict, fields=(("mimeType", _OPTIONAL_STRING), ("text", _OPTIONAL_STRING), ("encoding", _OPTIONAL_STRING))
+)
+# null is accepted only where sanitize and validate both read the field as
+# absent; a required container or a header's name/value that is null is rejected.
+_HAR_ENTRY = _HarField(
+    dict,
+    fields=(
+        (
+            "request",
+            _HarField(
+                dict,
+                fields=(
+                    ("method", _OPTIONAL_STRING),
+                    ("url", _STRING),
+                    ("headers", _HarField(list, items=_HEADER)),
+                    ("cookies", _PAIRS),
+                    ("queryString", _PAIRS),
+                    ("postData", _POST_DATA),
+                ),
+            ),
+        ),
+        (
+            "response",
+            _HarField(
+                dict,
+                fields=(
+                    ("headers", _HarField(list, items=_HEADER)),
+                    ("cookies", _PAIRS),
+                    ("content", _CONTENT),
+                ),
+            ),
+        ),
+    ),
+)
+_HAR_ROOT = _HarField(
+    dict,
+    fields=(
+        (
+            "log",
+            _HarField(
+                dict,
+                fields=(
+                    ("_har_capture", _HarField(dict)),
+                    (
+                        "pages",
+                        _HarField(list, nullable=True, items=_HarField(dict, fields=(("title", _STRING),))),
+                    ),
+                    ("entries", _HarField(list, items=_HAR_ENTRY)),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def _json_type_name(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    return _HAR_TYPE_NAMES.get(type(value), type(value).__name__)
+
+
+def _check_har_field(value: object, spec: _HarField, path: str) -> None:
+    if value is None and spec.nullable:
+        return
+    if not isinstance(value, spec.kind):
+        raise HarValidationError(f"must be {_HAR_TYPE_NAMES[spec.kind]}, not {_json_type_name(value)}", path)
+    if isinstance(value, dict):
+        for key, child in spec.fields:
+            if key in value:
+                _check_har_field(value[key], child, f"{path}.{key}" if path != "root" else key)
+    elif isinstance(value, list) and spec.items is not None:
+        for index, item in enumerate(value):
+            _check_har_field(item, spec.items, f"{path}[{index}]")
+
+
+def check_har_types(har_data: object) -> None:
+    """Reject a HAR whose fields do not have the HAR 1.2 types sanitize and validate read.
+
+    The one boundary both tools share: a field that is present has its type
+    (headers an array of objects with string names and values, a URL a string,
+    content an object…), and ``null`` is accepted only where both read it as
+    absent (``queryString``, ``cookies``, ``postData``, ``postData.text``,
+    content ``text``/``mimeType``/``encoding``, a pair's name or value). An
+    absent field is not required here; ``validate_har_structure`` judges that.
+
+    Args:
+        har_data: Parsed HAR JSON
+
+    Raises:
+        HarValidationError: Naming the first field with the wrong type
+    """
+    _check_har_field(har_data, _HAR_ROOT, "root")
+
+
 def _load_sensitive_headers() -> tuple[set[str], set[str], set[str]]:
     """Load sensitive header names from patterns.
 
@@ -177,14 +347,6 @@ def _compile_sensitive_field_patterns(
     auto_patterns = fields.get("auto_redact_patterns", [])
     flag_patterns = fields.get("flag_patterns", [])
 
-    # Fallback for legacy format
-    if not auto_patterns:
-        legacy = fields.get("patterns", [])
-        if legacy:
-            auto_patterns = legacy
-        else:
-            auto_patterns = ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"]
-
     auto_re = re.compile("|".join(auto_patterns), re.IGNORECASE)
     flag_re = re.compile("|".join(flag_patterns), re.IGNORECASE) if flag_patterns else None
     return auto_re, flag_re
@@ -198,34 +360,6 @@ def _load_sensitive_field_patterns() -> tuple[re.Pattern[str], re.Pattern[str] |
 # Load patterns at module level for efficiency
 _FULL_REDACT_HEADERS, _COOKIE_REDACT_HEADERS, _SCHEME_REDACT_HEADERS = _load_sensitive_headers()
 _SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_FIELD_RE = _load_sensitive_field_patterns()
-
-# Auth schemes recognized by sanitize_header_value when redacting an
-# Authorization-style header. Preserving the scheme token lets downstream
-# tools (e.g. cable_modem_monitor's analyze_har) classify the auth mechanism
-# from a single authenticated request, rather than waiting for a 401 +
-# WWW-Authenticate exchange that may never appear when the browser sends
-# cached credentials. The list is intentionally restricted to RFC-recognized
-# schemes (IANA HTTP Authentication Scheme Registry) so an unrecognized
-# leading token — which could be the start of a secret in a non-standard
-# format — falls through to full redaction.
-_KNOWN_AUTH_SCHEMES: frozenset[str] = frozenset(
-    {
-        "basic",
-        "bearer",
-        "digest",
-        "ntlm",
-        "negotiate",
-        "oauth",
-    }
-)
-
-# Response cookie headers. RFC 6265 sec. 4.1.1 gives these a different grammar
-# from the request `Cookie` header: one `name=value` cookie pair followed by
-# `;`-separated attributes, rather than a list of cookie pairs. Only the pair
-# is cookie data, so only it is redacted — see `_sanitize_set_cookie_value`.
-# Hardcoded rather than pattern-configured for the same reason as
-# `_KNOWN_AUTH_SCHEMES`: it is protocol structure, not a domain pattern.
-_SET_COOKIE_HEADERS: frozenset[str] = frozenset({"set-cookie", "set-cookie2"})
 
 
 @dataclass(frozen=True)
@@ -258,6 +392,80 @@ _DEFAULT_FIELD_PATTERNS = _FieldPatternSet(_SENSITIVE_FIELD_RE, _SENSITIVE_FLAG_
 _FIELD_PATTERNS_CTX: contextvars.ContextVar[_FieldPatternSet] = contextvars.ContextVar(
     "har_capture_field_patterns", default=_DEFAULT_FIELD_PATTERNS
 )
+
+
+@dataclass(frozen=True)
+class _CallPatterns:
+    """What the JSON walker and string patterns need from a call's ``custom_patterns``.
+
+    Resolved once when the call's scope is entered, so the per-string work
+    reads these instead of loading the pattern files again.
+    """
+
+    custom_patterns: str | dict[str, Any] | None
+    preserved_ips: frozenset[str]
+    allowlist: dict[str, Any]
+    serial_detectors: tuple[Any, ...]
+    pattern_file: tuple[tuple[str, re.Pattern[str], str], ...]
+    safe_values: tuple[re.Pattern[str], ...]
+
+
+def _resolve_call_patterns(custom_patterns: str | dict[str, Any] | None) -> _CallPatterns:
+    return _CallPatterns(
+        custom_patterns,
+        frozenset(load_pii_patterns(custom_patterns).get("preserved_gateway_ips", [])),
+        load_allowlist(custom_patterns),
+        tuple(_resolve_serial_detectors(custom_patterns)),
+        tuple(pattern_file_patterns(custom_patterns)),
+        tuple(compile_safe_value_patterns(load_sensitive_patterns(custom_patterns))),
+    )
+
+
+# The active call's patterns for helpers with no custom_patterns parameter
+# (the string patterns' address passes, the JSON walker), so a caller's
+# preserved gateway addresses, allowlist and vendor serial formats hold on
+# every route, as they do in the HTML engine. None: the built-in patterns.
+_CALL_PATTERNS_CTX: contextvars.ContextVar[_CallPatterns | None] = contextvars.ContextVar(
+    "har_capture_call_patterns", default=None
+)
+
+# The credentials the capture being sanitized submits (_scan_submitted_credentials):
+# a response echoing one under a credential-named key is redacted, whatever its
+# shape. Empty outside sanitize_har.
+_SUBMITTED_CREDENTIALS_CTX: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
+    "har_capture_submitted_credentials", default=frozenset()
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _default_call_patterns() -> _CallPatterns:
+    return _resolve_call_patterns(None)
+
+
+def _active_call_patterns() -> _CallPatterns:
+    """The active call's resolved patterns, or the built-in ones outside any call."""
+    active = _CALL_PATTERNS_CTX.get()
+    return active if active is not None else _default_call_patterns()
+
+
+@contextmanager
+def _call_patterns_scope(custom_patterns: str | dict[str, Any] | None) -> Iterator[None]:
+    """Make ``custom_patterns`` the active call's patterns for this scope.
+
+    A scope already active for the same patterns object is kept, so a
+    ``sanitize_har`` call resolves them once rather than once per entry.
+    """
+    active = _CALL_PATTERNS_CTX.get()
+    if custom_patterns is not None and active is not None and active.custom_patterns is custom_patterns:
+        yield
+        return
+    token = _CALL_PATTERNS_CTX.set(
+        None if custom_patterns is None else _resolve_call_patterns(custom_patterns)
+    )
+    try:
+        yield
+    finally:
+        _CALL_PATTERNS_CTX.reset(token)
 
 
 @contextmanager
@@ -474,8 +682,13 @@ def _redact_value(
         collector: Optional collector to record the redaction
 
     Returns:
-        Hashed value if hasher provided, otherwise REDACTED placeholder
+        Hashed value if hasher provided, otherwise REDACTED placeholder;
+        an empty value comes back empty
     """
+    if value == "":
+        # Nothing to hide, and a placeholder would invent a value the capture
+        # never sent (an empty default password), as the JSON route never has.
+        return value
     if collector:
         collector.record_auto_redaction(category.lower())
     placeholder = hasher.hash_generic(value, category) if hasher else REDACTED
@@ -534,74 +747,49 @@ def is_flaggable_field(field_name: str) -> bool:
     return _FIELD_PATTERNS_CTX.get().matches_flaggable(field_name)
 
 
-def _redact_cookie_segment(
-    segment: str,
-    hasher: Hasher | None,
-    collector: RedactionCollector | None,
-) -> str:
-    """Redact the value half of one ``name=value`` cookie segment.
-
-    Surrounding whitespace stays with the name half, so a reassembled header
-    keeps its original spacing. A segment with no ``=`` (a valueless
-    attribute like ``Secure``) has no value to redact and is returned as-is.
-
-    Args:
-        segment: One ``;``-separated segment of a cookie header value
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record the redaction
-
-    Returns:
-        The segment with its value replaced by a placeholder
-    """
-    if "=" not in segment:
-        return segment
-    name, _, value = segment.partition("=")
-    return f"{name}={_redact_value(value, hasher, 'COOKIE', collector)}"
-
-
-def _sanitize_set_cookie_value(
+def _sanitize_cookie_header(
     value: str,
     hasher: Hasher | None,
     collector: RedactionCollector | None,
+    *,
+    set_cookie: bool,
 ) -> str:
-    """Redact the cookie value in a Set-Cookie header, preserving attributes.
+    """Redact the cookie data in a Cookie or Set-Cookie value, keeping names and attributes.
 
-    RFC 6265 sec. 4.1.1: a Set-Cookie value is one ``name=value`` cookie pair
-    followed by ``;``-separated attributes. Redacting every ``k=v`` segment
-    destroys the scoping metadata (``Path``, ``Domain``, ``Expires``, …) that
-    downstream tooling reads to reason about cookie scope, and those
-    attributes are not secrets. So: the first segment's value is redacted,
-    reserved attributes survive verbatim, and any *unreserved* trailing pair
-    is redacted — an unknown key in the attribute position is not something
-    to hand a free pass to. A valueless token (a flag, reserved or not) has
-    no value half to redact and is preserved.
+    ``cookie_segment_actions`` (shared with validate) decides, one
+    ``;``-separated segment at a time, what is cookie data: a pair's value,
+    or a valueless segment that is a nameless cookie. Names, reserved
+    Set-Cookie attributes (RFC 6265 sec. 4.1.1: they scope the cookie and are
+    not secrets) and spacing survive, so a reassembled header keeps its shape.
 
     Args:
-        value: Raw Set-Cookie header value
+        value: Raw header value
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
+        set_cookie: The header is a Set-Cookie
 
     Returns:
         Sanitized header value
 
     Example:
-        >>> _sanitize_set_cookie_value("sid=secret; Path=/isp; HttpOnly", None, None)
+        >>> _sanitize_cookie_header(
+        ...     "sid=secret; Path=/isp; HttpOnly", None, None, set_cookie=True
+        ... )
         'sid=[REDACTED]; Path=/isp; HttpOnly'
     """
     segments = value.split(";")
-
-    if "=" not in segments[0]:
-        # No leading cookie pair to anchor on — the value does not have the
-        # shape this parse assumes, so redact it whole rather than guess.
-        return _redact_value(value, hasher, "COOKIE", collector) if value.strip() else value
-
-    sanitized = [_redact_cookie_segment(segments[0], hasher, collector)]
-    for segment in segments[1:]:
-        if is_cookie_attribute_name(segment.partition("=")[0]):
-            sanitized.append(segment)
-        else:
-            sanitized.append(_redact_cookie_segment(segment, hasher, collector))
-    return ";".join(sanitized)
+    for index, action in enumerate(cookie_segment_actions(value, set_cookie=set_cookie)):
+        segment = segments[index]
+        if action == "value":
+            name, _, data = segment.partition("=")
+            if data.strip():
+                segments[index] = f"{name}={_redact_value(data, hasher, 'COOKIE', collector)}"
+        elif action == "token":
+            token = segment.strip()
+            lead = segment[: len(segment) - len(segment.lstrip())]
+            trail = segment[len(segment.rstrip()) :]
+            segments[index] = f"{lead}{_redact_value(token, hasher, 'COOKIE', collector)}{trail}"
+    return ";".join(segments)
 
 
 def sanitize_header_value(
@@ -647,37 +835,14 @@ def sanitize_header_value(
         # non-standard format can't leak its leading token.
         stripped = value.lstrip()
         parts = stripped.split(None, 1)
-        if len(parts) == 2 and parts[0].lower() in _KNOWN_AUTH_SCHEMES:
+        if len(parts) == 2 and parts[0].lower() in KNOWN_AUTH_SCHEMES:
             scheme, credential = parts
             hashed = _redact_value(credential, hasher, "AUTH", collector)
             return f"{scheme} {hashed}"
         return _redact_value(value, hasher, "AUTH", collector)
 
     if name_lower in sets.cookie_redact:
-        # Detect cookie attribute metadata (e.g., "HttpOnly: true, Secure: true")
-        # that was incorrectly serialized as the header value
-        if is_cookie_attribute_metadata(value):
-            return _redact_value(value, hasher, "COOKIE", collector)
-
-        if name_lower in _SET_COOKIE_HEADERS:
-            # Response cookie: one cookie pair, then scoping attributes.
-            return _sanitize_set_cookie_value(value, hasher, collector)
-
-        # Request cookie: every segment is a cookie pair.
-        # Preserve cookie names, redact values
-        def redact_cookie(match: re.Match[str]) -> str:
-            cookie_name = match.group(1)
-            cookie_value = match.group(2)
-            hashed = _redact_value(cookie_value, hasher, "COOKIE", collector)
-            return f"{cookie_name}={hashed}"
-
-        result = re.sub(r"([^=;\s]+)=([^;]*)", redact_cookie, value)
-
-        # If regex matched nothing (no name=value pairs), redact the whole value
-        if result == value and value.strip():
-            return _redact_value(value, hasher, "COOKIE", collector)
-
-        return result
+        return _sanitize_cookie_header(value, hasher, collector, set_cookie=name_lower in SET_COOKIE_HEADERS)
 
     return value
 
@@ -697,33 +862,35 @@ def _sanitize_form_urlencoded(
     Returns:
         Sanitized text with sensitive field values redacted
     """
-    login_shaped = any(
-        is_sensitive_field(pair.split("=", 1)[0]) or is_flaggable_field(pair.split("=", 1)[0])
-        for pair in text.split("&")
-        if "=" in pair
-    )
+    # A name is judged decoded, as validate judges it: `user%5Bpass%5D` is
+    # the field `user[pass]`.
+    names = [urllib.parse.unquote_plus(pair.split("=", 1)[0]) for pair in text.split("&") if "=" in pair]
+    login_shaped = any(is_sensitive_field(name) or is_flaggable_field(name) for name in names)
 
     pairs = []
     for pair in text.split("&"):
         if "=" in pair:
             key, value = pair.split("=", 1)
+            name = urllib.parse.unquote_plus(key)
             # Hash the percent-decoded value so the placeholder matches the
             # params copy (HAR stores params decoded).
             decoded_value = urllib.parse.unquote_plus(value)
-            if is_sensitive_field(key):
+            # Same order as the params copy and the query tree.
+            if is_sensitive_field(name):
                 value = _redact_value(decoded_value, hasher, "FIELD", collector)
-            elif is_flaggable_field(key) and collector and value:
+            elif is_base64_credential(value) or is_base64_credential(decoded_value):
+                # base64(user:pass) — check the raw and percent-decoded forms.
+                value = _redact_value(decoded_value, hasher, "AUTH", collector)
+            elif (payload := _sanitize_payload_field(value, hasher, collector)) is not None:
+                value = payload
+            elif is_flaggable_field(name) and collector and value:
                 collector.flag_value(
                     decoded_value,
                     "field",
                     ConfidenceLevel.MEDIUM,
-                    f"form field '{key}'",
-                    f"Flaggable field name '{key}' in form data",
+                    f"form field '{name}'",
+                    f"Flaggable field name '{name}' in form data",
                 )
-            elif is_base64_credential(value) or is_base64_credential(decoded_value):
-                # base64(user:pass) value in an unrecognized field name —
-                # check the raw and percent-decoded forms.
-                value = _redact_value(decoded_value, hasher, "AUTH", collector)
             elif login_shaped and collector and is_base64_decodable_text(decoded_value):
                 # Likely a vendor-encoded credential (Sercomm/Hitron style).
                 # Flag, never auto-redact: base64-decodable alone is not a
@@ -732,8 +899,8 @@ def _sanitize_form_urlencoded(
                     decoded_value,
                     "credential",
                     ConfidenceLevel.MEDIUM,
-                    f"form field '{key}'",
-                    f"Base64-decodable value in unrecognized field '{key}' of a login-shaped form POST",
+                    f"form field '{name}'",
+                    f"Base64-decodable value in unrecognized field '{name}' of a login-shaped form POST",
                 )
             pairs.append(f"{key}={value}")
         else:
@@ -741,28 +908,52 @@ def _sanitize_form_urlencoded(
     return "&".join(pairs)
 
 
-def _sanitize_json_text(
+def _rewrite_json(
     text: str,
-    hasher: Hasher | None = None,
-    collector: RedactionCollector | None = None,
+    data: dict[str, Any] | list[Any],
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+    *,
+    served: bool = False,
 ) -> str:
-    """Sanitize JSON text by redacting sensitive fields.
+    """Sanitize parsed JSON and write it back as its text was written.
 
-    Args:
-        text: JSON text to sanitize
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record redactions
-
-    Returns:
-        Sanitized JSON text with sensitive field values redacted
+    Text with nothing to redact comes back byte-identical — a repeated key
+    included, when none of its earlier values has anything to redact either.
+    Otherwise it is re-serialized in the original's layout where
+    ``json.dumps`` can reproduce it (``_dump_json_like``). A repeated key
+    then keeps only its last value, as every JSON parser reads it, so a
+    shadowed secret never passes through; text that repeats a key cannot be
+    reproduced, so such a body takes the default layout.
     """
-    try:
-        data = json.loads(text)
-        sanitized = _sanitize_json_recursive(data, hasher, collector)
-        return json.dumps(sanitized)
-    except json.JSONDecodeError:
-        _LOGGER.debug("Non-JSON text encountered in response body, skipping JSON sanitization")
+    cleaned = _sanitize_json_recursive(data, hasher, collector, served=served)
+    if cleaned == data and not _shadowed_values_change(data, hasher, served=served):
         return text
+    return _dump_json_like(cleaned, data, text)
+
+
+def _shadowed_values_change(data: Any, hasher: Hasher | None, *, served: bool = False) -> bool:
+    """True when a repeated key's earlier value would be redacted or offered for review.
+
+    Probed with a throwaway collector: the shadowed members are dropped from
+    the output, so nothing is counted or offered for review twice. A value
+    the review would be offered must be dropped too — kept, it would pass
+    through with no review item while validate reports it.
+    """
+    probe = RedactionCollector(hasher=hasher if hasher is not None else Hasher(salt=None))
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, JsonObjectWithDuplicates):
+            for key, value in node.shadowed:
+                member = {key: value}
+                if _sanitize_json_recursive(member, hasher, probe, served=served) != member or probe.flagged:
+                    return True
+                if isinstance(value, dict | list):
+                    stack.append(value)
+        children = node.values() if isinstance(node, dict) else node  # only objects and arrays are stacked
+        stack.extend(child for child in children if isinstance(child, dict | list))
+    return False
 
 
 def sanitize_post_data(
@@ -799,6 +990,7 @@ def sanitize_post_data(
     with (
         _field_patterns_scope(custom_patterns),
         _header_sets_scope(custom_patterns),
+        _call_patterns_scope(custom_patterns),
     ):
         # Sanitize params array
         if "params" in result and isinstance(result["params"], list):
@@ -810,8 +1002,18 @@ def sanitize_post_data(
             )
             for param in result["params"]:
                 if isinstance(param, dict) and "name" in param:
+                    # The query tree's order (_classify_query_param): a
+                    # credential or payload value decides before an
+                    # identity-style name, so `user=<b64(user:pass)>` is a
+                    # credential here as it is in a URL.
                     if is_sensitive_field(param["name"]):
                         param["value"] = _redact_value(param.get("value", ""), hasher, "FIELD", collector)
+                    elif is_base64_credential(param.get("value", "")):
+                        param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
+                    elif (
+                        payload := _sanitize_payload_field(str(param.get("value", "")), hasher, collector)
+                    ) is not None:
+                        param["value"] = payload
                     elif is_flaggable_field(param["name"]) and collector and param.get("value"):
                         collector.flag_value(
                             param["value"],
@@ -820,10 +1022,6 @@ def sanitize_post_data(
                             f"POST param '{param['name']}'",
                             f"Flaggable field name '{param['name']}' in POST params",
                         )
-                    elif is_base64_credential(param.get("value", "")):
-                        # base64(user:pass) value in an unrecognized field name
-                        # — mirrors the queryString fallback.
-                        param["value"] = _redact_value(param["value"], hasher, "AUTH", collector)
                     elif login_shaped and collector and is_base64_decodable_text(param.get("value", "")):
                         # Mirrors the form-text login-shaped heuristic.
                         collector.flag_value(
@@ -840,17 +1038,26 @@ def sanitize_post_data(
             text = result["text"]
             mime_type = result.get("mimeType", "")
 
-            if "application/x-www-form-urlencoded" in mime_type:
+            # JSON by content first, whatever the type: validate reads a POST
+            # body as JSON whenever it parses (text/plain XHR bodies, and
+            # jQuery's form-urlencoded default around JSON.stringify).
+            data = parse_json_container(text)
+            if data is not None:
+                result["text"] = _rewrite_json(text, data, hasher, collector)
+            elif "application/x-www-form-urlencoded" in mime_type:
                 result["text"] = _sanitize_form_urlencoded(text, hasher, collector)
-            elif "application/json" in mime_type:
-                result["text"] = _sanitize_json_text(text, hasher, collector)
-            elif "text/xml" in mime_type or "application/xml" in mime_type:
+            elif mime_kind(mime_type) == "markup":
                 text = _sanitize_xml_fields(text, hasher, collector)
                 result["text"] = sanitize_html(
                     text,
                     collector=collector,
                     custom_patterns=custom_patterns,
                     heuristics=heuristics,
+                )
+            else:
+                # Any other text: as a text response body is.
+                result["text"] = _sanitize_body_string(
+                    text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)
                 )
 
     return result
@@ -877,9 +1084,8 @@ def _sanitize_xml_fields(
     """
     import xml.etree.ElementTree as ET
 
-    try:
-        root = ET.fromstring(text)  # noqa: S314
-    except ET.ParseError:
+    root = parse_xml(text)
+    if root is None:
         return text
 
     modified = False
@@ -904,11 +1110,140 @@ def _sanitize_xml_fields(
     return ET.tostring(root, encoding="unicode")
 
 
+def _is_reviewable_ssid(key: str, value: object) -> bool:
+    """True for a network name under an SSID-named key — offered for review, never redacted."""
+    if not (isinstance(value, str) and value and is_ssid_key(key)):
+        return False
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    active = _active_call_patterns()
+    return not is_allowlisted(value, active.allowlist) and not is_safe_value(value, list(active.safe_values))
+
+
+# The placeholders _redact_value writes for a credential-named field:
+# `FIELD_<hex>` with a salt, `***FIELD***` without one, `[REDACTED]` without
+# a hasher.
+_OWN_FIELD_PLACEHOLDER_RE = re.compile(r"FIELD_[0-9a-f]{8,}|\*\*\*FIELD\*\*\*|\[REDACTED\]")
+
+
+def _is_own_placeholder(value: str) -> bool:
+    """True for a value that is exactly the placeholder this sanitizer writes for a credential field.
+
+    It must also be one ``validate`` accepts (``is_redacted``), so a value
+    kept here is never reported there. A real value that merely looks
+    redacted (``TP_LINK_20231105``, ``WIFI_Home2024``, ``00000000``) is
+    replaced.
+    """
+    return _OWN_FIELD_PLACEHOLDER_RE.fullmatch(value) is not None and is_redacted(
+        value, _active_call_patterns().custom_patterns
+    )
+
+
+def _sanitize_key(
+    key: str, taken: dict[str, Any], hasher: Hasher | None, collector: RedactionCollector | None
+) -> str:
+    """Emit an object key through the text passes, never onto a key already emitted.
+
+    A client table keyed by MAC or address carries PII in its keys, and
+    validate reads keys as it reads values. Two keys can hash to one
+    placeholder — the same MAC in two cases, or any two MACs in static mode —
+    so a collision gets a ``~2``, ``~3`` suffix rather than silently
+    dropping a member.
+    """
+    out_key = _sanitize_json_string(key, hasher, collector)
+    if out_key in taken:
+        suffix = 2
+        while f"{out_key}~{suffix}" in taken:
+            suffix += 1
+        out_key = f"{out_key}~{suffix}"
+    return out_key
+
+
+def _sanitize_deep_strings(data: Any, hasher: Hasher | None, collector: RedactionCollector | None) -> Any:
+    """Past the depth the key rules reach: the string patterns on every key and string.
+
+    Iterative, so no nesting the parser accepted can exhaust the stack. The
+    validator's field checks stop at the same depth; its text scans do not,
+    and every address or MAC they would find here is rewritten.
+    """
+    root = [data]
+    stack: list[tuple[Any, Any]] = [(root, 0)]
+    while stack:
+        parent, slot = stack.pop()
+        node = parent[slot]
+        if isinstance(node, dict):
+            rebuilt: dict[str, Any] = {}
+            for key, value in node.items():
+                rebuilt[_sanitize_key(key, rebuilt, hasher, collector)] = value
+            parent[slot] = rebuilt
+            stack.extend((rebuilt, key) for key in rebuilt)
+        elif isinstance(node, list):
+            copied = list(node)
+            parent[slot] = copied
+            stack.extend((copied, index) for index in range(len(copied)))
+        elif isinstance(node, str):
+            parent[slot] = _sanitize_json_string(node, hasher, collector)
+    return root[0]
+
+
+def _offerable(text: str) -> bool:
+    """False for a field value the text passes turned wholly into a placeholder: nothing is left to review.
+
+    Offering it would also be harmful: in static mode every email becomes
+    `x@x.invalid`, and redacting that in the review would rewrite them all.
+    """
+    return not is_fully_redacted(text, _active_call_patterns().custom_patterns)
+
+
+def _sanitize_credential_value(
+    key: str,
+    value: str,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+    depth: int,
+    served: bool,
+) -> str:
+    """A non-empty value under a credential-named JSON key, not a placeholder of ours.
+
+    Submitted, it is redacted. Served, it is judged by its shape
+    (``credential_value_action``, shared with validate): a button word is
+    kept, prose is offered for review with the string patterns still applied
+    inside it, anything else is redacted — and so is prose where no review
+    can reach it (no collector, or flags muted inside an encoded payload).
+    """
+    # A served value equal to a credential the capture submits is that
+    # credential echoed back, whatever its shape, unless it is a status word
+    # (`Yes`, `No`): those are kept wherever they are served.
+    action = credential_value_action(value) if served else "redact"
+    if action == "review" and value in _SUBMITTED_CREDENTIALS_CTX.get():
+        action = "redact"
+    reviewable = action == "review" and collector is not None and collector.accepts_flags
+    if action != "keep" and not reviewable:
+        return _redact_value(value, hasher, "FIELD", collector)
+    mark = collector.flag_mark() if collector is not None else 0
+    result: str = _sanitize_json_recursive(value, hasher, collector, depth + 1, served=served)
+    if reviewable and collector is not None and _offerable(result):
+        # The text as the output holds it, so the review can replace it. LOW:
+        # every such value across the fleet is UI text, so the review shows
+        # it without pre-selecting it for redaction.
+        collector.flag_value(
+            result,
+            "credential",
+            ConfidenceLevel.LOW,
+            f"JSON key '{key}'",
+            f"Text under credential-named key '{key}' in a response: a UI string, or a passphrase with spaces",
+            supersede_since=mark,
+        )
+    return result
+
+
 def _sanitize_json_recursive(
     data: Any,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
     _depth: int = 0,
+    *,
+    served: bool = False,
 ) -> Any:
     """Recursively sanitize JSON data.
 
@@ -917,53 +1252,84 @@ def _sanitize_json_recursive(
         hasher: Optional hasher for correlation-preserving redaction
         collector: Optional collector to record redactions
         _depth: Current recursion depth (internal use)
+        served: The JSON is a response body: a value under a credential-named
+            key is judged by its shape (``credential_value_action``). A
+            submitted body's credential-named values are all redacted.
 
     Returns:
         Sanitized data
     """
     if _depth > _MAX_RECURSION_DEPTH:
-        _LOGGER.warning("Max recursion depth exceeded in JSON sanitization")
-        return data
+        _LOGGER.warning("Max recursion depth exceeded in JSON sanitization; applying text patterns only")
+        return _sanitize_deep_strings(data, hasher, collector)
 
     if isinstance(data, dict):
-        result = {}
+        result: dict[str, Any] = {}
         for key, value in data.items():
-            key_lower = key.lower()
+            # Every rule reads the original key; the key itself is emitted
+            # through the string patterns (_sanitize_key).
+            out_key = _sanitize_key(key, result, hasher, collector)
+            # A key naming a device identity, holding a value of that
+            # identity's shape (classify_identity_field, shared with validate).
+            identity = classify_identity_field(key, value)
             if is_sensitive_field(key) and isinstance(value, str):
-                result[key] = _redact_value(value, hasher, "FIELD", collector)
+                # An empty value, or a placeholder this sanitizer writes, holds
+                # no secret: kept, so an HNAP "Password": "" stays empty and a
+                # sanitized value is not hashed again.
+                if not value or _is_own_placeholder(value):
+                    result[out_key] = value
+                else:
+                    result[out_key] = _sanitize_credential_value(
+                        key, value, hasher, collector, _depth, served
+                    )
+            elif identity == "mac_address" and not is_constant_mac(str(value)):
+                if collector:
+                    collector.record_auto_redaction("mac_address")
+                result[out_key] = hasher.hash_mac(str(value)) if hasher else "***MAC***"
+            elif identity == "serial_number":
+                if collector:
+                    collector.record_auto_redaction("serial_number")
+                result[out_key] = hasher.hash_generic(str(value), "SERIAL") if hasher else "***SERIAL***"
             elif is_flaggable_field(key) and isinstance(value, str) and collector and value:
-                collector.flag_value(
-                    value,
-                    "field",
-                    ConfidenceLevel.MEDIUM,
-                    f"JSON key '{key}'",
-                    f"Flaggable field name '{key}' in JSON",
+                # Flagged as the output holds it, so the review can replace it.
+                mark = collector.flag_mark()
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
                 )
-                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
-            elif key_lower in ("mac", "macaddress", "mac_address", "hwaddr", "hw_addr"):
-                # Explicit MAC address field - always redact
-                if isinstance(value, str) and value:
-                    if collector:
-                        collector.record_auto_redaction("mac_address")
-                    result[key] = hasher.hash_mac(value) if hasher else "***MAC***"
-                else:
-                    result[key] = value
-            elif key_lower in ("serial", "serial_number", "serialnumber", "serialnum", "sn"):
-                # Explicit serial number field - always redact
-                if isinstance(value, str) and value:
-                    if collector:
-                        collector.record_auto_redaction("serial_number")
-                    result[key] = hasher.hash_generic(value, "SERIAL") if hasher else "***SERIAL***"
-                else:
-                    result[key] = value
+                if _offerable(result[out_key]):
+                    collector.flag_value(
+                        result[out_key],
+                        "field",
+                        ConfidenceLevel.MEDIUM,
+                        f"JSON key '{key}'",
+                        f"Flaggable field name '{key}' in JSON",
+                        supersede_since=mark,
+                    )
+            elif collector and _is_reviewable_ssid(key, value):
+                # Flagged as the output holds it, so the review can replace it.
+                mark = collector.flag_mark()
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
+                if _offerable(result[out_key]):
+                    collector.flag_value(
+                        result[out_key],
+                        "wifi_ssid",
+                        ConfidenceLevel.MEDIUM,
+                        f"JSON key '{key}'",
+                        f"Wi-Fi network name under SSID key '{key}' in JSON",
+                        supersede_since=mark,
+                    )
             else:
-                result[key] = _sanitize_json_recursive(value, hasher, collector, _depth + 1)
+                result[out_key] = _sanitize_json_recursive(
+                    value, hasher, collector, _depth + 1, served=served
+                )
         return result
     if isinstance(data, list):
-        return [_sanitize_json_recursive(item, hasher, collector, _depth + 1) for item in data]
-    # Apply pattern matching to string values
+        return [_sanitize_json_recursive(item, hasher, collector, _depth + 1, served=served) for item in data]
+    # Apply the text passes to string values
     if isinstance(data, str):
-        return _sanitize_string_patterns(data, hasher, collector)
+        return _sanitize_json_string(data, hasher, collector)
     return data
 
 
@@ -973,23 +1339,10 @@ _API_KEY_PREFIX_PATTERN = re.compile(r"^(?:sk|pk|key)-[a-zA-Z0-9]{16,}$")
 _LONG_TOKEN_PATTERN = re.compile(r"^(?=[a-zA-Z]*\d)(?=\d*[a-zA-Z])[a-zA-Z0-9]{32,}$")
 _DEVICE_SERIAL_PATTERN = re.compile(r"^[A-Z]{2,6}-[A-Z0-9]{5,}$")
 
-# Regex patterns for value-based sanitization
-_MAC_PATTERN = re.compile(r"\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
-_PRIVATE_IP_PATTERN = re.compile(r"\b(?:10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.|192\.168\.)\d{1,3}\.\d{1,3}\b")
-# Public IPs: any non-private, non-localhost, non-reserved first octet
-_PUBLIC_IP_PATTERN = re.compile(
-    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)"
-    r"(?!127\.)(?!0\.)(?!255\.)"
-    r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
-)
-_EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
-_SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_CC_VISA_PATTERN = re.compile(r"\b4[0-9]{12}(?:[0-9]{3})?\b")
-_CC_MC_PATTERN = re.compile(r"\b5[1-5][0-9]{14}\b")
-_CC_AMEX_PATTERN = re.compile(r"\b3[47][0-9]{13}\b")
+# Regex patterns for value-based sanitization. The IP, IPv6 and email
+# regexes are the shared ones in patterns/redaction.py, so a value is
+# redacted the same whether its body routes to the HTML engine or here.
+_DIGIT_RUN_RE = re.compile(r"\d{3}")
 _PHONE_PATTERN = re.compile(
     # At least one separator (or parens / leading +) is required. A bare
     # 10-11 digit run is far more often a constant, counter, or frequency
@@ -1010,73 +1363,51 @@ _PHONE_PATTERN = re.compile(
 )
 
 
-def _luhn_check(number: str) -> bool:
-    """Validate a number string using the Luhn algorithm.
+def _redact_macs(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
+    """The string patterns' MAC pass (the HTML engine's pass 1): every MAC but a constant one."""
 
-    Args:
-        number: Digit-only string to validate
-
-    Returns:
-        True if the number passes Luhn validation
-    """
-    digits = [int(c) for c in number]
-    checksum = 0
-    for i, digit in enumerate(reversed(digits)):
-        value = digit * 2 if i % 2 == 1 else digit
-        if value > 9:
-            value -= 9
-        checksum += value
-    return checksum % 10 == 0
-
-
-def _sanitize_string_patterns(
-    value: str,
-    hasher: Hasher | None = None,
-    collector: RedactionCollector | None = None,
-) -> str:
-    """Apply pattern-based sanitization to a string value.
-
-    Redacts MAC addresses, private IPs, and emails found in string values.
-
-    Args:
-        value: String value to sanitize
-        hasher: Optional hasher for correlation-preserving redaction
-        collector: Optional collector to record redactions
-
-    Returns:
-        Sanitized string
-    """
-    if not value:
-        return value
-    # Perf guard only — must stay far above real firmware assets, or PII scans
-    # silently skip them. At 10,000 chars this skipped the CM2500's 33 KB
-    # utility.js, leaving MACs/IPs in any large non-HTML text body unscanned.
-    if len(value) > 1_000_000:
-        _LOGGER.debug("Skipping pattern sanitization for long string (length=%d)", len(value))
-        return value
-
-    # MAC addresses
     def replace_mac(match: re.Match[str]) -> str:
+        if is_constant_mac(match.group(0)):
+            return match.group(0)
         if collector:
             collector.record_auto_redaction("mac_address")
         return hasher.hash_mac(match.group(0)) if hasher else "***MAC***"
 
-    value = _MAC_PATTERN.sub(replace_mac, value)
+    if ":" in value or "-" in value:
+        value = MAC_RE.sub(replace_mac, value)
+    return value
 
-    # Private IPs (keep common gateway IPs)
-    preserved_ips = {"192.168.0.1", "192.168.1.1", "10.0.0.1", "192.168.100.1"}
+
+def _redact_ip_addresses(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
+    """The string patterns' address passes (the HTML engine's 6, 4 and 5): IPv6, private and public IPv4."""
+
+    # IPv6 addresses, before IPv4 so an IPv4-mapped address (`::ffff:1.2.3.4`)
+    # is one address. A candidate that is not a host address (a clock time,
+    # `::`, `::1`) stays.
+    def replace_ipv6(match: re.Match[str]) -> str:
+        candidate = match.group(0)
+        if not is_ipv6_host_address(candidate):
+            return candidate
+        if collector:
+            collector.record_auto_redaction("ipv6")
+        return hasher.hash_ipv6(candidate) if hasher else "***IPV6***"
+
+    if ":" in value:
+        value = IPV6_RE.sub(replace_ipv6, value)
+
+    # Private IPs (keep the gateway IPs pii.json and the call's patterns list)
+    preserved_ips = _active_call_patterns().preserved_ips
 
     def replace_private_ip(match: re.Match[str]) -> str:
         ip = match.group(0)
-        if ip in preserved_ips:
-            return ip
-        if not is_valid_ip_address(ip):
+        if ip in preserved_ips or not is_private_ip_in_range(ip):
             return ip
         if collector:
             collector.record_auto_redaction("private_ip")
         return hasher.hash_ip(ip, is_private=True) if hasher else "***IP***"
 
-    value = _PRIVATE_IP_PATTERN.sub(replace_private_ip, value)
+    if "." in value:
+        value = PRIVATE_IP_RE.sub(replace_private_ip, value)
 
     # Public IPs (non-private, non-localhost, non-reserved)
     def replace_public_ip(match: re.Match[str]) -> str:
@@ -1087,26 +1418,30 @@ def _sanitize_string_patterns(
             collector.record_auto_redaction("public_ip")
         return hasher.hash_ip(ip, is_private=False) if hasher else "***IP***"
 
-    value = _PUBLIC_IP_PATTERN.sub(replace_public_ip, value)
+    if "." in value:
+        value = PUBLIC_IP_RE.sub(replace_public_ip, value)
+    return value
 
-    # Email addresses
+
+def _redact_emails_and_flag_phones(
+    value: str, hasher: Hasher | None, collector: RedactionCollector | None
+) -> str:
+    """The string patterns' email pass (the HTML engine's 11), then phone numbers offered for review.
+
+    Card- and SSN-shaped numbers are the pattern-file pass's (``redact_pattern_file_matches``).
+    """
+
     def replace_email(match: re.Match[str]) -> str:
         if collector:
             collector.record_auto_redaction("email")
         return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
 
-    value = _EMAIL_PATTERN.sub(replace_email, value)
+    if "@" in value:
+        value = EMAIL_RE.sub(replace_email, value)
 
-    # SSN — flag for review instead of auto-redacting
-    if collector:
-        for match in _SSN_PATTERN.finditer(value):
-            collector.flag_value(
-                match.group(0),
-                "ssn",
-                ConfidenceLevel.MEDIUM,
-                value[max(0, match.start() - 20) : match.end() + 20],
-                "Possible SSN pattern (###-##-####)",
-            )
+    # A phone number holds a run of three digits.
+    if not _DIGIT_RUN_RE.search(value):
+        return value
 
     # Phone numbers — flag for review instead of auto-redacting
     if collector:
@@ -1118,19 +1453,6 @@ def _sanitize_string_patterns(
                 value[max(0, match.start() - 20) : match.end() + 20],
                 "Possible phone number pattern",
             )
-
-    # Credit cards (with Luhn validation to reduce false positives)
-    def replace_cc(match: re.Match[str]) -> str:
-        number = match.group(0)
-        if not _luhn_check(number):
-            return number
-        if collector:
-            collector.record_auto_redaction("credit_card")
-        return _redact_value(number, hasher, "CC", None)
-
-    value = _CC_VISA_PATTERN.sub(replace_cc, value)
-    value = _CC_MC_PATTERN.sub(replace_cc, value)
-    value = _CC_AMEX_PATTERN.sub(replace_cc, value)
 
     return value
 
@@ -1151,8 +1473,15 @@ def _sanitize_headers(
         if isinstance(header, dict) and "name" in header and "value" in header:
             value = header["value"]
             if isinstance(value, str) and str(header["name"]).lower() in URL_VALUED_HEADERS:
-                value = _sanitize_url_query_params(value, hasher, collector)
+                value = _sanitize_url(value, hasher, collector)
             header["value"] = sanitize_header_value(header["name"], value, hasher, collector)
+
+
+def _url_path(url: str) -> str:
+    """Return a URL's path, split by hand like its query (see ``split_url_query``)."""
+    head = split_url_query(url)[0].removesuffix("?").partition("#")[0]
+    _, scheme_sep, rest = head.partition("://")
+    return "/" + rest.partition("/")[2] if scheme_sep else head
 
 
 def _sanitize_url_path(
@@ -1174,13 +1503,13 @@ def _sanitize_url_path(
     Returns:
         The original URL, unchanged
     """
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.path or parsed.path == "/":
+    path = _url_path(url)
+    if not path or path == "/":
         return url
 
     # Flag suspicious path segments for review instead of auto-redacting
     if collector:
-        for segment in parsed.path.split("/"):
+        for segment in path.split("/"):
             if not segment:
                 continue
             if _UUID_PATTERN.match(segment):
@@ -1219,7 +1548,12 @@ def _sanitize_url_path(
     return url
 
 
-def _classify_query_param(name: str, value: str, found: QueryCredential | None) -> str:
+def _classify_query_param(
+    name: str,
+    value: str,
+    found: QueryCredential | None,
+    payload: QueryPayload | None,
+) -> str:
     """Decide what happens to one query parameter.
 
     The single decision tree for the URL string and the parsed ``queryString``
@@ -1229,23 +1563,138 @@ def _classify_query_param(name: str, value: str, found: QueryCredential | None) 
         name: Decoded parameter name
         value: Decoded parameter value
         found: ``find_query_credential`` on the parameter's raw segment
+        payload: ``find_query_payload`` on the parameter's raw segment
 
     Returns:
-        ``"auth"``, ``"field"``, ``"flag"`` or ``"keep"``
+        ``"auth"``, ``"field"``, ``"payload"``, ``"flag"`` or ``"keep"``
     """
-    # A bare or marker-prefixed credential has no field name: any '=' in it is
-    # base64 padding, so the name rules must not read it as key=value.
+    # A bare or marker-prefixed credential or payload has no field name: any
+    # '=' in it is base64 padding, so the name rules must not read it as
+    # key=value.
     if found is not None and not found.keyed:
         return "auth"
+    if payload is not None and not payload.prefix.rstrip("?"):
+        return "payload"
     if is_blank_query_value(value):
         return "keep"
     if is_sensitive_field(name):
         return "field"
     if found is not None:
         return "auth"
+    if payload is not None:
+        return "payload"
     if is_flaggable_field(name):
         return "flag"
     return "keep"
+
+
+def _flags_muted(collector: RedactionCollector | None) -> contextlib.AbstractContextManager[None]:
+    """Scope inside a base64 payload: redactions recorded, review flags discarded."""
+    return collector.flags_muted() if collector is not None else contextlib.nullcontext()
+
+
+def _dump_json_like(data: Any, original_data: Any, original_text: str) -> str:
+    r"""Serialize sanitized JSON the way its original text was written.
+
+    Compact, default spacing, or a 2- or 4-space indent, with non-ASCII
+    escaped or written as-is and '/' escaped as PHP writes it (``\/``) —
+    whichever reproduces the original exactly — inside the original's
+    surrounding whitespace. What ``json.dumps`` cannot reproduce (another
+    indent, number spellings like ``1.50``) falls back to default spacing
+    with non-ASCII as written.
+    """
+    body = original_text.strip()
+    lead = original_text[: len(original_text) - len(original_text.lstrip())]
+    trail = original_text[len(original_text.rstrip()) :]
+    slashes_escaped = "\\/" in body and "/" not in body.replace("\\/", "")
+
+    def render(obj: Any, **options: Any) -> str:
+        text = json.dumps(obj, **options)
+        return text.replace("/", "\\/") if slashes_escaped else text
+
+    layouts: tuple[dict[str, Any], ...] = (
+        {"separators": (",", ":")},
+        {"separators": (", ", ": ")},
+        {"indent": 2},
+        {"indent": 4},
+    )
+    for layout in layouts:
+        for ensure_ascii in (False, True):
+            if render(original_data, ensure_ascii=ensure_ascii, **layout) == body:
+                return lead + render(data, ensure_ascii=ensure_ascii, **layout) + trail
+    return lead + render(data, ensure_ascii=False) + trail
+
+
+def _rewrap_payload(original: str, text: str, *, quoted: bool) -> str:
+    """Base64-encode sanitized payload text in the original's transport form.
+
+    Unpadded only if the original visibly stripped its padding — no '=' where
+    its length needed one; a full quantum gives no evidence and gets standard
+    base64. Percent-encoded if the original was, so a query parser still
+    reads it.
+    """
+    encoded = base64.b64encode(text.encode("utf-8", "surrogatepass")).decode("ascii")
+    if not original.endswith("=") and len(original) % 4:
+        encoded = encoded.rstrip("=")
+    return urllib.parse.quote(encoded, safe="") if quoted else encoded
+
+
+def _sanitize_base64_payload(
+    payload: QueryPayload,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+) -> str | None:
+    """Sanitize inside a base64-wrapped JSON or URL query payload and wrap it again.
+
+    A JSON payload gets the JSON rules, a URL payload the query rules — the
+    checks ``validate`` runs inside one. Nothing is rewritten when nothing
+    inside needed redacting, so an ordinary payload survives byte-for-byte.
+    Pass 1 is final inside a payload: its values are stored encoded, beyond
+    the reach of Pass 1b and Pass 2's find-and-replace, so none is offered
+    for review.
+
+    Args:
+        payload: The located payload
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        The re-encoded payload, or None when it is unchanged
+    """
+    data = parse_json_container(payload.text)
+    with _flags_muted(collector):
+        if data is not None:
+            rewritten_json = _rewrite_json(payload.text, data, hasher, collector)
+            sanitized = None if rewritten_json == payload.text else rewritten_json
+        else:
+            rewritten = _sanitize_url(payload.text, hasher, collector)
+            sanitized = None if rewritten == payload.text else rewritten
+    return None if sanitized is None else _rewrap_payload(payload.encoded, sanitized, quoted=payload.quoted)
+
+
+def _sanitize_payload_field(
+    value: str,
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+) -> str | None:
+    """Sanitize a POST field whose whole value is a base64 JSON or URL payload.
+
+    The same rule as a query payload (``_sanitize_base64_payload``): a payload
+    is never a credential, and what is inside is sanitized in place.
+
+    Args:
+        value: The field's value (raw or decoded — URL transport encoding is undone)
+        hasher: Optional hasher for correlation-preserving redaction
+        collector: Optional collector to record redactions
+
+    Returns:
+        The rewritten value, or None when the value is not a payload or is unchanged
+    """
+    payload = find_query_payload(value)
+    if payload is None or payload.prefix.strip("?"):
+        return None
+    sanitized = _sanitize_base64_payload(payload, hasher, collector)
+    return None if sanitized is None else payload.prefix + sanitized
 
 
 def _flag_query_value(collector: RedactionCollector, name: str, value: str, where: str) -> None:
@@ -1259,12 +1708,12 @@ def _flag_query_value(collector: RedactionCollector, name: str, value: str, wher
     )
 
 
-def _sanitize_url_query_params(
+def _sanitize_url(
     url: str,
     hasher: Hasher | None = None,
     collector: RedactionCollector | None = None,
 ) -> str:
-    """Sanitize credentials and sensitive parameters in a URL's query.
+    """Sanitize the credentials a URL carries: its userinfo password and its query.
 
     Args:
         url: Full URL string
@@ -1272,29 +1721,39 @@ def _sanitize_url_query_params(
         collector: Optional collector to record redactions
 
     Returns:
-        URL with sensitive query parameter values redacted
+        URL with the userinfo password and sensitive query values redacted
     """
-    # Split by hand rather than urlparse/urlunparse: only the query changes,
-    # and everything around it (scheme case, empty ';' or '#', a relative
-    # Location) must come back byte-identical. Raw segments, not parse_qsl,
-    # which would read base64 padding as a key/value separator.
-    head, question, rest = url.partition("?")
-    query, hash_mark, fragment = rest.partition("#")
-    if not question or not query:
+    userinfo = split_url_password(url)
+    if userinfo is not None:
+        before_password, password, after_password = userinfo
+        url = before_password + _redact_value(password, hasher, "AUTH", collector) + after_password
+
+    # Only the query changes: everything around it (scheme case, an empty
+    # ';' or '#', a relative Location) comes back byte-identical. Raw
+    # segments, not parse_qsl, which would read base64 padding as a key/value
+    # separator.
+    before, query, after = split_url_query(url)
+    if not query:
         return url
 
     rebuilt_segments = []
     changed = False
     for segment in query.split("&"):
         found = find_query_credential(segment)
+        payload = find_query_payload(segment) if found is None else None
         key, sep, raw_value = segment.partition("=")
         name = urllib.parse.unquote_plus(key)
         value = urllib.parse.unquote_plus(raw_value) if sep else ""
-        action = _classify_query_param(name, value, found)
+        action = _classify_query_param(name, value, found, payload)
         rebuilt = segment
         if action == "auth" and found is not None:
             rebuilt = found.prefix + _redact_value(found.credential, hasher, "AUTH", collector)
             changed = True
+        elif action == "payload" and payload is not None:
+            sanitized = _sanitize_base64_payload(payload, hasher, collector)
+            if sanitized is not None:
+                rebuilt = payload.prefix + sanitized
+                changed = True
         elif action == "field":
             rebuilt = f"{key}={_redact_value(value, hasher, 'FIELD', collector)}"
             changed = True
@@ -1305,7 +1764,7 @@ def _sanitize_url_query_params(
     if not changed:
         return url
 
-    return f"{head}?{'&'.join(rebuilt_segments)}{hash_mark}{fragment}"
+    return before + "&".join(rebuilt_segments) + after
 
 
 def _sanitize_query_string_array(
@@ -1325,9 +1784,17 @@ def _sanitize_query_string_array(
             continue
         name = str(param["name"])
         value = str(param.get("value", ""))
-        found = find_query_credential(query_param_segment(param))
-        action = _classify_query_param(name, value, found)
-        if action == "auth" and found is not None:
+        segment = query_param_segment(param)
+        found = find_query_credential(segment)
+        payload = find_query_payload(segment) if found is None else None
+        action = _classify_query_param(name, value, found, payload)
+        if action == "payload" and payload is not None:
+            sanitized = _sanitize_base64_payload(payload, hasher, collector)
+            if sanitized is not None:
+                # Re-split the rewritten segment the way the query parser did.
+                new_name, _, new_value = (payload.prefix + sanitized).partition("=")
+                param["name"], param["value"] = new_name, new_value
+        elif action == "auth" and found is not None:
             if found.keyed:
                 param["value"] = _redact_value(found.credential, hasher, "AUTH", collector)
             else:
@@ -1383,50 +1850,70 @@ def _sanitize_request(
 
     # Sanitize the URL string itself (query params and path segments)
     if "url" in req and isinstance(req["url"], str):
-        req["url"] = _sanitize_url_query_params(req["url"], hasher, collector)
+        req["url"] = _sanitize_url(req["url"], hasher, collector)
         req["url"] = _sanitize_url_path(req["url"], hasher, collector)
 
 
-# A body made entirely of base64-alphabet characters is a candidate for
-# base64-encoded-JSON decoding (see _decode_base64_json). Cheap pre-filter so
-# HTML/JSON/text bodies bail before a full decode attempt.
-_BASE64_BODY_RE = re.compile(r"^[A-Za-z0-9+/=]+$")
+def _sanitize_body_string(
+    text: str,
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
+    serial_detectors: Sequence[Any] = (),
+    pattern_file: Sequence[tuple[str, re.Pattern[str], str]] | None = None,
+) -> str:
+    """Sanitize a text outside the HTML engine in that engine's pass order.
 
-
-def _decode_base64_json(value: str) -> Any | None:
-    """Decode a base64 body into a structured JSON payload, if it is one.
-
-    Some devices return their data as raw base64-encoded JSON (often with an
-    empty Content-Type). The decoded text is colon-bearing, so it would
-    otherwise trip the opaque-credential heuristic and be collapsed to a single
-    ``AUTH_`` token — destroying the field names and JSON shape, which are not
-    PII. This discriminator answers "payload or secret?": it returns the parsed
-    object only when ``value`` is valid base64 that decodes to UTF-8 parsing as
-    a JSON object or array. Scalars, non-JSON, and non-base64 inputs return
-    ``None`` so the caller falls back to opaque-token handling.
+    A text body, or one decoded JSON string — the unit validate checks — so an
+    escape hides nothing and no match crosses from one JSON string into the
+    next. Besides the string patterns it takes the HTML engine's positional
+    passes: labeled serials (pass 2), vendor-format serials (2e) and
+    structurally-located credentials (7c), since a device label block in a
+    script, or a serial in a JSON string, must not be reported by validate and
+    left by sanitize (ADR-13, ADR-14). The order is the HTML engine's — MAC
+    (1), serials (2, 2e), IPv6 and IPv4 (6, 4, 5), structural credentials
+    (7c), email (11) — so a value two passes could claim (a MAC after a serial
+    label, an address in a password's element) gets the same placeholder on
+    every route.
 
     Args:
-        value: Candidate base64 string (already stripped).
+        text: The text
+        hasher: Hasher for the string patterns (None: static placeholders)
+        collector: Collector for redaction counts and review flags (None: the
+            passes hash with ``hasher``, or static placeholders without one)
+        custom_patterns: Optional custom patterns for the allowlist checks
+        serial_detectors: Compiled high-confidence vendor serial detectors
+        pattern_file: ``pattern_file_patterns()`` resolved for the call (None:
+            resolved here from ``custom_patterns``)
 
     Returns:
-        The parsed dict/list, or ``None`` when ``value`` is not base64-encoded
-        JSON (object/array).
+        The sanitized text
     """
-    if not value or not _BASE64_BODY_RE.match(value):
-        return None
-    try:
-        decoded = base64.b64decode(value, validate=True).decode("utf-8")
-    except ValueError:
-        # binascii.Error (bad alphabet/padding) and UnicodeDecodeError are both
-        # ValueError subclasses.
-        return None
-    try:
-        parsed = json.loads(decoded)
-    except ValueError:  # includes json.JSONDecodeError
-        return None
-    if isinstance(parsed, dict | list):
-        return parsed
-    return None
+    if not text:
+        return text
+    # With no collector the passes that need one hash with the caller's
+    # hasher (static placeholders without one), and review flags are discarded.
+    passes = collector if collector is not None else RedactionCollector(hasher=hasher or Hasher(salt=None))
+    if pattern_file is None:
+        pattern_file = pattern_file_patterns(custom_patterns)
+    text = redact_pattern_file_matches(text, passes.hasher, passes, pattern_file)
+    text = _redact_macs(text, hasher, collector)
+    if SERIAL_LABEL_HINT_RE.search(text):
+        text = redact_labeled_serials(text, passes.hasher, passes, custom_patterns)
+    if serial_detectors:
+        text = redact_vendor_serials(text, list(serial_detectors), passes.hasher, passes)
+    text = _redact_ip_addresses(text, hasher, collector)
+    if "<" in text:
+        text = redact_structural_credentials(text, passes.hasher, passes, custom_patterns)
+    return _redact_emails_and_flag_phones(text, hasher, collector)
+
+
+def _sanitize_json_string(value: str, hasher: Hasher | None, collector: RedactionCollector | None) -> str:
+    """A decoded JSON string (value or key), as any text outside the HTML engine."""
+    active = _active_call_patterns()
+    return _sanitize_body_string(
+        value, hasher, collector, active.custom_patterns, active.serial_detectors, active.pattern_file
+    )
 
 
 def _sanitize_response_content(
@@ -1438,6 +1925,12 @@ def _sanitize_response_content(
 ) -> None:
     """Sanitize response content in-place.
 
+    The body is decoded first (``decode_transport_body``): HAR's ``encoding:
+    base64`` is how the recorder stored the bytes, not what the server sent,
+    so a transport-encoded body is sanitized as the text it carries and
+    written back as that text, ``encoding`` dropped. Binary stays as
+    recorded.
+
     Args:
         content: HAR response content object with 'text' and 'mimeType' keys
         collector: Optional collector with hasher for redaction
@@ -1448,64 +1941,81 @@ def _sanitize_response_content(
             only redacted if it echoes that credential — opaque server-issued
             session tokens are preserved for replay fidelity.
     """
-    if "text" not in content or not content["text"]:
+    text = decode_transport_body(content)
+    if text is None:
+        # An earlier release wiped some transport-encoded bodies to an AUTH_
+        # placeholder under `encoding: base64`, which no decoder accepts. The
+        # placeholder is text; the marker is what makes the body invalid.
+        raw = content.get("text")
+        if content.get("encoding") == "base64" and isinstance(raw, str) and is_fully_redacted(raw):
+            del content["encoding"]
         return
+    if content.get("encoding") == "base64":
+        del content["encoding"]
+    content["text"] = _sanitize_body_text(
+        text, str(content.get("mimeType") or ""), collector, custom_patterns, heuristics, url_credential
+    )
 
-    mime_type = content.get("mimeType", "")
+
+def _sanitize_body_text(
+    text: str,
+    mime_type: str,
+    collector: RedactionCollector | None,
+    custom_patterns: str | dict[str, Any] | None,
+    heuristics: HeuristicMode,
+    url_credential: str | None,
+) -> str:
+    """Sanitize a response body's text: the one dispatch for every body.
+
+    In order: a body that is itself base64 of a JSON object or URL is
+    sanitized as the text it wraps — the whole dispatch, so every check
+    ``validate`` runs on it has a remedy — and wrapped again; a bare base64
+    credential is redacted whole unless it is a server token (see
+    ``_is_echoed_credential``); anything else goes to the engine
+    ``route_body`` picks.
+
+    Args:
+        text: The body's text, transport encoding already undone
+        mime_type: The body's declared mime type
+        collector: Optional collector with hasher for redaction
+        custom_patterns: Optional custom patterns (file path or dict)
+        heuristics: Heuristic mode for pipe-delimited value detection
+        url_credential: Base64 credential from the request URL (if any)
+
+    Returns:
+        The sanitized text
+    """
     hasher = collector.hasher if collector else None
+    stripped = text.strip()
 
-    stripped = content["text"].strip()
+    payload_text = decode_base64_payload(stripped)
+    if payload_text is not None:
+        with _flags_muted(collector):
+            inner = payload_text
+            if parse_json_container(inner) is None:
+                inner = _sanitize_url(inner, hasher, collector)
+            inner = _sanitize_body_text(inner, "", collector, custom_patterns, heuristics, url_credential)
+        if inner == payload_text:
+            return text
+        return _rewrap_payload(stripped, inner, quoted=False)
 
-    # Decode-first discriminator: a base64-encoded *structured* payload (JSON
-    # object or array) must be sanitized value-by-value with its structure
-    # intact — never collapsed to a single AUTH_ token. Devices like the Sercomm
-    # DM1000 return data as raw base64 JSON (empty Content-Type), which decodes
-    # to a colon-bearing string and would otherwise trip the opaque-credential
-    # branch below. Re-encode to base64 on the way out, matching how it arrived.
-    decoded_json = _decode_base64_json(stripped)
-    if decoded_json is not None:
-        sanitized = _sanitize_json_recursive(decoded_json, hasher, collector)
-        content["text"] = base64.b64encode(json.dumps(sanitized).encode()).decode()
-        return
+    if is_base64_credential(stripped) and (
+        url_credential is None or _is_echoed_credential(stripped, url_credential)
+    ):
+        return _redact_value(stripped, hasher, "AUTH", collector)
 
-    if is_base64_credential(stripped):
-        if url_credential is None or _is_echoed_credential(stripped, url_credential):
-            content["text"] = _redact_value(stripped, hasher, "AUTH", collector)
-            return
-
-    if "text/html" in mime_type or "text/xml" in mime_type or "application/xml" in mime_type:
-        content["text"] = sanitize_html(
-            content["text"],
-            collector=collector,
-            custom_patterns=custom_patterns,
-            heuristics=heuristics,
+    route, data = route_body(mime_type, text)
+    if route == "html":
+        return sanitize_html(
+            text, collector=collector, custom_patterns=custom_patterns, heuristics=heuristics
         )
-        return
 
-    # Structurally-located credentials (HTML engine pass 7c) for every other
-    # text-bearing body. `validate` checks *all* response bodies, so a device
-    # label block embedded in a `.js` or `application/javascript` body would
-    # otherwise be reported as an error that no sanitize run could clear —
-    # sanitize and validate must agree on what they can each see (ADR-14).
-    if hasher is not None and collector is not None and content.get("encoding") != "base64":
-        content["text"] = redact_structural_credentials(content["text"], hasher, collector, custom_patterns)
+    if route == "json" and data is not None:
+        return _rewrite_json(text, data, hasher, collector, served=True)
 
-    if "application/json" in mime_type:
-        try:
-            data = json.loads(content["text"])
-            content["text"] = json.dumps(_sanitize_json_recursive(data, hasher, collector))
-        except json.JSONDecodeError:
-            _LOGGER.warning("Invalid JSON in response content, skipping sanitization")
-    elif (mime_type.startswith("text/") or not mime_type) and content.get("encoding") != "base64":
-        # Fallback: apply pattern-based sanitization to text content
-        content["text"] = _sanitize_string_patterns(content["text"], hasher, collector)
-        # Vendor-format serials (delimiter-aware, domain detectors) — runs
-        # outside _sanitize_string_patterns so its perf length guard can
-        # never cost serial coverage, however large the text body.
-        if hasher is not None and collector is not None:
-            serial_detectors = _resolve_serial_detectors(custom_patterns)
-            if serial_detectors:
-                content["text"] = redact_vendor_serials(content["text"], serial_detectors, hasher, collector)
+    return _sanitize_body_string(
+        text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)
+    )
 
 
 def _sanitize_response(
@@ -1534,7 +2044,7 @@ def _sanitize_response(
 
     # HAR's copy of the Location header
     if isinstance(resp.get("redirectURL"), str):
-        resp["redirectURL"] = _sanitize_url_query_params(resp["redirectURL"], hasher, collector)
+        resp["redirectURL"] = _sanitize_url(resp["redirectURL"], hasher, collector)
 
     # Sanitize cookie objects (Playwright parses Set-Cookie into structured objects)
     if "cookies" in resp and isinstance(resp["cookies"], list):
@@ -1580,6 +2090,9 @@ def sanitize_entry(
     Returns:
         Sanitized entry
     """
+    if not _skip_copy:
+        # sanitize_har has already checked every entry it passes with _skip_copy.
+        _check_har_field(entry, _HAR_ENTRY, "entry")
     result = entry if _skip_copy else copy.deepcopy(entry)
 
     # Use collector's hasher if provided, otherwise create one
@@ -1593,6 +2106,7 @@ def sanitize_entry(
     with (
         _field_patterns_scope(custom_patterns),
         _header_sets_scope(custom_patterns),
+        _call_patterns_scope(custom_patterns),
     ):
         if "request" in result:
             _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
@@ -1600,7 +2114,52 @@ def sanitize_entry(
         if "response" in result:
             _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_credential)
 
+        _sanitize_security_details(result, collector)
+
     return result
+
+
+# Names a self-signed certificate is issued to by default, not by an owner.
+_LOOPBACK_CERTIFICATE_NAMES = frozenset({"localhost", "localhost.localdomain"})
+
+
+def _sanitize_security_details(entry: dict[str, Any], collector: RedactionCollector) -> None:
+    """Redact the device identities in an entry's TLS certificate names (ADR-17).
+
+    A MAC in ``_securityDetails.subjectName`` or ``issuer`` is hashed in
+    place, in its own layout, so it correlates with the same MAC elsewhere
+    (``certificate_name_macs``, shared with validate). A self-signed name with
+    no MAC — a model name, a vendor hostname, or a name its owner set — is
+    offered for review. ``protocol``, ``validFrom`` and ``validTo`` are kept.
+    """
+    details = entry.get("_securityDetails")
+    if not isinstance(details, dict):
+        return
+    subject, issuer = details.get("subjectName"), details.get("issuer")
+    for field in CERTIFICATE_NAME_FIELDS:
+        name = details.get(field)
+        if not isinstance(name, str):
+            continue
+        for mac in dict.fromkeys(certificate_name_macs(name)):
+            if not is_mac_placeholder(mac):
+                collector.record_auto_redaction("mac_address")
+                name = name.replace(mac, collector.hasher.hash_mac(mac))
+        details[field] = name
+    if (
+        isinstance(subject, str)
+        and subject
+        and subject == issuer
+        and details["subjectName"] == subject
+        and subject not in _LOOPBACK_CERTIFICATE_NAMES
+        and not is_redacted(subject, _active_call_patterns().custom_patterns)
+    ):
+        collector.flag_value(
+            subject,
+            "device_name",
+            ConfidenceLevel.LOW,
+            "TLS certificate subject",
+            "Self-signed certificate name: a model or vendor hostname, or a name the device's owner set",
+        )
 
 
 def _embed_sanitization_metadata(
@@ -1640,6 +2199,10 @@ def _embed_sanitization_metadata(
         "flagged_total": len(report.flagged),
         "warnings": list(report.warnings),
     }
+    if not report.flagged:
+        # Nothing to review, so the outcome is known now; any other outcome
+        # is recorded by whoever runs the review (record_review).
+        metadata["sanitization"]["review"] = ReviewOutcome.NONE_FLAGGED.value
 
 
 def _parse_cookie_names(cookie_header_value: str) -> list[str]:
@@ -1663,29 +2226,81 @@ def _parse_set_cookie_name(set_cookie_value: str) -> str | None:
     return None
 
 
-def _request_query_segments(request: dict[str, Any]) -> Iterator[str]:
-    """Yield a request's query segments: the URL string's first, then ``queryString``'s."""
-    url = request.get("url", "")
-    if isinstance(url, str) and url:
-        yield from urllib.parse.urlparse(url).query.split("&")
-    params = request.get("queryString")
-    if isinstance(params, list):
-        for param in params:
-            if isinstance(param, dict):
-                yield query_param_segment(param)
+def _scan_submitted_credentials(entries: list[Any]) -> frozenset[str]:
+    """Every value the capture's requests submit under a credential-named field.
 
-
-def _extract_url_credential(request: dict[str, Any]) -> str | None:
-    """Return the base64 credential carried in a request's URL query, or None.
-
-    The response-body guard compares against it to tell an echoed credential
-    from a server-issued session token.
+    Every request's ``postData`` — its ``params``, and its text read as JSON
+    members (to ``JSON_MAX_DEPTH``) when it parses as JSON, else as
+    ``&``-separated form pairs when it holds ``=`` — and the ``queryString``
+    array, judged by ``is_sensitive_field``. Read before
+    sanitizing, so a response served before the request that submits the same
+    value is matched too. Empty values and this sanitizer's own placeholders
+    are not credentials. XML, multipart and base64-wrapped bodies are not
+    parsed as such (one holding ``=`` is split as form pairs like any other
+    text), and a URL query with no ``queryString`` array is not read: a served
+    copy of a value submitted only there is judged by its shape alone, which
+    offers prose for review (none of these occurs in the fleet's requests).
     """
-    for segment in _request_query_segments(request):
-        found = find_query_credential(segment)
-        if found:
-            return found.credential
-    return None
+    found: set[str] = set()
+    for entry in entries:
+        request = entry.get("request") if isinstance(entry, dict) else None
+        if not isinstance(request, dict):
+            continue
+        post = request.get("postData")
+        post = post if isinstance(post, dict) else {}
+        pairs: list[tuple[str, Any]] = []
+        for params in (request.get("queryString"), post.get("params")):
+            # check_har_types has made every item an object.
+            for param in params if isinstance(params, list) else ():
+                pairs.append((str(param.get("name", "")), param.get("value")))
+        text = post.get("text")
+        if isinstance(text, str) and text:
+            data = parse_json_container(text)
+            if data is not None:
+                pairs.extend(_json_members_to_depth(data))
+            elif "=" in text:
+                for pair in text.split("&"):
+                    key, _, value = pair.partition("=")
+                    pairs.append((urllib.parse.unquote_plus(key), urllib.parse.unquote_plus(value)))
+        found.update(
+            value
+            for key, value in pairs
+            if isinstance(value, str) and value and not _is_own_placeholder(value) and is_sensitive_field(key)
+        )
+    return frozenset(found)
+
+
+def _json_members_to_depth(data: Any) -> list[tuple[str, Any]]:
+    """Every ``(key, value)`` member of a parsed JSON container, down to ``JSON_MAX_DEPTH``."""
+    members: list[tuple[str, Any]] = []
+    stack: list[tuple[Any, int]] = [(data, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > JSON_MAX_DEPTH:
+            continue
+        children = json_members(node) if isinstance(node, dict) else [("", item) for item in node]
+        if isinstance(node, dict):
+            members.extend(children)
+        stack.extend((value, depth + 1) for _, value in children if isinstance(value, dict | list))
+    return members
+
+
+def _readable_text(har_data: dict[str, Any]) -> str:
+    """Every string in a HAR, with each JSON body's decoded strings: what the review's find-and-replace can reach."""
+    parts: list[str] = []
+    stack: list[Any] = [har_data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, str):
+            parts.append(node)
+            parsed = parse_json_container(node)
+            if parsed is not None:
+                parts.extend(iter_json_strings(parsed))
+    return "\n".join(parts)
 
 
 def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
@@ -1699,9 +2314,9 @@ def _scan_url_credentials(entries: list[Any]) -> dict[int, str]:
     credentials: dict[int, str] = {}
     for i, entry in enumerate(entries):
         request = entry.get("request") if isinstance(entry, dict) else None
-        credential = _extract_url_credential(request) if isinstance(request, dict) else None
-        if credential is not None:
-            credentials[i] = credential
+        found = next(iter_url_credentials(request), None) if isinstance(request, dict) else None
+        if found is not None:
+            credentials[i] = found.credential
     return credentials
 
 
@@ -1894,6 +2509,9 @@ def sanitize_har(
     Returns:
         Tuple of (sanitized HAR data, sanitization report)
 
+    Raises:
+        HarValidationError: If a field has the wrong HAR type (``check_har_types``)
+
     Note:
         This is a BREAKING CHANGE from the previous return type (dict only).
         Callers that only need the sanitized data can unpack with:
@@ -1906,6 +2524,8 @@ def sanitize_har(
         >>> "log" in sanitized
         True
     """
+    check_har_types(har_data)
+
     # Generate salt upfront so it can be stored in report
     actual_salt: str
     if salt in ("auto", "random"):
@@ -1932,21 +2552,31 @@ def sanitize_har(
     # is looking for.
     orig_entries = har_data.get("log", {}).get("entries", [])
     url_credentials = _scan_url_credentials(orig_entries) if isinstance(orig_entries, list) else {}
+    with _field_patterns_scope(custom_patterns):
+        submitted = (
+            _scan_submitted_credentials(orig_entries) if isinstance(orig_entries, list) else frozenset()
+        )
 
-    # Sanitize all entries using the shared collector
+    # Sanitize all entries using the shared collector, the call's patterns
+    # resolved once for all of them.
     if "entries" in log and isinstance(log["entries"], list):
         sanitized_entries = []
-        for i, entry in enumerate(log["entries"]):
-            sanitized_entries.append(
-                sanitize_entry(
-                    entry,
-                    custom_patterns=custom_patterns,
-                    collector=collector,
-                    heuristics=heuristics,
-                    _skip_copy=True,
-                    _url_credential=url_credentials.get(i),
-                )
-            )
+        submitted_token = _SUBMITTED_CREDENTIALS_CTX.set(submitted)
+        try:
+            with _call_patterns_scope(custom_patterns):
+                for i, entry in enumerate(log["entries"]):
+                    sanitized_entries.append(
+                        sanitize_entry(
+                            entry,
+                            custom_patterns=custom_patterns,
+                            collector=collector,
+                            heuristics=heuristics,
+                            _skip_copy=True,
+                            _url_credential=url_credentials.get(i),
+                        )
+                    )
+        finally:
+            _SUBMITTED_CREDENTIALS_CTX.reset(submitted_token)
         log["entries"] = sanitized_entries
 
     # Sanitize pages (if present) using the shared collector
@@ -1983,8 +2613,11 @@ def sanitize_har(
         client_side = _detect_client_side_cookies(log["entries"])
         meta = log.setdefault("_har_capture", {})
         meta["_client_side_cookies"] = client_side
+        # A file sanitized before keeps its annotation: this run cannot
+        # recognize the AUTH_ placeholders the earlier one wrote.
+        prior = {i for i in annotated_url_credential_entries(log) if 0 <= i < len(log["entries"])}
         meta["_sanitized_credentials"] = [
-            {"entry_index": i, "location": "url_query_param"} for i in url_credentials
+            {"entry_index": i, "location": "url_query_param"} for i in sorted(prior | url_credentials.keys())
         ]
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
@@ -1992,9 +2625,21 @@ def sanitize_har(
     propagated = _propagate_redacted_values(result, collector.redacted_values)
     if propagated:
         collector.auto_redacted_counts["propagated"] = propagated
-        # A propagated value has no surviving occurrence left, so asking the user
-        # to review it is a decision with no effect. Drop it from the review queue.
-        collector.drop_flagged({v for v in collector.redacted_values if _is_propagation_eligible(v)})
+        # A value with no surviving occurrence left would give the user a review
+        # decision with no effect, so it leaves the review queue. One that
+        # survives in a form the sweep does not match (`\/` in a PHP body, an
+        # ASCII-escaped JSON string) stays offered.
+        # Only a flagged value can leave the queue, so the flagged values are
+        # the ones searched: searching every redacted value made this
+        # quadratic in a capture whose session cookie rotates per request.
+        readable = _readable_text(result)
+        collector.drop_flagged(
+            {
+                v
+                for v in (flagged.original_value for flagged in collector.flagged)
+                if v in collector.redacted_values and _is_propagation_eligible(v) and v not in readable
+            }
+        )
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)
@@ -2118,6 +2763,44 @@ def _validate_har_for_redaction(har_data: dict[str, Any]) -> None:
         raise HarValidationError("Missing required 'log' key", "root")
 
 
+def _user_redaction_forms(value: str) -> set[str]:
+    r"""Every text a HAR string can hold ``value`` as.
+
+    As written; percent-encoded, as a URL path (``/`` kept), a query value or a
+    form body (``+`` for space) carries it; and escaped, as a JSON body inside
+    the string carries it (``\"``, ``\u00e9``, PHP's ``\/``).
+    """
+    forms = {
+        value,
+        urllib.parse.quote(value),
+        urllib.parse.quote(value, safe=""),
+        urllib.parse.quote_plus(value),
+    }
+    for escaped in (json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]):
+        forms.update((escaped, escaped.replace("/", "\\/")))
+    return forms
+
+
+def _replace_in_string_values(data: Any, replacements: dict[str, str]) -> None:
+    """Replace each form with its placeholder inside every string value of ``data``, in place.
+
+    Keys, numbers and every other JSON structure are left alone, so no value
+    can corrupt the HAR (``200`` is not a status code's digits, ``name`` is
+    not a key). One matcher per call, longest form first at each position, so
+    a form is never matched inside a placeholder already written.
+    """
+    pattern = re.compile("|".join(re.escape(form) for form in sorted(replacements, key=len, reverse=True)))
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        slots = list(node.items()) if isinstance(node, dict) else list(enumerate(node))
+        for slot, child in slots:
+            if isinstance(child, str):
+                node[slot] = pattern.sub(lambda match: replacements[match.group(0)], child)
+            elif isinstance(child, dict | list):
+                stack.append(child)
+
+
 def apply_user_redactions(
     har_data: dict[str, Any],
     report: SanitizationReport,
@@ -2165,13 +2848,17 @@ def apply_user_redactions(
     result = copy.deepcopy(har_data)
 
     try:
-        # Serialize to string for global replacement
-        content = json.dumps(result)
+        # A HAR that cannot be serialized cannot be written back either.
+        json.dumps(result)
     except (TypeError, ValueError) as e:
         raise HarValidationError(f"Failed to serialize HAR data: {e}") from e
 
-    # Apply each redaction
-    for item in redactions_to_apply:
+    # Every form of every chosen value, mapped to its placeholder. A value
+    # can contain another offered value (a username holding a phone number):
+    # longest originals claim a shared form first, and the matcher tries
+    # longest forms first, so the outer value is replaced whole.
+    replacements: dict[str, str] = {}
+    for item in sorted(redactions_to_apply, key=lambda flagged: len(flagged.original_value), reverse=True):
         try:
             # Generate redacted value via the category→prefix map, so
             # user redactions carry the same placeholder prefixes as
@@ -2181,32 +2868,20 @@ def apply_user_redactions(
             # safe-value patterns did not all recognize as redacted.
             redacted = hasher.hash_sensitive_value(item.original_value, item.category)
             item.redacted_value = redacted
-
-            # IMPORTANT: Escape values for JSON string context
-            # This handles newlines, quotes, backslashes, etc.
-            escaped_original = json.dumps(item.original_value)[1:-1]  # Strip quotes
-            escaped_redacted = json.dumps(redacted)[1:-1]
-
-            # Perform global replacement
-            content = content.replace(escaped_original, escaped_redacted)
-
+            for form in _user_redaction_forms(item.original_value):
+                replacements.setdefault(form, redacted)
         except Exception as e:  # noqa: PERF203 - intentional: continue with other redactions on error
             _LOGGER.warning("Failed to redact flagged item (category=%s): %s", item.category, e)
-            # Continue with other redactions
             continue
 
-    try:
-        # Parse back to dict — cast needed because json.loads returns Any
-        parsed: dict[str, Any] = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise HarValidationError(
-            f"Failed to parse HAR after applying redactions: {e.msg} at position {e.pos}"
-        ) from e
+    parsed = result
+    if replacements:
+        _replace_in_string_values(parsed, replacements)
 
     # Refresh the embedded metadata's user-decision counts. The metadata was
     # embedded at the end of Pass 1, before any review decision existed, so
     # without this a reviewed artifact reports user_redacted: 0 forever
-    # (observed on the CM2500 contributor capture, 2026-08-19).
+    # (a reviewed CM2500 capture reported it).
     sanitization_meta = parsed.get("log", {}).get("_har_capture", {}).get("sanitization")
     if isinstance(sanitization_meta, dict):
         sanitization_meta["user_redacted"] = report.total_user_redacted
@@ -2240,13 +2915,13 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
         r"DEVICE_[a-f0-9]{8}",  # Hashed device names
         r"PRIV_IP_[a-f0-9]{8}",  # Hashed private IPs (old format)
         r"\*\*\*[A-Z]+\*\*\*",  # Static placeholders
-        r"02:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}",  # Hashed MACs
         r"10\.255\.\d+\.\d+",  # Hashed private IPs
         r"192\.0\.2\.\d+",  # Hashed public IPs (TEST-NET-1)
         r"user_[a-f0-9]{8}@redacted\.invalid",  # Hashed emails
     ]
 
-    total_matches = 0
+    # Hashed MACs: the MACs in the document that the allowlist calls placeholders
+    total_matches = sum(1 for match in MAC_RE.finditer(content) if is_redacted(match.group(0)))
     for pattern in redaction_patterns:
         matches = re.findall(pattern, content, re.IGNORECASE)
         total_matches += len(matches)

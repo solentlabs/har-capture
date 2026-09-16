@@ -4,30 +4,17 @@ from __future__ import annotations
 
 import gzip
 import json
-import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from har_capture.cli import interactive
 from har_capture.cli._completeness_display import display_completeness
 from har_capture.cli._patterns_resolver import require_patterns
 from har_capture.patterns import PatternLoadError
-from har_capture.sanitization.report import HeuristicMode
+from har_capture.sanitization.report import HeuristicMode, ReviewOutcome
 from har_capture.validation import analyze_har_file
-
-
-def _stdin_is_tty() -> bool:
-    """Return True if stdin is a real terminal.
-
-    Extracted as a single seam so tests can override the
-    "interactive vs non-interactive" branch without monkeypatching
-    click's runtime-replaced ``sys.stdin``. The CLI checks this in
-    three places (gating the auto-report fallback, the
-    already-sanitized confirmation, and the interactive review) —
-    one helper keeps the answer consistent across the three.
-    """
-    return sys.stdin.isatty()
 
 
 def sanitize(
@@ -122,11 +109,13 @@ def sanitize(
         typer.echo(f"Error: max-size must be >= 0, got {max_size}", err=True)
         raise typer.Exit(1)
 
-    # Interactive review is always enabled — fall back to report if no TTY
+    # Interactive review is always enabled — fall back to report if no TTY.
+    # One answer for all three uses: the report fallback, the
+    # already-sanitized confirmation, and the review itself.
     run_heuristics = True
-    interactive_terminal = _stdin_is_tty()
+    interactive_terminal = interactive.stdin_is_tty()
 
-    if not _stdin_is_tty():
+    if not interactive_terminal:
         typer.echo(
             "Note: No terminal detected. Writing flagged values to report instead.",
             err=True,
@@ -170,7 +159,7 @@ def sanitize(
             typer.echo(f"  Found {match_count} redaction placeholder(s) (MAC_xxxxx, PASS_xxxxx, etc.)")
             typer.echo("  Proceeding may double-hash already redacted values.")
             typer.echo()
-            if _stdin_is_tty():
+            if interactive_terminal:
                 confirm = typer.confirm("Continue anyway?", default=False)
                 if not confirm:
                     typer.echo("Aborted.")
@@ -191,37 +180,29 @@ def sanitize(
             heuristics=heuristics,
         )
 
-        # Interactive review mode (requires TTY)
-        review_refreshed_sibling = False
+        # Interactive review mode (requires TTY). Every flagged run records
+        # how its review ended; save_review regenerates an existing .gz.
+        review_refreshed_sibling = bool(sanitization_report.flagged)
         if interactive_terminal and sanitization_report.flagged:
-            from har_capture.cli.interactive import run_interactive_review
-
-            review_completed = run_interactive_review(
+            outcome = interactive.run_interactive_review(
                 sanitization_report,
                 input_path=str(input_file),
                 output_path=result_path,
                 salt_mode=salt_mode,
             )
-
-            if review_completed and sanitization_report.total_user_redacted > 0:
-                from har_capture.cli.interactive import apply_reviewed_redactions
-
-                # Auto-detects and regenerates an existing .gz sibling.
-                apply_reviewed_redactions(sanitization_report, result_path)
-                review_refreshed_sibling = True
-
-            # Display summary
-            from har_capture.cli.interactive import display_summary
-
-            display_summary(sanitization_report)
+            interactive.save_review(sanitization_report, result_path, outcome)
+            interactive.display_summary(sanitization_report)
 
         else:
             # Non-interactive mode: display sanitization summary
-            from har_capture.cli.interactive import display_sanitization_summary
+            interactive.display_sanitization_summary(
+                sanitization_report, str(input_file), result_path, salt_mode
+            )
 
-            display_sanitization_summary(sanitization_report, str(input_file), result_path, salt_mode)
-
-            if run_heuristics and not sanitization_report.flagged:
+            if sanitization_report.flagged:
+                interactive.save_review(sanitization_report, result_path, ReviewOutcome.NO_TTY)
+                interactive.warn_unreviewed(len(sanitization_report.flagged), result_path)
+            else:
                 typer.echo()
                 typer.echo("No suspicious values found. All values were handled automatically.")
 
@@ -240,9 +221,7 @@ def sanitize(
         if not compress and not review_refreshed_sibling:
             sibling = Path(str(result_path) + ".gz")
             if sibling.exists():
-                from har_capture.cli.interactive import regenerate_compressed_har
-
-                regenerate_compressed_har(Path(result_path), sibling)
+                interactive.regenerate_compressed_har(Path(result_path), sibling)
 
         if compress:
             result_path_obj = Path(result_path)

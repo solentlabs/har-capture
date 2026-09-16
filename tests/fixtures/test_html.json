@@ -16,7 +16,6 @@
     {"input_html": "Relay: 3.100.200.50",                     "removed": "3.100.200.50",          "placeholder": "0.0.0.0",            "id": "public_ip_low_first_octet"},
     {"input_html": "IPv6: 2001:db8::1",                       "removed": "2001:db8::1",           "placeholder": "::",                 "id": "ipv6_compressed"},
     {"input_html": "IPv6: 2001:0db8:85a3:0000:0000:8a2e:0370:7334", "removed": "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "placeholder": "::", "id": "ipv6_full"},
-    {"input_html": "Localhost: ::1",                          "removed": "::1",                   "placeholder": "::",                 "id": "ipv6_localhost"},
     {"input_html": "password=secret123",                      "removed": "secret123",             "placeholder": "***PASS***",         "id": "password_equals"},
     {"input_html": "passphrase: mysecretphrase",              "removed": "mysecretphrase",        "placeholder": "***PASS***",         "id": "passphrase"},
     {"input_html": "psk=wireless_key_here",                   "removed": "wireless_key_here",     "placeholder": "***PASS***",         "id": "psk_wireless"},
@@ -26,6 +25,39 @@
     {"input_html": "config file: isp_settings.cfg",           "removed": "isp_settings.cfg",      "placeholder": "***CONFIG***",       "id": "config_lowercase"},
     {"input_html": "Account ID: 12345678",                    "removed": "12345678",              "placeholder": "***ACCOUNT***",      "id": "account_id"},
     {"input_html": "Subscriber Number: SUB-9876",             "removed": "SUB-9876",              "placeholder": "***ACCOUNT***",      "id": "subscriber_number"},
+    {"input_html": "<p>Account ID: <b>998877</b></p>",        "removed": "998877",                "placeholder": "Account ID: <b>***ACCOUNT***</b></p>", "id": "account_id_tag_wrapped"},
+    {"input_html": "Customer Number: DEV_abc123",             "removed": "DEV_abc123",            "placeholder": "Customer Number: ***ACCOUNT***", "id": "account_id_prefix_shaped"},
+    {"input_html": "<a href=\"/s?deviceid=abc123&x=1\">Link</a>", "removed": "abc123",           "placeholder": "deviceid=***ACCOUNT***&x=1\">Link</a>", "id": "account_value_stops_at_url_delimiters"},
+    {"input_html": "var deviceId = \"abc123\";",              "removed": "abc123",                "placeholder": "var deviceId = \"***ACCOUNT***\";", "id": "account_quoted_script_value"},
+    {"input_html": "<input type=\"password\" onkeyup=\"if(this.value.length<8)warn()\" value=\"hunter2x\">", "removed": "hunter2x", "placeholder": "value=\"***PASS***\"", "id": "password_input_lt_in_quoted_attribute"},
+    {"input_html": "<input type=password value=hunter2x><p>kept</p>", "removed": "hunter2x", "placeholder": "value=***PASS***><p>kept</p>", "id": "password_input_unquoted_value_stops_at_tag_end"},
+    {"input_html": "<input\n  type=\"password\"\n  value=\"hunter2x\">", "removed": "hunter2x", "placeholder": "value=\"***PASS***\"", "id": "password_input_attributes_on_lines"},
+    {"input_html": "<meta name=csrf-token content=xsrf_abc123><p>kept</p>", "removed": "xsrf_abc123", "placeholder": "content=***CSRF***><p>kept</p>", "id": "csrf_unquoted_value_stops_at_tag_end"},
+    {"input_html": "<meta data-hint=\"a<b\" name=\"csrf-token\" content=\"xsrf_abc123\">", "removed": "xsrf_abc123", "placeholder": "content=\"***CSRF***\"", "id": "csrf_meta_lt_in_quoted_attribute"},
+    {"input_html": "<td>Serial Number</td><td title=\"a<b\">4131N12345678</td>", "removed": "4131N12345678", "placeholder": "<td title=\"a<b\">***SERIAL***</td>", "id": "serial_cell_lt_in_quoted_attribute"},
+    {"input_html": "<input type=\"password\" onfocus=clear() value=\"hunter2x\">", "removed": "hunter2x", "placeholder": "onfocus=clear() value=\"***PASS***\"", "id": "password_input_unquoted_paren_attribute"},
+    {"input_html": "<input type=password data-opts={min:8} value=hunter2x>", "removed": "hunter2x", "placeholder": "data-opts={min:8} value=***PASS***>", "id": "password_input_unquoted_brace_attribute"},
+    {"input_html": "<td><font class=\"wifi_ntwrk\" style=font-weight:bold;>XFSETUP-9210</font></td>", "removed": "XFSETUP-9210", "placeholder": "style=font-weight:bold;>***WIFI***</font>", "id": "ssid_attribute_unquoted_semicolon_attribute"},
+    {"input_html": "document.write(\"Serial Number: <b class=\\\"v\\\">4131N12345678</b>\");", "removed": "4131N12345678", "placeholder": "<b class=\\\"v\\\">***SERIAL***</b>", "id": "serial_tag_escaped_quotes_in_script"},
+    {"input_html": "document.write(\"<p>WPS PIN: <b class=\\\"v\\\">13572468</b></p>\");", "removed": "13572468", "placeholder": "<b class=\\\"v\\\">***PIN***</b>", "id": "wps_pin_tag_escaped_quotes_in_script"},
+    {"input_html": "document.write(\"<input type=\\\"password\\\" value=\\\"hunter2x\\\">\");", "removed": "hunter2x", "placeholder": "value=\\\"***PASS***\\\">", "id": "password_input_escaped_quotes_in_script"},
+    {"input_html": "document.write(\"<meta name=\\\"csrf-token\\\" content=\\\"xsrf_abc123\\\">\");", "removed": "xsrf_abc123", "placeholder": "content=\\\"***CSRF***\\\">", "id": "csrf_meta_escaped_quotes_in_script"},
+    {"input_html": "document.write(\"<label>SSID</label><input value=\\\"MyHomeNet\\\">\");", "removed": "MyHomeNet", "placeholder": "value=\\\"***WIFI***\\\">", "id": "ssid_input_escaped_quotes_in_script"},
+    {"input_html": "x = \"password=\\\"hunter2x\\\"\";",       "removed": "hunter2x",              "placeholder": "password=\\\"***PASS***\\\"\";", "id": "password_label_escaped_quotes"},
+    {"input_html": "{passphrase: 'mysecretphrase'}",           "removed": "mysecretphrase",        "placeholder": "{passphrase: '***PASS***'}", "id": "password_label_separator_and_quote_kept"},
+    {"input_html": "x = \"session=\\\"AbcDef1234567890abcdef\\\"\";", "removed": "AbcDef1234567890abcdef", "placeholder": "session=\\\"***TOKEN***\\\"\";", "id": "session_token_escaped_quotes"},
+    {"input_html": "x = \"password=\\\\\\\"hunter2x\\\\\\\"\";", "removed": "hunter2x", "placeholder": "password=\\\\\\\"***PASS***\\\\\\\"\";", "id": "password_label_double_escaped_quotes"},
+    {"input_html": "x = \"password=abc12345\\\\\";", "removed": "abc12345", "placeholder": "password=***PASS***\\\\\";", "id": "password_value_before_escaped_backslash"},
+    {"input_html": "x = \"session=\\\\\\\"AbcDef1234567890abcdef\\\\\\\"\";", "removed": "AbcDef1234567890abcdef", "placeholder": "session=\\\\\\\"***TOKEN***\\\\\\\"\";", "id": "session_token_double_escaped_quotes"},
+    {"input_html": "<td>Password:&nbsp;hunter2x</td>", "removed": "hunter2x", "placeholder": "Password:&nbsp;***PASS***</td>", "id": "password_after_nbsp_entities"},
+    {"input_html": "password='!secret99'", "removed": "!secret99", "placeholder": "password='***PASS***'", "id": "quoted_password_starting_with_bang"},
+    {"input_html": "wpakey=abc123xyz", "removed": "abc123xyz", "placeholder": "wpakey=***PASS***", "id": "wpa_key_label_still_redacted"},
+    {"input_html": "var wifi0_wpapsk_key = \"s3cretWifi9\";", "removed": "s3cretWifi9", "placeholder": "wifi0_wpapsk_key = \"***PASS***\"", "id": "glued_key_label_still_redacted"},
+    {"input_html": "document.write(\"<td><font class=\\\"wifi_ntwrk\\\">XFSETUP-9210</font></td>\");", "removed": "XFSETUP-9210", "placeholder": "<font class=\\\"wifi_ntwrk\\\">***WIFI***</font>", "id": "ssid_attribute_escaped_quotes_in_script"},
+    {"input_html": "document.write(\"<select name=\\\"mac_ssid\\\"><option value=\\\"17\\\">XFSETUP-9210</option></select>\");", "removed": "XFSETUP-9210", "placeholder": "<option value=\\\"17\\\">***WIFI***</option>", "id": "ssid_select_escaped_quotes_in_script"},
+    {"input_html": "<input type=\"password\" value=\"ab'cd99\">", "removed": "cd99", "placeholder": "value=\"***PASS***\">", "id": "password_input_value_holding_other_quote"},
+    {"input_html": "<input type='password' value='ab\"cd99'>", "removed": "cd99", "placeholder": "value='***PASS***'>", "id": "password_input_single_quoted_holding_double"},
+    {"input_html": "<meta name=\"csrf-token\" content=\"ab\\cd99xyz\">", "removed": "cd99xyz", "placeholder": "content=\"***CSRF***\">", "id": "csrf_value_holding_backslash"},
     {"input_html": "SSID: HomeNetwork",                       "removed": "HomeNetwork",           "placeholder": "***WIFI***",         "id": "ssid_text_label"},
     {"input_html": "Network Name=MyWiFi5G",                   "removed": "MyWiFi5G",              "placeholder": "***WIFI***",         "id": "network_name_label"},
     {"input_html": "password_24g: 'MyP@ssw0rd'",              "removed": "MyP@ssw0rd",            "placeholder": "***PASS***",         "id": "js_password_obj"},
@@ -35,8 +67,7 @@
     {"input_html": "session=AbcDef1234567890abcdef",          "removed": "AbcDef1234567890abcdef","placeholder": "***TOKEN***",        "id": "session_token"},
     {"input_html": "auth: xK9mP2qR7sT4wZaBcDeFgHiJ",         "removed": "xK9mP2qR7sT4wZaBcDeFgHiJ","placeholder": "***TOKEN***",     "id": "auth_token_long"},
     {"input_html": "<meta name=\"csrf-token\" content=\"xsrf_abc123\">", "removed": "xsrf_abc123","placeholder": "***CSRF***",         "id": "csrf_token_meta"},
-    {"input_html": "var CurrentPw = 'motor0laP@ss'",           "removed": "motor0laP@ss",          "placeholder": "***PASS***",         "id": "motorola_password_var"},
-    {"input_html": "var CurrentPassword = 'adminPass1'",      "removed": "adminPass1",            "placeholder": "***PASS***",         "id": "motorola_password_full"},
+    {"input_html": "var CurrentPassword = 'adminPass1'",      "removed": "adminPass1",            "placeholder": "***PASS***",         "id": "password_suffixed_script_variable"},
     {"input_html": "ssid_24g: 'MyNetwork5G'",                 "removed": "MyNetwork5G",           "placeholder": "***WIFI***",         "id": "ssid_js_field"},
     {"input_html": "guest_ssid = \"Visitors\"",               "removed": "Visitors",              "placeholder": "***WIFI***",         "id": "guest_ssid_js_field"}
   ],
@@ -48,6 +79,9 @@
     {"input_html": "Uptime: 12:34:56",                        "preserved": "12:34:56",              "id": "time_format_hhmmss"},
     {"input_html": "Duration: 01:23:45",                      "preserved": "01:23:45",              "id": "time_format_short"},
     {"input_html": "Time: 00:00:00",                          "preserved": "00:00:00",              "id": "time_format_midnight"},
+    {"input_html": "Localhost: ::1",                          "preserved": "Localhost: ::1",        "id": "ipv6_loopback_constant"},
+    {"input_html": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "preserved": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "id": "table_serial_placeholder_kept"},
+    {"input_html": "IPv6 Gateway: ::",                        "preserved": "IPv6 Gateway: ::",      "id": "ipv6_unspecified_constant"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "7.5 dBmV",              "id": "signal_dbmv"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "38.2 dB",               "id": "signal_db"},
     {"input_html": "Frequency: 602.0 MHz",                    "preserved": "602.0 MHz",             "id": "frequency_mhz"},
@@ -60,7 +94,19 @@
     {"input_html": "Version: 1.0.0",                          "preserved": "1.0.0",                 "id": "version_string"},
     {"input_html": "Build: 2.4.6.100",                        "preserved": "2.4.6.100",             "id": "version_3_small_octets"},
     {"input_html": "Firmware: 3.4.5.6",                       "preserved": "3.4.5.6",               "id": "version_4_small_octets"},
-    {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"}
+    {"input_html": "Account ID: ACCOUNT_a1b2c3d4",           "preserved": "ACCOUNT_a1b2c3d4",     "id": "account_already_redacted"},
+    {"input_html": "Account ID: [REDACTED]",                 "preserved": "Account ID: [REDACTED]", "id": "account_allowlisted_kept"},
+    {"input_html": "var t = '<input type=\"password\" id=\"p\">'; $(\"#p\").hide(); alert(\"key_size.value=128\");", "preserved": "alert(\"key_size.value=128\")", "id": "script_holding_input_markup_kept"},
+    {"input_html": "<td>MAC</td><td>00:00:00:00:00:00</td>", "preserved": "00:00:00:00:00:00", "id": "zero_mac_constant"},
+    {"input_html": "if (mac == 'ff:ff:ff:ff:ff:ff') return;", "preserved": "ff:ff:ff:ff:ff:ff", "id": "broadcast_mac_constant"},
+    {"input_html": "<p><b>Serial Number</b>: Disabled</p>", "preserved": "Disabled", "id": "serial_label_status_word_kept"},
+    {"input_html": "<td>SN</td><td>Enabled</td>", "preserved": "Enabled", "id": "serial_table_status_word_kept"},
+    {"input_html": "<td>Password:&nbsp;&nbsp;&nbsp;</td>", "preserved": "Password:&nbsp;&nbsp;&nbsp;</td>", "id": "password_label_then_spacing_entities_kept"},
+    {"input_html": "c={password:!0,user:!1};", "preserved": "password:!0,", "id": "minified_boolean_after_password_kept"},
+    {"input_html": "a.password=c.getPasswordField(b);", "preserved": "c.getPasswordField(b)", "id": "call_after_password_kept"},
+    {"input_html": "document.cookie=function(e,t,n){return e};", "preserved": "function(e,t,n)", "id": "function_after_cookie_label_kept"},
+    {"input_html": "h = '<input type=\"password\" id=\"pw\" value=\"' + $(\"#pw\").val() + '\">';", "preserved": "value=\"' + $(\"#pw\").val()", "id": "script_built_password_input_value_kept"},
+    {"input_html": "x = {key: 'QWERTY_CONST'};", "preserved": "QWERTY_CONST", "id": "bare_key_label_offered_not_redacted"}
   ],
 
   "pii_detection_cases": [
@@ -81,6 +127,120 @@
     {"content": "Power: 7.5 dBmV",                         "id": "signal_metric"},
     {"content": "Status: OK",                              "id": "status_value"}
   ],
+
+  "pii_json_line_cases": {
+    "_comment": "check_for_pii reports each JSON finding on the line its string is written on — every occurrence on its own line, however the string is escaped. findings lists [pattern, line] in report order. nest_lists wraps the content in that many arrays: identity fields are read down to JSON_MAX_DEPTH, as the sanitizer's key rules reach.",
+    "cases": [
+      {"id": "plain_value",   "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N12345678\"\n}",        "findings": [["serial_number", 3]]},
+      {"id": "repeated_value", "content": "{\"x\": \"ABC12345\",\n\"serialNumber\": \"ABC12345\"}",                "findings": [["serial_number", 2]]},
+      {"id": "php_escaped_slash", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"AB\\/1234567\"\n}",          "findings": [["serial_number", 3]]},
+      {"id": "escaped_key",       "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N12345678\"\n}", "findings": [["serial_number", 3]]},
+      {"id": "escaped_key_and_value", "content": "{\n  \"a\": 1,\n  \"serial\\u004eumber\": \"4131N\\u00c912345\"\n}", "findings": [["serial_number", 3]]},
+      {"id": "escaped_value", "content": "{\n  \"a\": 1,\n  \"serialNumber\": \"4131N\\u00c912345\"\n}",   "findings": [["serial_number", 3]]},
+      {"id": "repeated_text_value", "content": "{\"a\": \"mac 3C:7A:8A:12:34:56\",\n\"b\": \"mac 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 1], ["mac_address", 2]]},
+      {"id": "unicode_escaped_colons", "content": "{\"a\": 1,\n\"m\": \"3C\\u003a7A\\u003a8A\\u003a12\\u003a34\\u003a56\"}", "findings": [["mac_address", 2]]},
+      {"id": "php_escaped_slash_text", "content": "{\"a\": 1,\n\"u\": \"http:\\/\\/x\\/ mac 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 2]]},
+      {"id": "raw_non_ascii_escaped_quote", "content": "{\"a\": 1,\n\"n\": \"café \\\"q\\\" 3C:7A:8A:12:34:56\"}", "findings": [["mac_address", 2]]},
+      {"id": "pii_in_key",          "content": "{\"a\": 1,\n\"3C:7A:8A:12:34:56\": 1}",                        "findings": [["mac_address", 2]]},
+      {"id": "key_text_repeated_as_value", "content": "{\"sn\": \"x\",\n\"note\": \"sn\", \"serialNumber\": \"4131N12345678\"}", "findings": [["serial_number", 2]]},
+      {"id": "identity_within_depth", "content": "{\"serialNumber\": \"4131N12345678\"}", "nest_lists": 50,     "findings": [["serial_number", 1]]},
+      {"id": "identity_past_depth",   "content": "{\"serialNumber\": \"4131N12345678\"}", "nest_lists": 51,     "findings": []},
+      {"id": "identity_after_nested_close", "content": "{\"a\": [[{\"b\": 1}]],\n\"serialNumber\": \"4131N12345678\"}", "nest_lists": 50, "findings": [["serial_number", 2]]}
+    ]
+  },
+
+  "pii_custom_pattern_cases": {
+    "_comment": "check_for_pii with custom patterns: an entry that is not a pattern object is skipped, require_hex_letter drops matches with no a-f letter, and custom fields patterns (current or legacy key) name credential fields in a JSON fixture.",
+    "cases": [
+      {"id": "malformed_entry_skipped", "custom_patterns": {"patterns": {"broken": "not-a-pattern"}},                                                 "content": "dns 8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "dedicated_name_override_ignored", "custom_patterns": {"patterns": {"mac_address": {"regex": "\\b[0-9A-F]{12}\\b", "replacement_prefix": "MAC"}}}, "content": "<p>cm AABBCCDDEEF1</p>", "findings": []},
+      {"id": "custom_credential_field", "custom_patterns": {"fields": {"auto_redact_patterns": ["vendorsecret"]}},                             "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
+      {"id": "legacy_custom_credential_field", "custom_patterns": {"fields": {"patterns": ["vendorsecret"]}},                                "content": "{\"vendorsecret\": \"abc12345\"}", "findings": [["credential_field", "abc12345"]]},
+      {"id": "require_hex_letter",      "custom_patterns": {"patterns": {"hexy": {"regex": "\\b[0-9a-f]{6}\\b", "replacement_prefix": "H", "require_hex_letter": true}}}, "content": "123456 abc123", "findings": [["hexy", "abc123"]]}
+    ]
+  },
+
+  "custom_pattern_compile_cases": {
+    "_comment": "A custom pii pattern is compiled one way for the HTML engine's pass 0 and check_for_pii (loader.compile_pattern): every re flag named in flags is honoured, an invalid regex is skipped rather than crashing, and a value_group the match does not have falls back to the whole match. The pattern is installed as 'p'; removed must not survive sanitize_html; findings is check_for_pii's exact [pattern, match] list.",
+    "cases": [
+      {"id": "ignorecase",           "pattern": {"regex": "secret\\d+",        "replacement_prefix": "S", "flags": ["IGNORECASE"]}, "content": "SECRET123",        "removed": "SECRET123", "findings": [["p", "SECRET123"]]},
+      {"id": "multiline",            "pattern": {"regex": "^SECRET\\d+$",      "replacement_prefix": "S", "flags": ["MULTILINE"]},  "content": "a\nSECRET123\nb", "removed": "SECRET123", "findings": [["p", "SECRET123"]]},
+      {"id": "dotall",               "pattern": {"regex": "BEGIN.+?END",         "replacement_prefix": "S", "flags": ["DOTALL"]},     "content": "BEGIN\nx9\nEND",   "removed": "x9",        "findings": [["p", "BEGIN\nx9\nEND"]]},
+      {"id": "invalid_regex_skipped", "pattern": {"regex": "([",                 "replacement_prefix": "B"},                          "content": "dns 8.8.8.8",       "removed": "8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]},
+      {"id": "value_group_out_of_range", "pattern": {"regex": "ID-(\\d+)",     "replacement_prefix": "V", "value_group": 5},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]},
+      {"id": "value_group_unmatched", "pattern": {"regex": "ID-(?:(x)|\\d+)",  "replacement_prefix": "V", "value_group": 1},        "content": "ID-12345",          "removed": "12345",     "findings": [["p", "ID-12345"]]},
+      {"id": "flag_not_a_name_ignored", "pattern": {"regex": "abc9",           "replacement_prefix": "X", "flags": [2]},            "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "flag_nested_list_ignored", "pattern": {"regex": "abc9",          "replacement_prefix": "X", "flags": [["I"]]},        "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "flags_as_one_name",      "pattern": {"regex": "ABC9",            "replacement_prefix": "X", "flags": "IGNORECASE"},   "content": "id abc9",           "removed": "abc9",      "findings": [["p", "abc9"]]},
+      {"id": "regex_not_a_string",     "pattern": {"regex": 5,                 "replacement_prefix": "X"},                          "content": "dns 8.8.8.8",       "removed": "8.8.8.8",   "findings": [["public_ip", "8.8.8.8"]]}
+    ]
+  },
+
+  "pass0_number_cases": {
+    "_comment": "The HTML engine's pass 0 treats card- and SSN-shaped numbers as the text path does: a card-shaped number is hashed only when it passes the Luhn check, and an SSN-shaped one is offered for review (category ssn), not hashed. removed must not survive; kept must; flagged lists the values offered for review.",
+    "cases": [
+      {"id": "card_luhn_valid_hashed",   "html": "<td>4111111111111111</td>",  "removed": ["4111111111111111"], "kept": ["<td>CC_"],              "flagged": []},
+      {"id": "card_luhn_failing_kept",   "html": "<td>4111111111111112</td>",  "removed": [],                   "kept": ["<td>4111111111111112</td>"], "flagged": []},
+      {"id": "ssn_offered_for_review",   "html": "<td>123-45-6789</td>",       "removed": [],                   "kept": ["<td>123-45-6789</td>"],      "flagged": ["123-45-6789"]}
+    ]
+  },
+
+  "pii_exact_findings_cases": {
+    "_comment": "check_for_pii(content) must report exactly these (pattern, match) pairs. It shares the sanitizer's rules: a JSON fixture's identity fields are reported with validate's predicate (unredacted_identity), a MAC is reported once (not again as an IPv6 candidate), and a match the sanitizer keeps — a constant MAC, a dotted-quad version string — is not reported, since no sanitize run clears it.",
+    "cases": [
+      {"id": "json_serial_key",          "content": "{\"StatusSoftwareSerialNum\": \"4131N12345678\"}", "findings": [["serial_number", "4131N12345678"]]},
+      {"id": "json_bare_mac_key",        "content": "{\"CmMacAddress\": \"3C7A8A123456\"}",             "findings": [["mac_address", "3C7A8A123456"]]},
+      {"id": "json_colon_mac_key_once",  "content": "{\"mac\": \"3C:7A:8A:12:34:56\"}",                 "findings": [["mac_address", "3C:7A:8A:12:34:56"]]},
+      {"id": "json_mac_placeholder",     "content": "{\"CmMacAddress\": \"02a1b2c3d4e5\"}",             "findings": []},
+      {"id": "json_serial_placeholder",  "content": "{\"serialNumber\": \"SERIAL_2c9c9cf9\"}",          "findings": []},
+      {"id": "json_serial_label_value",  "content": "{\"PAGE_SERIAL_NUMBER\": \"Seriennummer\"}",        "findings": []},
+      {"id": "ipv6_leading_colons",      "content": "addr ::ffff:c000:280",                             "findings": [["ipv6", "::ffff:c000:280"]]},
+      {"id": "ipv6_hashed_placeholder",  "content": "addr 2001:db8::ab12:cd34",                         "findings": []},
+      {"id": "ipv6_loopback_kept",       "content": "lo6 ::1 fe80::1a",                                 "findings": [["ipv6", "fe80::1a"]]},
+      {"id": "private_fragment_kept",    "content": "firmware 10.1.2 build",                            "findings": []},
+      {"id": "private_ten_whole",        "content": "lan 10.1.2.3",                                     "findings": [["private_ip", "10.1.2.3"]]},
+      {"id": "gateway_ip_kept",          "content": "gw 192.168.100.1",                                 "findings": []},
+      {"id": "ipv6_all_digits",          "content": "wan 2001:470:1::5",                                "findings": [["ipv6", "2001:470:1::5"]]},
+      {"id": "ipv6_ipv4_mapped_whole",   "content": "map ::ffff:192.0.2.128 ok",                        "findings": [["ipv6", "::ffff:192.0.2.128"]]},
+      {"id": "ipv4_mapped_private_once", "content": "map ::ffff:192.168.5.4 ok",                        "findings": [["ipv6", "::ffff:192.168.5.4"]]},
+      {"id": "ipv4_mapped_zero_padded_once", "content": "map ::ffff:192.168.001.100 ok",                "findings": [["ipv6", "::ffff:192.168.001.100"]]},
+      {"id": "json_markup_split",        "content": "{\"a\": \"<b>Password:</b><i>x\", \"</i>\": 1}",   "findings": []},
+      {"id": "json_escaped_mac",         "content": "{\"m\": \"3C\\u003a7A\\u003a8A\\u003a12\\u003a34\\u003a56\"}", "findings": [["mac_address", "3C:7A:8A:12:34:56"]]},
+      {"id": "serial_placeholder_label", "content": "Serial Number: SERIAL_34067a2e",                   "findings": []},
+      {"id": "serial_placeholder_cell",  "content": "<td>SN</td><td>SERIAL_34067a2e</td>",              "findings": []},
+      {"id": "account_placeholder",      "content": "Account ID: ACCOUNT_1a2b3c4d",                     "findings": []},
+      {"id": "serial_followed_by_at",    "content": "Serial Number: 4131N12345678@cm1",                 "findings": [["serial_number", "Serial Number: 4131N12345678"]]},
+      {"id": "email_after_serial_label", "content": "Serial Number: admin123@example.com",              "findings": [["email", "admin123@example.com"]]},
+      {"id": "account_tag_wrapped",      "content": "<p>Account ID: <b>998877</b></p>",                 "findings": [["account_id", "Account ID: <b>998877"]]},
+      {"id": "account_tag_wrapped_placeholder", "content": "<p>Account ID: <b>ACCOUNT_1a2b3c4d</b></p>", "findings": []},
+      {"id": "account_prefix_shaped",    "content": "<p>Customer Number: DEV_abc123</p>",               "findings": [["account_id", "Customer Number: DEV_abc123"]]},
+      {"id": "account_allowlisted",      "content": "Account ID: [REDACTED]",                           "findings": []},
+      {"id": "password_input_placeholder", "content": "<input type=\"password\" value=\"PASS_1a2b3c4d\">", "findings": []},
+      {"id": "constant_mac_kept",        "content": "bcast ff:ff:ff:ff:ff:ff",                          "findings": []},
+      {"id": "html_only_pattern_in_markup", "content": "<p>password: hunter2x</p>",                    "findings": [["password_field", "password: hunter2x"]]},
+      {"id": "password_input_lt_in_quoted_attribute", "content": "<input type=\"password\" onkeyup=\"if(this.value.length<8)warn()\" value=\"hunter2x\">", "findings": [["password_input", "<input type=\"password\" onkeyup=\"if(this.value.length<8)warn()\" value=\"hunter2x\""]]},
+      {"id": "script_built_password_input", "content": "<script>h = '<input type=\"password\" value=\"' + $(\"#pw\").val() + '\">';</script>", "findings": []},
+      {"id": "password_input_unquoted_paren_attribute", "content": "<input type=\"password\" onfocus=clear() value=\"hunter2x\">", "findings": [["password_input", "<input type=\"password\" onfocus=clear() value=\"hunter2x\""]]},
+      {"id": "password_label_escaped_quotes", "content": "<script>x = \"password=\\\"hunter2x\\\"\";</script>", "findings": [["password_field", "password=\\\"hunter2x"]]},
+      {"id": "session_token_escaped_quotes", "content": "<script>x = \"session=\\\"AbcDef1234567890abcdef\\\"\";</script>", "findings": [["session_token", "session=\\\"AbcDef1234567890abcdef"]]},
+      {"id": "password_input_escaped_quotes", "content": "<script>document.write(\"<input type=\\\"password\\\" value=\\\"hunter2x\\\">\");</script>", "findings": [["password_input", "<input type=\\\"password\\\" value=\\\"hunter2x\\\""]]},
+      {"id": "csrf_meta_escaped_quotes", "content": "<script>document.write(\"<meta name=\\\"csrf-token\\\" content=\\\"xsrf_abc123\\\">\");</script>", "findings": [["csrf_token", "<meta name=\\\"csrf-token\\\" content=\\\"xsrf_abc123\\\""]]},
+      {"id": "wps_pin_tag_escaped_quotes", "content": "<script>document.write(\"<p>WPS PIN: <b class=\\\"v\\\">13572468</b></p>\");</script>", "findings": [["wps_pin", "WPS PIN: <b class=\\\"v\\\">13572468"]]},
+      {"id": "serial_tag_escaped_quotes", "content": "<script>document.write(\"Serial Number: <b class=\\\"v\\\">4131N12345678</b>\");</script>", "findings": [["serial_number", "Serial Number: <b class=\\\"v\\\">4131N12345678"]]},
+      {"id": "html_only_pattern_in_script", "content": "config={key:!0,token:a};",                     "findings": []},
+      {"id": "html_only_pattern_in_json_string", "content": "{\"note\": \"WPS PIN: 12345670\"}",       "findings": []},
+      {"id": "json_credential_field",    "content": "{\"Username\": \"admin\", \"Password\": \"hunter2x\"}", "findings": [["credential_field", "hunter2x"]]},
+      {"id": "json_credential_pws",      "content": "{\"pws\": \"s3cr3tpw\"}",                           "findings": [["credential_field", "s3cr3tpw"]]},
+      {"id": "json_credential_kept_values", "content": "{\"password\": \"FIELD_1a2b3c4d\", \"pwd\": \"\", \"token\": \"[REDACTED]\"}", "findings": []},
+      {"id": "json_credential_encoding_kept", "content": "{\"credential_encoding\": \"plain\"}",           "findings": []},
+      {"id": "json_credential_ui_strings", "content": "{\"PAGE_GENERAL_SET_PASSWORD\": \"Set a new password\", \"ADM_SHOW_PASSWORD\": \"Yes\", \"PAGE_DEVICE_PASSWORD_TITLE\": \"Password\"}", "findings": [["credential_field", "Password"]]},
+      {"id": "json_credential_non_string", "content": "{\"auth\": true, \"has_credentials\": false}",  "findings": []},
+      {"id": "card_luhn_valid",          "content": "card 4111111111111111",                            "findings": [["credit_card_visa", "4111111111111111"]]},
+      {"id": "ssn_offered_not_reported", "content": "<p>SSN: 123-45-6789</p> {x} SSN 123-45-6789",     "findings": []},
+      {"id": "card_luhn_invalid_kept",   "content": "card 4111111111111112 id 5555555555554444",        "findings": [["credit_card_mastercard", "5555555555554444"]]},
+      {"id": "version_string_kept",      "content": "jquery 1.12.4.5 loaded",                           "findings": []}
+    ]
+  },
 
   "serial_table_cases": [
     {"html": "<td><strong>Serial Number</strong></td>\n<td>17V541334700308</td>", "serial_value": "17V541334700308", "id": "serial_in_adjacent_td"},
@@ -105,6 +265,66 @@
     {"input_html": "localStorage.setItem(\"theme\", \"dark\")",                            "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_value"},
     {"input_html": "sessionStorage.setItem(\"lang\", \"en\")",                             "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_lang"}
   ],
+
+  "script_variable_cases": {
+    "_comment": "Script variable names are domain knowledge (ADR-5): the core engine reads `var NAME = '…'` only for names a pattern file's script_variables section lists. password values are redacted whole; pipe_delimited values are split on | and judged one value at a time. patterns: 'base' = none, 'network-device' = the built-in domain, or a custom dict. kept/removed are checked with salt=None.",
+    "cases": [
+      {"id": "currentpw_base_kept",               "patterns": "base",           "input_html": "<script>var CurrentPw = 'motor0laP@ss';</script>",      "kept": "motor0laP@ss"},
+      {"id": "currentpw_domain_redacted",         "patterns": "network-device", "input_html": "<script>var CurrentPw = 'motor0laP@ss';</script>",      "removed": "motor0laP@ss", "placeholder": "var CurrentPw = '***PASS***'"},
+      {"id": "currentpassword_domain_redacted",   "patterns": "network-device", "input_html": "var CurrentPassword = 'adminPass1'",                    "removed": "adminPass1",   "placeholder": "var CurrentPassword = '***PASS***'"},
+      {"id": "currentpw_domain_ignores_case",     "patterns": "network-device", "input_html": "VAR currentpwadmin = \"adminPass1\"",                   "removed": "adminPass1",   "placeholder": "VAR currentpwadmin = \"***PASS***\""},
+      {"id": "currentpw_placeholder_kept",        "patterns": "network-device", "input_html": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>",     "kept": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>"},
+      {"id": "tagvaluelist_base_kept",            "patterns": "base",           "heuristics": "redact", "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "kept": "P@ssw0rd!123"},
+      {"id": "tagvaluelist_domain_redacted",      "patterns": "network-device", "heuristics": "redact", "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "tagvaluelist_domain_case_sensitive","patterns": "network-device", "heuristics": "redact", "input_html": "var TAGVALUELIST = '0|Good||P@ssw0rd!123|data';",       "kept": "P@ssw0rd!123"},
+      {"id": "connected_devices_base_kept",       "patterns": "base",           "heuristics": "redact", "input_html": "var connectedDevices = '0|Good||P@ssw0rd!123|data';",   "kept": "P@ssw0rd!123"},
+      {"id": "connected_devices_domain_redacted", "patterns": "network-device", "heuristics": "redact", "input_html": "var connectedDevices = '0|Good||P@ssw0rd!123|data';",   "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "wifi_info_domain_redacted",         "patterns": "network-device", "heuristics": "redact", "input_html": "var wifiInfo = '0|Good||P@ssw0rd!123|data';",           "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "custom_password_variable",          "patterns": {"script_variables": {"password": [{"regex": "adminPw"}]}},       "input_html": "var adminPw = 'hunter2xyz';", "removed": "hunter2xyz", "placeholder": "var adminPw = '***PASS***'"},
+      {"id": "custom_password_flags_honoured",    "patterns": {"script_variables": {"password": [{"regex": "adminPw"}]}},       "input_html": "var ADMINPW = 'hunter2xyz';", "kept": "hunter2xyz"},
+      {"id": "custom_pipe_variable",              "patterns": {"script_variables": {"pipe_delimited": [{"regex": "statusBlob"}]}}, "heuristics": "redact", "input_html": "var statusBlob = '0|Good||P@ssw0rd!123|data';", "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "custom_invalid_regex_skipped",      "patterns": {"script_variables": {"password": [{"regex": "("}, "adminPw", {"regex": 7}, {"regex": "adminPw"}]}}, "input_html": "var adminPw = 'hunter2xyz';", "removed": "hunter2xyz", "placeholder": "var adminPw = '***PASS***'"},
+      {"id": "custom_password_name_with_group",   "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "input_html": "<script>var AdminPw = 'hunter2x';</script>", "removed": "hunter2x", "placeholder": "var AdminPw = '***PASS***';"},
+      {"id": "custom_pipe_name_with_group",       "patterns": {"script_variables": {"pipe_delimited": [{"regex": "status(Blob|List)"}]}}, "heuristics": "redact", "input_html": "var statusBlob = '0|Good||P@ssw0rd!123|data';", "removed": "P@ssw0rd!123", "placeholder": "var statusBlob = '0|Good||***CRED***"},
+      {"id": "custom_section_not_a_dict",         "patterns": {"script_variables": ["adminPw"]},                              "input_html": "var adminPw = 'hunter2xyz';", "kept": "hunter2xyz"}
+    ]
+  },
+
+  "pii_script_variable_cases": {
+    "_comment": "check_for_pii reports a password script variable only for names a pattern file lists, and only in markup (the HTML engine is the only route that redacts it).",
+    "cases": [
+      {"id": "base_not_reported",        "patterns": "base",           "content": "<script>var CurrentPw = 'hunter2xyz';</script>",    "findings": []},
+      {"id": "domain_reported",          "patterns": "network-device", "content": "<script>var CurrentPw = 'hunter2xyz';</script>",    "findings": [["script_password", "var CurrentPw = 'hunter2xyz'"]]},
+      {"id": "domain_placeholder_clean", "patterns": "network-device", "content": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>", "findings": []},
+      {"id": "domain_not_markup",        "patterns": "network-device", "content": "var CurrentPw = 'hunter2xyz';",                     "findings": []},
+      {"id": "custom_name_with_group_reported", "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "content": "<script>var AdminPw = 'hunter2x';</script>", "findings": [["script_password", "var AdminPw = 'hunter2x'"]]},
+      {"id": "custom_name_with_group_clean",    "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "content": "<script>var AdminPw = 'PASS_a1b2c3d4';</script>", "findings": []},
+      {"id": "custom_reported",          "patterns": {"script_variables": {"password": [{"regex": "adminPw", "flags": ["IGNORECASE"]}]}}, "content": "<script>var ADMINPW = 'hunter2xyz';</script>", "findings": [["script_password", "var ADMINPW = 'hunter2xyz'"]]}
+    ]
+  },
+
+  "pipe_context_cases": {
+    "_comment": "capture_pipe_context: the flagged value marked >>>value<<< with up to `window` neighbours each side, clipped at the ends.",
+    "cases": [
+      {"id": "window_1",       "values": ["a", "b", "c", "d", "e"], "index": 2, "window": 1, "expected": "b|>>>c<<<|d"},
+      {"id": "window_2",       "values": ["a", "b", "c", "d", "e"], "index": 2, "window": 2, "expected": "a|b|>>>c<<<|d|e"},
+      {"id": "at_start",       "values": ["a", "b", "c"],           "index": 0, "window": 2, "expected": ">>>a<<<|b|c"},
+      {"id": "at_end",         "values": ["a", "b", "c"],           "index": 2, "window": 2, "expected": "a|b|>>>c<<<"},
+      {"id": "single_element", "values": ["only"],                  "index": 0, "window": 3, "expected": ">>>only<<<"}
+    ]
+  },
+
+  "pipe_whitespace_cases": {
+    "_comment": "The pipe-delimited pass judges each value without its surrounding whitespace and writes that whitespace back around the value or its placeholder: the blob's spacing is not the pass's to change. patterns: network-device; salt=None; output is the exact result.",
+    "cases": [
+      {"id": "spaces_kept_nothing_redacted", "heuristics": "disabled", "input_html": "var tagValueList = 'Locked | 3 |  602000000 Hz | ok';",  "output": "var tagValueList = 'Locked | 3 |  602000000 Hz | ok';"},
+      {"id": "spaces_kept_around_mac",       "heuristics": "disabled", "input_html": "var tagValueList = 'ok | AA:BB:CC:DD:EE:01 | good';",     "output": "var tagValueList = 'ok | XX:XX:XX:XX:XX:XX | good';"},
+      {"id": "spaces_kept_around_redaction", "heuristics": "redact",   "input_html": "var tagValueList = '0 | Good | P@ssw0rd!123 | data';",   "output": "var tagValueList = '0 | Good | ***CRED*** | ***SENSITIVE***';"},
+      {"id": "whitespace_only_segment_kept", "heuristics": "disabled", "input_html": "var tagValueList = 'a |  | b';",                        "output": "var tagValueList = 'a |  | b';"},
+      {"id": "tabs_and_newline_escape_kept", "heuristics": "disabled", "input_html": "var tagValueList = 'a\t| b |c ';",                       "output": "var tagValueList = 'a\t| b |c ';"},
+      {"id": "unspaced_blob_unchanged",      "heuristics": "redact",   "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "output": "var tagValueList = '0|Good||***CRED***|***SENSITIVE***';"}
+    ]
+  },
 
   "pipe_serial_cases": [
     {"input_html": "var tagValueList = 'enabled|SN-N6MAA10816|WPA3';",  "should_not_contain": "SN-N6MAA10816",  "should_contain": "SERIAL_",  "id": "pipe_serial_sn_dash"},
@@ -157,7 +377,11 @@
     {"value": "S/N-DEVICE789",      "expected_unchanged": false, "expected_contains": "SERIAL_", "id": "serial_s_n_prefix"},
     {"value": "Locked",             "expected_unchanged": true,  "id": "status_word_safe"},
     {"value": "OK",                 "expected_unchanged": true,  "id": "status_ok_safe"},
-    {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"}
+    {"value": "QAM256",             "expected_unchanged": true,  "id": "modulation_safe"},
+    {"value": "ff-ff-ff-ff-ff-ff", "expected_unchanged": true, "id": "constant_mac_hyphen_kept"},
+    {"value": "3c-7a-8a-12-34-56", "expected_unchanged": false, "expected_not_contain": "3c-7a-8a-12-34-56", "expected_contains": "02-", "id": "device_mac_hyphen_redacted"},
+    {"value": "enable", "expected_unchanged": true, "id": "domain_safe_list_only_value"},
+    {"value": "***partial", "expected_unchanged": true, "id": "star_prefixed_value_treated_as_redacted"}
   ],
 
   "device_label_block_cases": [

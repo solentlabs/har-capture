@@ -45,8 +45,8 @@ purposes:
 1. Sanitization (Pass 1) processes the HAR, replacing PII with hashes
 1. Validation checks the sanitized output to verify nothing was missed
 1. Validation calls `is_redacted()` to suppress findings for values that are already properly sanitized
-1. Both modules load patterns from `sensitive.json`, but validation also uses hard-coded regexes for MAC, serial, and IP
-   detection in content
+1. Both modules load patterns from `sensitive.json` and share code-level detectors from `patterns/redaction.py` (MAC,
+   URL credentials); validation also uses hard-coded regexes for label-anchored serial and IP detection in content
 
 ## Finding Dataclass
 
@@ -72,10 +72,17 @@ Severity levels:
 **error**; a name matching `flag_patterns` asserts identity-adjacent content the sanitizer itself only flags for review
 — an unredacted value is a **warning**. A flag-tier field whose value is a factory-default username
 (`KNOWN_DEFAULT_USERNAMES`, currently `admin`) is **suppressed entirely**: the value is fixed per device family and
-carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it (CM2500
-round 1: three `[ERROR]` on `loginName: admin` exited 1 on a compliant capture). Suppression never applies to
-auto-redact-tier names — `admin` in a password field is a real credential leak. The model applies uniformly to form
-params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via `_classify_field_finding`.
+carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it.
+Suppression never applies to auto-redact-tier names — `admin` in a password field is a real credential leak. The model
+applies uniformly to form params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via
+`_classify_field_finding`.
+
+A flag-tier warning is the one finding a sanitize run leaves in place on purpose: the sanitizer offers the value for
+review and keeps it unless the user redacts it, so the warning is the reviewer's prompt, not a leak ADR-14 requires a
+remedy for. In a request — form params, POST bodies, query parameters — a flag-tier name holds what someone typed (a
+username), so the warning stays. In a response body's JSON it is not reported: there such names are mostly translation
+keys, and a warning on firmware text would prompt nothing (see "JSON fields" under `check_content` below). Across the
+fleet after sanitize the flag-tier warnings are 174, all on `login`- and `username`-named request fields.
 
 ## Entry Point
 
@@ -88,6 +95,9 @@ def validate_har(
 ```
 
 1. Load HAR (JSON or gzip-compressed)
+1. `check_har_types()` — the sanitizer's type boundary
+   ([Sanitization Spec — Type Boundary](SANITIZATION_SPEC.md#type-boundary)); a field of the wrong type raises
+   `HarValidationError` naming it
 1. For each entry in `log.entries`:
    - `check_url(entry.request.url)` and `check_query_string(entry.request.queryString)` → URL credentials and sensitive
      query parameters, reported once across the two
@@ -96,7 +106,11 @@ def validate_har(
    - `check_url(header.value)` for each `Referer` / `Location` / `Content-Location`, and
      `check_url(response.redirectURL)` → the same query checks
    - `check_post_data(entry.request.postData)` → Form field + JSON body scanning
-   - `check_content(entry.response.content)` → bare base64 credentials, MAC, serial, IP in text content
+   - `check_security_details(entry._securityDetails)` → a MAC in a TLS certificate name
+   - `check_content(entry.response.content)` → bare base64 credentials, JSON fields, MAC, serial, IPv4, IPv6 in text
+     content. The body is read with the sanitizer's decoder, `decode_transport_body()`: a transport-encoded body is
+     checked as the text it carries, and a binary body is not checked — the sanitizer leaves it untouched too
+     ([ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content))
 1. Return accumulated `list[Finding]`
 
 ## Check Functions
@@ -114,35 +128,53 @@ https://device.local/status.html?login_YWRtaW46cGFzcw==
                                  marker + base64("admin:pass")
 ```
 
-1. Split the raw query string on `&` (not `parse_qsl`, which would strip base64 padding); a `queryString` entry is
-   rejoined into its segment with `query_param_segment()`.
+1. A password in the URL's userinfo (`split_url_password()`: the `user:password` part ahead of the host) → **error**,
+   unless `is_redacted()` recognizes it as a placeholder.
+1. Read the query with `url_query()` — from the first `?` to the next `#`, as the sanitizer does, rather than
+   `urlparse`, which raises on a URL it cannot parse — and split it on `&` (not `parse_qsl`, which would strip base64
+   padding); a `queryString` entry is rejoined into its segment with `query_param_segment()`.
 1. A credential in any shape `find_query_credential()` recognizes (bare, marker-prefixed, keyed — under any name) →
    **error**, unless `is_redacted()` recognizes it as a placeholder.
-1. Otherwise the parameter name is judged by the [field tiers](#finding-dataclass), exactly as for form fields: an
-   auto-redact-tier name with an unredacted value → **error**; a flag-tier name → **warning**, a factory-default
-   username suppressed. Empty values are skipped.
+1. Otherwise an auto-redact-tier name with an unredacted value → **error**, judged by the
+   [field tiers](#finding-dataclass) exactly as for form fields.
+1. Otherwise a base64-wrapped JSON or URL payload (`find_query_payload()`) is checked inside — a JSON payload with
+   `check_json_fields()`, a URL payload with `check_url()` — under any other name, including an identity-style one: the
+   sanitizer sanitizes inside it rather than flagging it. Only errors found inside are reported: nothing inside a
+   payload is offered for review, so a warning there would have no remedy.
+1. Otherwise a flag-tier name → **warning**, a factory-default username suppressed. Empty values are skipped.
+
+This is the sanitizer's own decision order (`_classify_query_param`), so what one tool does to a parameter, the other
+checks for.
 
 The URL string and the `queryString` array are one query recorded twice, so `validate_har` passes both the same `seen`
 set and a finding present in both is reported once. A URL-valued header is a different place the value leaked to and is
 reported on its own.
 
+### `check_security_details(details, location, findings, custom_patterns)`
+
+Reads `_securityDetails.subjectName` and `issuer` as a device identity field
+([ADR-17](../ARCHITECTURE_DECISIONS.md#adr-17-a-device-cas-certificate-name-is-a-device-identity)): each MAC
+`certificate_name_macs()` finds there — the whole name in any MAC layout, bare 12-hex included, or a colon or hyphen MAC
+inside it — is an **error** (`MAC address in a TLS certificate name`, field `_securityDetails.<name>`) unless it is a
+MAC placeholder (`is_mac_placeholder()`, recognized here because the value is known to be a MAC) or allowlisted. A
+constant MAC is not reported, and neither is a self-signed name: the sanitizer only offers it for review.
+
 ### `check_headers(headers, location, findings)`
 
-Checks header names against the sensitive headers list from `sensitive.json`:
+Checks a header whose name (case-insensitive) is **exactly** one of the sanitizer's three sets from `sensitive.json`
+(`headers.full_redact`, `headers.cookie_redact`, `headers.scheme_redact`) — the sanitizer matches names exactly, so a
+header that merely contains one (`X-Cookie-Consent`) is not one it rewrites and is not reported. Each secret part of the
+value is checked on its own with `is_fully_redacted()`, so a placeholder in one part does not clear the header:
 
-```python
-# Sensitive headers (from sensitive.json: headers.full_redact +
-# headers.cookie_redact + headers.scheme_redact):
-# authorization, cookie, set-cookie, x-auth-token, x-api-key, ...
-```
-
-For each header:
-
-1. Check if header name (case-insensitive) matches sensitive list
-1. If matched, check if value is already redacted via `is_redacted()`
-1. Special handling for Cookie/Set-Cookie: skip if value contains only attributes (`HttpOnly`, `Secure`, `SameSite`,
-   `Path`, `Domain`, `Expires`) via `is_cookie_attribute_metadata()`
-1. Skip empty header values
+1. **Cookie headers**: the segments `cookie_segment_actions()` marks as cookie data — the classification the sanitizer
+   rewrites (see [Sanitization Spec — Header Sanitization](SANITIZATION_SPEC.md#header-sanitization)): every request
+   `Cookie` pair's value and nameless segment, and for a Set-Cookie that is not attributes-only
+   (`is_cookie_attributes_only()`), the first segment and any unreserved pair after it. `a=COOKIE_…; sid=realsecret99`,
+   `path=s3cr3t` and `Secure=abc123; Path=/` are reported; `Secure; HttpOnly` is not.
+1. **Scheme headers** (`Authorization`, `Proxy-Authorization`): the credential after a recognized scheme
+   (`KNOWN_AUTH_SCHEMES`), else the whole value — `Bearer AUTH_… realsecret99` is reported.
+1. **Full-redact headers**: the whole value.
+1. Empty header values are skipped.
 
 Severity: **error**
 
@@ -155,12 +187,13 @@ Checks form field names and JSON body content:
 1. For each parameter, classify `name` via `_classify_field_finding` (see the
    [field-name severity model](#finding-dataclass)): `auto_redact_patterns` match → **error**, `flag_patterns` match →
    **warning**, flag-tier match with a factory-default username value → suppressed
+1. Unless the name is auto-redact-tier, a value that is a base64 JSON or URL payload is checked inside instead, errors
+   only — the sanitizer's order, as in `check_url` above
 1. If matched, check if `value` is already redacted
 1. Report if value is not redacted
 1. If the name did NOT match but the form is **login-shaped** (any parameter name in the form matches a sensitive
    pattern) and the value is base64 that decodes to printable text (`is_base64_decodable_text()`), report a **warning**
-   — the backstop for vendor credential field names the patterns don't know yet (Sercomm/Hitron `pws`,
-   cable_modem_monitor issue #92)
+   — the backstop for vendor credential field names the patterns don't know yet (Sercomm/Hitron `pws`)
 
 **Form-urlencoded body** (`postData.text` with `application/x-www-form-urlencoded` content type):
 
@@ -168,15 +201,21 @@ Checks form field names and JSON body content:
 1. Run the same checks as form params, with the location suffix `(body)`
 1. The text copy is checked independently of `params` — a sanitizer that redacts one copy but not the other must still
    be caught
+1. Values are judged by field name, as the sanitizer judges them: a MAC, IP address or email under a field name that is
+   not sensitive is not reported (see [SANITIZATION_SPEC — POST data](SANITIZATION_SPEC.md#post-data-sanitization))
 
-**JSON body** (`postData.text` with JSON content type):
+**Body text** (`postData.text`), in the sanitizer's order: skipped only when the whole text is one placeholder
+(`is_fully_redacted()` — `is_redacted()` searches, so a `#000000` anywhere would skip a body). Then:
 
-1. Parse JSON
-1. Call `check_json_fields()` for recursive scanning
+1. Text that parses as a JSON object or array (`parse_json_container()`) is JSON whatever its content type — a
+   `text/plain` XHR body, or JSON under jQuery's form-urlencoded default — and gets `check_json_fields()`
+1. Otherwise a form-urlencoded body is split into pairs and checked as form params
 
-**XML body** (`postData.text` with `text/xml` or `application/xml` content type):
+**XML body** (`postData.text` of a markup type, `mime_kind()`: `text/xml`, `application/xml`, any `+xml` such as
+`application/soap+xml` — the sanitizer's predicate too):
 
-1. Parse XML with `xml.etree.ElementTree`
+1. Parse XML with `parse_xml()`, the sanitizer's parse too (`xml.etree.ElementTree`; a lone surrogate is read as U+FFFD,
+   so it does not switch off the check)
 1. Walk element tree, checking element tag names and attribute names against sensitive field patterns
 1. Strip namespace prefixes if present (`{http://ns}tagname` → `tagname`)
 1. Report findings for elements whose text content is not redacted
@@ -187,15 +226,16 @@ Checks form field names and JSON body content:
 Severity: **tiered** — error for auto-redact-tier names, warning for flag-tier names, factory-default usernames in
 flag-tier fields suppressed. The same model applies to every branch above (form params, urlencoded body, JSON, XML).
 
-### `check_content(content, location, findings, custom_patterns, *, has_sanitized_url_credential, serial_detectors)`
+### `check_content(content, location, findings, custom_patterns, **keywords)`
 
-Detects PII patterns in response content text.
+Detects PII patterns in response content text. Keyword-only: `has_sanitized_url_credential`, `serial_detectors`,
+`field_tiers` (pre-compiled, as for `check_json_fields`).
 
 **Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
 single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
 zeros (`0{6,}` — a separator-less zero MAC, a zeroed counter, a `#000000` in minified CSS) or a literal `XXX` /
-`REDACTED` anywhere in the body made the entire page look already-redacted and skipped every check below. That
-suppressed 209 of 750 committed fleet entries, including an XB10 page holding a plaintext default Wi-Fi password.
+`REDACTED` anywhere in the body would make the entire page look already-redacted and skip every check below. 209 of 750
+committed fleet entries contain such a run, including an XB10 page holding a plaintext default Wi-Fi password.
 `is_fully_redacted()` requires the whole string to be one opaque placeholder token: no whitespace, no markup, no
 structural punctuation, and a match accounting for the entire token rather than appearing inside it.
 
@@ -203,6 +243,8 @@ structural punctuation, and a match accounting for the entire token rather than 
 
 - Strips whitespace from the content, then calls `is_base64_credential()` on the entire body
 - Matches only when the whole body is a bare `base64(user:pass)` token (e.g. a router echoing its auth token)
+- A body that is base64 of a JSON object or array, or of a URL (`decode_base64_payload()`), is a payload, not a
+  credential: the checks below run on the text it wraps, as the sanitizer sanitizes inside it
 - Returns early after flagging — suppresses MAC/serial/IP checks on the same body to avoid noise
 - When `has_sanitized_url_credential=True`, skips this check. Set by `validate_har` for entries listed in
   `log._har_capture._sanitized_credentials` — those entries' response bodies were already evaluated by the sanitizer's
@@ -210,28 +252,47 @@ structural punctuation, and a match accounting for the entire token rather than 
 
 Severity: **error**
 
+**JSON fields (error):**
+
+- A body the sanitizer routes as JSON (`route_body()`: text that parses as a JSON object or array, whatever its type —
+  HNAP answers JSON as `text/html`) has its fields checked by `check_json_fields()`, with the rules the sanitizer
+  redacts by: identity fields and credential-named keys. Flag-tier names (`username`, `login`) are not reported here —
+  in responses they are mostly translation-bundle keys, and the sanitizer only offers them for review, so a warning
+  would have no sanitize remedy. Likewise a credential-named value the sanitizer keeps or offers for review
+  (`credential_value_action()`: a button word, or prose) is not reported in a response; in a POST body every unredacted
+  credential-named value is an error
+- Only string values are judged, as the sanitizer judges them: a boolean, number or container under a credential- or
+  identity-named key is not reported (the fleet holds 54 booleans there and nothing else)
+- A MAC reported as an identity field is not reported again by the MAC scan below
+- An object that repeats a key is checked member by member, the shadowed earlier values included (`json_members()`): the
+  parser keeps only the last, and the sanitizer drops the others by re-serializing
+
+**Unit of text.** Every check below reads a text body whole, and a JSON body one decoded string at a time — each value
+and each object key, at any depth (`iter_json_strings()`) — the unit the sanitizer's passes rewrite. An escape
+(`\u003c`) hides no markup, and no pattern pairs a label in one string with a value in the next.
+
 **MAC addresses:**
 
-- Pattern: `([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}`
-- Skips common test patterns (e.g., `AA:BB:CC:DD:EE:FF`)
+- Pattern: `MAC_RE`, the sanitizer's own definition (see
+  [Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses))
+- Skips a constant MAC — one byte repeated, broadcast or zero (`is_constant_mac()`, which the sanitizer also leaves
+  alone) — and the documentation examples `AA:BB:CC:DD:EE:FF` and `00:11:22:33:44:55`
 - Checks via `is_redacted()` before reporting
 
 **Serial numbers (label-anchored, warning):**
 
-- Pattern: `SN|S/N|Serial Number|SerialNum` + value — inline, in HTML table cells, or in sibling elements (tag chains
-  tolerate whitespace between tags, per the sibling-element rule in
-  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#scanner-pipeline))
-- The inline label patterns require `(?!ize)` after `serial` (jquery's `serialize:`/`serializeArray:` methods matched as
-  labels) and a digit in the value (`serialize: function` matched `function` as a serial) — both reproduced as cosmetic
-  noise on the CM2500 round-1 validate run
+- Imports the sanitizer's own pattern, `SERIAL_LABEL_RE` from `sanitization/html.py` (pass 2; see
+  [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)), so every labeled
+  serial reported here is one a sanitize run removes, in every body route (`redact_labeled_serials()`). A label that
+  merely contains `serial` (`cmSerialNumber:`) is not a serial label, and a label whose value is a template placeholder
+  (`<?get_cm_sn>`) does not reach across the table row to the next row's firmware name
 - Checks via `is_redacted()` before reporting
 
 **Labeled credentials and network names (structural, error / warning):**
 
 - Imports the compiled patterns from `sanitization/html.py` (`SIBLING_PASSWORD_RE`, `SIBLING_SSID_RE`,
   `SSID_ATTRIBUTE_RE`, `iter_ssid_option_values`) rather than restating them, so the sanitizer's pass 7c, `validate`,
-  and `check_for_pii` cannot drift apart on what counts as a labeled credential — the 0.12.1 reconciliation covered
-  vendor serial *tokens* only and left this layer divergent
+  and `check_for_pii` cannot drift apart on what counts as a labeled credential
 - A **password** in a labeled field is an **error**: the label states outright that the value is a credential, so an
   unredacted match is a known leak, not a maybe (the ADR-13 determinism rule)
 - A **Wi-Fi network name** is a **warning**: an SSID identifies a network rather than authenticating to it
@@ -247,7 +308,6 @@ Severity: **error**
   counts as a vendor serial
   ([ADR-13](../ARCHITECTURE_DECISIONS.md#adr-13-high-confidence-vendor-serial-formats-are-deterministic--auto-redact-and-validate-error-delimiter-aware))
 - Exists because a serial inside a pipe-delimited blob (`tagValueList`) has no label for the patterns above to anchor on
-  — CM2500 round 1 shipped the real serial unmasked and `validate` blessed it
 - An unredacted fullmatch is an **error**: a vendor-format match is a known serial layout, not a maybe
 - Each distinct token is reported once per content body; `validate_har` compiles the detectors once per file and passes
   them via `serial_detectors`
@@ -257,8 +317,8 @@ Severity: **error**
 - Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost)
 - Excludes redacted placeholders (10.255.x.x, 192.0.2.x)
 - Excludes netmasks (`is_netmask()`: contiguous-bit masks like 255.255.252.0), reserved first octets (255.x, 0.x), and
-  version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them put
-  cosmetic noise on every healthy capture (CM2500 round 1: `255.255.255.0` reported as a potential public IP)
+  version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them would put
+  cosmetic noise on every healthy capture
 
 **Line numbers:**
 
@@ -266,9 +326,30 @@ Severity: **error**
 
 Severity: **warning**
 
-### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth)`
+**IPv6 addresses:**
 
-Recursively scans JSON structures for sensitive field names.
+- `IPV6_RE` candidates that `is_ipv6_host_address()` accepts — the sanitizer's own IPv6 pass (`patterns/redaction.py`),
+  so a clock time, a MAC, the unspecified `::` and the loopback `::1` are not reported, and every address that is gets
+  rewritten by any sanitize run, in every body route
+- Reported because a global address locates the subscriber and an EUI-64 link-local address embeds the device's MAC;
+  JSON bodies across the cable_modem_monitor fleet hold 960 IPv6 addresses
+- Placeholders (the `2001:db8::` documentation prefix) are skipped via `is_redacted()`
+- An IPv4-mapped address (`::ffff:1.2.3.4`) is one address: its dotted-quad tail is not reported again by the public-IP
+  scan (`ipv6_host_spans()`)
+
+Severity: **warning**
+
+### `check_json_fields(data, location, findings, path, custom_patterns, _field_tiers, _depth, _served)`
+
+Recursively scans JSON structures for sensitive field names and identity fields.
+
+**Identity fields (error).** A key naming a device identity whose value has that identity's shape
+(`unredacted_identity()`, built on the sanitizer's own `classify_identity_field()`; see
+[JSON Body Traversal](SANITIZATION_SPEC.md#json-body-traversal)) is reported as "Device serial number in a JSON field"
+or "MAC address in a JSON field". The key states what the value is, so the finding is deterministic (ADR-13). Under a
+MAC-named key a MAC placeholder in any layout (`is_mac_placeholder()` — bare and dotted placeholders are not in the
+global allowlist, since a bare `02…` hex run in free text could be anything), a constant MAC, or an allowlisted value is
+clean. An identity finding replaces the field-tier check for that member.
 
 #### Full Signature
 
@@ -278,28 +359,30 @@ def check_json_fields(
     location: str,
     findings: list[Finding],
     path: str = "",
-    custom_patterns: str | None = None,
+    custom_patterns: str | dict[str, Any] | None = None,
     _field_tiers: _FieldTiers | None = None,
     _depth: int = 0,
+    _served: bool = False,
 ) -> None:
 ```
 
 #### Public Parameters
 
-| Parameter         | Type            | Description                                                   |
-| ----------------- | --------------- | ------------------------------------------------------------- |
-| `data`            | dict \| list    | JSON structure to scan                                        |
-| `location`        | str             | HAR location for findings (e.g., "Entry 5 (request body)")    |
-| `findings`        | list\[Finding\] | Accumulator list (mutated in-place)                           |
-| `path`            | str             | Current path in structure (e.g., "user.credentials.password") |
-| `custom_patterns` | str \| None     | Custom patterns file path                                     |
+| Parameter         | Type                | Description                                                   |
+| ----------------- | ------------------- | ------------------------------------------------------------- |
+| `data`            | dict \| list        | JSON structure to scan                                        |
+| `location`        | str                 | HAR location for findings (e.g., "Entry 5 (request body)")    |
+| `findings`        | list\[Finding\]     | Accumulator list (mutated in-place)                           |
+| `path`            | str                 | Current path in structure (e.g., "user.credentials.password") |
+| `custom_patterns` | str \| dict \| None | Custom patterns (file path or dict)                           |
 
 #### Internal Parameters
 
-| Parameter      | Type                 | Description                                          |
-| -------------- | -------------------- | ---------------------------------------------------- |
-| `_field_tiers` | \_FieldTiers \| None | Pre-compiled tier patterns — loaded once, reused     |
-| `_depth`       | int                  | Recursion depth counter — checked against limit (50) |
+| Parameter      | Type                 | Description                                                                                                                                  |
+| -------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_field_tiers` | \_FieldTiers \| None | Pre-compiled tier patterns — loaded once, reused                                                                                             |
+| `_depth`       | int                  | Recursion depth counter — checked against limit (50)                                                                                         |
+| `_served`      | bool                 | The JSON is a response body: a credential-named value the sanitizer keeps or offers for review (`credential_value_action()`) is not reported |
 
 **`_field_tiers` lifecycle:**
 
@@ -314,14 +397,14 @@ def check_json_fields(
 1. Starts at 0 on the initial call
 1. Incremented by 1 before each recursive call
 1. Checked against limit (50) at the start of each call
-1. If `_depth > 50`: return immediately (logged, not fatal)
+1. If `_depth > 50`: return immediately (silently: the sanitizer's key rules stop at the same depth)
 1. Prevents stack overflow from deeply nested or circular JSON
 
 #### Recursion Logic
 
 ```python
 def check_json_fields(data, location, findings, path="",
-                      custom_patterns=None, _field_tiers=None, _depth=0):
+                      custom_patterns=None, _field_tiers=None, _depth=0, _served=False):
     if _depth > 50:
         return
 
@@ -329,12 +412,16 @@ def check_json_fields(data, location, findings, path="",
         _field_tiers = _compile_field_tiers(custom_patterns)
 
     if isinstance(data, dict):
-        for key, value in data.items():
+        for key, value in json_members(data):  # shadowed duplicates included
             current_path = f"{path}.{key}" if path else key
-            # Classify key against the field tiers (error / warning / suppressed)
-            if isinstance(value, str) and value and not is_redacted(value):
+            # An identity field first (error), else the field tiers (error / warning / suppressed)
+            if isinstance(value, str) and _identity_finding(key, value, custom_patterns):
+                findings.append(Finding(severity="error", ...))
+            elif isinstance(value, str) and value and not is_redacted(value, custom_patterns):
                 classified = _classify_field_finding(key, value, _field_tiers)
-                if classified is not None:
+                served_kept = _served and classified and classified[0] == "error" \
+                    and credential_value_action(value) != "redact"
+                if classified is not None and not served_kept:
                     severity, pattern = classified
                     findings.append(Finding(severity=severity, ...))
             # Recurse into nested structures
@@ -342,7 +429,7 @@ def check_json_fields(data, location, findings, path="",
                 check_json_fields(value, location, findings, current_path,
                                   custom_patterns,
                                   _field_tiers=_field_tiers,
-                                  _depth=_depth + 1)
+                                  _depth=_depth + 1, _served=_served)
 
     elif isinstance(data, list):
         for i, item in enumerate(data):
@@ -350,7 +437,7 @@ def check_json_fields(data, location, findings, path="",
                 check_json_fields(item, location, findings, f"{path}[{i}]",
                                   custom_patterns,
                                   _field_tiers=_field_tiers,
-                                  _depth=_depth + 1)
+                                  _depth=_depth + 1, _served=_served)
 ```
 
 Key design decisions:
@@ -372,41 +459,78 @@ def analyze_capture_completeness(har, custom_patterns_path=None) -> CaptureCompl
 ```python
 @dataclass
 class CaptureCompletenessReport:
-    total_entries: int                        # Requests captured
-    method_counts: dict[str, int]             # Count per HTTP method
-    unique_urls: int                          # Distinct request URLs
-    set_cookie_responses: int                 # Responses carrying Set-Cookie (not proof of a session)
-    first_request_session_cookies: list[str]  # Session cookies already on request #1
-    credential_post_counts: dict[str, int]    # Credential submissions per request URL
-    warnings: list[CompletenessWarning]       # Gaps found (empty == complete)
+    total_entries: int                            # Requests captured
+    method_counts: dict[str, int]                 # Count per HTTP method
+    unique_urls: int                              # Distinct request URLs
+    set_cookie_responses: int                     # Responses carrying Set-Cookie (not proof of a session)
+    first_request_session_cookies: list[str]      # Session cookies already on request #1
+    credential_submission_counts: dict[str, int]  # Credential submissions per request URL (see Keys)
+    warnings: list[CompletenessWarning]           # Gaps found (empty == complete)
 
-    post_count: int             # property — method_counts["POST"]
-    credential_post_count: int  # property — total credential submissions
-    complete: bool              # property — no warnings
+    credential_submission_count: int  # property — total credential submissions
+    complete: bool                    # property — no warnings
 ```
 
 Three gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
 
-| Code                     | Trigger                                          | Meaning                                                                                                                                                                                          |
-| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mid_session_capture`    | Session cookie present on the **first** request  | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
-| `no_post_requests`       | Zero `POST` entries                              | No form or auth submission was recorded                                                                                                                                                          |
-| `single_credential_post` | Exactly one credential submission in the capture | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
+| Code                           | Trigger                                                              | Meaning                                                                                                                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mid_session_capture`          | Session cookie present on the **first** request                      | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
+| `no_credential_submission`     | No credential submission, and no `POST`/`PUT`/`PATCH` request at all | Nothing that could carry a login was recorded                                                                                                                                                    |
+| `single_credential_submission` | Exactly one credential submission in the capture                     | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
 
 "First request" is resolved by `startedDateTime` when every entry carries one (index-tiebroken for same-millisecond
 stamps), falling back to file order otherwise — foreign HARs are not guaranteed to be sorted, and the mid-session signal
 depends on genuinely reading the earliest request.
 
-A **credential submission** is a POST whose `postData` carries a parameter with a password-shaped name (parsed `params`
-array, else an urlencoded `text` body; JSON bodies are not inspected). Names are matched against
-`password_fields.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields) — names
-only, so the check works identically on raw and sanitized HARs. Two or more submissions suppress the warning: the tool
-cannot verify outcomes, so a repeat submission is taken as the deliberate wrong-password attempt the contributor
-instructions call for.
+A **credential submission** is a request carrying any of:
+
+- a `POST`, `PUT` or `PATCH` body with a **non-empty** value under a password-shaped field name: the parsed `params`
+  array, else the `text` read by its shape, not its declared type — a JSON object or array is walked by key through
+  nested objects and arrays to `JSON_MAX_DEPTH` (50), any other text is read as urlencoded. Text that looks like JSON
+  but does not parse is not read (`parse_qsl` would make field names out of its values). Only string values count: a
+  boolean or number under such a key is a setting (`showPassword: true`), and a container is walked into;
+- a base64 `user:pass` URL credential (`iter_url_credentials()`, every shape in
+  [SANITIZATION_SPEC URL Sanitization](SANITIZATION_SPEC.md#url-sanitization)) or, on a sanitized file, an entry the
+  `log._har_capture._sanitized_credentials` annotation lists (`annotated_url_credential_entries()`) — the sanitizer's
+  `AUTH_` placeholder is not recognizable as a credential;
+- a `Basic` or `Digest` `Authorization` value not seen on an earlier request. A browser resends the same Basic value on
+  every request to the realm (9 of the 15 CMM fleet captures with Basic auth resend it 3×), while a refused attempt
+  carries a different value.
+
+Each request counts once, whichever of these it carries. Field names are matched against `password_fields.name_patterns`
+in [`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields).
+Every signal read survives sanitization — field names, whether a value is empty (the sanitizer keeps an empty value and
+never empties one), the `Authorization` scheme, distinct header values (hashed one placeholder per value), and the
+annotation — so the check reports the same gaps on raw and sanitized HARs; the `TestSanitizedParity` rows enforce it.
+Two or more submissions suppress the single-submission warning: the tool cannot verify outcomes, so a repeat submission
+is taken as the deliberate wrong-password attempt the contributor instructions call for. An empty password is not a
+submission, so HNAP's first login phase (`LoginPassword: ""`, the challenge request) is not counted and its second phase
+is.
+
+**Why "no submission" also needs no write request.** Many logins cannot be read by field name: across the 480 CMM fleet
+captures, 117 hold a `POST` but no readable submission — HNAP captures holding only the challenge phase (27), encrypted
+`AuthData`/`EncryptData` form logins (19), encrypted LuCI `arguments` (13). A write request can carry a login the tool
+cannot read (a JSON `PUT` login is one), so the no-submission gap is reported only when nothing in the capture could
+have carried a login.
+
+**Keys.** `credential_submission_counts` is keyed by the request URL with its query, fragment and userinfo dropped
+(split by hand; `urlparse` raises on an unbalanced IPv6 bracket). Those parts can carry the credential itself, and `get`
+prints the single-submission warning, which names the URL, for the raw capture.
+
+**Accepted limits** (fleet counts over the 480 CMM captures):
+
+- Basic/Digest values are told apart by value, so a file sanitized with static placeholders (`--salt none`, one
+  `***AUTH***` for every value) counts every attempt as one — 0 fleet captures carry Basic auth under static
+  placeholders (6 hashed, 9 raw). A Digest value differs on every request (its `uri`/`nc`/`response` change), so each
+  request counts and the single-submission nudge never fires for Digest — 0 fleet captures use Digest.
+- An HNAP capture whose challenge phase carries a value counts two submissions for one login, suppressing the nudge — a
+  false negative costs a nudge, never evidence. 25 fleet captures do; 19 of them hold a `FIELD_` placeholder in place of
+  the empty value, which the sanitizer does not write (it keeps an empty value on every route).
+- XML and multipart bodies are not read (0 fleet XML login bodies); GET query-string passwords are not read (0 fleet).
 
 Session cookies are matched by name against `session_cookies.name_patterns` in
-[`capture.json`](PATTERN_SPEC.md#capturejson-capture-settings-bloat-extensions-session-cookies-password-fields),
+[`capture.json`](PATTERN_SPEC.md#capturejson--capture-settings-bloat-extensions-session-cookies-password-fields),
 case-insensitively and full-match. Cookie names are read from both the parsed `request.cookies` array and the raw
 `Cookie` header, since HAR producers populate one, the other, or both.
 
@@ -430,19 +554,16 @@ Analysis works on sanitized files because sanitization redacts cookie *values* b
 are all the mid-session check reads — so a contributor's sanitized `.har.gz` is still checkable at intake. `load_har()`
 handles `.har` and `.har.gz` transparently and is shared with `validate_har()`.
 
-**Why this exists:** cable_modem_monitor issue #120 (Technicolor CGA6444VF) shipped a HAR whose first request already
-carried a `PHPSESSID` cookie. The login exchange was never inside the capture window, the tool reported success, and a
-full auth config was hand-authored downstream from evidence that did not exist — five months and six contributor
-retests. The companion defect (same-URL POST dedup discarding the login submission) is closed: the capture no longer
-collapses repeated requests at all — see [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
+**Why this exists:** a capture whose first request already carries a session cookie holds no login exchange, and an auth
+config written from it rests on evidence that is not there. The login submission itself is kept because the capture
+never collapses repeated requests — see [Capture Spec](CAPTURE_SPEC.md#filter-and-compress-filter_and_compress_har).
 
 ## Compressed-Artifact Freshness Check
 
 `stale_compressed_sibling()` (`validation/artifacts.py`) compares a `.har` with its `.har.gz` sibling. Every har-capture
 flow writes the `.gz` as a byte-for-byte gzip of the final `.har`, so any divergence means one member predates the
-other's last edit. The known failure mode is a compressed artifact written before the interactive review scrubbed PII
-from the `.har` — observed on all three reviewed CM2500 captures (2026-08-19) — and the `.gz` is exactly the file
-contributors upload.
+other's last edit. The failure it catches is a compressed artifact written before the interactive review scrubbed PII
+from the `.har`, and the `.gz` is exactly the file contributors upload.
 
 - `compressed_sibling_pair(path)` resolves the `(har, gz)` pair from either member; an incomplete pair returns `None`
 - Divergent content (or an unreadable `.gz`) returns a human-readable problem description; a matching pair returns
@@ -451,7 +572,7 @@ contributors upload.
   reports the divergence **once**, and counts a stale pair as an **error** (exit 1) — unlike completeness gaps, a stale
   `.gz` is a live PII-leak vector, not a coverage note
 
-The interactive review itself regenerates the `.gz` after applying user redactions (see
+The review itself regenerates the `.gz` when it records its outcome (`record_review`, see
 [SANITIZATION_SPEC](SANITIZATION_SPEC.md)), so this check is the backstop for artifacts produced outside that flow —
 hand-edited files, older tool versions, interrupted runs.
 
@@ -466,6 +587,9 @@ har-capture validate capture.har --patterns <domain|custom.json>
 - Loads and validates a single HAR file
 - Prints findings to stdout with severity, location, field, value
 - Checks `.har`/`.har.gz` pair freshness (see above)
+- A file it cannot read as a HAR — invalid JSON, JSON nested past the interpreter's recursion limit, a corrupt or
+  truncated gzip, a field of the wrong type — is one `[ERROR] [file]` naming why, and the scan continues with the next
+  file
 - Exit code 0 if no findings, 1 if findings detected
 - Supports custom patterns via `--patterns`
 
@@ -518,7 +642,8 @@ sensitive.json
 │                                        sanitization (sanitize_header_value, scheme-preserving branch)
 ├── fields.auto_redact_patterns → Used by: validation (check_json_fields, check_post_data)
 │                                           sanitization (is_sensitive_field)
-├── fields.flag_patterns     → Used by: validation (check_json_fields, check_post_data)
+├── fields.flag_patterns     → Used by: validation (check_json_fields and check_post_data on request
+│                                        bodies; not on response bodies — see check_content)
 │                                        sanitization (is_flaggable_field)
 ├── heuristics.detectors     → serial_number @ high confidence: validation (check_content vendor-serial scan)
 │   (domain-merged)                        sanitization (redact_vendor_serials); all others: sanitization only
@@ -528,10 +653,35 @@ sensitive.json
 Code-level detectors shared through `patterns/redaction.py` rather than a JSON file:
 
 - `find_query_credential()` and `query_param_segment()` — URL query credentials. Used by validation (`check_url`,
-  `check_query_string`) and sanitization (`_sanitize_url_query_params`, `_sanitize_query_string_array`,
-  `_scan_url_credentials`).
+  `check_query_string`) and sanitization (`_sanitize_url_query_params`, `_sanitize_query_string_array`, and
+  `_scan_url_credentials` through `iter_url_credentials()`).
+- `find_query_payload()` and `decode_base64_payload()` — base64-wrapped JSON and URL payloads, which are data rather
+  than credentials. Used by validation (`check_url`, `check_query_string`, `check_content`) and sanitization
+  (`_sanitize_url_query_params`, `_sanitize_query_string_array`, `_sanitize_body_text`).
+- `decode_transport_body()` — a body's text, transport encoding undone. Used by validation (`validate_har`) and
+  sanitization (`_sanitize_response_content`).
+- `split_url_query()` / `url_query()` — a URL's raw query, split by hand. Used by validation (`check_url`) and
+  sanitization (`_sanitize_url_query_params`, `_sanitize_url_path`, `iter_url_credentials`).
+- `SERIAL_LABEL_RE` (from `sanitization/html.py`) — labeled serials. Used by validation (`check_content`), sanitization
+  (pass 2) and `check_for_pii` (through `pii.json`'s mirrored `serial_number` regex).
+- `MAC_RE` — MAC addresses in text. Used by validation (`check_content`), sanitization (`_sanitize_body_string`, HTML
+  engine pass 1 and pipe-delimited values) and `check_for_pii` (through `pii.json`'s mirrored `mac_address` regex).
+  `is_constant_mac()` — the broadcast and zero MACs neither tool treats as PII — is shared the same way.
+- `IPV6_RE` with `is_ipv6_host_address()`, `PUBLIC_IP_RE`, `PRIVATE_IP_RE`, `EMAIL_RE` — addresses in text. Used by
+  sanitization (HTML engine passes 4–6 and 11, and `_sanitize_body_string` for JSON values, JSON keys and text bodies),
+  validation (`check_content`'s IPv6 scan) and `check_for_pii` (through `pii.json`'s mirrored `private_ip`, `public_ip`,
+  `ipv6` and `email` regexes, skipping what the engines keep).
+- `route_body()` / `parse_json_container()` — which engine a response body's text goes to, and whether text is JSON.
+  Used by sanitization (`_sanitize_body_text`, `sanitize_post_data`) and validation (`check_content`, to check a
+  JSON-routed body's fields; `check_post_data`). `JSON_MAX_DEPTH` bounds the key rules in both tools and in
+  `check_for_pii`.
+- `classify_identity_field()` — a serial or MAC under a key naming it. Used by sanitization (`_sanitize_json_recursive`)
+  and, through `unredacted_identity()` (which also skips the sanitizer's own placeholders), by validation
+  (`check_json_fields`) and `check_for_pii`.
 - `URL_VALUED_HEADERS` — headers whose value is a URL. Used by validation (`validate_har`) and sanitization
   (`_sanitize_headers`).
+- `certificate_name_macs()` with `CERTIFICATE_NAME_FIELDS` — the MACs in an entry's TLS certificate names. Used by
+  sanitization (`_sanitize_security_details`) and validation (`check_security_details`).
 
 ### Validation-Only Patterns
 
@@ -539,21 +689,19 @@ These patterns are hard-coded in `secrets.py` and not shared with sanitization:
 
 | Pattern       | Purpose                                     |
 | ------------- | ------------------------------------------- |
-| MAC regex     | Detect unsanitized MACs in response content |
-| Serial regex  | Detect serial numbers in HTML tables        |
 | Netmask check | Suppress subnet masks in the public-IP scan |
-| IP regex      | Detect public IPs in response content       |
+| IP regex      | Detect public IPv4 in response content      |
 
 ### Sanitization-Only Patterns
 
 These patterns are used only during sanitization:
 
-| Source                                  | Purpose                                                                                                                |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `pii.json`                              | Full PII detection patterns with replacement prefixes                                                                  |
-| Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above) |
-| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                            |
-| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`)                                                  |
+| Source                                  | Purpose                                                                                                                           |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pii.json`                              | PII detection patterns with replacement prefixes (HTML engine pass 0; `check_for_pii`, whose built-ins mirror the shared regexes) |
+| Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above)            |
+| Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                                       |
+| HTML scanner passes                     | Password inputs, SSID fields (`html.py`); script variables a domain file names (`script_variables`)                               |
 
 ### Design Intent
 
@@ -571,18 +719,22 @@ Validation is intentionally simpler than sanitization:
    unsanitized HAR would produce overwhelming findings.
 1. **Redacted values are always suppressed** — If `is_redacted(value)` returns True, no finding is generated. This is
    the contract between sanitization and validation.
-1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Exceeding this is logged but does
-   not crash or produce findings for deeper content.
+1. **Depth limit prevents crashes** — `check_json_fields` caps recursion at 50 levels. Deeper content is skipped
+   silently — no crash and no findings.
 1. **Pattern compilation is done once** — `_field_tiers` is compiled on the first call to `check_json_fields` and reused
    across all recursive invocations and all entries; `validate_har` compiles the vendor-serial detectors once per file.
-1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`,
-   `SameSite`) are not flagged. Only headers with actual session values trigger findings.
+1. **Cookie data is classified one segment at a time** — `cookie_segment_actions()` is the rule both tools share (see
+   Cookie headers above). A Set-Cookie made only of valid RFC 6265 attributes (`Secure; HttpOnly`, `SameSite=Lax`) and a
+   valueless `Secure`/`HttpOnly`/`Partitioned` in a request `Cookie` are not flagged; every other cookie value that is
+   not a placeholder is, whatever its name (`path=s3cr3t` in a request `Cookie` is a cookie).
 1. **Severity is deterministic** — every finding's severity follows from which pattern matched, never from scoring:
-   headers, auto-redact-tier field names, base64 credentials, and vendor-format serials are "error"; flag-tier field
-   names, MAC/label-serial/IP content patterns are "warning"; factory-default usernames in flag-tier fields are
-   suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic engine).
+   headers, auto-redact-tier field names, JSON identity fields, base64 credentials, and vendor-format serials are
+   "error"; flag-tier field names, MAC/label-serial/IPv4/IPv6 content patterns are "warning"; factory-default usernames
+   in flag-tier fields are suppressed. There is no confidence scoring in validation (unlike sanitization's heuristic
+   engine).
 1. **Empty values are skipped** — Empty header values, empty POST data values, and empty content are not flagged.
 1. **Base64 detection is conservative** — `is_base64_credential()` requires valid base64 characters, canonical padding,
    a strict decode to UTF-8, and a colon with at least one character on each side (the split is at the first colon, so a
    password may itself contain colons). Random base64-looking strings that don't decode to `user:pass` format are not
-   flagged.
+   flagged, and neither is base64 of a JSON object or array or of a URL: that text always has a colon, and it is a
+   payload, checked inside rather than reported whole.

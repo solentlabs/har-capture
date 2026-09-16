@@ -8,16 +8,16 @@ domain patterns, merge order, and the section schema for each pattern type. It a
 
 ## Key Files
 
-| File                                                   | Role                                                                                     |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns                                        |
-| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                                                         |
-| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                                           |
-| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                                                       |
-| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names                             |
-| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                                                      |
-| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                                                          |
-| `src/har_capture/patterns/redaction.py`                | `is_redacted()`, `is_allowlisted()`, `is_base64_credential()`, `find_query_credential()` |
+| File                                                   | Role                                                                                                                                     |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/har_capture/patterns/loader.py`                   | Load, merge, compile, resolve, and cache patterns                                                                                        |
+| `src/har_capture/patterns/pii.json`                    | Universal PII detection patterns                                                                                                         |
+| `src/har_capture/patterns/sensitive.json`              | Universal headers, field patterns, safe values                                                                                           |
+| `src/har_capture/patterns/allowlist.json`              | Already-redacted value recognition                                                                                                       |
+| `src/har_capture/patterns/capture.json`                | Bloat extensions, session cookie names, password field names                                                                             |
+| `src/har_capture/patterns/domains/__init__.py`         | Domain package init                                                                                                                      |
+| `src/har_capture/patterns/domains/network_device.json` | Network device domain knowledge                                                                                                          |
+| `src/har_capture/patterns/redaction.py`                | `is_redacted()` and the detection primitives shared by sanitize and validate (see [Redaction Checking](#redaction-checking-redactionpy)) |
 
 ## File Format
 
@@ -54,31 +54,37 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Schema: `patterns` dict**
 
-| Field                | Type       | Required | Description                                                      |
-| -------------------- | ---------- | -------- | ---------------------------------------------------------------- |
-| `regex`              | string     | Yes      | Python regex pattern for matching PII                            |
-| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)              |
-| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                       |
-| `require_hex_letter` | bool       | No       | For IPv6: reject matches without a-f chars (avoids time strings) |
-| `description`        | string     | No       | Human-readable description                                       |
+| Field                | Type       | Required | Description                                                                                                    |
+| -------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `regex`              | string     | Yes      | Python regex pattern for matching PII                                                                          |
+| `replacement_prefix` | string     | Yes      | Prefix used when hashing (MAC, SERIAL, EMAIL, etc.)                                                            |
+| `flags`              | string\[\] | No       | Regex flags: IGNORECASE, MULTILINE, DOTALL                                                                     |
+| `require_hex_letter` | bool       | No       | `check_for_pii` only: reject matches without a-f chars                                                         |
+| `value_group`        | int        | No       | `check_for_pii`: the group holding the value, judged against the allowlist (default and fallback: whole match) |
+| `description`        | string     | No       | Human-readable description                                                                                     |
 
 **Built-in patterns:**
 
-| Name          | Prefix              | What It Matches                                     |
-| ------------- | ------------------- | --------------------------------------------------- |
-| mac_address   | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF`            |
-| serial_number | SERIAL              | SN, S/N, Serial Number labels + values              |
-| account_id    | ACCOUNT             | Account, Subscriber, Customer, Device ID labels     |
-| private_ip    | (format-preserving) | 10.x, 172.16-31.x, 192.168.x                        |
-| public_ip     | (format-preserving) | Non-private, non-reserved IPv4                      |
-| ipv6          | (format-preserving) | IPv6 full and compressed forms                      |
-| email         | (format-preserving) | RFC 5321 simplified                                 |
-| session_token | TOKEN               | 20+ char alphanumeric strings                       |
-| csrf_token    | CSRF                | CSRF tokens in meta tags                            |
-| password      | PASS                | password=, passphrase= patterns                     |
-| ssn           | SSN                 | Social Security Number (flagged, not auto-redacted) |
-| credit_card   | CC                  | Visa/MC/Amex with Luhn validation                   |
-| config_path   | CONFIG              | .cfg file references                                |
+| Name            | Prefix              | What It Matches                                                                  |
+| --------------- | ------------------- | -------------------------------------------------------------------------------- |
+| mac_address     | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`)                              |
+| serial_number   | SERIAL              | A serial label and its value (`SERIAL_LABEL_RE`)                                 |
+| wps_pin         | PIN                 | A WPS/pairing/default PIN label and 8 digits (`WPS_PIN_LABEL_RE`)                |
+| account_id      | ACCOUNT             | An Account/Subscriber/Customer/Device ID label and value (`ACCOUNT_LABEL_RE`)    |
+| private_ip      | (format-preserving) | 10.x, 172.16-31.x, 192.168.x (`PRIVATE_IP_RE`)                                   |
+| public_ip       | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)                                  |
+| ipv6            | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)                                       |
+| email           | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                                                 |
+| password_field  | PASS                | A password/passphrase/psk/glued-`key` label and its value (`PASSWORD_FIELD_RE`)  |
+| password_input  | PASS                | An `<input type=password>` value (`PASSWORD_INPUT_RE`)                           |
+| session_token   | TOKEN               | A session/token/auth/cookie label and a 20+ character value (`SESSION_TOKEN_RE`) |
+| csrf_token      | CSRF                | A `<meta name=csrf-token>` content value (`CSRF_META_RE`)                        |
+| config_path     | CONFIG              | .cfg file references                                                             |
+| ssn             | SSN                 | Social Security Number (flagged, not auto-redacted)                              |
+| credit_card\_\* | CC                  | Visa/MC/Amex with Luhn validation                                                |
+
+The labeled and tag patterns are the sanitizer's compiled regexes verbatim, pinned by a test, so `check_for_pii` reports
+what the HTML engine replaces.
 
 **`preserved_gateway_ips`**: Array of IP addresses that should never be redacted. These are common router gateway
 addresses that appear in every device capture and don't constitute PII (e.g., `192.168.1.1`, `192.168.0.1`, `10.0.0.1`).
@@ -89,8 +95,8 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
 {
   "headers": {
     "full_redact": ["x-auth-token", "x-api-key"],
-    "cookie_redact": ["cookie", "set-cookie"],
-    "scheme_redact": ["authorization"]
+    "cookie_redact": ["cookie", "set-cookie", "set-cookie2"],
+    "scheme_redact": ["authorization", "proxy-authorization"]
   },
   "fields": {
     "auto_redact_patterns": ["password", "secret", "token", "\\bkey\\b", "\\bauth\\b"],
@@ -111,10 +117,13 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
 
 **Schema: `headers`**
 
+Names match exactly (case-insensitive), in the sanitizer and `validate` alike: `cookie` names the `Cookie` header, not
+`X-Cookie-Consent`.
+
 | Field           | Type       | Description                                                                                                                                                                                             |
 | --------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `full_redact`   | string\[\] | Header names (case-insensitive) whose values are fully replaced                                                                                                                                         |
-| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted)                                                                                                                                |
+| `cookie_redact` | string\[\] | Header names with cookie-style values (names preserved, values redacted); `set-cookie` and `set-cookie2` are read with Set-Cookie grammar, any other name as a list of pairs                            |
 | `scheme_redact` | string\[\] | Header names with RFC 7235 `Scheme credentials` syntax. Recognized scheme tokens (`Basic`, `Bearer`, `Digest`, `NTLM`, `Negotiate`, `OAuth`) are preserved; unknown schemes fall through to full redact |
 
 **Schema: `fields`**
@@ -141,46 +150,19 @@ addresses that appear in every device capture and don't constitute PII (e.g., `1
 
 ```json
 {
-  "static_placeholders": {
-    "values": ["XX:XX:XX:XX:XX:XX", "0.0.0.0", "::", "x@x.invalid", "[REDACTED]"]
-  },
+  "static_placeholders": {"values": ["XX:XX:XX:XX:XX:XX", "0.0.0.0", "::", "x@x.invalid", "[REDACTED]"]},
   "format_preserving_patterns": {
-    "mac": {
-      "pattern": "^02:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$",
-      "description": "Locally administered MAC (02:xx:xx:xx:xx:xx)"
-    },
-    "private_ip": {
-      "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
-      "description": "Redacted private IP (10.255.x.x)"
-    },
-    "public_ip": {
-      "pattern": "^192\\.0\\.2\\.\\d{1,3}$",
-      "description": "Redacted public IP (192.0.2.x)"
-    },
-    "ipv6": {
-      "pattern": "^2001:db8::",
-      "description": "Redacted IPv6 (2001:db8::)"
-    },
-    "email": {
-      "pattern": "@redacted\\.invalid$",
-      "description": "Redacted email (@redacted.invalid)"
-    }
+    "mac": {"pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$", "description": "Locally administered MAC"}
   },
-  "hash_prefixes": {
-    "values": [
-      "SERIAL_", "ACCOUNT_", "PASS_", "TOKEN_", "CSRF_", "CONFIG_",
-      "WIFI_", "DEVICE_", "FIELD_", "AUTH_", "COOKIE_", "STORAGE_",
-      "CRED_", "SENSITIVE_", "MAC_"
-    ]
-  },
-  "redaction_patterns": {
-    "values": [
-      "\\[REDACTED\\]", "REDACTED", "XXX+", "0{6,}",
-      "\\*\\*\\*[A-Z]+\\*\\*\\*"
-    ]
-  }
+  "hash_prefixes": {"values": ["SERIAL_", "PASS_", "WIFI_", "…"]},
+  "redaction_patterns": {"values": ["\\[REDACTED\\]", "\\*\\*\\*[A-Z]+\\*\\*\\*", "MAC_[a-f0-9]{8}", "…"]}
 }
 ```
+
+The excerpt shows each section's shape; [`allowlist.json`](../../src/har_capture/patterns/allowlist.json) holds the full
+lists. `hash_prefixes` lists the prefixes of the built-in passes and of the hasher's heuristic categories
+(`Hasher.hash_sensitive_value` requires each of its prefixes to be listed); pass 0's card-number `CC_` and a custom
+pattern's own prefix are not listed, and no rule matches those placeholders again.
 
 Used by `is_redacted()` in `redaction.py` to determine whether a value has already been sanitized.
 
@@ -219,10 +201,11 @@ mid-session. Entries are case-insensitive full-match regexes tested against cook
 read, so this list carries no PII risk.
 
 `password_fields.name_patterns` is used by `get_password_field_patterns()` and read by capture-completeness validation
-to count credential submissions (POSTs carrying a password-named parameter), which drives the
-[`single_credential_post`](VALIDATION_SPEC.md#capture-completeness-validation) warning. Entries are case-insensitive
-substring-match regexes tested against POST parameter **names** only. The list is deliberately narrower than
-`sensitive.json` `auto_redact_patterns` — token/secret fields ride along on every form and would inflate the count.
+to count credential submissions (a `POST`/`PUT`/`PATCH` body with a non-empty value under a password-named form field or
+JSON key, among the [other kinds](VALIDATION_SPEC.md#capture-completeness-validation)), which drives the
+`single_credential_submission` warning. Entries are case-insensitive substring-match regexes tested against field
+**names**; of a value, only whether it is empty is read. The list is deliberately narrower than `sensitive.json`
+`auto_redact_patterns` — token/secret fields ride along on every form and would inflate the count.
 
 **Merge semantics:** a custom capture-settings file extends all three sections. `bloat_extensions` categories extend
 per-category (unknown categories are added); `session_cookies.name_patterns` and `password_fields.name_patterns` extend
@@ -259,6 +242,11 @@ A domain file can contain any combination of these sections:
 
   "tagValueList": {
     "safe_values": ["domain-specific-safe-value"]
+  },
+
+  "script_variables": {
+    "password": [{"regex": "CurrentPw[A-Za-z]*", "flags": ["IGNORECASE"]}],
+    "pipe_delimited": [{"regex": "tagValueList"}]
   },
 
   "include_patterns": ["mac_address", "serial_number", "private_ip", "public_ip", "ipv6", "email"],
@@ -342,6 +330,28 @@ Case-insensitive exact-match strings safe in pipe-delimited data. Domain-specifi
 
 Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclient`
 
+### Section: `script_variables`
+
+Names of JavaScript variables (`var NAME = '…'`) whose string value the HTML engine reads. Variable names are vendor
+knowledge ([ADR-5](../ARCHITECTURE_DECISIONS.md#adr-5-domain-agnostic-core-domain-knowledge-via-data)), so the core
+names none: without a pattern file that lists them, no script variable is read by name.
+
+| Field            | Type       | Description                                                                                                                     |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup |
+| `pipe_delimited` | object\[\] | Names whose value is split on `\|` and judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics)             |
+
+Each entry is `{"regex": "NAME", "flags": [...]}`. The regex matches the variable name and becomes
+`var\s+(?:NAME)\s*=\s*['"]VALUE['"]`, whose head, value and closing quote are named groups, so a group inside NAME
+(`Current(Pw|Password)`) is allowed; the flags apply to the whole assignment. The value stops at the first quote of
+either kind: a value holding the other quote (`var CurrentPw = "ab'cd"`) is redacted only up to it (0 fleet values). An
+entry that is not an object, or whose regex is not a string or does not compile, is skipped with a warning. Lists extend
+across pattern files.
+
+`network-device` lists Motorola's `Current(?:Pw|Password)…` (ignoring case) as `password`, and Netgear's `tagValueList`
+plus `connectedDevices`/`deviceList`/`systemInfo`-style names as `pipe_delimited`. Across the CMM fleet (480 HARs) they
+match 38 password assignments in 19 captures, 2,721 `tagValueList` blobs in 124, and 0 of the other pipe names.
+
 ### Section: `include_patterns`
 
 Top-level list of PII pattern names that are relevant to this domain. When present, only matching patterns survive the
@@ -371,8 +381,8 @@ SSNs. The domain declares which PII categories are relevant, including both core
 `pii.patterns`. The inclusion filter runs after the merge, so domain-specific patterns are first-class citizens
 alongside core patterns.
 
-When `include_patterns` is absent, all core patterns are applied (backward compatible). When multiple `--patterns` files
-are specified, `include_patterns` lists are accumulated across all files before being applied.
+When `include_patterns` is absent, all core patterns are applied. When multiple `--patterns` files are specified,
+`include_patterns` lists are accumulated across all files before being applied.
 
 As domain-specific patterns prove valuable across multiple consumers, they can be graduated to core (`pii.json`) — at
 which point existing domain files that already name them in `include_patterns` continue to work unchanged.
@@ -398,9 +408,9 @@ The built-in network device domain provides:
 - Safe value patterns for WiFi standards, modulation types, security protocols
 - WiFi SSID detector (band suffixes, common prefixes, CamelCase)
 - Device name detector (possessives, router brands, consumer devices)
-- Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — issue #49 C7000v2,
-  CM2500 7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate —
-  see the deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
+- Serial number detectors, split by confidence: known vendor layouts (13-char Netgear formats — C7000v2, CM2500
+  7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
+  deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
 
 ## Merge Order
@@ -433,23 +443,32 @@ for header_key in ("full_redact", "cookie_redact", "scheme_redact"):
             custom["headers"][header_key]
         )
 
-# Field-name regex lists extend additively. Both the current-schema keys
-# (auto_redact_patterns, flag_patterns) and the legacy `patterns` key are
-# honored and extend whatever list already exists on builtin.
-for key in ("auto_redact_patterns", "flag_patterns", "patterns"):
-    builtin["fields"].setdefault(key, []).extend(custom["fields"].get(key, []))
+# Field-name regex lists extend additively, tier by tier. Names under the
+# `patterns` key join the auto-redact tier.
+for key, tier in (("auto_redact_patterns", "auto_redact_patterns"),
+                  ("flag_patterns", "flag_patterns"),
+                  ("patterns", "auto_redact_patterns")):
+    builtin["fields"].setdefault(tier, []).extend(custom["fields"].get(key, []))
 
-# Dicts are updated (custom overrides builtin keys)
-builtin["patterns"].update(custom["patterns"])
+# Custom patterns add to the built-ins or replace them by name — except a
+# built-in the sanitizer applies with a pass of its own (DEDICATED_PASS_PATTERNS:
+# mac_address, serial_number, account_id, the address and email patterns, the
+# HTML engine's labeled patterns), which is ignored with a warning: its pass
+# does not read the file's regex, so a custom one would change what
+# check_for_pii reports and nothing the sanitizer removes.
+for name, definition in custom["patterns"].items():
+    if name not in DEDICATED_PASS_PATTERNS:
+        builtin["patterns"][name] = definition
+
+# script_variables lists extend kind by kind (password, pipe_delimited).
+for kind in ("password", "pipe_delimited"):
+    builtin.setdefault("script_variables", {}).setdefault(kind, []).extend(
+        custom["script_variables"].get(kind, [])
+    )
 
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})
 ```
-
-> **Note:** Prior to 0.7.0, `load_sensitive_patterns` merged only the legacy `fields.patterns` key and silently dropped
-> `fields.auto_redact_patterns` / `fields.flag_patterns` from custom inputs — even though both keys appear in the
-> built-in `sensitive.json` schema. The merge now honors all three. File- or dict-based consumers that previously worked
-> around this by editing `sensitive.json` directly can switch to the `custom_patterns` kwarg.
 
 ## Loader Architecture
 
@@ -508,8 +527,13 @@ def compile_pattern(pattern_dict: dict) -> re.Pattern | None:
     """Compile {regex, flags} dict. Returns None on invalid regex (logged, not fatal)."""
 ```
 
-Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are silently
-skipped to ensure one bad pattern doesn't break the entire system.
+Invalid regex patterns (unclosed brackets, quantifier at start, duplicate group names) return `None` — they are skipped
+with one warning per distinct pattern (compilation is cached), so one bad pattern doesn't break the entire system. The
+HTML engine's pass 0 and `check_for_pii` both compile custom `pii.json` patterns through it, so every flag a pattern
+names (`IGNORECASE`, `MULTILINE`, `DOTALL`) holds in both, and an invalid one crashes neither. A pattern file is user
+input: `flags` may be one name or any collection of names, an entry that is not a flag name is ignored with a warning, a
+pre-compiled `re.Pattern` keeps its own flags, and any other `regex` that is not a string skips the pattern with a
+warning (once per distinct pattern).
 
 ### Cache
 
@@ -580,28 +604,141 @@ Detects a base64-encoded `user:pass` value:
    explicit because Python 3.10 accepts excess padding that 3.11+ rejects; the answer must not depend on the
    interpreter.
 1. Check: the decoded string has a colon with at least one character on each side (split at the first colon, so a
-   password may contain colons)
+   password may contain colons), and is not structured text — a URL, or an opening JSON brace or bracket
 
 ### `find_query_credential(segment) -> QueryCredential | None`
 
 Locates a `base64(user:pass)` credential in one raw URL query segment — bare (`?<b64>`), marker-prefixed
 (`?login_<b64>`), or keyed (`?t=<b64>`) — undoing URL transport encoding first. Returns the verbatim `prefix` to keep,
-the `credential`, and whether it was `keyed`. Stripped padding is restored only above a length floor (11 characters) and
-for printable decoded text that is not a URL or JSON payload; a segment shaped like a hash placeholder (`AUTH_d2c6b8e4`)
-is never read as a credential. The single definition of a URL credential for the sanitizer, the validator and the
-credential annotation; see [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
+the `credential`, and whether it was `keyed`. Base64 of a JSON object or array or of a URL is a payload, never a
+credential (`decode_base64_payload()`). Stripped padding is restored only above a length floor (11 characters) and for
+printable decoded text; a segment shaped like a hash placeholder (`AUTH_d2c6b8e4`) is never read as a credential. The
+single definition of a URL credential for the sanitizer, the validator and the credential annotation; see
+[Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
 
 Companions: `query_param_segment(param)` rejoins a HAR `queryString` entry into the segment it was parsed from, and
 `URL_VALUED_HEADERS` names the headers whose value is a URL (`referer`, `location`, `content-location`).
 
-### `is_cookie_attribute_metadata(value) -> bool`
+### `MAC_RE`, `mac_layout(value)` and `is_mac_value(value)`
 
-Distinguishes cookie attributes from cookie values:
+`MAC_RE` is the one definition of a MAC address in text — six hex pairs joined by `:` or `-`, wherever they occur — for
+the sanitizer, `validate`, and (through `pii.json`'s `mac_address` regex, which must equal `MAC_RE.pattern`)
+`check_for_pii`. `mac_layout()` names a whole value's layout by the separator a placeholder in it is written with (`:`,
+`-`, `""` for bare 12-hex, `.` for dotted 4-4-4, `None` otherwise); the hasher writes MAC placeholders from it.
+`is_mac_value()` accepts any of those layouts, plus mixed separators. See
+[Sanitization Spec — MAC addresses](SANITIZATION_SPEC.md#mac-addresses).
 
-- Metadata: `HttpOnly: true, Secure: true`, `SameSite=Lax`
-- Not metadata: `session_id=abc123def456`
+### `classify_identity_field(key, value) -> str | None`
 
-Used to avoid flagging cookie headers that only contain metadata.
+Classifies a field whose key names a device identity and whose value has that identity's shape: `"serial_number"`,
+`"mac_address"`, or `None`. The key is read as its words, lowercased and joined with `_` (`StatusSoftwareSerialNum` →
+`status_software_serial_num`, `CMMACAddress` → `cmmac_address`) and as written, lowercased — an acronym run into a word
+(`HWaddr`, `MACaddress`, `SERIALnumber`) splits at the wrong letter, but its spelling still names the field — and either
+form must end with the identity (`SERIAL_KEY_RE`, `MAC_KEY_RE`): a serial (`serial`, `serial_number`, `serial_num`,
+`serial_no`, or exactly `sn`) or a MAC (`mac`, `mac_address`, `hwaddr`, ...), optionally numbered (`macaddress_5`). The
+last word may carry a glued prefix (`cmserialnumber`, `wanmacaddr`, `ethmac`) — except a word starting `hmac`, a message
+authentication code; a key containing `hmac` is read as words only, since its written form has no word boundary to
+exclude it by (`userHMAC`). A key whose identity is not last (`serialNumberLabel`, `MacAddressFilterEnabled`,
+`macaddr.wan`) is not an identity key.
+
+A serial value is one whitespace-free token of five or more characters carrying a digit that is not wholly a placeholder
+(`is_fully_redacted()`: `SN0000001234` contains a zero run and is still a serial) — the digit rule is what excludes
+status words (`N/A`, `Enabled`). A MAC value passes `is_mac_value()`; a MAC placeholder is still classified as a MAC,
+since it cannot be told from a real locally administered one, and whether to skip it is the caller's decision.
+
+`unredacted_identity(key, value, custom_patterns)` is that decision for the checkers (`validate`'s `check_json_fields`
+and `check_for_pii`): `classify_identity_field()`, less a MAC placeholder in any layout (`is_mac_placeholder()`: one
+uniform layout, lowercase, first octet `02` — trusted only under a MAC-named key), a constant MAC, or an allowlisted
+value. `credential_value_action(value)` decides a value a response serves under a credential-named key: `"keep"` for a
+button word (`Yes`, `No` — the only words the fleet's translation tables hold there), `"review"` for prose (words on
+both sides of a space), `"redact"` otherwise. The sanitizer, `validate`'s response JSON check and `check_for_pii` share
+it; a value a client submits is always redacted. `is_ssid_key(key)` is true when one of a key's words is `ssid`
+(`ssid_24g`, `guestSSID`): the sanitizer offers such a value for review rather than redacting it.
+
+### `PRIVATE_IP_RE`, `PUBLIC_IP_RE`, `IPV6_RE`, `EMAIL_RE` and `is_ipv6_host_address(candidate)`
+
+The address regexes both sanitizer engines use — the HTML engine's passes 4–6 and 11 and the string patterns that JSON
+values, JSON keys and text bodies take — so whether a value is redacted never depends on its body's route. `pii.json`'s
+`private_ip`, `public_ip`, `ipv6` and `email` regexes must equal their `.pattern` (a test pins them), and
+`check_for_pii` skips what the engines keep: `preserved_gateway_ips`, version strings, and IPv6 candidates that are not
+host addresses. An `IPV6_RE` candidate (colon-terminated hex groups ending in a hex group or, for an IPv4-mapped
+address, a dotted quad; not glued to a word or colon on either side) is an address only when `is_ipv6_host_address()`
+accepts it: `ipaddress` parses it — after unpadding a dotted-quad tail's zero-padded octets (`::ffff:192.168.001.100`),
+as the IPv4 passes read a padded quad — and it is not the unspecified `::` or loopback `::1` — protocol constants like
+IPv4's `0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of
+the IPv4 passes, so an IPv4-mapped address is hashed as one.
+
+### `route_body(mime_type, text)`
+
+The one routing decision for a response body's text, shared by the sanitizer and `validate`: `"json"` when the text
+parses as a JSON object or array whatever the type declares (HNAP answers JSON as `text/html`); else `"html"` for a
+markup `mime_kind()` and `"text"` for any other text kind; a type that says nothing about text is sniffed — `<` opens
+markup, else text. It returns the route with the parsed JSON, so neither tool parses a response body twice. See
+[Sanitization Spec — Response Content Dispatch](SANITIZATION_SPEC.md#response-content-dispatch).
+
+`JSON_MAX_DEPTH` (50) is how deep the key rules reach — the sanitizer's walker, `check_json_fields` and
+`check_for_pii`'s identity fields all stop there. `iter_json_strings()` yields every decoded string of a parsed body —
+values and keys, at any depth — the unit of text both tools' text passes read. `ipv6_host_spans()` gives the spans of
+the IPv6 host addresses in a text, so a checker does not report an IPv4-mapped address's tail again as IPv4.
+
+### `mime_kind(mime)`, `is_text_mime(mime)` and `decode_transport_body(content)`
+
+`mime_kind()` is the one mime vocabulary: `"markup"` (HTML, XML, any `+xml`), `"json"` (any `json` or `x-json` subtype
+or `+json` suffix, whatever the type — DM1000's `applation/json` counts), `"text"` (other `text/*`, JavaScript, form
+data), or `None` when the type says nothing about text. A subtype that merely contains `json` or `xml` is neither.
+`is_text_mime()` is `mime_kind() is not None`.
+
+`decode_transport_body()` returns the text a HAR body carries. A body without `encoding` is already text; a `base64`
+body is decoded with the mime type's declared charset — or strictly as UTF-8 when none is declared, or the declared one
+is unknown or not a text encoding (`hex`, `zlib`). When that fails under a text type, the bytes are read as latin-1.
+Otherwise bytes that do not decode, an empty result, or text holding NUL mean binary, and return `None`. See
+[ADR-16](../ARCHITECTURE_DECISIONS.md#adr-16-transport-encoding-is-not-content).
+
+### `parse_json_container(text)` and `is_constant_mac(mac)`
+
+`parse_json_container()` returns the object or array JSON text holds, or `None` — for scalars, invalid JSON, and nesting
+too deep for the parser or deeper than `JSON_MAX_NESTING` (400), so hostile input never crashes either tool. An object
+that repeats a key parses to a `JsonObjectWithDuplicates`: the last value of each key, as every parser reads it, with
+the earlier pairs in `shadowed`. `json_members()` gives an object's members with the shadowed ones. `is_constant_mac()`
+is true for a MAC that is one byte repeated (broadcast `ff:ff:…`, zero `00:00:…`): a protocol constant neither tool
+treats as PII.
+
+`parse_xml(text)` is the one XML parse for the field checks both tools run on an XML body: the root element, or `None`
+when the text is not well-formed. A lone surrogate, which no encoder accepts, is read as U+FFFD, so it does not switch
+off the check of every field in the body. `luhn_valid(number)` is the Luhn checksum every payment card number carries:
+the text path redacts, and `check_for_pii` reports, only a card-shaped number that passes it.
+
+### `decode_base64_payload(value)` and `find_query_payload(segment)`
+
+`decode_base64_payload()` returns the text of a base64-wrapped structured payload — a JSON object or array that parses,
+or a URL — with missing or miscounted padding tolerated, or `None`. Structured text is never a credential:
+`is_base64_credential()` rejects any base64 whose text opens a JSON object or array (parsed or not) or is a URL.
+`find_query_payload()` locates a payload in a URL query segment, bare or keyed, as a
+`QueryPayload(prefix, encoded, text, quoted)` — `quoted` records a percent-encoded original, so a rewrite can be encoded
+the same way. See [Sanitization Spec — URL Sanitization](SANITIZATION_SPEC.md#url-sanitization).
+
+### `split_url_password(url)`
+
+Splits out the password a URL's userinfo carries (the `user:password` part ahead of the host) as
+`(before, password, after)`, so the URL reassembles byte-for-byte, or returns `None`. The authority ends at the first
+`/`, `?` or `#`; its userinfo runs to the authority's last `@`, as browsers parse it, and the password starts after the
+userinfo's first `:`. A port or an `@` in the path is not userinfo. Shared by the sanitizer and `check_url`.
+
+### `split_url_query(url)`, `url_query(url)` and `iter_url_credentials(request)`
+
+`split_url_query()` splits a URL into `(before, query, after)` with `url == before + query + after`; the query runs from
+the first `?` to the next `#`, so a hash route's parameters (`#/login?password=…`) are a query and a plain fragment is
+not. It never raises, unlike `urlparse`, and gives back the exact bytes it read, so the sanitizer rewrites a query in
+place. `url_query()` returns the query alone. `iter_url_credentials()` yields every `find_query_credential()` hit in a
+HAR request: URL string segments first, then the `queryString` array's.
+
+### `cookie_segment_actions(value, *, set_cookie)` and `is_set_cookie_attribute(segment)`
+
+`cookie_segment_actions()` classifies each `;`-separated segment of a cookie header as `keep`, `value` (a pair whose
+value is cookie data) or `token` (a valueless segment that is a nameless cookie) — the one rule the sanitizer rewrites
+and `validate` checks. `is_set_cookie_attribute()` is RFC 6265's attribute grammar, which decides whether a Set-Cookie
+holds no cookie at all. `SET_COOKIE_HEADERS` names the headers read with Set-Cookie grammar. See
+[Sanitization Spec — Header Sanitization](SANITIZATION_SPEC.md#header-sanitization).
 
 ## Constraints / Invariants
 
@@ -609,15 +746,24 @@ Used to avoid flagging cookie headers that only contain metadata.
    `--patterns custom.json`, pii.json and sensitive.json are always present.
 1. **Invalid regex is non-fatal** — `compile_pattern()` returns `None` on invalid regex. The pattern is skipped, other
    patterns continue to work.
+1. **A malformed pattern file is non-fatal** — Every custom file or dict passes through `_well_typed_sections()` when it
+   loads: a known section, list or entry of the wrong type (`"heuristics": null`, a string where a detector pattern
+   object belongs, a non-integer `min_length`, a non-string `include_patterns` entry) is dropped with one warning, and
+   the rest of the file applies. Only a file that is missing, unreadable or not JSON raises `PatternLoadError`.
 1. **Underscore keys are metadata** — Any key starting with `_` in a pattern file is skipped during merge. This is a
    convention for comments and metadata.
 1. **Lists extend, dicts update** — This is the universal merge semantic. Custom lists are appended (never replace),
-   custom dict keys override (but don't delete existing keys).
+   custom dict keys override (but don't delete existing keys) — except a custom `pii.json` pattern named like a built-in
+   with a pass of its own (`DEDICATED_PASS_PATTERNS`), which is ignored with one warning per name.
 1. **Name normalization** — Built-in domain names normalize hyphens to underscores: `network-device` and
    `network_device` resolve to the same file.
 1. **Cache is session-scoped** — Pattern files are not re-read after initial load within a session. File changes require
    a new session or explicit `clear_pattern_cache()`.
-1. **Allowlist patterns must not match real PII** — Format-preserving hash ranges (TEST-NET, documentation prefixes,
-   locally administered MACs) are chosen specifically because they cannot appear in legitimate traffic.
+1. **Allowlist patterns name placeholder formats** — Format-preserving hash ranges are chosen from reserved space:
+   TEST-NET and documentation IP ranges cannot appear in legitimate traffic. Locally administered MACs can, so the MAC
+   pattern also matches a real colon- or hyphen-form MAC starting `02`. The sanitizer never skips a MAC because of it
+   (see [Sanitization Spec — Idempotency Boundary](SANITIZATION_SPEC.md#idempotency-boundary)); anywhere else
+   `is_redacted()` is consulted, a value written exactly in that shape counts as redacted. Placeholder layouts that
+   cannot be told from ordinary data in an arbitrary field — bare 12-hex, dotted — are deliberately not listed.
 1. **Pattern precedence** — Custom patterns (from domain files) have higher precedence than core patterns for the same
    key in a dict. For lists, custom patterns are appended (run after core patterns).

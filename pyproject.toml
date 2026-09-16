@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "har-capture"
-version = "0.12.6"
+version = "0.13.0"
 description = "HAR capture and PII sanitization library for network traffic analysis"
 readme = "README.md"
 license = "MIT"
@@ -60,6 +60,8 @@ dev = [
     "trustme>=1.1",
     # Pre-commit
     "pre-commit>=3.7",
+    # Packaging — the tool .github/workflows/publish.yml builds releases with
+    "build>=1.0",
     # Security
     "pip-audit>=2.7",
 ]

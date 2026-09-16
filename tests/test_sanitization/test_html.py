@@ -25,12 +25,23 @@ Dependencies:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from har_capture.patterns import load_allowlist, load_pii_patterns
+from har_capture.patterns import Hasher, load_allowlist, load_pii_patterns
+from har_capture.patterns.loader import resolve_patterns_arg
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
+    ACCOUNT_LABEL_RE,
+    CSRF_META_RE,
+    PASSWORD_FIELD_RE,
+    PASSWORD_INPUT_RE,
+    SERIAL_LABEL_RE,
+    SESSION_TOKEN_RE,
+    WPS_PIN_LABEL_RE,
+    capture_pipe_context,
     check_for_pii,
     is_structural_value_sensitive,
     sanitize_html,
@@ -66,6 +77,11 @@ PII_DETECTION_CASES = [
 ]
 
 ALLOWLISTED_CASES = [(c["content"], c["id"]) for c in _FIXTURE["allowlisted_cases"]]
+PII_EXACT_FINDINGS_CASES = _FIXTURE["pii_exact_findings_cases"]["cases"]
+PII_JSON_LINE_CASES = _FIXTURE["pii_json_line_cases"]["cases"]
+PII_CUSTOM_PATTERN_CASES = _FIXTURE["pii_custom_pattern_cases"]["cases"]
+CUSTOM_PATTERN_COMPILE_CASES = _FIXTURE["custom_pattern_compile_cases"]["cases"]
+PASS0_NUMBER_CASES = _FIXTURE["pass0_number_cases"]["cases"]
 
 SERIAL_TABLE_CASES = [(c["html"], c["serial_value"], c["id"]) for c in _FIXTURE["serial_table_cases"]]
 
@@ -92,6 +108,19 @@ PIPE_SERIAL_CASES = [
     (c["input_html"], c["should_not_contain"], c["should_contain"], c["id"])
     for c in _FIXTURE["pipe_serial_cases"]
 ]
+
+PIPE_CONTEXT_CASES = _FIXTURE["pipe_context_cases"]["cases"]
+SCRIPT_VARIABLE_CASES = _FIXTURE["script_variable_cases"]["cases"]
+PIPE_WHITESPACE_CASES = _FIXTURE["pipe_whitespace_cases"]["cases"]
+PII_SCRIPT_VARIABLE_CASES = _FIXTURE["pii_script_variable_cases"]["cases"]
+
+
+def _fixture_patterns(patterns: str | dict) -> str | dict | None:
+    """A fixture row's patterns: ``base`` (none), a built-in domain name, or a custom dict."""
+    if isinstance(patterns, dict):
+        return patterns
+    return None if patterns == "base" else str(resolve_patterns_arg(patterns))
+
 
 SERIAL_KEY_FP_CASES = [
     (c["input_html"], c.get("preserved"), c.get("removed"), c["id"])
@@ -185,6 +214,42 @@ class TestCheckForPii:
         """Test allowlisted values are ignored."""
         findings = check_for_pii(content)
         assert len(findings) == 0, f"{desc}: should have no findings"
+
+    @pytest.mark.parametrize(
+        "case", PII_EXACT_FINDINGS_CASES, ids=[c["id"] for c in PII_EXACT_FINDINGS_CASES]
+    )
+    def test_exact_findings(self, case: dict) -> None:
+        """check_for_pii reports what the sanitizer rewrites, once, and nothing it keeps."""
+        found = [[f["pattern"], f["match"]] for f in check_for_pii(case["content"])]
+        assert found == case["findings"]
+
+    @pytest.mark.parametrize("case", PII_JSON_LINE_CASES, ids=[c["id"] for c in PII_JSON_LINE_CASES])
+    def test_json_finding_line(self, case: dict) -> None:
+        """Each JSON finding is reported on the line its string is written on, escaped or not."""
+        depth = case.get("nest_lists", 0)
+        content = "[" * depth + case["content"] + "]" * depth
+        assert [[f["pattern"], f["line"]] for f in check_for_pii(content)] == case["findings"]
+
+    @pytest.mark.parametrize(
+        "case", PII_CUSTOM_PATTERN_CASES, ids=[c["id"] for c in PII_CUSTOM_PATTERN_CASES]
+    )
+    def test_custom_patterns(self, case: dict) -> None:
+        """Custom pii patterns: malformed entries are skipped, require_hex_letter filters."""
+        found = [
+            [f["pattern"], f["match"]]
+            for f in check_for_pii(case["content"], custom_patterns=case["custom_patterns"])
+        ]
+        assert found == case["findings"]
+
+    @pytest.mark.parametrize(
+        "case", CUSTOM_PATTERN_COMPILE_CASES, ids=[c["id"] for c in CUSTOM_PATTERN_COMPILE_CASES]
+    )
+    def test_custom_pattern_compiled_like_loader(self, case: dict) -> None:
+        """Pass 0 and check_for_pii compile a custom pattern as the loader does: flags, invalid regex, value_group."""
+        custom = {"patterns": {"p": case["pattern"]}}
+        assert case["removed"] not in sanitize_html(case["content"], custom_patterns=custom, salt=None)
+        found = [[f["pattern"], f["match"]] for f in check_for_pii(case["content"], custom_patterns=custom)]
+        assert found == case["findings"]
 
     def test_returns_line_numbers(self) -> None:
         """Test line number reporting."""
@@ -283,7 +348,7 @@ class TestSerialNumberSiblingSpans:
 
 
 # =============================================================================
-# Device Label Information Block (issue #194)
+# Device Label Information Block
 # =============================================================================
 
 
@@ -530,11 +595,6 @@ class TestIdempotencyBoundary:
             "<p>Config File Name: cust00219abc.cfg</p>",
             "config_path",
         ),
-        (
-            "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>",
-            "<script>var CurrentPw = 'hunter2xyz';</script>",
-            "motorola_password",
-        ),
     ]
 
     @pytest.mark.parametrize(
@@ -623,7 +683,7 @@ class TestIdempotencyBoundary:
 
 
 # =============================================================================
-# Web Storage setItem() Scanning (Gap 1 fix)
+# Web Storage setItem() Scanning
 # =============================================================================
 
 
@@ -801,8 +861,41 @@ class TestSanitizeHtmlCustomFieldPatterns:
 
 
 # =============================================================================
-# Serial Numbers in Pipe-Delimited Strings (Gap 2 fix)
+# Serial Numbers in Pipe-Delimited Strings
 # =============================================================================
+
+
+class TestPipeWhitespace:
+    """The pipe-delimited pass keeps each value's surrounding whitespace."""
+
+    # ┌──────────────────────────────┬──────────────────────────────────────────────────────┐
+    # │ blob                         │ output                                               │
+    # ├──────────────────────────────┼──────────────────────────────────────────────────────┤
+    # │ spaced, nothing redacted     │ byte-identical                                       │
+    # │ spaced, a value redacted     │ placeholder in the value's place, spacing unchanged  │
+    # │ whitespace-only segment      │ kept as written                                      │
+    # └──────────────────────────────┴──────────────────────────────────────────────────────┘
+    @pytest.mark.parametrize("case", PIPE_WHITESPACE_CASES, ids=[c["id"] for c in PIPE_WHITESPACE_CASES])
+    def test_output(self, case: dict) -> None:
+        """Values are judged stripped and written back with their whitespace."""
+        result = sanitize_html(
+            case["input_html"],
+            salt=None,
+            custom_patterns=str(resolve_patterns_arg("network-device")),
+            heuristics=HeuristicMode(case["heuristics"]),
+        )
+        assert result == case["output"]
+
+    def test_flagged_value_is_stripped(self) -> None:
+        """A flagged value is offered without the blob's spacing, so the review replaces it where it sits."""
+        collector = RedactionCollector(hasher=Hasher.create(None))
+        sanitize_html(
+            "var tagValueList = '0 | Good | HomeNetwork-5G | data';",
+            custom_patterns=str(resolve_patterns_arg("network-device")),
+            heuristics=HeuristicMode.FLAG,
+            collector=collector,
+        )
+        assert "HomeNetwork-5G" in [f.original_value for f in collector.flagged]
 
 
 class TestPipeSerialNumber:
@@ -821,7 +914,7 @@ class TestPipeSerialNumber:
         desc: str,
     ) -> None:
         """Test serial numbers in pipe-delimited strings are handled correctly."""
-        result = sanitize_html(html, salt="test")
+        result = sanitize_html(html, salt="test", custom_patterns=str(resolve_patterns_arg("network-device")))
         if should_not_contain:
             assert should_not_contain not in result, f"{desc}: serial should be redacted"
         if should_contain:
@@ -834,6 +927,58 @@ class TestPipeSerialNumber:
                 assert "SNMP" in result, f"{desc}: SNMP should be preserved"
             elif "SN-AB" in html:
                 assert "SN-AB" in result, f"{desc}: short value should be preserved"
+
+
+class TestCapturePipeContext:
+    """The review context a flagged pipe-delimited value carries."""
+
+    @pytest.mark.parametrize("case", PIPE_CONTEXT_CASES, ids=[c["id"] for c in PIPE_CONTEXT_CASES])
+    def test_context(self, case: dict) -> None:
+        """Neighbours within the window, the value marked, clipped at either end."""
+        assert capture_pipe_context(case["values"], case["index"], case["window"]) == case["expected"]
+
+
+# =============================================================================
+# Script Variables Named by a Pattern File (ADR-5)
+# =============================================================================
+
+
+class TestScriptVariables:
+    """Script variable names come from a pattern file's script_variables section, not the core."""
+
+    # ┌──────────────────────────┬──────────────────────────┬──────────────────────────────────────┐
+    # │ patterns                 │ input_html               │ expectation                          │
+    # ├──────────────────────────┼──────────────────────────┼──────────────────────────────────────┤
+    # │ base                     │ var CurrentPw = '…'      │ kept: the core knows no vendor names │
+    # │ network-device           │ var CurrentPw = '…'      │ removed, ***PASS*** in place         │
+    # │ network-device + redact  │ var tagValueList = '…'   │ heuristic pipe value removed         │
+    # │ custom script_variables  │ var adminPw = '…'        │ removed; flags and bad entries honoured │
+    # └──────────────────────────┴──────────────────────────┴──────────────────────────────────────┘
+    @pytest.mark.parametrize("case", SCRIPT_VARIABLE_CASES, ids=[c["id"] for c in SCRIPT_VARIABLE_CASES])
+    def test_sanitize(self, case: dict) -> None:
+        """A named variable's value is redacted; an unnamed one is kept."""
+        result = sanitize_html(
+            case["input_html"],
+            salt=None,
+            custom_patterns=_fixture_patterns(case["patterns"]),
+            heuristics=HeuristicMode(case.get("heuristics", "disabled")),
+        )
+        if "kept" in case:
+            assert case["kept"] in result
+        else:
+            assert case["removed"] not in result
+            assert case["placeholder"] in result
+
+    @pytest.mark.parametrize(
+        "case", PII_SCRIPT_VARIABLE_CASES, ids=[c["id"] for c in PII_SCRIPT_VARIABLE_CASES]
+    )
+    def test_check_for_pii(self, case: dict) -> None:
+        """check_for_pii reports a named password variable in markup, as the sanitizer redacts it."""
+        found = [
+            [f["pattern"], f["match"]]
+            for f in check_for_pii(case["content"], custom_patterns=_fixture_patterns(case["patterns"]))
+        ]
+        assert found == case["findings"]
 
 
 # =============================================================================
@@ -1066,3 +1211,111 @@ class TestSetItemHeuristicCoverage:
             result = sanitize_html(html, salt="test", collector=collector, heuristics=HeuristicMode.FLAG)
         assert "opaque_val_999" in result, "value should be preserved in FLAG mode"
         assert len(collector.flagged) > 0, "should have flagged a value"
+
+
+@pytest.mark.parametrize(
+    ("name", "regex", "value_group"),
+    [
+        ("serial_number", SERIAL_LABEL_RE, 3),
+        ("account_id", ACCOUNT_LABEL_RE, 2),
+        ("wps_pin", WPS_PIN_LABEL_RE, 3),
+        ("password_input", PASSWORD_INPUT_RE, 2),
+        ("csrf_token", CSRF_META_RE, 2),
+        ("password_field", PASSWORD_FIELD_RE, 3),
+        ("session_token", SESSION_TOKEN_RE, 3),
+    ],
+)
+def test_pii_json_mirrors_label_regex(name: str, regex: re.Pattern[str], value_group: int) -> None:
+    """check_for_pii reads pii.json; its labeled patterns must be the sanitizer's regexes verbatim."""
+    from har_capture.patterns import load_pii_patterns
+
+    definition = load_pii_patterns()["patterns"][name]
+    assert definition["regex"] == regex.pattern
+    assert definition.get("value_group") == value_group
+
+
+@pytest.mark.parametrize("case", PASS0_NUMBER_CASES, ids=[c["id"] for c in PASS0_NUMBER_CASES])
+def test_pass0_numbers_match_text_path(case: dict) -> None:
+    """Pass 0 hashes Luhn-valid cards only and offers SSN-shaped numbers for review, as the text path does."""
+    from har_capture.patterns import Hasher
+    from har_capture.sanitization.collector import RedactionCollector
+
+    collector = RedactionCollector(hasher=Hasher.create("pass0"))
+    out = sanitize_html(case["html"], collector=collector)
+    for leaked in case["removed"]:
+        assert leaked not in out
+    for kept in case["kept"]:
+        assert kept in out
+    assert [f.original_value for f in collector.flagged] == case["flagged"]
+
+
+def test_tag_runs_are_quote_aware_and_bounded() -> None:
+    """No tag regex scans an attribute run with `[^>]*`.
+
+    That run makes a series of unclosed `<input` or `<a` tags quadratic, or
+    cubic with two such runs (password inputs, CSRF meta tags: minutes for
+    40 KB). Tag regexes use the quote-aware `_TAG_RUN` instead, which stops at
+    `<` or `>` outside a quoted value.
+    """
+    import har_capture.sanitization.html as html_module
+    from har_capture.patterns import load_pii_patterns
+
+    assert "[^>]*" not in Path(html_module.__file__).read_text(encoding="utf-8")
+    assert all("[^>]*" not in d["regex"] for d in load_pii_patterns()["patterns"].values())
+
+
+def test_word_runs_do_not_backtrack_through_a_label() -> None:
+    r"""No group opens with a `\w` run followed by a literal or class.
+
+    `(\w*password\w*)` is retried from every letter of a long word and, even
+    anchored by `\b`, backtracks through every earlier `password` in a word
+    that repeats it: 64 KB took eleven seconds in sanitize_html. The passes
+    check the label with a lookahead instead, `\b(?=\w*password)(\w+)`, which
+    matches the same words (a differential test over random strings found no
+    difference) in linear time.
+    """
+    import har_capture.sanitization.html as html_module
+
+    source = Path(html_module.__file__).read_text(encoding="utf-8")
+    assert not re.search(r"\((?:\?:)?\\w[*+][A-Za-z\[]", source)
+
+
+@pytest.mark.parametrize(
+    ("html", "offered"),
+    [
+        ("Network Key: abc123xyz", ["abc123xyz"]),
+        ("x = {key: 'QWERTY_CONST'};", ["QWERTY_CONST"]),
+        ("obj.key = value123", ["value123"]),
+        ("wifikey=abc123xyz", []),
+        ("wpakey=abc123xyz", []),
+    ],
+    ids=[
+        "text_label",
+        "script_literal",
+        "property_access_offered",
+        "glued_label_redacted",
+        "wpa_key_redacted",
+    ],
+)
+def test_bare_key_label_is_offered_for_review(html: str, offered: list[str]) -> None:
+    """A bare `key` label is not a credential with certainty: its value is offered (LOW), not redacted."""
+    from har_capture.patterns import Hasher
+    from har_capture.sanitization.collector import RedactionCollector
+
+    collector = RedactionCollector(hasher=Hasher.create("test"))
+    result = sanitize_html(html, collector=collector)
+    assert [f.original_value for f in collector.flagged] == offered
+    assert all(value in result for value in offered)
+    assert all(f.confidence.value == "low" and f.category == "credential" for f in collector.flagged)
+
+
+@pytest.mark.parametrize("name", ["PASSWORD_INPUT_RE", "CSRF_META_RE", "SSID_ATTRIBUTE_RE", "SSID_SELECT_RE"])
+def test_two_run_tag_regexes_stop_at_the_first_anchor(name: str) -> None:
+    """A tag regex with runs on both sides of an anchor runs to its first copy only (`_tag_run_to`).
+
+    With two free runs, one unclosed tag repeating the anchor retried the
+    second run from every copy: 56 KB took five seconds, 224 KB two minutes.
+    """
+    import har_capture.sanitization.html as html_module
+
+    assert "(?:(?!" in getattr(html_module, name).pattern

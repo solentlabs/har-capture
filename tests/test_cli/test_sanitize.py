@@ -264,7 +264,7 @@ class TestSanitizeOutput:
 # =============================================================================
 #
 # These tests target the branches not exercised by the basic happy-path tests
-# above. The ``_stdin_is_tty`` helper in cli/sanitize.py is monkeypatched
+# above. The ``stdin_is_tty`` helper in cli/interactive.py is monkeypatched
 # where we need to simulate a real terminal — that's a single private
 # seam, not a test override of internal state. Click's CliRunner replaces
 # ``sys.stdin`` with a non-TTY stream during ``invoke``, so patching
@@ -307,7 +307,7 @@ class TestSanitizeAlreadySanitized:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """isatty=True + user answers "n" -> exit 0 with "Aborted"."""
-        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+        monkeypatch.setattr("har_capture.cli.interactive.stdin_is_tty", lambda: True)
         result = runner.invoke(
             app, ["sanitize", str(already_redacted_har), "--patterns", "base"], input="n\n"
         )
@@ -321,7 +321,7 @@ class TestSanitizeAlreadySanitized:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """isatty=True + user answers "y" -> sanitization proceeds."""
-        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+        monkeypatch.setattr("har_capture.cli.interactive.stdin_is_tty", lambda: True)
         result = runner.invoke(
             app, ["sanitize", str(already_redacted_har), "--patterns", "base"], input="y\n"
         )
@@ -350,82 +350,62 @@ class TestSanitizeInteractiveReview:
     def har_with_flagged_fields(self, tmp_path: Path) -> Path:
         return _write_fixture_har(tmp_path, "har_with_flagged_fields", "flagged.har")
 
-    def test_review_invoked_when_tty_and_flagged(
+    @pytest.mark.parametrize("redact", [False, True], ids=["nothing_redacted", "user_redacted"])
+    def test_review_outcome_recorded_when_tty_and_flagged(
         self,
         har_with_flagged_fields: Path,
         monkeypatch: pytest.MonkeyPatch,
+        redact: bool,
     ) -> None:
-        """isatty=True + non-empty ``report.flagged`` -> review runs.
+        """isatty=True + flagged -> review runs and its outcome is always saved.
 
         ``run_interactive_review`` is replaced at the import boundary
-        (``har_capture.cli.interactive``) — that's a module-level seam,
-        not internal state. ``display_summary`` and
-        ``apply_reviewed_redactions`` get the same treatment so the
-        test doesn't actually drive an interactive prompt loop.
+        (``har_capture.cli.interactive``) — a module-level seam, not
+        internal state — so no prompt loop runs. The outcome is saved even
+        when the user redacted nothing: that decision is what the file
+        must record.
         """
         from har_capture.cli import interactive as interactive_mod
+        from har_capture.sanitization.report import RedactionStatus, ReviewOutcome
 
-        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
+        monkeypatch.setattr("har_capture.cli.interactive.stdin_is_tty", lambda: True)
 
         review_calls: list[dict[str, Any]] = []
         summary_calls: list[Any] = []
 
-        def fake_review(report: Any, **kwargs: Any) -> bool:
+        def fake_review(report: Any, **kwargs: Any) -> ReviewOutcome:
             review_calls.append(kwargs)
-            # User reviewed but redacted nothing -> apply path skipped.
-            return True
+            for f in report.flagged:
+                f.status = RedactionStatus.USER_REDACTED if redact else RedactionStatus.USER_SKIPPED
+            return ReviewOutcome.COMPLETED
 
         monkeypatch.setattr(interactive_mod, "run_interactive_review", fake_review)
         monkeypatch.setattr(interactive_mod, "display_summary", summary_calls.append)
-        monkeypatch.setattr(
-            interactive_mod,
-            "apply_reviewed_redactions",
-            lambda *a, **k: pytest.fail("apply must not run when user redacted nothing"),
-        )
 
         result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base"])
 
         assert result.exit_code == 0
         assert review_calls, "run_interactive_review was not invoked"
         assert summary_calls, "display_summary must run after review"
-        # Review received the kwargs the CLI is contracted to pass.
-        kwargs = review_calls[0]
-        assert "input_path" in kwargs
-        assert "output_path" in kwargs
-        assert "salt_mode" in kwargs
+        assert {"input_path", "output_path", "salt_mode"} <= set(review_calls[0])
+        written = json.loads(Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).read_text())
+        meta = written["log"]["_har_capture"]["sanitization"]
+        assert meta["review"] == "completed"
+        assert (meta["user_redacted"] > 0) == redact
 
-    def test_apply_redactions_when_user_redacted(
-        self,
-        har_with_flagged_fields: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Branch 193->196: ``total_user_redacted > 0`` -> apply runs."""
-        from har_capture.cli import interactive as interactive_mod
+    def test_no_tty_records_no_tty_and_writes_report(self, har_with_flagged_fields: Path) -> None:
+        """Without a terminal the file records no_tty; sanitize still writes .review.json.
 
-        monkeypatch.setattr("har_capture.cli.sanitize._stdin_is_tty", lambda: True)
-
-        apply_calls: list[tuple[Any, str]] = []
-
-        def fake_review(report: Any, **kwargs: Any) -> bool:
-            # Force the post-review counter so the apply branch fires.
-            for f in report.flagged:
-                from har_capture.sanitization.report import RedactionStatus
-
-                f.status = RedactionStatus.USER_REDACTED
-                f.user_replacement = "REDACTED"
-            return True
-
-        def fake_apply(report: Any, path: str) -> None:
-            apply_calls.append((report, path))
-
-        monkeypatch.setattr(interactive_mod, "run_interactive_review", fake_review)
-        monkeypatch.setattr(interactive_mod, "apply_reviewed_redactions", fake_apply)
-        monkeypatch.setattr(interactive_mod, "display_summary", lambda r: None)
-
+        The input is already on disk, so the report beside it adds no raw
+        copy — unlike ``get``, which writes none.
+        """
         result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base"])
 
         assert result.exit_code == 0
-        assert apply_calls, "apply_reviewed_redactions must run when user redacted"
+        written = json.loads(Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).read_text())
+        assert written["log"]["_har_capture"]["sanitization"]["review"] == "no_tty"
+        assert Path(str(har_with_flagged_fields) + ".review.json").exists()
+        assert "NOT reviewed" in result.output
 
 
 class TestSanitizeReportOption:
@@ -511,7 +491,7 @@ class TestCompletenessReporting:
         Sanitization replaces the cookie *value* but keeps the *name*, which
         is all the mid-session check reads.
         """
-        har = self._write(tmp_path, "mid_session_and_no_post", "mid.har")
+        har = self._write(tmp_path, "mid_session_and_no_submission", "mid.har")
 
         result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
 
@@ -526,7 +506,7 @@ class TestCompletenessReporting:
         result = runner.invoke(app, ["sanitize", str(har), "--patterns", "base"])
 
         assert result.exit_code == 0
-        assert "POST requests: 2" in result.output
+        assert "Credential submissions: 2" in result.output
         assert "Recording began mid-session" not in result.output
 
 
@@ -536,7 +516,7 @@ class TestStaleSiblingRefresh:
     Every sanitize pass rewrites the .sanitized.har (fresh salt), so a
     sibling .gz from an earlier --compress run diverges even when the
     review applies nothing. Without the refresh, the stale sibling — the
-    upload artifact — survives silently (2026-08-19 CM2500 finding).
+    upload artifact — survives silently.
     """
 
     def test_existing_sibling_regenerated_without_compress(self, valid_har: Path) -> None:

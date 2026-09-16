@@ -53,7 +53,9 @@ har-capture get <TARGET> --patterns <DOMAIN>
   a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 
 Auto-sanitization after capture uses a random salt. To control the correlation salt, capture with `--no-sanitize` and
-run `har-capture sanitize --salt ...` separately. Interactive review of flagged values is always enabled after capture.
+run `har-capture sanitize --salt ...` separately. Interactive review of flagged values is always enabled after capture;
+without a terminal it is not prompted — the file records `review: no_tty`, a warning names the flagged count, and no
+report file is written (the raw capture never persists).
 
 ### Examples (get)
 
@@ -135,7 +137,8 @@ har-capture sanitize INPUT.har --patterns network-device
 - `--report PATH` - Save sanitization report to JSON file
 
 Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report
-file instead.
+file instead, the sanitized file records `review: no_tty`, and a warning names the flagged count. Every run records how
+its review ended in `log._har_capture.sanitization.review`.
 
 #### Size Limits
 

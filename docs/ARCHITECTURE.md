@@ -46,10 +46,12 @@ without har-capture carrying any product-specific code.
    reducing noise.
 
 1. **Correlation-preserving.** Redacted values use format-preserving salted hashes so the same MAC address always maps
-   to the same placeholder within a session, preserving the ability to trace behavior across requests.
+   to the same placeholder digits within a session — each occurrence in the layout it was written in — preserving the
+   ability to trace behavior across requests.
 
 1. **PII never persists on disk unsanitized.** Raw captures go to temp files, get sanitized immediately, and the temp
-   file is deleted. Even on crash, the raw HAR lives in `/tmp`, not the user's working directory.
+   file is deleted. Even on crash — or when sanitization fails, which keeps the temp file and names it rather than lose
+   the capture — the raw HAR lives in `/tmp`, not the user's working directory.
 
 ## Code Organization
 
@@ -118,7 +120,7 @@ graph TD
     subgraph process[Post-Capture Processing]
         direction TB
         meta[Inject metadata + pre_capture_cookies] --> strip[Strip browser-internal entries<br>chrome:// etc.]
-        strip --> complete[Completeness check<br>mid-session? any POSTs? refused login?]
+        strip --> complete[Completeness check<br>mid-session? any login submitted? refused login?]
         complete --> sanitize[Pass 1: Auto-sanitize PII]
         sanitize --> filter[Filter bloat file types]
         filter --> compress[Gzip compress]
@@ -168,7 +170,8 @@ The core Playwright session. Key design decisions:
 - **Clean context**: `storage_state={"cookies": [], "origins": []}` forces an empty cookie jar — no inherited session
   cookies or credentials
 - **Temp file**: Raw HAR (containing PII) is written to `/tmp` via `mkstemp()`, never to the user's working directory
-- **Embedded content**: Response bodies are base64-encoded within the HAR
+- **Embedded content**: Response bodies are embedded in the HAR — text as text, anything the recorder does not store as
+  text (binary, and some text types) base64 with `encoding: base64`
 - **Service worker blocking**: Prevents cached responses from interfering
 - **HTTPS tolerance**: Self-signed/expired device certificates accepted
 
@@ -200,15 +203,16 @@ review (Pass 2), which rewrites the `.sanitized.har` **and regenerates the `.har
 go stale relative to the reviewed file. Browser downloads are saved out of Playwright's ephemeral artifacts directory
 into `<output-stem>_downloads/` before the context closes — raw device output, NOT sanitized, and announced as such.
 
-The raw temp file is **always** deleted, ensuring PII doesn't persist on disk. See
+The raw temp file is deleted, ensuring PII doesn't persist on disk — except when sanitization fails, when it is the only
+copy of the capture and is kept in the temp dir and named in the error. See
 [Capture Spec](specs/CAPTURE_SPEC.md#post-capture-processing) for the full processing pipeline and file cleanup rules.
 
 **Completeness check**: a HAR that omits the auth exchange still looks structurally complete, so
 [`analyze_capture_completeness()`](specs/VALIDATION_SPEC.md#capture-completeness-validation) reports what the capture
 does and does not contain — warning when a session cookie on the first request shows recording began mid-session, when
-no POST was captured at all, and when exactly one credential submission was captured (no deliberately refused login on
-file). It runs on the raw HAR (bloat filtering can drop the true first entry) and **only warns**: captures are immutable
-evidence, so nothing is mutated or rejected.
+nothing that could carry a login was captured at all, and when exactly one credential submission was captured (no
+deliberately refused login on file). It runs on the raw HAR (bloat filtering can drop the true first entry) and **only
+warns**: captures are immutable evidence, so nothing is mutated or rejected.
 
 ## Sanitization Pipeline
 
@@ -242,16 +246,19 @@ graph TD
     sanitized --> pass2[Pass 2: Interactive Review<br>Show flagged → user selects → apply redactions]
 ```
 
-**Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content
-(MIME-dispatched to the HTML engine, JSON traversal, or string pattern matching).
+**Pass 1** auto-sanitizes each entry: headers, cookies, POST data, query strings, URL paths, then response content —
+transport encoding undone first, then dispatched — JSON traversal for text that parses as JSON whatever its type, else
+by mime type, or sniffed when the type says nothing, to the HTML engine or string pattern matching
+([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#response-content-dispatch)).
 
 **Pass 1b** sweeps the whole HAR once after every entry is done, replacing any remaining verbatim occurrence of an
 already-redacted value with the placeholder that value was assigned. This catches secrets on surfaces that carry no
 field name to match — most commonly a URL path segment. It adds no detection of its own; eligibility is a
 collision-safety test on values Pass 1 already redacted.
 
-**Pass 2** presents flagged values for interactive review (TTY) or writes them to a JSON report (CI/CD). User-selected
-redactions are applied via global find-and-replace using the same session salt.
+**Pass 2** presents flagged values for interactive review (TTY); without a terminal nobody is prompted. User-selected
+redactions replace every copy of a value inside string values — escaped and percent-encoded forms too — using the same
+session salt, and the sanitized file records how the review ended (`sanitization.review`, see ADR-6).
 
 See [Sanitization Spec](specs/SANITIZATION_SPEC.md) for the full entry point signatures, per-field logic, and two-pass
 model.

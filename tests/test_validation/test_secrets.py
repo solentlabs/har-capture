@@ -71,6 +71,10 @@ CHECK_CONTENT_CASES = [
     (c["content"], c["expect_ip"], c["expect_mac"], c["id"]) for c in _DATA["check_content_cases"]
 ]
 
+CHECK_CONTENT_IPV6_CASES = _DATA["check_content_ipv6_cases"]["cases"]
+LABELED_SERIAL_COUNT_CASES = _DATA["labeled_serial_count_cases"]["cases"]
+CHECK_CONTENT_REASON_CASES = _DATA["check_content_reason_cases"]["cases"]
+
 NETMASK_CASES = [(c["ip"], c["expected"], c["id"]) for c in _DATA["netmask_cases"]]
 
 SERIAL_LABEL_FP_CASES = [
@@ -97,7 +101,10 @@ CHECK_CONTENT_BASE64_CASES = [
     ("[REDACTED]", False, "already_redacted"),
 ]
 
-CHECK_URL_CASES = [(c["url"], c["expected_count"], c["id"]) for c in _DATA["check_url_cases"]]
+CHECK_URL_CASES = [
+    (c["url"], c["expected_count"], c.get("reason", "Base64-encoded credential"), c["id"])
+    for c in _DATA["check_url_cases"]
+]
 
 COOKIE_ATTR_EXTENDED_CASES = [
     (c["value"], c["expected"], c["id"]) for c in _DATA["cookie_attr_extended_cases"]
@@ -269,7 +276,7 @@ class TestCheckPostData:
         assert len(findings) == 1
 
     def test_detects_pws_in_params_and_text(self) -> None:
-        """The issue #92 capture shape: a leaked pws value errors in both copies."""
+        """A Sercomm/Hitron pws capture: a leaked pws value errors in both copies."""
         post_data = {
             "mimeType": "application/x-www-form-urlencoded",
             "params": [
@@ -404,6 +411,26 @@ def test_check_content(content: str, expect_ip: bool, expect_mac: bool, desc: st
 
 
 @pytest.mark.parametrize(
+    "case", LABELED_SERIAL_COUNT_CASES, ids=[c["id"] for c in LABELED_SERIAL_COUNT_CASES]
+)
+def test_check_content_labeled_serial_count(case: dict) -> None:
+    """Each labeled serial is reported once."""
+    findings: list[Finding] = []
+    check_content(case["content"], "response.body", findings)
+    assert len([f for f in findings if f.reason == "Potential serial number"]) == case["expected"]
+
+
+@pytest.mark.parametrize("case", CHECK_CONTENT_IPV6_CASES, ids=[c["id"] for c in CHECK_CONTENT_IPV6_CASES])
+def test_check_content_ipv6(case: dict) -> None:
+    """Every IPv6 address the sanitizer rewrites is reported; its placeholders are not."""
+    findings: list[Finding] = []
+    check_content(case["content"], "response.body", findings)
+    ipv6 = [f for f in findings if "IPv6" in f.reason]
+    assert len(ipv6) == case["expected"], findings
+    assert all(f.severity == "warning" for f in ipv6)
+
+
+@pytest.mark.parametrize(
     ("ip", "expected", "desc"),
     NETMASK_CASES,
     ids=[c[2] for c in NETMASK_CASES],
@@ -423,7 +450,7 @@ def test_check_content_serial_label_false_positives(
 ) -> None:
     """Labeled serial detection ignores jquery serialize methods and digitless values.
 
-    Regression for CM2500 round-1 validate noise: jquery's ``serialize:``/
+    Regression for validate noise on a CM2500 capture: jquery's ``serialize:``/
     ``serializeArray:`` methods were reported as potential serial numbers.
     """
     findings: list[Finding] = []
@@ -440,7 +467,7 @@ def test_check_content_serial_label_false_positives(
 def test_check_content_vendor_serials(content: str, expected_errors: int, desc: str) -> None:
     """Delimiter-aware vendor-serial detection with network-device detectors.
 
-    Regression for the CM2500 round-1 leak: a Netgear serial inside a
+    Regression for a CM2500 capture leak: a Netgear serial inside a
     pipe-delimited tagValueList blob has no label for SERIAL_PATTERNS to
     anchor on, and validate blessed the leak. A vendor-format token match
     is an error — the same detectors the sanitizer auto-redacts with.
@@ -483,20 +510,6 @@ def test_form_field_severity_model(name: str, value: str, expected_severity: str
     else:
         assert len(field_findings) == 1, f"{desc}: expected one finding, got {findings}"
         assert field_findings[0].severity == expected_severity, f"{desc}"
-
-
-def test_field_tiers_legacy_format_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A legacy patterns file (single `patterns` list) keeps error treatment."""
-    from har_capture.validation import secrets as secrets_mod
-
-    monkeypatch.setattr(
-        secrets_mod,
-        "load_sensitive_patterns",
-        lambda _cp=None: {"fields": {"patterns": ["password"]}},
-    )
-    tiers = secrets_mod._compile_field_tiers()
-    assert len(tiers.auto_redact) == 1
-    assert not tiers.flag
 
 
 def test_xml_field_severity_model() -> None:
@@ -583,22 +596,22 @@ def test_validate_har_gzipped(tmp_path) -> None:
 # check_url()
 # ---------------------------------------------------------------------------
 class TestCheckURL:
-    """Tests for check_url() base64 credential detection."""
+    """Tests for check_url() URL credential detection."""
 
     @pytest.mark.parametrize(
-        ("url", "expected_count", "desc"),
+        ("url", "expected_count", "reason", "desc"),
         CHECK_URL_CASES,
-        ids=[c[2] for c in CHECK_URL_CASES],
+        ids=[c[3] for c in CHECK_URL_CASES],
     )
-    def test_check_url(self, url: str, expected_count: int, desc: str) -> None:
-        """Test check_url detects base64-encoded credentials in query strings."""
+    def test_check_url(self, url: str, expected_count: int, reason: str, desc: str) -> None:
+        """check_url reports URL credentials: query credentials and userinfo passwords."""
         from har_capture.validation.secrets import check_url
 
         findings: list[Finding] = []
         check_url(url, "Entry 0", findings)
         assert len(findings) == expected_count, f"{desc}: expected {expected_count} findings"
         if expected_count > 0:
-            assert "Base64-encoded credential" in findings[0].reason
+            assert reason in findings[0].reason
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +736,7 @@ class TestCheckContentSerialInTable:
         """Test check_content flags serials split across sibling span elements.
 
         Technicolor .jst markup — label and value in sibling spans with
-        whitespace between the tags (cable_modem_monitor issue #101).
+        whitespace between the tags.
         """
         html = (
             '<span class="readonlyLabel">Serial Number:</span>\n<span class="value">\n1234567890123456</span>'
@@ -740,7 +753,7 @@ class TestDeviceLabelCredentials:
     ``validate`` is documented as the step that "confirms nothing leaked", so
     a plaintext default Wi-Fi password must be an error, not a warning and not
     silence. Before this check the gate returned 0 errors on a capture holding
-    all four sticker values (issue #194).
+    all four sticker values.
 
     All markup below is synthetic; the values are fabricated.
     """
@@ -870,7 +883,7 @@ class TestContentCheckNotSkippedByStrayPlaceholder:
     ``re.search``. A run of six or more zeros (``0{6,}``) or a literal ``XXX`` /
     ``REDACTED`` anywhere in a body made the whole page look already-redacted —
     209 of 750 committed fleet entries were skipped that way, including an XB10
-    page holding a plaintext default Wi-Fi password (issue #194).
+    page holding a plaintext default Wi-Fi password.
     """
 
     LEAK_MARKUP = (
@@ -1123,3 +1136,58 @@ class TestValidateHarSanitizedCredentials:
         findings = validate_har(har_file)
         mac_findings = [f for f in findings if "MAC" in f.reason or "mac" in f.reason.lower()]
         assert len(mac_findings) >= 1, "MAC check should still fire for annotated entries"
+
+
+def test_serial_patterns_are_the_sanitizers() -> None:
+    """Validate reports labeled serials with the sanitizer's own pass 2 pattern."""
+    from har_capture.sanitization.html import SERIAL_LABEL_RE
+    from har_capture.validation.secrets import SERIAL_PATTERNS
+
+    assert SERIAL_PATTERNS == [SERIAL_LABEL_RE]
+
+
+SERVED_CREDENTIAL_VALIDATE_CASES = _DATA["served_credential_validate_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", SERVED_CREDENTIAL_VALIDATE_CASES, ids=[c["id"] for c in SERVED_CREDENTIAL_VALIDATE_CASES]
+)
+def test_served_credential_values(case: dict) -> None:
+    """A served credential-named value is reported as the sanitizer treats it; a submitted one always."""
+    findings: list[Finding] = []
+    if case["where"] == "post":
+        check_post_data({"mimeType": "application/json", "text": case["text"]}, "request", findings)
+    else:
+        check_content(case["text"], "response.body", findings)
+    assert [[f.severity, f.field] for f in findings] == case["findings"]
+
+
+SECURITY_DETAILS_VALIDATE_CASES = _DATA["security_details_validate_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", SECURITY_DETAILS_VALIDATE_CASES, ids=[c["id"] for c in SECURITY_DETAILS_VALIDATE_CASES]
+)
+def test_validate_reads_certificate_names(case: dict, tmp_path: Path) -> None:
+    """A MAC in a TLS certificate name is an error; its placeholder, a constant and a self-signed name are not."""
+    entry = {
+        "request": {"method": "GET", "url": "https://192.168.100.1/", "headers": []},
+        "response": {"status": 200, "headers": [], "content": {"text": "", "mimeType": "text/html"}},
+        "_securityDetails": case["details"],
+    }
+    har_file = tmp_path / "cert.har"
+    har_file.write_text(json.dumps({"log": {"entries": [entry]}}))
+    assert [[f.severity, f.field, f.value] for f in validate_har(har_file)] == case["findings"]
+
+
+COOKIE_HEADER_VALIDATION_CASES = _DATA["cookie_header_validation_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", COOKIE_HEADER_VALIDATION_CASES, ids=[c["id"] for c in COOKIE_HEADER_VALIDATION_CASES]
+)
+def test_sensitive_header_checked_as_the_sanitizer_rewrites_it(case: dict) -> None:
+    """A cookie header is checked a segment at a time; other headers by their credential token."""
+    findings: list[Finding] = []
+    check_headers([{"name": case["name"], "value": case["value"]}], "request", findings)
+    assert [f.severity for f in findings] == (["error"] if case["error"] else [])

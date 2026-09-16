@@ -422,7 +422,7 @@ class TestCaptureDeviceHar:
         capture_device_har(
             ip="127.0.0.1",
             output=str(output),
-            headless=True,
+            headless=False,
             timeout=None,
             sanitize=False,
             compress=False,
@@ -2293,7 +2293,7 @@ class TestDialogHandler:
         ("headless", "timeout", "expect_dialog_capture"),
         [
             (False, None, True),
-            (True, None, False),
+            (True, 1, False),  # a headless capture needs a timeout
             (False, 1, False),
         ],
         ids=["interactive_headed", "headless", "timed"],
@@ -2596,7 +2596,7 @@ class TestRunPostCapturePipelineUnit:
 
         assert result.success is True
 
-        # Temp file always deleted
+        # Temp file deleted once sanitization succeeds (failures: see below)
         assert not temp_path.exists(), "Temp file should always be deleted"
 
         # Raw HAR only when keep_raw or not sanitize
@@ -2642,6 +2642,97 @@ class TestRunPostCapturePipelineUnit:
         )
 
         assert not temp_path.exists(), "Temp file should still be cleaned up"
+
+    def test_vanished_temp_file_does_not_raise(self, tmp_path: Path) -> None:
+        """A temp file already gone (cleaned by the OS) fails the copy, not the pipeline."""
+        result = _run_post_capture_pipeline(
+            temp_path=tmp_path / "gone.har",
+            output_path=tmp_path / "output.har",
+            sanitized_output=tmp_path / "sanitized.har",
+            sanitize=False,
+            compress=False,
+            keep_raw=True,
+            interactive=False,
+            capture_options=CaptureOptions(),
+        )
+
+        assert result.success is False
+        assert result.error is not None and "Failed to save HAR file" in result.error
+
+    # ┌──────────────────┬──────────────────────────────┬──────────┬───────────────────┐
+    # │ id               │ failure                      │ keep_raw │ raw capture kept  │
+    # └──────────────────┴──────────────────────────────┴──────────┴───────────────────┘
+    #
+    # A sanitize failure used to delete the raw temp file and report success:
+    # the capture was lost silently. Now the capture fails, the raw capture
+    # stays where it is (the temp dir design constraint 5 allows, or the
+    # output path --keep-raw asked for), and the error says how to finish it.
+    #
+    # fmt: off
+    SANITIZE_FAILURE_CASES = [
+        # (id,                failure,        keep_raw)
+        ("pattern_name",     "patterns",     False),
+        ("too_large",        "size",         False),
+        ("sanitizer_error",  "exception",    False),
+        ("kept_raw_copy",    "exception",    True),
+    ]
+    # fmt: on
+
+    @pytest.mark.parametrize(
+        ("case_id", "failure", "keep_raw"), SANITIZE_FAILURE_CASES, ids=[c[0] for c in SANITIZE_FAILURE_CASES]
+    )
+    def test_sanitize_failure_keeps_raw_and_fails(
+        self,
+        case_id: str,
+        failure: str,
+        keep_raw: bool,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from har_capture import sanitization
+        from har_capture.sanitization import HarSizeError
+
+        temp_path = tmp_path / "har_capture_raw.har"
+        temp_path.write_text(json.dumps({"log": {"version": "1.2", "entries": []}}))
+        custom_patterns = None
+        if failure == "patterns":
+            # A domain name, not a path: the library does not resolve names.
+            custom_patterns = "network-device"
+        else:
+            error = (
+                HarSizeError(200 * 1024 * 1024, 100 * 1024 * 1024)
+                if failure == "size"
+                else RuntimeError("boom")
+            )
+
+            def fail(*args: Any, **kwargs: Any) -> Any:
+                raise error
+
+            monkeypatch.setattr(sanitization, "sanitize_har_file", fail)
+
+        output_path = tmp_path / "out" / "output.har"
+        result = _run_post_capture_pipeline(
+            temp_path=temp_path,
+            output_path=output_path,
+            sanitized_output=tmp_path / "out" / "output.sanitized.har",
+            sanitize=True,
+            compress=True,
+            keep_raw=keep_raw,
+            interactive=True,
+            capture_options=CaptureOptions(),
+            custom_patterns=custom_patterns,
+        )
+
+        kept = output_path if keep_raw else temp_path
+        assert result.success is False
+        assert result.error is not None
+        assert "Sanitization failed" in result.error
+        assert str(kept) in result.error
+        assert f"har-capture sanitize {kept}" in result.error
+        assert kept.exists(), "the raw capture must survive a sanitize failure"
+        assert temp_path.exists() == (not keep_raw), "no second raw copy is left behind"
+        assert result.sanitized_path is None
+        assert result.compressed_path is None
 
 
 # =============================================================================
@@ -2711,8 +2802,8 @@ class TestApplyDialogResolution:
 
 
 # =============================================================================
-# Download preservation — 2026-08-19 CM2500 session: the event-log export
-# went to Playwright's ephemeral artifacts dir and was wiped on close.
+# Download preservation — a download (a CM2500 event-log export) went to
+# Playwright's ephemeral artifacts dir and was wiped on close.
 # =============================================================================
 
 
@@ -2799,7 +2890,7 @@ class TestSavePendingDownloads:
 # Codecov patch-gap closure for the 0.12.0 download/strip paths: the event
 # handler bodies, the in-session save trigger, the popup download attach,
 # the pipeline strip write-back, and the unreadable-.har artifacts branch
-# were unexercised (12 uncovered patch lines in PR #61's Codecov report).
+# were unexercised.
 # =============================================================================
 
 

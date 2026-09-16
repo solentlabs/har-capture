@@ -193,7 +193,7 @@ class TestPipeDelimitedCredentialGaps:
     )
     def test_preserves_technical_data(self, html: str, should_preserve: str, desc: str) -> None:
         """Test technical data is preserved (not over-sanitized)."""
-        result = sanitize_html(html, salt=None)
+        result = sanitize_html(html, salt=None, custom_patterns=_NETWORK_DEVICE_PATTERNS)
         assert should_preserve in result, (
             f"{desc}: value '{should_preserve}' should be preserved but was removed. Result: {result}"
         )
@@ -202,8 +202,8 @@ class TestPipeDelimitedCredentialGaps:
 class TestVendorSerialAutoRedaction:
     """Vendor-format serials auto-redact as standalone tokens (pass 2e).
 
-    Regression for the CM2500 round-1 leak (2026-08-19): the Netgear serial
-    inside RouterStatus.htm's tagValueList shipped unmasked because nothing
+    The Netgear serial inside RouterStatus.htm's tagValueList once shipped
+    unmasked because nothing
     deterministic covered a serial with no label — FLAG-mode review was the
     only barrier, and a skipped review ships the leak. High-confidence
     serial_number detectors now auto-redact delimiter-bounded token matches
@@ -285,7 +285,7 @@ class TestRealWorldPipeDelimited:
             "HomeNetwork-5G|secretpass456|0|0|0|0|0|0|0|0|1|0|0|0|0|---.---.---.---|1|'"
         )
 
-        result = sanitize_html(html, salt=None)
+        result = sanitize_html(html, salt=None, custom_patterns=_NETWORK_DEVICE_PATTERNS)
 
         # Technical data should be preserved
         assert "Good" in result, "Status 'Good' should be preserved"
