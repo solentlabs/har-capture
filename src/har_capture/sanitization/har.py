@@ -2250,9 +2250,9 @@ def _scan_submitted_credentials(entries: list[Any]) -> frozenset[str]:
         post = post if isinstance(post, dict) else {}
         pairs: list[tuple[str, Any]] = []
         for params in (request.get("queryString"), post.get("params")):
+            # check_har_types has made every item an object.
             for param in params if isinstance(params, list) else ():
-                if isinstance(param, dict):
-                    pairs.append((str(param.get("name", "")), param.get("value")))
+                pairs.append((str(param.get("name", "")), param.get("value")))
         text = post.get("text")
         if isinstance(text, str) and text:
             data = parse_json_container(text)

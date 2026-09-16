@@ -1,4 +1,18 @@
 {
+  "kept_or_unoffered_cases": {
+    "_comment": "Values sanitize keeps or does not offer for review, and inputs it skips without failing. Each entry runs through sanitize_har (FLAG, salt t) as the only entry of a HAR; absent/present are checked in the JSON output, not_offered against the flagged values; validate_errors is the validate error count on the sanitized output.",
+    "cases": [
+      {"id": "empty_cookie_value_kept", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": [{"name": "Cookie", "value": "a=; sid=s3cretvalue99"}]}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": ""}}},
+       "absent": ["s3cretvalue99"], "present": ["a=; sid=COOKIE_"], "not_offered": [], "validate_errors": 0},
+      {"id": "ssid_wholly_a_placeholder_not_offered", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "application/json", "text": "{\"ssid\": \"192.168.1.50\"}"}}},
+       "absent": ["192.168.1.50"], "present": ["10.255."], "not_offered": ["192.168.1.50", "10.255.154.80"], "validate_errors": 0},
+      {"id": "certificate_name_not_a_string", "entry": {"request": {"method": "GET", "url": "https://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": ""}}, "_securityDetails": {"subjectName": 5, "issuer": "aa:bb:cc:dd:ee:01"}},
+       "absent": ["aa:bb:cc:dd:ee:01"], "present": ["\"subjectName\": 5"], "not_offered": [], "validate_errors": 0},
+      {"id": "key_label_placeholder_not_offered", "entry": {"request": {"method": "GET", "url": "http://192.168.100.1/", "headers": []}, "response": {"status": 200, "headers": [], "content": {"mimeType": "text/html", "text": "<script>x = {key: 'PASS_a1b2c3d4'};</script>"}}},
+       "absent": [], "present": ["PASS_a1b2c3d4"], "not_offered": ["PASS_a1b2c3d4"], "validate_errors": 0}
+    ]
+  },
+
   "har_type_cases": {
     "_comment": "The type boundary sanitize_har, validate_har and analyze_har_file share (check_har_types): a field present with a non-null value has its HAR 1.2 type; null is accepted only where both tools read it as absent. set: the path in base_har to replace (a string key or list index); delete: remove the key instead; error_path: the HarValidationError path, or null when the HAR is accepted. 0 of 26,253 CMM fleet entries break the rule.",
     "base_har": {"log": {"version": "1.2", "creator": {"name": "t", "version": "1"}, "pages": [{"id": "p", "title": "Status"}],

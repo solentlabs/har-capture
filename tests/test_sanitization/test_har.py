@@ -3554,6 +3554,31 @@ class TestHarTypes:
         assert raised.value.path == case["error_path"].replace("log.entries[0]", "entry")
 
 
+KEPT_OR_UNOFFERED_CASES = _HAR_FIXTURE["kept_or_unoffered_cases"]["cases"]
+
+
+class TestKeptOrUnoffered:
+    """Values sanitize keeps or does not offer, and inputs it skips without failing."""
+
+    @pytest.mark.parametrize("case", KEPT_OR_UNOFFERED_CASES, ids=[c["id"] for c in KEPT_OR_UNOFFERED_CASES])
+    def test_case(self, case: dict, tmp_path: Path) -> None:
+        """Output holds and lacks the listed text, nothing listed is offered, and validate agrees."""
+        from har_capture.validation import validate_har
+
+        har = {"log": {"entries": [case["entry"]]}}
+        out, report = sanitize_har(har, salt="t", heuristics=HeuristicMode.FLAG)
+        text = json.dumps(out)
+        for value in case["absent"]:
+            assert value not in text
+        for value in case["present"]:
+            assert value in text
+        offered = {f.original_value for f in report.flagged}
+        assert not offered & set(case["not_offered"])
+        path = tmp_path / "s.har"
+        path.write_text(text)
+        assert sum(f.severity == "error" for f in validate_har(path)) == case["validate_errors"]
+
+
 class TestValidateHarStructure:
     """Tests for validate_har_structure error and warning paths."""
 

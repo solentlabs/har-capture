@@ -473,6 +473,18 @@ class TestErrorHandling:
         with pytest.raises(HarValidationError, match=expected_error):
             apply_user_redactions(har_data, report)  # type: ignore
 
+    def test_every_item_failing_leaves_har_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When hashing fails for every chosen value, nothing is replaced and the HAR is returned intact."""
+        from har_capture.patterns import Hasher
+
+        def fail(self: Hasher, value: str, category: str) -> str:
+            raise ValueError("boom")
+
+        monkeypatch.setattr(Hasher, "hash_sensitive_value", fail)
+        har_data = {"log": {"entries": [], "content": "SSID: TestNetwork"}}
+        report = create_report_with_flagged([("TestNetwork", "wifi_ssid", RedactionStatus.USER_REDACTED)])
+        assert apply_user_redactions(har_data, report) == har_data
+
     def test_malformed_json_serialization(self) -> None:
         """Test handling of data that can't be serialized."""
         from har_capture.sanitization.har import HarValidationError
