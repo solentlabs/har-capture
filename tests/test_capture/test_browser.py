@@ -2802,8 +2802,8 @@ class TestApplyDialogResolution:
 
 
 # =============================================================================
-# Download preservation — 2026-08-19 CM2500 session: the event-log export
-# went to Playwright's ephemeral artifacts dir and was wiped on close.
+# Download preservation — a download (a CM2500 event-log export) went to
+# Playwright's ephemeral artifacts dir and was wiped on close.
 # =============================================================================
 
 
@@ -2890,7 +2890,7 @@ class TestSavePendingDownloads:
 # Codecov patch-gap closure for the 0.12.0 download/strip paths: the event
 # handler bodies, the in-session save trigger, the popup download attach,
 # the pipeline strip write-back, and the unreadable-.har artifacts branch
-# were unexercised (12 uncovered patch lines in PR #61's Codecov report).
+# were unexercised.
 # =============================================================================
 
 

@@ -54,6 +54,7 @@ def validate(
         har-capture validate --dir ./captures --recursive --patterns base
         har-capture validate device.har --strict --patterns network-device
     """
+    from har_capture.sanitization import HarValidationError
     from har_capture.validation import (
         analyze_har_file,
         compressed_sibling_pair,
@@ -117,7 +118,23 @@ def validate(
                 typer.echo(f"     {stale_message}")
                 total_errors += 1
 
-        findings = validate_har(file_path, custom_patterns=custom_patterns)
+        # A file that is not a readable HAR (bad JSON or gzip, a field of the
+        # wrong type) is one error; the rest of the scan still runs.
+        try:
+            findings = validate_har(file_path, custom_patterns=custom_patterns)
+            report = analyze_har_file(file_path)
+        except HarValidationError as e:
+            unreadable = str(e)
+        except (ValueError, OSError, EOFError) as e:
+            unreadable = f"Not a readable HAR: {e}"
+        else:
+            unreadable = ""
+        if unreadable:
+            typer.echo(f"\n{file_path}:")
+            typer.echo("  [ERROR] [file]")
+            typer.echo(f"     {unreadable}")
+            total_errors += 1
+            continue
 
         if findings:
             typer.echo(f"\n{file_path}:")
@@ -134,7 +151,6 @@ def validate(
         else:
             typer.echo(f"[OK] {file_path}: Clean")
 
-        report = analyze_har_file(file_path)
         if show_summary or report.warnings:
             typer.echo()
             if not show_summary:

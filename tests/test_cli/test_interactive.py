@@ -29,8 +29,6 @@ import json
 import pytest
 
 from har_capture.cli.interactive import (
-    capture_html_context,
-    capture_pipe_context,
     format_context,
     parse_indices,
     truncate_value,
@@ -102,22 +100,6 @@ FORMAT_CONTEXT_CASES = [
     ("a" * 80, 40, "...", "truncated_has_ellipsis"),  # Needs >60 chars (max_len + 20 for markup)
 ]
 
-CAPTURE_PIPE_CONTEXT_CASES = [
-    # (values, index, window, expected_contains, description)
-    (["a", "b", "c", "d", "e"], 2, 1, "b|>>>c<<<|d", "window_1"),
-    (["a", "b", "c", "d", "e"], 2, 2, "a|b|>>>c<<<|d|e", "window_2"),
-    (["a", "b", "c"], 0, 2, ">>>a<<<|b|c", "at_start"),
-    (["a", "b", "c"], 2, 2, "a|b|>>>c<<<", "at_end"),
-    (["only"], 0, 3, ">>>only<<<", "single_element"),
-]
-
-CAPTURE_HTML_CONTEXT_CASES = [
-    # (html, start, end, window, expected_contains, description)
-    ("before MATCH after", 7, 12, 5, ">>>MATCH<<<", "match_highlighted"),
-    ("before MATCH after", 7, 12, 5, "fore ", "before_context"),
-    ("before MATCH after", 7, 12, 5, " afte", "after_context"),
-    ("short", 0, 5, 10, ">>>short<<<", "whole_string_match"),
-]
 # fmt: on
 
 
@@ -240,61 +222,6 @@ class TestFormatContext:
         result = format_context("line1\r\nline2", 50)
         assert "\r" not in result
         assert "line1" in result and "line2" in result
-
-
-class TestCapturePipeContext:
-    """Tests for pipe-delimited context capture."""
-
-    @pytest.mark.parametrize(
-        ("values", "index", "window", "expected_contains", "desc"),
-        CAPTURE_PIPE_CONTEXT_CASES,
-        ids=[c[4] for c in CAPTURE_PIPE_CONTEXT_CASES],
-    )
-    def test_capture_pipe_context(
-        self,
-        values: list[str],
-        index: int,
-        window: int,
-        expected_contains: str,
-        desc: str,
-    ) -> None:
-        """Test pipe-delimited context capture."""
-        result = capture_pipe_context(values, index, window)
-        assert expected_contains in result, f"{desc}: expected '{expected_contains}' in '{result}'"
-
-    def test_capture_pipe_context_highlights_target(self) -> None:
-        """Test target value is highlighted with >>> <<<."""
-        values = ["before", "target", "after"]
-        result = capture_pipe_context(values, 1, 1)
-        assert ">>>target<<<" in result
-
-
-class TestCaptureHtmlContext:
-    """Tests for HTML context capture."""
-
-    @pytest.mark.parametrize(
-        ("html", "start", "end", "window", "expected_contains", "desc"),
-        CAPTURE_HTML_CONTEXT_CASES,
-        ids=[c[5] for c in CAPTURE_HTML_CONTEXT_CASES],
-    )
-    def test_capture_html_context(
-        self,
-        html: str,
-        start: int,
-        end: int,
-        window: int,
-        expected_contains: str,
-        desc: str,
-    ) -> None:
-        """Test HTML context capture."""
-        result = capture_html_context(html, start, end, window)
-        assert expected_contains in result, f"{desc}: expected '{expected_contains}' in '{result}'"
-
-    def test_capture_html_context_has_ellipsis(self) -> None:
-        """Test context has ellipsis markers."""
-        result = capture_html_context("prefix MATCH suffix", 7, 12, 5)
-        assert result.startswith("...")
-        assert result.endswith("...")
 
 
 class TestExceptionHandling:
@@ -534,7 +461,7 @@ class TestSaveReview:
 
 
 class TestCompressedRegeneration:
-    """Regression tests for the stale-gz PII bug (2026-08-19 CM2500 session).
+    """Regression tests for a stale .gz holding PII the review removed.
 
     The interactive review rewrites the .sanitized.har; a .har.gz written
     before the review then still carries every value the review scrubbed —

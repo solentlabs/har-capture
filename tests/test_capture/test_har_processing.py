@@ -132,8 +132,8 @@ class TestAddCaptureMetadata:
 class TestStripBrowserInternalEntries:
     """Tests for strip_browser_internal_entries.
 
-    Reproduces the 2026-08-19 CM2500 finding: 11 chrome:// entries in the
-    happy-path capture, including chrome://fileicon URLs embedding local
+    Reproduces a CM2500 capture: 11 chrome:// entries in the happy-path
+    capture, including chrome://fileicon URLs embedding local
     Playwright temp-dir paths.
     """
 
@@ -259,7 +259,7 @@ class TestFilterAndCompressHar:
 
     @pytest.mark.parametrize("case", REPEATED_REQUEST_CASES)
     def test_repeated_requests_all_kept(self, tmp_path: Path, case: str) -> None:
-        """Repeated requests all survive, in recorder order (cable_modem_monitor#213)."""
+        """Repeated requests all survive, in recorder order."""
         entries = FIXTURES["repeated_requests"][case]
         har_file = tmp_path / "repeated.har"
         har_file.write_text(json.dumps({"log": {"version": "1.2", "entries": entries}}))

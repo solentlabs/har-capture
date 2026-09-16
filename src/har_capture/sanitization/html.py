@@ -35,7 +35,7 @@ from har_capture.patterns import (
     load_pii_patterns,
     load_sensitive_patterns,
 )
-from har_capture.patterns.loader import DEDICATED_PASS_PATTERNS
+from har_capture.patterns.loader import DEDICATED_PASS_PATTERNS, compile_script_variables
 from har_capture.patterns.redaction import (
     EMAIL_DOMAIN,
     EMAIL_LOCAL_PART,
@@ -362,7 +362,6 @@ HTML_ONLY_PATTERNS = frozenset(
         "session_token",
         "csrf_token",
         "config_path",
-        "motorola_password",
     }
 )
 
@@ -498,6 +497,22 @@ def iter_ssid_option_values(
                 yield value, base + option_match.start(2)
 
 
+def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
+    """The review context for one pipe-delimited value: its neighbours, the value marked ``>>>value<<<``.
+
+    Args:
+        values: Every value of the pipe-delimited string
+        index: Position of the flagged value
+        window: Neighbours to keep on each side
+
+    Returns:
+        The values within ``window`` of ``index``, joined by ``|``
+    """
+    start = max(0, index - window)
+    end = min(len(values), index + window + 1)
+    return "|".join(f">>>{values[i]}<<<" if i == index else values[i] for i in range(start, end))
+
+
 def _sanitize_pipe_value(
     value: str,
     *,
@@ -578,8 +593,6 @@ def _sanitize_pipe_value(
                 collector.record_auto_redaction(category)
                 return hasher.hash_sensitive_value(value, category)
             if heuristics == HeuristicMode.FLAG:
-                from har_capture.cli.interactive import capture_pipe_context
-
                 context = capture_pipe_context(all_values or [], value_index)
                 collector.flag_value(
                     value,
@@ -943,7 +956,7 @@ def _sanitize_html_impl(
     # Pure-digit values can't be flagged heuristically (the universal `^\d+$`
     # safe pattern would have to be relaxed, drowning the review UI in counter
     # noise). The label is what makes the regex layer's 100% confidence bar
-    # achievable. See issue #47 and docs/ARCHITECTURE.md § Confidence boundary.
+    # achievable. See docs/ARCHITECTURE.md § Confidence boundary.
     # Tag chain and separator handling mirror pass 2: whitespace-tolerant
     # sibling-element matching, with the separator + tag run preserved.
     def replace_wps_pin(match: re.Match[str]) -> str:
@@ -982,7 +995,7 @@ def _sanitize_html_impl(
     # Netgear firmware ships the serial inside pipe-delimited blobs
     # (RouterStatus.htm tagValueList) where no label exists for passes 2-2c
     # to anchor on, and FLAG-mode review is the only thing between the raw
-    # serial and the shared artifact (CM2500 round-1 leak, 2026-08-19). A
+    # serial and the shared artifact (a CM2500 capture shipped it that way). A
     # high-confidence serial_number detector asserts a vendor layout tight
     # enough for the scanner pipeline's 100%-confidence bar, so those
     # formats auto-redact here. Token extraction bounds the match at
@@ -1105,7 +1118,7 @@ def _sanitize_html_impl(
     #
     # A default Wi-Fi password printed on the device sticker is a live
     # credential, not device metadata: XB7/XB10 captures reached a public issue
-    # with it in plain text (issue #194). The default SSID is redacted
+    # with it in plain text. The default SSID is redacted
     # alongside it — the pair together identifies the household's network, and
     # the SSID is what makes the password usable.
     html = redact_structural_credentials(html, hasher, collector, custom_patterns)
@@ -1182,8 +1195,8 @@ def _sanitize_html_impl(
         flags=re.IGNORECASE,
     )
 
-    # 13. Motorola JavaScript password variables
-    def replace_motorola_pw(match: re.Match[str]) -> str:
+    # 13. Password script variables a pattern file names (script_variables.password)
+    def replace_script_password(match: re.Match[str]) -> str:
         if is_redacted(match.group(2), custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("password")
@@ -1191,18 +1204,15 @@ def _sanitize_html_impl(
         suffix = match.group(3)
         return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
 
-    html = re.sub(
-        r"(var\s+Current(?:Pw|Password)[A-Za-z]*\s*=\s*['\"])([^'\"]+)(['\"])",
-        replace_motorola_pw,
-        html,
-        flags=re.IGNORECASE,
-    )
+    for variable_re in compile_script_variables(sensitive, "password"):
+        html = variable_re.sub(replace_script_password, html)
 
-    # 14. WiFi credentials and device names in Netgear tagValueList
+    # 14. Pipe-delimited script variables a pattern file names
+    # (script_variables.pipe_delimited): Wi-Fi credentials and device names
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
-    def sanitize_tag_value_list(match: re.Match[str]) -> str:
-        """Sanitize pipe-delimited values in tagValueList.
+    def sanitize_pipe_variable(match: re.Match[str]) -> str:
+        """Sanitize a pipe-delimited script variable's values.
 
         Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``,
         and reassembles.
@@ -1231,20 +1241,10 @@ def _sanitize_html_impl(
 
         return prefix + "|".join(sanitized_values) + suffix
 
-    html = re.sub(
-        r"(var\s+tagValueList\s*=\s*['\"])([^'\"]+)(['\"])",
-        sanitize_tag_value_list,
-        html,
-    )
+    for variable_re in compile_script_variables(sensitive, "pipe_delimited"):
+        html = variable_re.sub(sanitize_pipe_variable, html)
 
-    # 15. Other pipe-delimited variables (connectedDevices, deviceList, systemInfo, etc.)
-    html = re.sub(
-        r"(var\s+(?:(?:connected)?[Dd]evice(?:s|List)?|(?:system|wifi|network|modem|router|wan|lan)[Ii]nfo)\s*=\s*['\"])([^'\"]+)(['\"])",
-        sanitize_tag_value_list,
-        html,
-    )
-
-    # 16. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
+    # 15. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
     def replace_js_ssid(match: re.Match[str]) -> str:
         if is_redacted(match.group(4), custom_patterns):
             return match.group(0)
@@ -1425,7 +1425,7 @@ def _fixture_text_findings(
     # generic replacer substitutes the whole match, which would flatten the
     # label markup this pattern deliberately preserves. Sharing the compiled
     # patterns keeps all three detection paths — sanitizer pass 7c, `validate`,
-    # and this CI fixture gate — from drifting apart (issue #194).
+    # and this CI fixture gate — from drifting apart.
     for sibling_pattern, sibling_name in (
         (SIBLING_PASSWORD_RE, "default_password_label"),
         (SIBLING_SSID_RE, "default_ssid_label"),
@@ -1502,6 +1502,12 @@ def check_for_pii(
         for entry in _compiled_pii_patterns(pii)
         if route == "html" or entry[0] not in HTML_ONLY_PATTERNS
     ]
+    if route == "html":
+        # Pass 13's password variables, named by the pattern files.
+        patterns.extend(
+            ("script_password", regex, {"value_group": 2})
+            for regex in compile_script_variables(load_sensitive_patterns(custom_patterns), "password")
+        )
     allowlist = load_allowlist(custom_patterns)
     preserved_ips = frozenset(pii.get("preserved_gateway_ips", []))
     line_of = _line_numbers(content)

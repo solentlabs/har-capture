@@ -71,6 +71,24 @@ def har_directory(tmp_path: Path) -> Path:
 # =============================================================================
 
 
+UNREADABLE_FILE_CASES = _FIXTURES["unreadable_file_cases"]["cases"]
+
+
+class TestValidateUnreadableFile:
+    """A file validate cannot read is reported as an error, and the scan continues."""
+
+    @pytest.mark.parametrize("case", UNREADABLE_FILE_CASES, ids=[c["id"] for c in UNREADABLE_FILE_CASES])
+    def test_reported_and_scan_continues(self, case: dict, tmp_path: Path) -> None:
+        """The unreadable file is one [ERROR] with its reason; the clean file beside it is still checked."""
+        (tmp_path / case["filename"]).write_bytes(case["content"].encode("latin-1"))
+        _write_fixture_har(tmp_path, "clean_har", "clean.har")
+        result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
+        assert result.exit_code == 1, result.output
+        assert case["reason"] in result.output
+        assert "[OK]" in result.output and "clean.har" in result.output
+        assert "Summary: 1 errors" in result.output
+
+
 class TestValidateBasic:
     """Basic validate command tests."""
 
@@ -189,7 +207,7 @@ class TestCompletenessReporting:
 
     This is the intake path: contributor HARs reach the project through
     `validate`, not through a capture this tool performed, so the gaps have
-    to surface here (cable_modem_monitor #120).
+    to surface here.
     """
 
     _COMPLETENESS = json.loads(

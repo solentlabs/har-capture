@@ -140,7 +140,7 @@ def capture(
 
     # Capture always starts at the device root; a path in the target is
     # dropped. Say so up front — silently capturing the root instead of
-    # the named page cost a wasted capture run (CM2500, 2026-08-19).
+    # the named page wastes the contributor's capture run.
     from har_capture.capture.connectivity import target_path
 
     dropped_path = target_path(target)

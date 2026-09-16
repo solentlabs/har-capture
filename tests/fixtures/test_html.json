@@ -67,8 +67,7 @@
     {"input_html": "session=AbcDef1234567890abcdef",          "removed": "AbcDef1234567890abcdef","placeholder": "***TOKEN***",        "id": "session_token"},
     {"input_html": "auth: xK9mP2qR7sT4wZaBcDeFgHiJ",         "removed": "xK9mP2qR7sT4wZaBcDeFgHiJ","placeholder": "***TOKEN***",     "id": "auth_token_long"},
     {"input_html": "<meta name=\"csrf-token\" content=\"xsrf_abc123\">", "removed": "xsrf_abc123","placeholder": "***CSRF***",         "id": "csrf_token_meta"},
-    {"input_html": "var CurrentPw = 'motor0laP@ss'",           "removed": "motor0laP@ss",          "placeholder": "***PASS***",         "id": "motorola_password_var"},
-    {"input_html": "var CurrentPassword = 'adminPass1'",      "removed": "adminPass1",            "placeholder": "***PASS***",         "id": "motorola_password_full"},
+    {"input_html": "var CurrentPassword = 'adminPass1'",      "removed": "adminPass1",            "placeholder": "***PASS***",         "id": "password_suffixed_script_variable"},
     {"input_html": "ssid_24g: 'MyNetwork5G'",                 "removed": "MyNetwork5G",           "placeholder": "***WIFI***",         "id": "ssid_js_field"},
     {"input_html": "guest_ssid = \"Visitors\"",               "removed": "Visitors",              "placeholder": "***WIFI***",         "id": "guest_ssid_js_field"}
   ],
@@ -266,6 +265,50 @@
     {"input_html": "localStorage.setItem(\"theme\", \"dark\")",                            "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_value"},
     {"input_html": "sessionStorage.setItem(\"lang\", \"en\")",                             "should_not_contain": null,                      "should_contain": null,        "id": "setitem_safe_lang"}
   ],
+
+  "script_variable_cases": {
+    "_comment": "Script variable names are domain knowledge (ADR-5): the core engine reads `var NAME = '…'` only for names a pattern file's script_variables section lists. password values are redacted whole; pipe_delimited values are split on | and judged one value at a time. patterns: 'base' = none, 'network-device' = the built-in domain, or a custom dict. kept/removed are checked with salt=None.",
+    "cases": [
+      {"id": "currentpw_base_kept",               "patterns": "base",           "input_html": "<script>var CurrentPw = 'motor0laP@ss';</script>",      "kept": "motor0laP@ss"},
+      {"id": "currentpw_domain_redacted",         "patterns": "network-device", "input_html": "<script>var CurrentPw = 'motor0laP@ss';</script>",      "removed": "motor0laP@ss", "placeholder": "var CurrentPw = '***PASS***'"},
+      {"id": "currentpassword_domain_redacted",   "patterns": "network-device", "input_html": "var CurrentPassword = 'adminPass1'",                    "removed": "adminPass1",   "placeholder": "var CurrentPassword = '***PASS***'"},
+      {"id": "currentpw_domain_ignores_case",     "patterns": "network-device", "input_html": "VAR currentpwadmin = \"adminPass1\"",                   "removed": "adminPass1",   "placeholder": "VAR currentpwadmin = \"***PASS***\""},
+      {"id": "currentpw_placeholder_kept",        "patterns": "network-device", "input_html": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>",     "kept": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>"},
+      {"id": "tagvaluelist_base_kept",            "patterns": "base",           "heuristics": "redact", "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "kept": "P@ssw0rd!123"},
+      {"id": "tagvaluelist_domain_redacted",      "patterns": "network-device", "heuristics": "redact", "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "tagvaluelist_domain_case_sensitive","patterns": "network-device", "heuristics": "redact", "input_html": "var TAGVALUELIST = '0|Good||P@ssw0rd!123|data';",       "kept": "P@ssw0rd!123"},
+      {"id": "connected_devices_base_kept",       "patterns": "base",           "heuristics": "redact", "input_html": "var connectedDevices = '0|Good||P@ssw0rd!123|data';",   "kept": "P@ssw0rd!123"},
+      {"id": "connected_devices_domain_redacted", "patterns": "network-device", "heuristics": "redact", "input_html": "var connectedDevices = '0|Good||P@ssw0rd!123|data';",   "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "wifi_info_domain_redacted",         "patterns": "network-device", "heuristics": "redact", "input_html": "var wifiInfo = '0|Good||P@ssw0rd!123|data';",           "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "custom_password_variable",          "patterns": {"script_variables": {"password": [{"regex": "adminPw"}]}},       "input_html": "var adminPw = 'hunter2xyz';", "removed": "hunter2xyz", "placeholder": "var adminPw = '***PASS***'"},
+      {"id": "custom_password_flags_honoured",    "patterns": {"script_variables": {"password": [{"regex": "adminPw"}]}},       "input_html": "var ADMINPW = 'hunter2xyz';", "kept": "hunter2xyz"},
+      {"id": "custom_pipe_variable",              "patterns": {"script_variables": {"pipe_delimited": [{"regex": "statusBlob"}]}}, "heuristics": "redact", "input_html": "var statusBlob = '0|Good||P@ssw0rd!123|data';", "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
+      {"id": "custom_invalid_regex_skipped",      "patterns": {"script_variables": {"password": [{"regex": "("}, "adminPw", {"regex": 7}, {"regex": "adminPw"}]}}, "input_html": "var adminPw = 'hunter2xyz';", "removed": "hunter2xyz", "placeholder": "var adminPw = '***PASS***'"},
+      {"id": "custom_section_not_a_dict",         "patterns": {"script_variables": ["adminPw"]},                              "input_html": "var adminPw = 'hunter2xyz';", "kept": "hunter2xyz"}
+    ]
+  },
+
+  "pii_script_variable_cases": {
+    "_comment": "check_for_pii reports a password script variable only for names a pattern file lists, and only in markup (the HTML engine is the only route that redacts it).",
+    "cases": [
+      {"id": "base_not_reported",        "patterns": "base",           "content": "<script>var CurrentPw = 'hunter2xyz';</script>",    "findings": []},
+      {"id": "domain_reported",          "patterns": "network-device", "content": "<script>var CurrentPw = 'hunter2xyz';</script>",    "findings": [["script_password", "var CurrentPw = 'hunter2xyz'"]]},
+      {"id": "domain_placeholder_clean", "patterns": "network-device", "content": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>", "findings": []},
+      {"id": "domain_not_markup",        "patterns": "network-device", "content": "var CurrentPw = 'hunter2xyz';",                     "findings": []},
+      {"id": "custom_reported",          "patterns": {"script_variables": {"password": [{"regex": "adminPw", "flags": ["IGNORECASE"]}]}}, "content": "<script>var ADMINPW = 'hunter2xyz';</script>", "findings": [["script_password", "var ADMINPW = 'hunter2xyz'"]]}
+    ]
+  },
+
+  "pipe_context_cases": {
+    "_comment": "capture_pipe_context: the flagged value marked >>>value<<< with up to `window` neighbours each side, clipped at the ends.",
+    "cases": [
+      {"id": "window_1",       "values": ["a", "b", "c", "d", "e"], "index": 2, "window": 1, "expected": "b|>>>c<<<|d"},
+      {"id": "window_2",       "values": ["a", "b", "c", "d", "e"], "index": 2, "window": 2, "expected": "a|b|>>>c<<<|d|e"},
+      {"id": "at_start",       "values": ["a", "b", "c"],           "index": 0, "window": 2, "expected": ">>>a<<<|b|c"},
+      {"id": "at_end",         "values": ["a", "b", "c"],           "index": 2, "window": 2, "expected": "a|b|>>>c<<<"},
+      {"id": "single_element", "values": ["only"],                  "index": 0, "window": 3, "expected": ">>>only<<<"}
+    ]
+  },
 
   "pipe_serial_cases": [
     {"input_html": "var tagValueList = 'enabled|SN-N6MAA10816|WPA3';",  "should_not_contain": "SN-N6MAA10816",  "should_contain": "SERIAL_",  "id": "pipe_serial_sn_dash"},

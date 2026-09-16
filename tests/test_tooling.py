@@ -4,7 +4,8 @@ The commit hooks, CI and the local CI mirror run the same tools on the same
 inputs (docs/CODE_REVIEW.md, "Quality Gates"), and the shared VS Code tasks and
 launch configs call the CLI and tools the way they currently exist. Each rule
 spans config files that change independently, so it is checked rather than
-trusted.
+trusted. The library packages' import boundary (ARCHITECTURE, Code
+Organization rule 3) is checked the same way.
 """
 
 from __future__ import annotations
@@ -160,3 +161,34 @@ def test_vscode_python_modules_are_installed() -> None:
     modules |= {c["module"] for c in _vscode("launch.json")["configurations"] if "module" in c}
     missing = sorted(m for m in modules if importlib.util.find_spec(m) is None)
     assert missing == []
+
+
+# ── Library layering ─────────────────────────────────────────────────────────
+# ARCHITECTURE Code Organization rule 3: the core library has no CLI
+# dependency. A lazy import inside a function counts too.
+
+_LIBRARY_PACKAGES = ["patterns", "sanitization", "validation", "capture"]
+
+
+def library_cli_imports(package_dir: Path) -> list[str]:
+    """Every ``har_capture.cli`` import in a package, as ``file:line``."""
+    import ast
+
+    found = []
+    for path in sorted(package_dir.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = (
+                [a.name for a in node.names]
+                if isinstance(node, ast.Import)
+                else [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else []
+            )
+            if any(n == "har_capture.cli" or n.startswith("har_capture.cli.") for n in names):
+                found.append(f"{path.name}:{node.lineno}")
+    return found
+
+
+@pytest.mark.parametrize("package", _LIBRARY_PACKAGES)
+def test_library_does_not_import_cli(package: str) -> None:
+    assert library_cli_imports(_ROOT / "src" / "har_capture" / package) == []

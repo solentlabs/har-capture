@@ -436,8 +436,8 @@ class TestCaptureHelpers:
 class TestPopupCapture:
     """Real-browser tests that popup traffic lands in the HAR.
 
-    Models the failure mode reported in CMM #146 (S33 reboot button opens a
-    popup that the integrated browser does not capture). Without the
+    Models an Arris S33 whose reboot button opens a popup the integrated
+    browser did not capture. Without the
     ``context.on("page")`` subscription, popup responses can be evicted from
     Chromium's buffer before the HAR is flushed, and consumers have no signal
     that a popup occurred. Capture-everything: silent popups poison analysis.
@@ -505,7 +505,7 @@ class TestPopupCapture:
 # =============================================================================
 #
 # These tests exercise the JS init script + ``page.expose_function`` JS→Python
-# bridge introduced in v0.9.0 (PR #52) against a real Playwright session,
+# bridge against a real Playwright session,
 # not mocks. They run in headless mode and use ``page.on("dialog")`` with
 # ``dialog.accept()`` / ``dialog.dismiss()`` to drive resolution
 # programmatically — the production gating (``not headless and timeout is

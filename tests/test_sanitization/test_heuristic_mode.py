@@ -5,9 +5,9 @@ These tests verify the new heuristics parameter and its three modes:
 - FLAG: Flag suspicious values for manual review
 - REDACT: Auto-redact suspicious values
 
-Domain-specific detection (SSIDs, device names) requires loading domain
-patterns via custom_patterns. Without domain patterns, only entropy,
-credential-prefix, and adjacency heuristics run.
+Heuristics analyze the values of pipe-delimited script variables, which a
+domain pattern file names (network-device: tagValueList). Without domain
+patterns no pipe variable is read, so these tests load network-device.
 """
 
 from __future__ import annotations
@@ -32,34 +32,34 @@ def network_device_patterns() -> str:
 class TestHeuristicModeDisabled:
     """Test default behavior: heuristics disabled."""
 
-    def test_wifi_password_preserved_by_default(self) -> None:
+    def test_wifi_password_preserved_by_default(self, network_device_patterns: str) -> None:
         """WiFi credentials in tagValueList are preserved when heuristics disabled."""
         content = "var tagValueList = '0|Good||TestWiFiPass123|data';"
-        result = sanitize_html(content)  # Default: DISABLED
+        result = sanitize_html(content, custom_patterns=network_device_patterns)  # Default: DISABLED
         assert "TestWiFiPass123" in result
 
-    def test_ssid_preserved_by_default(self) -> None:
+    def test_ssid_preserved_by_default(self, network_device_patterns: str) -> None:
         """SSID-like values are preserved when heuristics disabled."""
         content = "var tagValueList = 'HomeNetwork-5G|data';"
-        result = sanitize_html(content)
+        result = sanitize_html(content, custom_patterns=network_device_patterns)
         assert "HomeNetwork-5G" in result
 
-    def test_device_name_preserved_by_default(self) -> None:
+    def test_device_name_preserved_by_default(self, network_device_patterns: str) -> None:
         """Device names are preserved when heuristics disabled."""
         content = "var tagValueList = '19|MyDevice|192.168.1.100|XX:XX:XX:XX:XX:XX';"
-        result = sanitize_html(content)
+        result = sanitize_html(content, custom_patterns=network_device_patterns)
         assert "MyDevice" in result
 
-    def test_high_entropy_preserved_by_default(self) -> None:
+    def test_high_entropy_preserved_by_default(self, network_device_patterns: str) -> None:
         """High-entropy values are preserved when heuristics disabled."""
         content = "var tagValueList = '0|Good||P@ssw0rd!123|data';"
-        result = sanitize_html(content)
+        result = sanitize_html(content, custom_patterns=network_device_patterns)
         assert "P@ssw0rd!123" in result
 
-    def test_macs_still_redacted_with_disabled(self) -> None:
+    def test_macs_still_redacted_with_disabled(self, network_device_patterns: str) -> None:
         """Known patterns (MACs) are always redacted regardless of heuristics mode."""
         content = "var tagValueList = '0|AA:BB:CC:DD:EE:FF|data';"
-        result = sanitize_html(content, salt="test")
+        result = sanitize_html(content, custom_patterns=network_device_patterns, salt="test")
         assert "AA:BB:CC:DD:EE:FF" not in result
         # Format-preserving MAC redaction (02:xx:xx:xx:xx:xx)
         assert re.search(r"02:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}:[a-f0-9]{2}", result)
@@ -68,10 +68,12 @@ class TestHeuristicModeDisabled:
 class TestHeuristicModeRedact:
     """Test auto-redaction mode: heuristics enabled with auto-redact."""
 
-    def test_wifi_password_redacted(self) -> None:
+    def test_wifi_password_redacted(self, network_device_patterns: str) -> None:
         """WiFi credentials are auto-redacted with REDACT mode."""
         content = "var tagValueList = '0|Good||TestWiFiPass123|data';"
-        result = sanitize_html(content, heuristics=HeuristicMode.REDACT, salt="test")
+        result = sanitize_html(
+            content, custom_patterns=network_device_patterns, heuristics=HeuristicMode.REDACT, salt="test"
+        )
         assert "TestWiFiPass123" not in result
         # Should be redacted as CRED or WIFI
         assert "CRED_" in result or "WIFI_" in result
@@ -101,17 +103,21 @@ class TestHeuristicModeRedact:
         # "MyDevice" may be detected as wifi_ssid or device_name depending on heuristics
         assert "WIFI_" in result or "DEVICE_" in result
 
-    def test_high_entropy_redacted(self) -> None:
+    def test_high_entropy_redacted(self, network_device_patterns: str) -> None:
         """High-entropy values are auto-redacted with REDACT mode."""
         content = "var tagValueList = '0|Good||P@ssw0rd!123|data';"
-        result = sanitize_html(content, heuristics=HeuristicMode.REDACT, salt="test")
+        result = sanitize_html(
+            content, custom_patterns=network_device_patterns, heuristics=HeuristicMode.REDACT, salt="test"
+        )
         assert "P@ssw0rd!123" not in result
         assert "CRED_" in result
 
-    def test_technical_values_preserved_with_redact(self) -> None:
+    def test_technical_values_preserved_with_redact(self, network_device_patterns: str) -> None:
         """Safe technical values are preserved even in REDACT mode."""
         content = "var tagValueList = 'Locked|OK|QAM256|123';"
-        result = sanitize_html(content, heuristics=HeuristicMode.REDACT)
+        result = sanitize_html(
+            content, custom_patterns=network_device_patterns, heuristics=HeuristicMode.REDACT
+        )
         assert "Locked" in result
         assert "OK" in result
         assert "QAM256" in result
@@ -148,11 +154,16 @@ class TestHeuristicModeRedact:
 class TestHeuristicModeFlag:
     """Test flag mode: heuristics enabled but values preserved for review."""
 
-    def test_wifi_password_flagged_not_redacted(self) -> None:
+    def test_wifi_password_flagged_not_redacted(self, network_device_patterns: str) -> None:
         """WiFi credentials are flagged but preserved with FLAG mode."""
         collector = RedactionCollector(hasher=Hasher.create("test"))
         content = "var tagValueList = '0|Good||TestWiFiPass123|data';"
-        result = sanitize_html(content, heuristics=HeuristicMode.FLAG, collector=collector)
+        result = sanitize_html(
+            content,
+            custom_patterns=network_device_patterns,
+            heuristics=HeuristicMode.FLAG,
+            collector=collector,
+        )
 
         assert "TestWiFiPass123" in result  # Preserved!
         assert len(collector.flagged) > 0  # But flagged
@@ -173,11 +184,16 @@ class TestHeuristicModeFlag:
         # Check category
         assert any("wifi" in f.category for f in collector.flagged)
 
-    def test_flagged_values_have_context(self) -> None:
+    def test_flagged_values_have_context(self, network_device_patterns: str) -> None:
         """Flagged values include context for user review."""
         collector = RedactionCollector(hasher=Hasher.create("test"))
         content = "var tagValueList = 'SSID|MyNetwork-5G|data';"
-        sanitize_html(content, heuristics=HeuristicMode.FLAG, collector=collector)
+        sanitize_html(
+            content,
+            custom_patterns=network_device_patterns,
+            heuristics=HeuristicMode.FLAG,
+            collector=collector,
+        )
 
         assert len(collector.flagged) > 0
         flagged = collector.flagged[0]
@@ -289,11 +305,11 @@ class TestCustomPatternsDict:
 class TestBackwardCompatibility:
     """Test that default behavior is backward compatible with v0.3.1."""
 
-    def test_default_same_as_v031(self) -> None:
+    def test_default_same_as_v031(self, network_device_patterns: str) -> None:
         """Default behavior (heuristics=DISABLED) matches v0.3.1."""
         # In v0.3.1, WiFi passwords were preserved by default
         content = "var tagValueList = '0|Good||happymango167|test';"
-        result = sanitize_html(content)
+        result = sanitize_html(content, custom_patterns=network_device_patterns)
 
         # Should be preserved (not redacted) by default
         assert "happymango167" in result

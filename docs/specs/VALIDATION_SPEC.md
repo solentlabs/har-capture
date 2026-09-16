@@ -95,6 +95,9 @@ def validate_har(
 ```
 
 1. Load HAR (JSON or gzip-compressed)
+1. `check_har_types()` — the sanitizer's type boundary
+   ([Sanitization Spec — Type Boundary](SANITIZATION_SPEC.md#type-boundary)); a field of the wrong type raises
+   `HarValidationError` naming it
 1. For each entry in `log.entries`:
    - `check_url(entry.request.url)` and `check_query_string(entry.request.queryString)` → URL credentials and sensitive
      query parameters, reported once across the two
@@ -592,6 +595,8 @@ har-capture validate capture.har --patterns <domain|custom.json>
 - Loads and validates a single HAR file
 - Prints findings to stdout with severity, location, field, value
 - Checks `.har`/`.har.gz` pair freshness (see above)
+- A file it cannot read as a HAR — invalid JSON, a corrupt or truncated gzip, a field of the wrong type — is one
+  `[ERROR] [file]` naming why, and the scan continues with the next file
 - Exit code 0 if no findings, 1 if findings detected
 - Supports custom patterns via `--patterns`
 
@@ -703,7 +708,7 @@ These patterns are used only during sanitization:
 | `pii.json`                              | PII detection patterns with replacement prefixes (HTML engine pass 0; `check_for_pii`, whose built-ins mirror the shared regexes) |
 | Domain `heuristics.detectors`           | WiFi SSID, device name detection (EXCEPT high-confidence serial_number detectors, which validation shares — see above)            |
 | Domain `heuristics.safe_value_patterns` | Domain-specific safe values                                                                                                       |
-| HTML scanner passes                     | Pipe-delimited, password inputs, SSID fields (hardcoded in `html.py`)                                                             |
+| HTML scanner passes                     | Password inputs, SSID fields (`html.py`); script variables a domain file names (`script_variables`)                               |
 
 ### Design Intent
 
@@ -725,8 +730,10 @@ Validation is intentionally simpler than sanitization:
    not crash or produce findings for deeper content.
 1. **Pattern compilation is done once** — `_field_tiers` is compiled on the first call to `check_json_fields` and reused
    across all recursive invocations and all entries; `validate_har` compiles the vendor-serial detectors once per file.
-1. **Cookie metadata is distinguished** — Set-Cookie headers containing only attributes (`HttpOnly`, `Secure`,
-   `SameSite`) are not flagged. Only headers with actual session values trigger findings.
+1. **Cookie data is classified one segment at a time** — `cookie_segment_actions()` is the rule both tools share (see
+   Cookie headers above). A Set-Cookie made only of valid RFC 6265 attributes (`Secure; HttpOnly`, `SameSite=Lax`) and a
+   valueless `Secure`/`HttpOnly`/`Partitioned` in a request `Cookie` are not flagged; every other cookie value that is
+   not a placeholder is, whatever its name (`path=s3cr3t` in a request `Cookie` is a cookie).
 1. **Severity is deterministic** — every finding's severity follows from which pattern matched, never from scoring:
    headers, auto-redact-tier field names, JSON identity fields, base64 credentials, and vendor-format serials are
    "error"; flag-tier field names, MAC/label-serial/IPv4/IPv6 content patterns are "warning"; factory-default usernames

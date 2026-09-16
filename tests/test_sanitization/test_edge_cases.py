@@ -27,6 +27,7 @@ import pytest
 
 from har_capture.sanitization.har import (
     _MAX_RECURSION_DEPTH,
+    HarValidationError,
     _sanitize_json_recursive,
     sanitize_entry,
     sanitize_har,
@@ -143,15 +144,14 @@ class TestMalformedInput:
         assert result == {"version": "1.2"}
 
     def test_invalid_entries_type(self) -> None:
-        """Test HAR with non-list entries."""
+        """Test HAR with non-list entries is rejected at the type boundary."""
         har_data = {"log": {"entries": "not a list"}}
 
-        # Should return unchanged
-        result, _ = sanitize_har(har_data)
-        assert result["log"]["entries"] == "not a list"
+        with pytest.raises(HarValidationError, match=r"log\.entries"):
+            sanitize_har(har_data)
 
     def test_headers_not_list(self) -> None:
-        """Test request with non-list headers."""
+        """Test request with non-list headers is rejected at the type boundary."""
         entry = {
             "request": {
                 "method": "GET",
@@ -161,9 +161,8 @@ class TestMalformedInput:
             "response": {"status": 200, "headers": [], "content": {}},
         }
 
-        # Should not raise
-        result = sanitize_entry(entry)
-        assert result["request"]["headers"] == "not a list"
+        with pytest.raises(HarValidationError, match=r"entry\.request\.headers"):
+            sanitize_entry(entry)
 
 
 class TestLargeInputs:

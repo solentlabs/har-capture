@@ -98,29 +98,6 @@ def format_context(context: str, max_len: int = _CONTEXT_TRUNCATE_LENGTH) -> str
     return context[:max_len] + "..."
 
 
-def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
-    """Capture context around a value in pipe-delimited list."""
-    start = max(0, index - window)
-    end = min(len(values), index + window + 1)
-    parts = []
-    for i in range(start, end):
-        if i == index:
-            parts.append(f">>>{values[i]}<<<")
-        else:
-            parts.append(values[i])
-    return "|".join(parts)
-
-
-def capture_html_context(html: str, start: int, end: int, window: int = 50) -> str:
-    """Capture context around a match in HTML."""
-    ctx_start = max(0, start - window)
-    ctx_end = min(len(html), end + window)
-    before = html[ctx_start:start]
-    match_text = html[start:end]
-    after = html[end:ctx_end]
-    return f"...{before}>>>{match_text}<<<{after}..."
-
-
 def stdin_is_tty() -> bool:
     """Return True if stdin is a real terminal the review can prompt in.
 

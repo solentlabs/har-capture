@@ -65,24 +65,23 @@ Underscore-prefixed keys are skipped during the merge process.
 
 **Built-in patterns:**
 
-| Name              | Prefix              | What It Matches                                                                  |
-| ----------------- | ------------------- | -------------------------------------------------------------------------------- |
-| mac_address       | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`)                              |
-| serial_number     | SERIAL              | A serial label and its value (`SERIAL_LABEL_RE`)                                 |
-| wps_pin           | PIN                 | A WPS/pairing/default PIN label and 8 digits (`WPS_PIN_LABEL_RE`)                |
-| account_id        | ACCOUNT             | An Account/Subscriber/Customer/Device ID label and value (`ACCOUNT_LABEL_RE`)    |
-| private_ip        | (format-preserving) | 10.x, 172.16-31.x, 192.168.x (`PRIVATE_IP_RE`)                                   |
-| public_ip         | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)                                  |
-| ipv6              | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)                                       |
-| email             | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                                                 |
-| password_field    | PASS                | A password/passphrase/psk/glued-`key` label and its value (`PASSWORD_FIELD_RE`)  |
-| password_input    | PASS                | An `<input type=password>` value (`PASSWORD_INPUT_RE`)                           |
-| session_token     | TOKEN               | A session/token/auth/cookie label and a 20+ character value (`SESSION_TOKEN_RE`) |
-| csrf_token        | CSRF                | A `<meta name=csrf-token>` content value (`CSRF_META_RE`)                        |
-| config_path       | CONFIG              | .cfg file references                                                             |
-| motorola_password | PASS                | Motorola `var CurrentPw… = '…'` script variables                                 |
-| ssn               | SSN                 | Social Security Number (flagged, not auto-redacted)                              |
-| credit_card\_\*   | CC                  | Visa/MC/Amex with Luhn validation                                                |
+| Name            | Prefix              | What It Matches                                                                  |
+| --------------- | ------------------- | -------------------------------------------------------------------------------- |
+| mac_address     | MAC                 | `AA:BB:CC:DD:EE:FF`, `AA-BB-CC-DD-EE-FF` (`MAC_RE`)                              |
+| serial_number   | SERIAL              | A serial label and its value (`SERIAL_LABEL_RE`)                                 |
+| wps_pin         | PIN                 | A WPS/pairing/default PIN label and 8 digits (`WPS_PIN_LABEL_RE`)                |
+| account_id      | ACCOUNT             | An Account/Subscriber/Customer/Device ID label and value (`ACCOUNT_LABEL_RE`)    |
+| private_ip      | (format-preserving) | 10.x, 172.16-31.x, 192.168.x (`PRIVATE_IP_RE`)                                   |
+| public_ip       | (format-preserving) | Non-private, non-reserved IPv4 (`PUBLIC_IP_RE`)                                  |
+| ipv6            | (format-preserving) | IPv6 full and compressed forms (`IPV6_RE`)                                       |
+| email           | (format-preserving) | RFC 5321 simplified (`EMAIL_RE`)                                                 |
+| password_field  | PASS                | A password/passphrase/psk/glued-`key` label and its value (`PASSWORD_FIELD_RE`)  |
+| password_input  | PASS                | An `<input type=password>` value (`PASSWORD_INPUT_RE`)                           |
+| session_token   | TOKEN               | A session/token/auth/cookie label and a 20+ character value (`SESSION_TOKEN_RE`) |
+| csrf_token      | CSRF                | A `<meta name=csrf-token>` content value (`CSRF_META_RE`)                        |
+| config_path     | CONFIG              | .cfg file references                                                             |
+| ssn             | SSN                 | Social Security Number (flagged, not auto-redacted)                              |
+| credit_card\_\* | CC                  | Visa/MC/Amex with Luhn validation                                                |
 
 The labeled and tag patterns are the sanitizer's compiled regexes verbatim, pinned by a test, so `check_for_pii` reports
 what the HTML engine replaces.
@@ -151,46 +150,19 @@ Names match exactly (case-insensitive), in the sanitizer and `validate` alike: `
 
 ```json
 {
-  "static_placeholders": {
-    "values": ["XX:XX:XX:XX:XX:XX", "0.0.0.0", "::", "x@x.invalid", "[REDACTED]"]
-  },
+  "static_placeholders": {"values": ["XX:XX:XX:XX:XX:XX", "0.0.0.0", "::", "x@x.invalid", "[REDACTED]"]},
   "format_preserving_patterns": {
-    "mac": {
-      "pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$",
-      "description": "Locally administered MAC, colon or hyphen layout"
-    },
-    "private_ip": {
-      "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
-      "description": "Redacted private IP (10.255.x.x)"
-    },
-    "public_ip": {
-      "pattern": "^192\\.0\\.2\\.\\d{1,3}$",
-      "description": "Redacted public IP (192.0.2.x)"
-    },
-    "ipv6": {
-      "pattern": "^2001:db8::",
-      "description": "Redacted IPv6 (2001:db8::)"
-    },
-    "email": {
-      "pattern": "@redacted\\.invalid$",
-      "description": "Redacted email (@redacted.invalid)"
-    }
+    "mac": {"pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$", "description": "Locally administered MAC"}
   },
-  "hash_prefixes": {
-    "values": [
-      "SERIAL_", "ACCOUNT_", "PASS_", "TOKEN_", "CSRF_", "CONFIG_",
-      "WIFI_", "DEVICE_", "FIELD_", "AUTH_", "COOKIE_", "STORAGE_",
-      "CRED_", "SENSITIVE_", "MAC_"
-    ]
-  },
-  "redaction_patterns": {
-    "values": [
-      "\\[REDACTED\\]", "REDACTED", "XXX+", "0{6,}",
-      "\\*\\*\\*[A-Z]+\\*\\*\\*"
-    ]
-  }
+  "hash_prefixes": {"values": ["SERIAL_", "PASS_", "WIFI_", "…"]},
+  "redaction_patterns": {"values": ["\\[REDACTED\\]", "\\*\\*\\*[A-Z]+\\*\\*\\*", "MAC_[a-f0-9]{8}", "…"]}
 }
 ```
+
+The excerpt shows each section's shape; [`allowlist.json`](../../src/har_capture/patterns/allowlist.json) holds the full
+lists. `hash_prefixes` lists the prefixes of the built-in passes and of the hasher's heuristic categories
+(`Hasher.hash_sensitive_value` requires each of its prefixes to be listed); pass 0's card-number `CC_` and a custom
+pattern's own prefix are not listed, and no rule matches those placeholders again.
 
 Used by `is_redacted()` in `redaction.py` to determine whether a value has already been sanitized.
 
@@ -270,6 +242,11 @@ A domain file can contain any combination of these sections:
 
   "tagValueList": {
     "safe_values": ["domain-specific-safe-value"]
+  },
+
+  "script_variables": {
+    "password": [{"regex": "CurrentPw[A-Za-z]*", "flags": ["IGNORECASE"]}],
+    "pipe_delimited": [{"regex": "tagValueList"}]
   },
 
   "include_patterns": ["mac_address", "serial_number", "private_ip", "public_ip", "ipv6", "email"],
@@ -352,6 +329,25 @@ review). Other categories at `high` keep the ordinary heuristic meaning (review 
 Case-insensitive exact-match strings safe in pipe-delimited data. Domain-specific technical vocabulary.
 
 Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclient`
+
+### Section: `script_variables`
+
+Names of JavaScript variables (`var NAME = '…'`) whose string value the HTML engine reads. Variable names are vendor
+knowledge ([ADR-5](../ARCHITECTURE_DECISIONS.md#adr-5-domain-agnostic-core-domain-knowledge-via-data)), so the core
+names none: without a pattern file that lists them, no script variable is read by name.
+
+| Field            | Type       | Description                                                                                                                     |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup |
+| `pipe_delimited` | object\[\] | Names whose value is split on `\|` and judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics)             |
+
+Each entry is `{"regex": "NAME", "flags": [...]}`. The regex matches the variable name and becomes
+`var\s+(?:NAME)\s*=\s*['"]VALUE['"]`; the flags apply to the whole assignment. An entry that is not an object, or whose
+regex is not a string or does not compile, is skipped with a warning. Lists extend across pattern files.
+
+`network-device` lists Motorola's `Current(?:Pw|Password)…` (ignoring case) as `password`, and Netgear's `tagValueList`
+plus `connectedDevices`/`deviceList`/`systemInfo`-style names as `pipe_delimited`. Across the CMM fleet (480 HARs) they
+match 38 password assignments in 19 captures, 2,721 `tagValueList` blobs in 124, and 0 of the other pipe names.
 
 ### Section: `include_patterns`
 
@@ -460,6 +456,12 @@ for key, tier in (("auto_redact_patterns", "auto_redact_patterns"),
 for name, definition in custom["patterns"].items():
     if name not in DEDICATED_PASS_PATTERNS:
         builtin["patterns"][name] = definition
+
+# script_variables lists extend kind by kind (password, pipe_delimited).
+for kind in ("password", "pipe_delimited"):
+    builtin.setdefault("script_variables", {}).setdefault(kind, []).extend(
+        custom["script_variables"].get(kind, [])
+    )
 
 # Missing sections are handled gracefully
 builtin.setdefault("heuristics", {})

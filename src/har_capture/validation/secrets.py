@@ -62,6 +62,7 @@ from har_capture.patterns.redaction import (
 from har_capture.patterns.redaction import (
     is_redacted as check_if_redacted,
 )
+from har_capture.sanitization.har import check_har_types
 from har_capture.sanitization.html import (
     SERIAL_LABEL_HINT_RE,
     SERIAL_LABEL_RE,
@@ -664,8 +665,7 @@ def _check_form_params(
     factory-default usernames suppressed. In a login-shaped form (any field
     name matches a sensitive pattern), a base64-decodable value in an
     unrecognized field is a warning — the backstop for vendor credential
-    fields the patterns don't know yet (the Sercomm/Hitron ``pws`` class,
-    cable_modem_monitor issue #92).
+    fields the patterns don't know yet (the Sercomm/Hitron ``pws`` class).
 
     Args:
         pairs: Form (name, value) pairs
@@ -970,7 +970,7 @@ def check_content(
     # minified CSS) or a literal `XXX` / `REDACTED` anywhere in the body was
     # enough to skip every content check for that entry. 209 of 750 committed
     # fleet entries were being skipped this way, including an XB10 page
-    # carrying a plaintext default Wi-Fi password (issue #194).
+    # carrying a plaintext default Wi-Fi password.
     if not content or is_fully_redacted(content, custom_patterns):
         return
 
@@ -1098,7 +1098,7 @@ def _scan_text(
     # deterministic matches: the label states outright that the value is a
     # password, so an unredacted match is a known credential leak, not a maybe.
     # This is the gate that blessed a contributor's real Wi-Fi password on its
-    # way to a public issue (issue #194). The SSID is a warning — it identifies
+    # way to a public issue tracker. The SSID is a warning — it identifies
     # the network rather than authenticating to it.
     for sibling_pattern, sibling_severity, sibling_reason in (
         (
@@ -1137,8 +1137,8 @@ def _scan_text(
     # the sanitizer's redact_vendor_serials pass: the same high-confidence
     # serial_number detectors applied to the same token extraction, so what
     # the sanitizer auto-redacts, validate errors on when found unredacted.
-    # (CM2500 round 1: the serial inside RouterStatus.htm's tagValueList had
-    # no label for SERIAL_PATTERNS to anchor on, and validate blessed the
+    # (A Netgear serial inside RouterStatus.htm's tagValueList has no label
+    # for SERIAL_PATTERNS to anchor on; without this, validate blessed that
     # leak.) Severity is error: a vendor-format match is a known serial
     # layout, not a maybe.
     if serial_detectors:
@@ -1230,6 +1230,7 @@ def validate_har(
     field_tiers = _compile_field_tiers(custom_patterns)
 
     har_data = load_har(har_path)
+    check_har_types(har_data)
 
     log = har_data.get("log", {})
     entries = log.get("entries", [])

@@ -5,7 +5,7 @@ encodings — every har-capture flow writes the ``.gz`` as a byte-for-byte
 gzip of the final ``.har``. When they diverge, one of them predates the
 other's last edit; the known failure mode is a compressed artifact
 written before an interactive review scrubbed PII from the ``.har``
-(observed on all three reviewed CM2500 captures, 2026-08-19), and the
+(the review rewrites the ``.har``, not its ``.gz``), and the
 ``.gz`` is exactly the file contributors upload.
 """
 

@@ -1,4 +1,48 @@
 {
+  "har_type_cases": {
+    "_comment": "The type boundary sanitize_har, validate_har and analyze_har_file share (check_har_types): a field present with a non-null value has its HAR 1.2 type; null is accepted only where both tools read it as absent. set: the path in base_har to replace (a string key or list index); delete: remove the key instead; error_path: the HarValidationError path, or null when the HAR is accepted. 0 of 26,253 CMM fleet entries break the rule.",
+    "base_har": {"log": {"version": "1.2", "creator": {"name": "t", "version": "1"}, "pages": [{"id": "p", "title": "Status"}],
+      "_har_capture": {"sanitization": {"review": "none_flagged"}},
+      "entries": [{
+        "request": {"method": "POST", "url": "http://192.168.100.1/login?x=1",
+          "headers": [{"name": "Cookie", "value": "a=b"}], "cookies": [{"name": "a", "value": "b"}], "queryString": [{"name": "x", "value": "1"}],
+          "postData": {"mimeType": "application/x-www-form-urlencoded", "text": "user=admin", "params": [{"name": "user", "value": "admin"}]}},
+        "response": {"status": 200, "headers": [{"name": "Set-Cookie", "value": "s=1"}], "cookies": [{"name": "s", "value": "1"}],
+          "content": {"mimeType": "text/html", "text": "<p>ok</p>"}}}]}},
+    "cases": [
+      {"id": "root_not_object",        "set": [],                                                      "value": [],     "error_path": "root"},
+      {"id": "log_null",               "set": ["log"],                                                 "value": null,   "error_path": "log"},
+      {"id": "entries_string",         "set": ["log", "entries"],                                      "value": "x",    "error_path": "log.entries"},
+      {"id": "har_capture_list",       "set": ["log", "_har_capture"],                                 "value": [],     "error_path": "log._har_capture"},
+      {"id": "page_title_number",      "set": ["log", "pages", 0, "title"],                            "value": 5,      "error_path": "log.pages[0].title"},
+      {"id": "entry_string",           "set": ["log", "entries", 0],                                   "value": "x",    "error_path": "log.entries[0]"},
+      {"id": "entry_null",             "set": ["log", "entries", 0],                                   "value": null,   "error_path": "log.entries[0]"},
+      {"id": "request_null",           "set": ["log", "entries", 0, "request"],                        "value": null,   "error_path": "log.entries[0].request"},
+      {"id": "response_list",          "set": ["log", "entries", 0, "response"],                       "value": [],     "error_path": "log.entries[0].response"},
+      {"id": "url_null",               "set": ["log", "entries", 0, "request", "url"],                 "value": null,   "error_path": "log.entries[0].request.url"},
+      {"id": "request_headers_null",   "set": ["log", "entries", 0, "request", "headers"],             "value": null,   "error_path": "log.entries[0].request.headers"},
+      {"id": "header_item_string",     "set": ["log", "entries", 0, "request", "headers", 0],          "value": "x",    "error_path": "log.entries[0].request.headers[0]"},
+      {"id": "header_value_null",      "set": ["log", "entries", 0, "request", "headers", 0, "value"], "value": null,   "error_path": "log.entries[0].request.headers[0].value"},
+      {"id": "cookie_value_number",    "set": ["log", "entries", 0, "request", "cookies", 0, "value"], "value": 5,      "error_path": "log.entries[0].request.cookies[0].value"},
+      {"id": "query_item_string",      "set": ["log", "entries", 0, "request", "queryString", 0],      "value": "x",    "error_path": "log.entries[0].request.queryString[0]"},
+      {"id": "post_data_string",       "set": ["log", "entries", 0, "request", "postData"],            "value": "x",    "error_path": "log.entries[0].request.postData"},
+      {"id": "post_text_number",       "set": ["log", "entries", 0, "request", "postData", "text"],    "value": 5,      "error_path": "log.entries[0].request.postData.text"},
+      {"id": "params_null",            "set": ["log", "entries", 0, "request", "postData", "params"],  "value": null,   "error_path": "log.entries[0].request.postData.params"},
+      {"id": "param_name_null",        "set": ["log", "entries", 0, "request", "postData", "params", 0, "name"], "value": null, "error_path": "log.entries[0].request.postData.params[0].name"},
+      {"id": "response_headers_number","set": ["log", "entries", 0, "response", "headers"],            "value": 5,      "error_path": "log.entries[0].response.headers"},
+      {"id": "content_null",           "set": ["log", "entries", 0, "response", "content"],            "value": null,   "error_path": "log.entries[0].response.content"},
+      {"id": "content_text_bool",      "set": ["log", "entries", 0, "response", "content", "text"],    "value": true,   "error_path": "log.entries[0].response.content.text"},
+      {"id": "query_string_null_ok",   "set": ["log", "entries", 0, "request", "queryString"],         "value": null,   "error_path": null},
+      {"id": "cookies_null_ok",        "set": ["log", "entries", 0, "response", "cookies"],            "value": null,   "error_path": null},
+      {"id": "post_data_null_ok",      "set": ["log", "entries", 0, "request", "postData"],            "value": null,   "error_path": null},
+      {"id": "post_text_null_ok",      "set": ["log", "entries", 0, "request", "postData", "text"],    "value": null,   "error_path": null},
+      {"id": "cookie_value_null_ok",   "set": ["log", "entries", 0, "request", "cookies", 0, "value"], "value": null,   "error_path": null},
+      {"id": "content_text_null_ok",   "set": ["log", "entries", 0, "response", "content", "text"],    "value": null,   "error_path": null},
+      {"id": "request_absent_ok",      "set": ["log", "entries", 0, "request"],  "delete": true,       "error_path": null},
+      {"id": "log_absent_ok",          "set": ["log"],                           "delete": true,       "error_path": null}
+    ]
+  },
+
   "sensitive_field_cases": [
     {"field_name": "password",          "expected": true,  "id": "password_exact"},
     {"field_name": "Password",          "expected": true,  "id": "password_capitalized"},

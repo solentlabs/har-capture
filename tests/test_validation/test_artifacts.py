@@ -1,6 +1,6 @@
 """Tests for .har/.har.gz artifact-consistency checks.
 
-The stale-gz case reproduces the 2026-08-19 CM2500 finding: an
+The stale-gz case reproduces a contributor capture where an
 interactive review rewrote the .sanitized.har while the pre-review
 .har.gz — the upload artifact — kept the scrubbed serial and IPv6.
 

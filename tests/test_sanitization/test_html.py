@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from har_capture.patterns import load_allowlist, load_pii_patterns
+from har_capture.patterns.loader import resolve_patterns_arg
 from har_capture.sanitization.html import (
     ACCOUNT_LABEL_RE,
     CSRF_META_RE,
@@ -39,6 +40,7 @@ from har_capture.sanitization.html import (
     SERIAL_LABEL_RE,
     SESSION_TOKEN_RE,
     WPS_PIN_LABEL_RE,
+    capture_pipe_context,
     check_for_pii,
     is_structural_value_sensitive,
     sanitize_html,
@@ -105,6 +107,18 @@ PIPE_SERIAL_CASES = [
     (c["input_html"], c["should_not_contain"], c["should_contain"], c["id"])
     for c in _FIXTURE["pipe_serial_cases"]
 ]
+
+PIPE_CONTEXT_CASES = _FIXTURE["pipe_context_cases"]["cases"]
+SCRIPT_VARIABLE_CASES = _FIXTURE["script_variable_cases"]["cases"]
+PII_SCRIPT_VARIABLE_CASES = _FIXTURE["pii_script_variable_cases"]["cases"]
+
+
+def _fixture_patterns(patterns: str | dict) -> str | dict | None:
+    """A fixture row's patterns: ``base`` (none), a built-in domain name, or a custom dict."""
+    if isinstance(patterns, dict):
+        return patterns
+    return None if patterns == "base" else str(resolve_patterns_arg(patterns))
+
 
 SERIAL_KEY_FP_CASES = [
     (c["input_html"], c.get("preserved"), c.get("removed"), c["id"])
@@ -332,7 +346,7 @@ class TestSerialNumberSiblingSpans:
 
 
 # =============================================================================
-# Device Label Information Block (issue #194)
+# Device Label Information Block
 # =============================================================================
 
 
@@ -579,11 +593,6 @@ class TestIdempotencyBoundary:
             "<p>Config File Name: cust00219abc.cfg</p>",
             "config_path",
         ),
-        (
-            "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>",
-            "<script>var CurrentPw = 'hunter2xyz';</script>",
-            "motorola_password",
-        ),
     ]
 
     @pytest.mark.parametrize(
@@ -672,7 +681,7 @@ class TestIdempotencyBoundary:
 
 
 # =============================================================================
-# Web Storage setItem() Scanning (Gap 1 fix)
+# Web Storage setItem() Scanning
 # =============================================================================
 
 
@@ -850,7 +859,7 @@ class TestSanitizeHtmlCustomFieldPatterns:
 
 
 # =============================================================================
-# Serial Numbers in Pipe-Delimited Strings (Gap 2 fix)
+# Serial Numbers in Pipe-Delimited Strings
 # =============================================================================
 
 
@@ -870,7 +879,7 @@ class TestPipeSerialNumber:
         desc: str,
     ) -> None:
         """Test serial numbers in pipe-delimited strings are handled correctly."""
-        result = sanitize_html(html, salt="test")
+        result = sanitize_html(html, salt="test", custom_patterns=str(resolve_patterns_arg("network-device")))
         if should_not_contain:
             assert should_not_contain not in result, f"{desc}: serial should be redacted"
         if should_contain:
@@ -883,6 +892,58 @@ class TestPipeSerialNumber:
                 assert "SNMP" in result, f"{desc}: SNMP should be preserved"
             elif "SN-AB" in html:
                 assert "SN-AB" in result, f"{desc}: short value should be preserved"
+
+
+class TestCapturePipeContext:
+    """The review context a flagged pipe-delimited value carries."""
+
+    @pytest.mark.parametrize("case", PIPE_CONTEXT_CASES, ids=[c["id"] for c in PIPE_CONTEXT_CASES])
+    def test_context(self, case: dict) -> None:
+        """Neighbours within the window, the value marked, clipped at either end."""
+        assert capture_pipe_context(case["values"], case["index"], case["window"]) == case["expected"]
+
+
+# =============================================================================
+# Script Variables Named by a Pattern File (ADR-5)
+# =============================================================================
+
+
+class TestScriptVariables:
+    """Script variable names come from a pattern file's script_variables section, not the core."""
+
+    # ┌──────────────────────────┬──────────────────────────┬──────────────────────────────────────┐
+    # │ patterns                 │ input_html               │ expectation                          │
+    # ├──────────────────────────┼──────────────────────────┼──────────────────────────────────────┤
+    # │ base                     │ var CurrentPw = '…'      │ kept: the core knows no vendor names │
+    # │ network-device           │ var CurrentPw = '…'      │ removed, ***PASS*** in place         │
+    # │ network-device + redact  │ var tagValueList = '…'   │ heuristic pipe value removed         │
+    # │ custom script_variables  │ var adminPw = '…'        │ removed; flags and bad entries honoured │
+    # └──────────────────────────┴──────────────────────────┴──────────────────────────────────────┘
+    @pytest.mark.parametrize("case", SCRIPT_VARIABLE_CASES, ids=[c["id"] for c in SCRIPT_VARIABLE_CASES])
+    def test_sanitize(self, case: dict) -> None:
+        """A named variable's value is redacted; an unnamed one is kept."""
+        result = sanitize_html(
+            case["input_html"],
+            salt=None,
+            custom_patterns=_fixture_patterns(case["patterns"]),
+            heuristics=HeuristicMode(case.get("heuristics", "disabled")),
+        )
+        if "kept" in case:
+            assert case["kept"] in result
+        else:
+            assert case["removed"] not in result
+            assert case["placeholder"] in result
+
+    @pytest.mark.parametrize(
+        "case", PII_SCRIPT_VARIABLE_CASES, ids=[c["id"] for c in PII_SCRIPT_VARIABLE_CASES]
+    )
+    def test_check_for_pii(self, case: dict) -> None:
+        """check_for_pii reports a named password variable in markup, as the sanitizer redacts it."""
+        found = [
+            [f["pattern"], f["match"]]
+            for f in check_for_pii(case["content"], custom_patterns=_fixture_patterns(case["patterns"]))
+        ]
+        assert found == case["findings"]
 
 
 # =============================================================================

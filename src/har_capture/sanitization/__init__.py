@@ -24,6 +24,7 @@ from har_capture.sanitization.har import (
     HarValidationError,
     appears_sanitized,
     apply_user_redactions,
+    check_har_types,
     is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
@@ -63,6 +64,7 @@ __all__ = [
     "is_sensitive_field",
     "is_flaggable_field",
     "validate_har_structure",
+    "check_har_types",
     "apply_user_redactions",
     "appears_sanitized",
     # Recording the review in a sanitized file

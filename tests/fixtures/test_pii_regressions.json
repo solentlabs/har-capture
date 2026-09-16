@@ -1,12 +1,12 @@
 {
-  "_comment": "PII regression cases drawn from real user-reported leaks. Each row is a value that should be flagged by the heuristic engine with a meaningful category for the Pass 2 review UI. Sources: issues #47, #49.",
+  "_comment": "PII regression cases drawn from real user-reported leaks. Each row is a value that should be flagged by the heuristic engine with a meaningful category for the Pass 2 review UI. Values are synthetic, in the layouts the reports showed.",
   "heuristic_regression_cases": [
     {
-      "value": "6JT1277YDEAAE",
+      "value": "6XY1234ZQWERT",
       "should_flag": true,
       "expected_category": "serial_number",
       "id": "netgear_c7000v2_serial",
-      "source": "issue #49 — Netgear C7000v2 RouterStatus.htm serial; 13-char Netgear format, HIGH so review pre-selects",
+      "source": "Netgear C7000v2 RouterStatus.htm serial; 13-char Netgear format, HIGH so review pre-selects",
       "expected_confidence": "high"
     },
     {
@@ -14,21 +14,21 @@
       "should_flag": true,
       "expected_category": "wifi_ssid",
       "id": "spsetup_default_ssid",
-      "source": "issue #47 — default SSID format SPSETUP-xxxx"
+      "source": "user-reported leak — default SSID format SPSETUP-xxxx"
     },
     {
-      "value": "Password999here",
+      "value": "Lantern555glove",
       "should_flag": true,
       "expected_category": "credential",
       "id": "default_password_mixed",
-      "source": "issue #47 — default password format with prefix word + digits + suffix"
+      "source": "user-reported leak — default password format with prefix word + digits + suffix"
     },
     {
       "value": "7TH4582JK9QP",
       "should_flag": true,
       "expected_category": "serial_number",
       "id": "generic_uppercase_alnum_serial",
-      "source": "issue #47 — SN-HERE placeholder; representative 12-char uppercase-alphanumeric serial token covered by the broader serial_number backstop",
+      "source": "user-reported leak — SN-HERE placeholder; representative 12-char uppercase-alphanumeric serial token covered by the broader serial_number backstop",
       "expected_confidence": "medium"
     },
     {
@@ -37,7 +37,7 @@
       "expected_category": "serial_number",
       "expected_confidence": "high",
       "id": "netgear_cm2500_7s_serial",
-      "source": "2026-08-19 CM2500 bench session — 7S-prefix Netgear serial was only medium-flagged and needed manual selection in review"
+      "source": "Netgear CM2500 — 7S-prefix Netgear serial was only medium-flagged and needed manual selection in review"
     }
   ],
   "_followup_regex_layer": "WPS PIN (8 bare digits) belongs in the regex layer — see regex_layer_regression_cases below. Heuristics can't disambiguate a WPS PIN from a packet counter; the adjacent label is what makes 100% confidence achievable per docs/ARCHITECTURE.md § Confidence boundary.",
@@ -47,56 +47,56 @@
       "leaked_value": "12345678",
       "expected_prefix": "PIN_",
       "id": "wps_pin_inline",
-      "source": "issue #47 — WPS PIN sanitization"
+      "source": "user-reported leak — WPS PIN sanitization"
     },
     {
       "input_html": "<td>WPS PIN</td><td>87654321</td>",
       "leaked_value": "87654321",
       "expected_prefix": "PIN_",
       "id": "wps_pin_inline_html",
-      "source": "issue #47 — WPS PIN sanitization (HTML)"
+      "source": "user-reported leak — WPS PIN sanitization (HTML)"
     },
     {
       "input_html": "PIN Code: 11223344",
       "leaked_value": "11223344",
       "expected_prefix": "PIN_",
       "id": "pin_code_label",
-      "source": "issue #47 — alternate label format"
+      "source": "user-reported leak — alternate label format"
     },
     {
       "input_html": "WPS-PIN 99887766",
       "leaked_value": "99887766",
       "expected_prefix": "PIN_",
       "id": "wps_pin_hyphenated_label",
-      "source": "issue #47 — hyphenated label variant"
+      "source": "user-reported leak — hyphenated label variant"
     },
     {
       "input_html": "Pairing PIN = 55667788",
       "leaked_value": "55667788",
       "expected_prefix": "PIN_",
       "id": "pairing_pin_equals",
-      "source": "issue #47 — pairing-PIN label, equals separator"
+      "source": "user-reported leak — pairing-PIN label, equals separator"
     },
     {
       "input_html": "<div class=\"form-row odd\">\n\t<span class=\"readonlyLabel\" id=\"hardmess2\">Serial Number:</span>\n\t<span class=\"value\">\n\t1234567890123456</span>\n</div>",
       "leaked_value": "1234567890123456",
       "expected_prefix": "SERIAL_",
       "id": "technicolor_jst_sibling_span_serial",
-      "source": "cable_modem_monitor issue #101 — Technicolor CGM4981COM hardware.jst renders label and value in sibling spans with whitespace between the tags"
+      "source": "Technicolor CGM4981COM — Technicolor CGM4981COM hardware.jst renders label and value in sibling spans with whitespace between the tags"
     },
     {
       "input_html": "<span class=\"readonlyLabel\">WPS PIN:</span>\n<span class=\"value\">\n13572468</span>",
       "leaked_value": "13572468",
       "expected_prefix": "PIN_",
       "id": "wps_pin_sibling_span",
-      "source": "cable_modem_monitor issue #101 — sibling-span markup applied to the WPS PIN label pattern, which shares the tag-chain construct"
+      "source": "Technicolor CGM4981COM — sibling-span markup applied to the WPS PIN label pattern, which shares the tag-chain construct"
     },
     {
       "input_html": "<td>\n<strong>Serial Number</strong>\n</td>\n<td>\n9876543210ABCD</td>",
       "leaked_value": "9876543210ABCD",
       "expected_prefix": "SERIAL_",
       "id": "serial_td_whitespace_between_tags",
-      "source": "cable_modem_monitor issue #101 — table-cell variant with newlines between tags, same tag-chain construct in the table pass"
+      "source": "Technicolor CGM4981COM — table-cell variant with newlines between tags, same tag-chain construct in the table pass"
     }
   ]
 }

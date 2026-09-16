@@ -276,7 +276,7 @@ class TestCheckPostData:
         assert len(findings) == 1
 
     def test_detects_pws_in_params_and_text(self) -> None:
-        """The issue #92 capture shape: a leaked pws value errors in both copies."""
+        """A Sercomm/Hitron pws capture: a leaked pws value errors in both copies."""
         post_data = {
             "mimeType": "application/x-www-form-urlencoded",
             "params": [
@@ -450,7 +450,7 @@ def test_check_content_serial_label_false_positives(
 ) -> None:
     """Labeled serial detection ignores jquery serialize methods and digitless values.
 
-    Regression for CM2500 round-1 validate noise: jquery's ``serialize:``/
+    Regression for validate noise on a CM2500 capture: jquery's ``serialize:``/
     ``serializeArray:`` methods were reported as potential serial numbers.
     """
     findings: list[Finding] = []
@@ -467,7 +467,7 @@ def test_check_content_serial_label_false_positives(
 def test_check_content_vendor_serials(content: str, expected_errors: int, desc: str) -> None:
     """Delimiter-aware vendor-serial detection with network-device detectors.
 
-    Regression for the CM2500 round-1 leak: a Netgear serial inside a
+    Regression for a CM2500 capture leak: a Netgear serial inside a
     pipe-delimited tagValueList blob has no label for SERIAL_PATTERNS to
     anchor on, and validate blessed the leak. A vendor-format token match
     is an error — the same detectors the sanitizer auto-redacts with.
@@ -736,7 +736,7 @@ class TestCheckContentSerialInTable:
         """Test check_content flags serials split across sibling span elements.
 
         Technicolor .jst markup — label and value in sibling spans with
-        whitespace between the tags (cable_modem_monitor issue #101).
+        whitespace between the tags.
         """
         html = (
             '<span class="readonlyLabel">Serial Number:</span>\n<span class="value">\n1234567890123456</span>'
@@ -753,7 +753,7 @@ class TestDeviceLabelCredentials:
     ``validate`` is documented as the step that "confirms nothing leaked", so
     a plaintext default Wi-Fi password must be an error, not a warning and not
     silence. Before this check the gate returned 0 errors on a capture holding
-    all four sticker values (issue #194).
+    all four sticker values.
 
     All markup below is synthetic; the values are fabricated.
     """
@@ -883,7 +883,7 @@ class TestContentCheckNotSkippedByStrayPlaceholder:
     ``re.search``. A run of six or more zeros (``0{6,}``) or a literal ``XXX`` /
     ``REDACTED`` anywhere in a body made the whole page look already-redacted —
     209 of 750 committed fleet entries were skipped that way, including an XB10
-    page holding a plaintext default Wi-Fi password (issue #194).
+    page holding a plaintext default Wi-Fi password.
     """
 
     LEAK_MARKUP = (

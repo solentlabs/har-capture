@@ -1,6 +1,16 @@
 {
   "_comment": "HAR fixtures for tests/test_cli/test_validate.py.",
 
+  "unreadable_file_cases": {
+    "_comment": "A file validate cannot read as a HAR is one [ERROR] naming why; the scan goes on to the next file. content is written as latin-1 bytes.",
+    "cases": [
+      {"id": "wrong_field_type", "filename": "bad.har",    "content": "{\"log\": {\"entries\": [{\"request\": null}]}}", "reason": "log.entries[0].request"},
+      {"id": "invalid_json",     "filename": "bad.har",    "content": "{ not json",                                    "reason": "Not a readable HAR"},
+      {"id": "corrupt_gzip",     "filename": "bad.har.gz", "content": "\u001f\u008b garbage",                        "reason": "Not a readable HAR"},
+      {"id": "truncated_gzip",   "filename": "bad.har.gz", "content": "\u001f\u008b\b\u0000\u0000\u0000\u0000\u0000\u0000\u0003", "reason": "Not a readable HAR"}
+    ]
+  },
+
   "clean_har": {
     "log": {
       "version": "1.2",

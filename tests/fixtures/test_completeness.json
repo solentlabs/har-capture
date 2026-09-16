@@ -1,5 +1,5 @@
 {
-  "_comment": "HAR fixtures for capture-completeness validation. The mid-session cases reproduce cable_modem_monitor issue #120, where a PHPSESSID cookie on the first request meant the login exchange happened before recording started. The submission cases reproduce cable_modem_monitor #213 (a PUT JSON login told to re-record).",
+  "_comment": "HAR fixtures for capture-completeness validation. The mid-session cases reproduce a capture where a PHPSESSID cookie on the first request meant the login exchange happened before recording started. The submission cases reproduce an SB8200 PHP-firmware capture whose JSON PUT login was told to re-record.",
   "clean_login_flow": {
     "log": {
       "entries": [

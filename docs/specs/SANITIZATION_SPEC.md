@@ -60,7 +60,7 @@ two-pass model (auto-sanitize + interactive review) and the format-preserving ha
 
 The file is organized into 9 groups:
 
-1. **HAR Structure Validation** — `validate_har_structure()`, `HarSizeError`, `HarValidationError`
+1. **HAR Structure Validation** — `validate_har_structure()`, `check_har_types()`, `HarSizeError`, `HarValidationError`
 1. **Pattern Loading** — `_load_sensitive_headers()`, `_load_sensitive_field_patterns()` (module-level caching)
 1. **Core Redaction Utilities** — `_redact_value()`, `is_sensitive_field()`, `is_flaggable_field()`,
    `sanitize_header_value()`
@@ -111,6 +111,18 @@ def sanitize_entry(
 ) -> dict[str, Any]:
     """Sanitize one HAR entry (request + response)."""
 ```
+
+### Type Boundary
+
+`sanitize_har()` (and so `sanitize_har_file()`), `validate_har()` and `analyze_har_file()` first run
+`check_har_types()`: a field either tool reads that is present has its HAR 1.2 type, or the call raises
+`HarValidationError` naming the field (`log.entries[3].request.headers`). `null` is accepted only where both tools read
+the field as absent: `queryString`, `cookies`, `postData`, `postData.text`/`mimeType`, content
+`text`/`mimeType`/`encoding`, and a query/cookie pair's name or value. A required container (`log`, `entries`, an entry,
+`request`, `response`, `headers`, `content`), a header's name or value, a URL and a form parameter's name may not be
+`null`. An absent field is not rejected here — `validate_har_structure()` judges presence. `sanitize_entry()` checks its
+entry against the same table (paths start at `entry`). One boundary, rather than a check in each walker, gives both
+tools the same answer. Across the CMM fleet (480 HARs, 26,253 entries) no field breaks the rule.
 
 ### TLS Certificate Names
 
@@ -730,10 +742,9 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`        |
 | 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                  | `hasher.hash_email()`                   |
 | 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
-| 13   | Vendor JS vars                 | Motorola `var CurrentPw_24g = '...'`                     | `hasher.hash_value(val, "PASS")`        |
-| 14   | Pipe-delimited (tagValueList)  | `var name = "val1\|val2\|val3"`                          | Per-value heuristic analysis            |
-| 15   | Pipe-delimited (other)         | Other pipe-delimited variables                           | Per-value heuristic analysis            |
-| 16   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
+| 13   | Password script variables      | `script_variables.password` names (domain file)          | `hasher.hash_value(val, "PASS")`        |
+| 14   | Pipe-delimited variables       | `script_variables.pipe_delimited` names (domain file)    | Per-value heuristic analysis            |
+| 15   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
 
 **Pass 0 — pattern-file regexes** (`redact_pattern_file_matches()`: every `pii.json` pattern without a dedicated pass,
 and custom ones): each match is hashed with the pattern's prefix, except the built-in number patterns, which keep one
@@ -890,11 +901,12 @@ Detects `localStorage.setItem()` and `sessionStorage.setItem()` in inline script
 - **Tier B**: Value contains IPs/MACs → handled by subsequent passes
 - **Tier C**: Heuristic analysis if enabled (`FLAG` or `REDACT` mode)
 
-### Pipe-Delimited Scanner (Passes 14–15)
+### Pipe-Delimited Scanner (Pass 14)
 
 Handles vendor-specific data structures like Netgear's tagValueList (`"val1|val2|val3"`):
 
-1. Match variable assignment where variable name matches pipe-delimited variable patterns (hardcoded in `html.py`)
+1. Match a variable assignment whose name a pattern file lists in `script_variables.pipe_delimited` (PATTERN_SPEC); the
+   core names none, so without `--patterns network-device` (or a file of your own) no blob is read
 1. Split value by `|` delimiter
 1. For each value:
    - Skip if empty or matches safe values (`sensitive.tagValueList.safe_values`)
@@ -939,12 +951,13 @@ stop at `JSON_MAX_DEPTH`. Until 0.13.0 `check_for_pii` read no JSON field by nam
 decoded strings a JSON fixture is read as.
 
 The HTML engine's own patterns — passwords after a label (`password_field`), password inputs, session and CSRF tokens,
-account IDs, WPS PINs, config paths, Motorola password variables (`HTML_ONLY_PATTERNS`) — are reported only in content
-the sanitizer routes to that engine, read as it reads a body with no type (`route_body()`: JSON by content, `<` opens
-markup, else text). Elsewhere their regexes match source code: across the sanitized fleet (0.13.0) they reported 21,287
-`password_field`, 3,061 `session_token` and 22 `account_id` matches, every one in a JavaScript or CSS body (`key:!0`,
-`auth = crc_sign(…)`), and none in a JSON or POST body. Running those passes on the text route would have hashed about
-24,000 code tokens (ADR-12: no leak named, fidelity lost), so they stay the HTML engine's.
+account IDs, WPS PINs, config paths (`HTML_ONLY_PATTERNS`), and password script variables a pattern file names
+(`script_password`) — are reported only in content the sanitizer routes to that engine, read as it reads a body with no
+type (`route_body()`: JSON by content, `<` opens markup, else text). Elsewhere their regexes match source code: across
+the sanitized fleet (0.13.0) they reported 21,287 `password_field`, 3,061 `session_token` and 22 `account_id` matches,
+every one in a JavaScript or CSS body (`key:!0`, `auth = crc_sign(…)`), and none in a JSON or POST body. Running those
+passes on the text route would have hashed about 24,000 code tokens (ADR-12: no leak named, fidelity lost), so they stay
+the HTML engine's.
 
 A JSON fixture is read in one pass over its string literals, in document order, so each finding is reported on the line
 its own literal starts on — every occurrence of a repeated value on its own line, however the literal is escaped (`:`,

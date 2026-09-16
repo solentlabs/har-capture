@@ -18,7 +18,7 @@
       "value_group": 3,
       "replacement_prefix": "PIN",
       "flags": ["IGNORECASE"],
-      "description": "WPS / pairing / default PIN labels followed by an 8-digit code (issue #47)"
+      "description": "WPS / pairing / default PIN labels followed by an 8-digit code"
     },
     "account_id": {
       "regex": "((?:Account|Subscriber|Customer|Device)\\s*(?:ID|Number)\\s*[:\\s=]+(?:<(?:=\\s*\\\\?\"[^\"]{0,2048}\"|=\\s*\\\\?'[^']{0,2048}'|[^<>\"'])*>\\s*)*[\\\"']?)([^\\s<>\\\"'&;]+)",
@@ -82,13 +82,6 @@
       "replacement_prefix": "CONFIG",
       "flags": ["IGNORECASE"],
       "description": "Configuration file paths"
-    },
-    "motorola_password": {
-      "regex": "(var\\s+Current(?:Pw|Password)[A-Za-z]*\\s*=\\s*['\"])([^'\"]+)(['\"])",
-      "value_group": 2,
-      "replacement_prefix": "PASS",
-      "flags": ["IGNORECASE"],
-      "description": "Motorola JavaScript password variables"
     },
     "ssn": {
       "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b",

@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from har_capture.patterns.loader import resolve_patterns_arg
 from har_capture.sanitization.har import (
     apply_user_redactions,
     sanitize_har,
@@ -93,7 +94,12 @@ class TestFullSanitizationFlow:
         har_data = create_har_with_suspicious_values()
 
         # Pass 1: Auto-redact known patterns, flag suspicious values
-        sanitized, report = sanitize_har(har_data, salt="test-salt", heuristics=HeuristicMode.FLAG)
+        sanitized, report = sanitize_har(
+            har_data,
+            salt="test-salt",
+            heuristics=HeuristicMode.FLAG,
+            custom_patterns=str(resolve_patterns_arg("network-device")),
+        )
 
         # Verify auto-redactions happened for KNOWN patterns
         content = sanitized["log"]["entries"][0]["response"]["content"]["text"]

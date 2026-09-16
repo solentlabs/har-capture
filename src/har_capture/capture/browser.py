@@ -418,8 +418,8 @@ def strip_browser_internal_entries(har: dict[str, Any]) -> int:
     ``devtools://``, ``about:`` ...) is never target-device evidence, and
     some of it leaks local machine state — ``chrome://fileicon/?path=...``
     embeds the local filesystem path of every file on the downloads page
-    (observed on the 2026-08-19 CM2500 captures: 11 chrome:// entries,
-    including Playwright temp-dir paths).
+    (a CM2500 capture held 11 chrome:// entries, including Playwright
+    temp-dir paths).
 
     Args:
         har: Parsed HAR data (modified in place)

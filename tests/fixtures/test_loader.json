@@ -62,5 +62,42 @@
       "expected_not_detected": [],
       "id": "cable_modem_false_positive_suppressed"
     }
-  ]
+  ],
+
+  "merge_cases": {
+    "_comment": "How a custom file extends the built-ins. loader: sensitive or allowlist. custom: the custom dict. expect: [path, kind, value] — kind contains (the list at path holds value), equals, or not_equals.",
+    "cases": [
+      {"id": "cookie_redact_extended",            "loader": "sensitive", "custom": {"headers": {"cookie_redact": ["X-Session"]}},             "expect": [[["headers", "cookie_redact"], "contains", "X-Session"]]},
+      {"id": "detectors_without_safe_patterns",   "loader": "sensitive", "custom": {"heuristics": {"detectors": [{"category": "c"}]}},     "expect": [[["heuristics", "detectors"], "contains", {"category": "c"}]]},
+      {"id": "format_preserving_key_added",       "loader": "allowlist", "custom": {"format_preserving_patterns": {"_comment": "custom", "vin": {"pattern": "^V", "description": "d"}}},
+       "expect": [[["format_preserving_patterns", "vin"], "equals", {"pattern": "^V", "description": "d"}], [["format_preserving_patterns", "_comment"], "not_equals", "custom"]]}
+    ]
+  },
+
+  "merge_files_cases": {
+    "_comment": "merge_pattern_files over files written in order: a section only a later file has is taken whole; within a section lists extend, dicts update, other values are replaced, and _ keys are skipped.",
+    "cases": [
+      {"id": "no_files",                "files": [],                                                        "merged": {}},
+      {"id": "section_only_in_later",   "files": [{}, {"headers": {"full_redact": ["A"]}}],                 "merged": {"headers": {"full_redact": ["A"]}}},
+      {"id": "extend_update_replace",   "files": [{"tagValueList": {"safe_values": ["a"]}, "heuristics": {"x": {"a": 1}, "flag": 1}},
+                                                  {"tagValueList": {"_comment": "c", "safe_values": ["b"]}, "heuristics": {"x": {"b": 2}, "flag": 2, "new": [1]}}],
+                                        "merged": {"tagValueList": {"safe_values": ["a", "b"]}, "heuristics": {"x": {"a": 1, "b": 2}, "flag": 2, "new": [1]}}}
+    ]
+  },
+
+  "detector_compile_cases": {
+    "_comment": "compile_detectors compiles each detector pattern as compile_pattern does: an entry without a regex or with an invalid one is skipped, an unknown flag is ignored.",
+    "cases": [
+      {"id": "skips_and_flags", "patterns": [{"reason": "no regex"}, {"regex": "^a", "flags": ["NOPE"], "reason": "unknown flag"}, {"regex": "(", "reason": "invalid"}, {"regex": "^b", "flags": ["IGNORECASE"], "reason": "ignorecase"}],
+       "compiled": [["unknown flag", "a", true], ["ignorecase", "B", true]]}
+    ]
+  },
+
+  "list_domains_cases": {
+    "_comment": "list_domains reads every *.json in the domains directory; a file that is not valid JSON is skipped, and a missing directory lists nothing.",
+    "cases": [
+      {"id": "invalid_file_skipped", "files": {"good_one.json": "{\"_description\": \"Good\"}", "broken.json": "{ nope"}, "names": ["good-one"]},
+      {"id": "missing_directory",    "files": null,                                                                           "names": []}
+    ]
+  }
 }

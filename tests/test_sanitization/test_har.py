@@ -763,7 +763,7 @@ class TestContextVarIsolatesThreads:
 
 
 # -----------------------------------------------------------------------------
-# Header-set custom_patterns coverage (0.7.1 fix)
+# Header-set custom_patterns coverage
 # -----------------------------------------------------------------------------
 
 
@@ -2738,8 +2738,8 @@ class TestBase64CredentialInFields:
         param = accessor(result)
         assert param == {"name": "format", "value": "json"}, desc
 
-    def test_malformed_querystring_entries_skipped(self) -> None:
-        """Non-dict and name-less queryString entries are left untouched, not errored."""
+    def test_malformed_querystring_entries(self) -> None:
+        """A non-object queryString item is rejected at the type boundary; a name- or value-less one is left untouched."""
         entry = {
             "request": {
                 "method": "GET",
@@ -2749,11 +2749,15 @@ class TestBase64CredentialInFields:
             },
             "response": {"status": 200, "headers": [], "content": {}},
         }
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt=None)
+        assert raised.value.path == "entry.request.queryString[0]"
+        entry["request"]["queryString"] = entry["request"]["queryString"][1:]
         result = sanitize_entry(entry, salt=None)
-        assert result["request"]["queryString"] == ["not-a-dict", {"label": "x"}]
+        assert result["request"]["queryString"] == [{"label": "x"}]
 
-    def test_malformed_cookie_entries_skipped(self) -> None:
-        """Non-dict and value-less request cookies are left untouched, not errored."""
+    def test_malformed_cookie_entries(self) -> None:
+        """A non-object cookies item is rejected at the type boundary; a name- or value-less one is left untouched."""
         entry = {
             "request": {
                 "method": "GET",
@@ -2763,8 +2767,12 @@ class TestBase64CredentialInFields:
             },
             "response": {"status": 200, "headers": [], "content": {}},
         }
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt=None)
+        assert raised.value.path == "entry.request.cookies[0]"
+        entry["request"]["cookies"] = entry["request"]["cookies"][1:]
         result = sanitize_entry(entry, salt=None)
-        assert result["request"]["cookies"] == ["not-a-dict", {"name": "n"}]
+        assert result["request"]["cookies"] == [{"name": "n"}]
 
     def test_request_without_url_is_tolerated(self) -> None:
         """A request with no 'url' key skips URL sanitization without erroring."""
@@ -2807,8 +2815,8 @@ class TestBase64CredentialInFields:
         """The same secret gets the same FIELD placeholder in params and text.
 
         The text copy is percent-encoded ('=' padding becomes %3D); hashing
-        must run on the decoded value so both copies correlate (issue #92
-        capture shape).
+        must run on the decoded value so both copies correlate (the
+        Sercomm/Hitron pws capture shape).
         """
         from har_capture.patterns import Hasher
 
@@ -2834,7 +2842,7 @@ class TestLoginShapedBase64Heuristic:
     """Login-shaped-form base64 heuristic: flag for review, never auto-redact.
 
     The backstop for vendor credential fields the name patterns don't know
-    yet (issue #92 class).
+    yet (the Sercomm/Hitron pws class).
     """
 
     _B64_BARE_PASSWORD = base64.b64encode(b"example-not-real").decode()
@@ -3479,6 +3487,73 @@ class TestCookieAttributeMetadata:
 # =============================================================================
 
 
+HAR_TYPE = _HAR_FIXTURE["har_type_cases"]
+
+
+def _har_with(case: dict) -> object:
+    """``base_har`` with the case's path replaced by its value, or deleted."""
+    har: object = copy.deepcopy(HAR_TYPE["base_har"])
+    *parents, last = case["set"] or [None]
+    if last is None:
+        return case["value"]
+    node = har
+    for key in parents:
+        node = node[key]  # type: ignore[index]
+    if case.get("delete"):
+        del node[last]  # type: ignore[union-attr]
+    else:
+        node[last] = case["value"]  # type: ignore[index]
+    return har
+
+
+class TestHarTypes:
+    """sanitize_har, validate_har and analyze_har_file share one type boundary."""
+
+    # ┌───────────────────────────────┬─────────────────┬─────────────────────────────────────────────┐
+    # │ field replaced                │ value           │ result                                      │
+    # ├───────────────────────────────┼─────────────────┼─────────────────────────────────────────────┤
+    # │ a field a walker reads        │ wrong HAR type  │ HarValidationError naming the field's path  │
+    # │ queryString, postData, …      │ null            │ accepted: read as absent                    │
+    # │ request, log                  │ (deleted)       │ accepted                                    │
+    # └───────────────────────────────┴─────────────────┴─────────────────────────────────────────────┘
+    @pytest.mark.parametrize("case", HAR_TYPE["cases"], ids=[c["id"] for c in HAR_TYPE["cases"]])
+    def test_boundary(self, case: dict, tmp_path: Path) -> None:
+        """Each tool rejects the same malformed field with the same path, or accepts the HAR."""
+        from har_capture.validation import validate_har
+        from har_capture.validation.completeness import analyze_har_file
+
+        har = _har_with(case)
+        har_file = tmp_path / "t.har"
+        har_file.write_text(json.dumps(har))
+        calls = {
+            "sanitize": lambda: sanitize_har(copy.deepcopy(har), salt="t"),  # type: ignore[arg-type]
+            "validate": lambda: validate_har(har_file),
+            "analyze": lambda: analyze_har_file(har_file),
+        }
+        for tool, call in calls.items():
+            if case["error_path"] is None:
+                call()
+                continue
+            with pytest.raises(HarValidationError) as raised:
+                call()
+            assert raised.value.path == case["error_path"], tool
+
+    ENTRY_CASES = [
+        c for c in HAR_TYPE["cases"] if c["set"][:3] == ["log", "entries", 0] and len(c["set"]) > 3
+    ]
+
+    @pytest.mark.parametrize("case", ENTRY_CASES, ids=[c["id"] for c in ENTRY_CASES])
+    def test_sanitize_entry(self, case: dict) -> None:
+        """sanitize_entry checks its entry against the same table, paths starting at ``entry``."""
+        entry = _har_with(case)["log"]["entries"][0]  # type: ignore[index]
+        if case["error_path"] is None:
+            sanitize_entry(entry, salt="t")
+            return
+        with pytest.raises(HarValidationError) as raised:
+            sanitize_entry(entry, salt="t")
+        assert raised.value.path == case["error_path"].replace("log.entries[0]", "entry")
+
+
 class TestValidateHarStructure:
     """Tests for validate_har_structure error and warning paths."""
 
@@ -3932,7 +4007,7 @@ class TestApplyUserRedactions:
 
         The metadata is written before any review decision exists, so a
         reviewed artifact otherwise reports user_redacted: 0 forever
-        (observed on the CM2500 contributor capture, 2026-08-19).
+        (a reviewed CM2500 capture reported it).
         """
         har_data = {
             "log": {

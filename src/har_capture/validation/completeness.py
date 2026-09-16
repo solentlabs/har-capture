@@ -35,13 +35,14 @@ from har_capture.patterns import (
     iter_url_credentials,
     parse_json_container,
 )
+from har_capture.sanitization.har import check_har_types
 
 MID_SESSION_CAPTURE = "mid_session_capture"
 NO_CREDENTIAL_SUBMISSION = "no_credential_submission"
 SINGLE_CREDENTIAL_SUBMISSION = "single_credential_submission"
 
 # Methods whose body can submit a login: a form, or JSON (the SB8200 PHP
-# firmware of cable_modem_monitor #213 logs in with a JSON PUT).
+# firmware logs in with a JSON PUT).
 _SUBMISSION_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 # Authorization schemes whose value is the credential itself (RFC 7617,
@@ -461,4 +462,6 @@ def analyze_har_file(
     Returns:
         CaptureCompletenessReport with a coverage summary and any warnings
     """
-    return analyze_capture_completeness(load_har(har_path), custom_patterns_path)
+    har_data = load_har(har_path)
+    check_har_types(har_data)
+    return analyze_capture_completeness(har_data, custom_patterns_path)

@@ -108,6 +108,15 @@ only universal PII rules.
 **Consequence:** Adding support for a new product category requires a JSON file, not code changes. Consumers ship their
 own pattern files.
 
+Script variable names are vendor knowledge. The HTML engine reads a `var NAME = '…'` value only for names a pattern file
+lists in `script_variables` (PATTERN_SPEC): `network-device` lists Motorola's `CurrentPw…` password variables and
+Netgear's `tagValueList` and similar pipe-delimited names. `--patterns base` applies universal rules only, so a device
+capture takes its domain file.
+
+Wi-Fi network names are not device knowledge: an SSID is personal data wherever it appears, so the SSID rules (text
+labels, sibling labels, SSID-named attributes, inputs and selects, JS keys naming `ssid`, the JSON SSID-key rule, and
+validate's SSID warnings) are core.
+
 ## ADR-6: Two-Pass Sanitization Model
 
 **Context:** Automated PII detection has false positives. Aggressive auto-redaction can destroy debugging utility.
@@ -552,3 +561,25 @@ issuer, protocol and validity survive, and a hashed MAC keeps its layout.
 
 **Consequence.** Only `_securityDetails` on the entry is read; the fleet holds it nowhere else. A certificate name the
 user chooses to redact in the review is replaced by Pass 2 everywhere it occurs, a model name in page text included.
+
+## ADR-18: Sanitize and Validate Are Two Walkers; the Symmetry Harness Enforces Agreement
+
+**Context.** `sanitize` (`sanitization/har.py`, `html.py`) and `validate` (`validation/secrets.py`) each walk the HAR
+and apply their own rules. A new vocabulary word is a pattern-file edit; a new leak shape touches both walkers and
+usually a shared predicate in `patterns/redaction.py`. The two can disagree — `validate` reporting a value no sanitize
+run clears, or sanitize removing a value `validate` never checks — which ADR-14 forbids.
+
+**Decision.** Agreement is enforced by the ADR-14 symmetry harness (`tests/test_symmetry.py`), not by construction:
+every leak either tool knows has a row (a raw HAR with one leak), and the harness requires `validate` to report it and
+every heuristic mode of `sanitize` to clear it. Where a decision can be one function, both tools call it
+(`classify_identity_field`, `cookie_segment_actions`, `certificate_name_macs`, `check_har_types`, the compiled
+HTML-engine regexes `check_for_pii` shares).
+
+Two ways of reaching the same answer are a strength, not duplication: `validate` independently re-derives what sanitize
+should have removed, so a sanitizer bug shows up as a finding instead of passing silently, and the harness turns any
+disagreement between them into a failing row. A single rule registry run in redact and check modes would make
+disagreement impossible by construction, and would give up that independent check.
+
+**Consequence.** A change that widens either tool adds harness rows in the same commit. A rule a shared predicate can
+express lives in `patterns/redaction.py` and is called by both tools; one that cannot is written twice and pinned by
+harness rows.

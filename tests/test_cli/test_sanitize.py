@@ -516,7 +516,7 @@ class TestStaleSiblingRefresh:
     Every sanitize pass rewrites the .sanitized.har (fresh salt), so a
     sibling .gz from an earlier --compress run diverges even when the
     review applies nothing. Without the refresh, the stale sibling — the
-    upload artifact — survives silently (2026-08-19 CM2500 finding).
+    upload artifact — survives silently.
     """
 
     def test_existing_sibling_regenerated_without_compress(self, valid_har: Path) -> None:

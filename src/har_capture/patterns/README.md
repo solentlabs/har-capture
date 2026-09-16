@@ -67,6 +67,8 @@ Defines sensitive HTTP headers and form fields to redact.
   to full redact
 - `fields.patterns`: Regex patterns matching sensitive form field names
 - `tagValueList.safe_values`: Values to preserve in device tag lists
+- `script_variables` (domain files only): script variable names the HTML engine reads — `password` (redacted whole) and
+  `pipe_delimited` (split on `|`); see PATTERN_SPEC
 
 ### allowlist.json
 

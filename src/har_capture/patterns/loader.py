@@ -145,7 +145,6 @@ def _load_custom_patterns(custom: Path | str | dict[str, Any]) -> dict[str, Any]
 # rather than an intentional regex literal. JSON parses "\b" to ASCII backspace
 # (\x08); a user writing \b for a regex word-boundary needs "\\b" in their JSON
 # source. Same trap exists for "\f" (form feed \x0c) intended as regex \f.
-# See issue #51.
 _JSON_REGEX_ESCAPE_TRAPS = {
     "\x08": (r"\b", "word-boundary"),
     "\x0c": (r"\f", "form-feed"),
@@ -159,7 +158,7 @@ def _warn_on_json_regex_escape_traps(data: dict[str, Any], source: str) -> None:
     regex compiler sees it. The pattern then compiles successfully (no error)
     but matches nothing - a silent failure that ships PII through. This walks
     the pattern dict and logs a warning per offending value so the user has
-    *some* diagnostic instead of a quiet no-op. See issue #51.
+    *some* diagnostic instead of a quiet no-op.
     """
 
     def _check_value(value: Any, path: str) -> None:
@@ -237,7 +236,6 @@ DEDICATED_PASS_PATTERNS = frozenset(
         "session_token",
         "csrf_token",
         "config_path",
-        "motorola_password",
     }
 )
 
@@ -304,7 +302,8 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
             - None: Use built-in patterns only
 
     Returns:
-        Dict with 'headers', 'fields', and 'tagValueList' keys
+        Dict with 'headers', 'fields', and 'tagValueList' keys, plus
+        'heuristics' and 'script_variables' when a pattern file supplies them
 
     Raises:
         PatternLoadError: If custom patterns file cannot be loaded
@@ -344,6 +343,11 @@ def load_sensitive_patterns(custom_path: Path | str | dict[str, Any] | None = No
                     builtin["fields"].setdefault(tier, []).extend(values)
         if "tagValueList" in custom and "safe_values" in custom["tagValueList"]:
             builtin["tagValueList"]["safe_values"].extend(custom["tagValueList"]["safe_values"])
+        if isinstance(custom.get("script_variables"), dict):
+            for kind in SCRIPT_VARIABLE_KINDS:
+                names = custom["script_variables"].get(kind)
+                if isinstance(names, list):
+                    builtin.setdefault("script_variables", {}).setdefault(kind, []).extend(names)
         if "heuristics" in custom:
             builtin.setdefault("heuristics", {})
             if "safe_value_patterns" in custom["heuristics"]:
@@ -507,8 +511,6 @@ def load_allowlist(custom_path: Path | str | dict[str, Any] | None = None) -> di
                     builtin["format_preserving_patterns"][key] = pattern
         # redaction_patterns can be extended with additional patterns
         if "redaction_patterns" in custom and "values" in custom["redaction_patterns"]:
-            if "redaction_patterns" not in builtin:
-                builtin["redaction_patterns"] = {"values": []}
             builtin["redaction_patterns"]["values"].extend(custom["redaction_patterns"]["values"])
 
     if cache_key:
@@ -631,23 +633,11 @@ def compile_detectors(
     for ddef in sensitive_data.get("heuristics", {}).get("detectors", []):
         compiled_patterns: list[tuple[re.Pattern[str], str]] = []
         for pdef in ddef.get("patterns", []):
-            regex_str = pdef.get("regex")
-            if not regex_str:
+            if not pdef.get("regex"):
                 continue
-            reason = pdef.get("reason", "")
-            flags = 0
-            for flag_name in pdef.get("flags", []):
-                flag = getattr(re, flag_name, None)
-                if flag is not None and isinstance(flag, re.RegexFlag):
-                    flags |= flag
-            try:
-                compiled_patterns.append((re.compile(regex_str, flags), reason))
-            except re.error:
-                _LOGGER.warning(
-                    "Skipping invalid detector pattern in '%s': %s",
-                    ddef.get("category", "unknown"),
-                    regex_str,
-                )
+            compiled = compile_pattern({**pdef, "replacement_prefix": ddef.get("category", "unknown")})
+            if compiled is not None:
+                compiled_patterns.append((compiled, pdef.get("reason", "")))
 
         detectors.append(
             CompiledDetector(
@@ -672,6 +662,50 @@ def compile_detectors(
 # colons) all fall outside the class, so a serial inside a delimited blob is
 # extracted as its own token.
 VENDOR_SERIAL_TOKEN_RE: re.Pattern[str] = re.compile(r"[\w.+/=-]+")
+
+
+# The kinds of script variable a pattern file can name (PATTERN_SPEC
+# `script_variables`): the HTML engine redacts a `password` variable's value
+# whole and splits a `pipe_delimited` one on `|`, judging each value alone.
+SCRIPT_VARIABLE_KINDS = ("password", "pipe_delimited")
+
+
+def compile_script_variables(sensitive_data: dict[str, Any], kind: str) -> list[re.Pattern[str]]:
+    """Compile a pattern file's script variable names of one kind into assignment regexes.
+
+    Each name entry (``{"regex": ..., "flags": [...]}``) becomes a regex for
+    ``var NAME = '<value>'`` (either quote): group 1 is everything before the
+    value, group 2 the value, group 3 the closing quote. The flags apply to the whole assignment. An
+    entry that is not an object, or whose regex is not a string or does not
+    compile, is skipped with a warning.
+
+    Args:
+        sensitive_data: Loaded sensitive patterns (from load_sensitive_patterns)
+        kind: One of ``SCRIPT_VARIABLE_KINDS``
+
+    Returns:
+        Compiled assignment regexes, in the order the files list them
+    """
+    compiled: list[re.Pattern[str]] = []
+    for entry in sensitive_data.get("script_variables", {}).get(kind, []):
+        label = f"script_variables.{kind}"
+        if not isinstance(entry, dict):
+            _warn_entry_not_an_object(label, repr(entry))
+            continue
+        name = entry.get("regex")
+        if not isinstance(name, str):
+            _warn_regex_not_a_string(label, repr(name))
+            continue
+        regex = compile_pattern(
+            {
+                "regex": r"(var\s+(?:" + name + r")\s*=\s*['\"])([^'\"]+)(['\"])",
+                "flags": entry.get("flags", ()),
+                "replacement_prefix": label,
+            }
+        )
+        if regex is not None:
+            compiled.append(regex)
+    return compiled
 
 
 def high_confidence_serial_detectors(
@@ -727,7 +761,7 @@ def merge_pattern_files(paths: list[Path]) -> dict[str, Any]:
     for path in paths[1:]:
         extra = load_json_file(path)
         # Merge each known section
-        for section in ("headers", "fields", "tagValueList", "heuristics", "patterns"):
+        for section in ("headers", "fields", "tagValueList", "heuristics", "patterns", "script_variables"):
             if section not in extra:
                 continue
             if section not in merged:
@@ -784,6 +818,11 @@ def compile_pattern(pattern_def: dict[str, Any]) -> re.Pattern[str] | None:
 @functools.lru_cache(maxsize=64)
 def _warn_regex_not_a_string(label: str, regex: str) -> None:
     _LOGGER.warning("Skipping pattern '%s': its regex %s is not a string", label, regex)
+
+
+@functools.lru_cache(maxsize=64)
+def _warn_entry_not_an_object(label: str, entry: str) -> None:
+    _LOGGER.warning("Skipping pattern '%s': entry %s is not a pattern object", label, entry)
 
 
 @functools.lru_cache(maxsize=64)

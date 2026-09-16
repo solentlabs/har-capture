@@ -71,7 +71,7 @@ def test_heuristic_engine_flags_reported_leaks(
         # Confidence drives review pre-selection: HIGH is pre-checked in
         # the checkbox UI, MEDIUM is not (except credentials). A serial
         # that drops from high to medium silently reintroduces the
-        # CM2500 select-it-by-hand gap.
+        # select-it-by-hand gap a CM2500 capture hit.
         assert confidence.value == expected_confidence, (
             f"{desc}: '{value}' expected confidence {expected_confidence!r}, got {confidence.value!r}"
         )

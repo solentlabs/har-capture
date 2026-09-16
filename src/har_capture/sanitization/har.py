@@ -193,6 +193,133 @@ def validate_har_structure(har_data: dict[str, Any], *, strict: bool = False) ->
     return warnings
 
 
+@dataclass(frozen=True)
+class _HarField:
+    """The HAR 1.2 type of one field the walkers read, and what it holds."""
+
+    kind: type
+    nullable: bool = False
+    fields: tuple[tuple[str, _HarField], ...] = ()
+    items: _HarField | None = None
+
+
+_HAR_TYPE_NAMES: dict[type, str] = {dict: "an object", list: "an array", str: "a string"}
+_STRING = _HarField(str)
+_OPTIONAL_STRING = _HarField(str, nullable=True)
+_HEADER = _HarField(dict, fields=(("name", _STRING), ("value", _STRING)))
+_PAIR = _HarField(dict, fields=(("name", _OPTIONAL_STRING), ("value", _OPTIONAL_STRING)))
+_PAIRS = _HarField(list, nullable=True, items=_PAIR)
+_POST_DATA = _HarField(
+    dict,
+    nullable=True,
+    fields=(
+        ("mimeType", _OPTIONAL_STRING),
+        ("text", _OPTIONAL_STRING),
+        (
+            "params",
+            _HarField(list, items=_HarField(dict, fields=(("name", _STRING), ("value", _OPTIONAL_STRING)))),
+        ),
+    ),
+)
+_CONTENT = _HarField(
+    dict, fields=(("mimeType", _OPTIONAL_STRING), ("text", _OPTIONAL_STRING), ("encoding", _OPTIONAL_STRING))
+)
+# null is accepted only where sanitize and validate both read the field as
+# absent; a required container or a header's name/value that is null is rejected.
+_HAR_ENTRY = _HarField(
+    dict,
+    fields=(
+        (
+            "request",
+            _HarField(
+                dict,
+                fields=(
+                    ("method", _OPTIONAL_STRING),
+                    ("url", _STRING),
+                    ("headers", _HarField(list, items=_HEADER)),
+                    ("cookies", _PAIRS),
+                    ("queryString", _PAIRS),
+                    ("postData", _POST_DATA),
+                ),
+            ),
+        ),
+        (
+            "response",
+            _HarField(
+                dict,
+                fields=(
+                    ("headers", _HarField(list, items=_HEADER)),
+                    ("cookies", _PAIRS),
+                    ("content", _CONTENT),
+                ),
+            ),
+        ),
+    ),
+)
+_HAR_ROOT = _HarField(
+    dict,
+    fields=(
+        (
+            "log",
+            _HarField(
+                dict,
+                fields=(
+                    ("_har_capture", _HarField(dict)),
+                    (
+                        "pages",
+                        _HarField(list, nullable=True, items=_HarField(dict, fields=(("title", _STRING),))),
+                    ),
+                    ("entries", _HarField(list, items=_HAR_ENTRY)),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def _json_type_name(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    return _HAR_TYPE_NAMES.get(type(value), type(value).__name__)
+
+
+def _check_har_field(value: object, spec: _HarField, path: str) -> None:
+    if value is None and spec.nullable:
+        return
+    if not isinstance(value, spec.kind):
+        raise HarValidationError(f"must be {_HAR_TYPE_NAMES[spec.kind]}, not {_json_type_name(value)}", path)
+    if isinstance(value, dict):
+        for key, child in spec.fields:
+            if key in value:
+                _check_har_field(value[key], child, f"{path}.{key}" if path != "root" else key)
+    elif isinstance(value, list) and spec.items is not None:
+        for index, item in enumerate(value):
+            _check_har_field(item, spec.items, f"{path}[{index}]")
+
+
+def check_har_types(har_data: object) -> None:
+    """Reject a HAR whose fields do not have the HAR 1.2 types sanitize and validate read.
+
+    The one boundary both tools share: a field that is present has its type
+    (headers an array of objects with string names and values, a URL a string,
+    content an object…), and ``null`` is accepted only where both read it as
+    absent (``queryString``, ``cookies``, ``postData``, ``postData.text``,
+    content ``text``/``mimeType``/``encoding``, a pair's name or value). An
+    absent field is not required here; ``validate_har_structure`` judges that.
+
+    Args:
+        har_data: Parsed HAR JSON
+
+    Raises:
+        HarValidationError: Naming the first field with the wrong type
+    """
+    _check_har_field(har_data, _HAR_ROOT, "root")
+
+
 def _load_sensitive_headers() -> tuple[set[str], set[str], set[str]]:
     """Load sensitive header names from patterns.
 
@@ -1963,6 +2090,9 @@ def sanitize_entry(
     Returns:
         Sanitized entry
     """
+    if not _skip_copy:
+        # sanitize_har has already checked every entry it passes with _skip_copy.
+        _check_har_field(entry, _HAR_ENTRY, "entry")
     result = entry if _skip_copy else copy.deepcopy(entry)
 
     # Use collector's hasher if provided, otherwise create one
@@ -2379,6 +2509,9 @@ def sanitize_har(
     Returns:
         Tuple of (sanitized HAR data, sanitization report)
 
+    Raises:
+        HarValidationError: If a field has the wrong HAR type (``check_har_types``)
+
     Note:
         This is a BREAKING CHANGE from the previous return type (dict only).
         Callers that only need the sanitized data can unpack with:
@@ -2391,6 +2524,8 @@ def sanitize_har(
         >>> "log" in sanitized
         True
     """
+    check_har_types(har_data)
+
     # Generate salt upfront so it can be stored in report
     actual_salt: str
     if salt in ("auto", "random"):
@@ -2746,7 +2881,7 @@ def apply_user_redactions(
     # Refresh the embedded metadata's user-decision counts. The metadata was
     # embedded at the end of Pass 1, before any review decision existed, so
     # without this a reviewed artifact reports user_redacted: 0 forever
-    # (observed on the CM2500 contributor capture, 2026-08-19).
+    # (a reviewed CM2500 capture reported it).
     sanitization_meta = parsed.get("log", {}).get("_har_capture", {}).get("sanitization")
     if isinstance(sanitization_meta, dict):
         sanitization_meta["user_redacted"] = report.total_user_redacted
