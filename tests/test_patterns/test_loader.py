@@ -698,3 +698,53 @@ class TestCustomMerge:
                 (domains / name).write_text(text)
         monkeypatch.setattr("har_capture.patterns.loader._get_domains_dir", lambda: domains)
         assert [d["name"] for d in list_domains()] == case["names"]
+
+
+MALFORMED_CUSTOM_CASES = _LOADER_FIXTURE["malformed_custom_cases"]["cases"]
+
+
+class TestMalformedCustomPatterns:
+    """A malformed pattern file warns and skips the bad part; nothing raises."""
+
+    @pytest.mark.parametrize("case", MALFORMED_CUSTOM_CASES, ids=[c["id"] for c in MALFORMED_CUSTOM_CASES])
+    def test_no_crash(self, case: dict, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """Every entry point accepts the file; the valid field pattern beside the bad section still redacts."""
+        import logging
+
+        from har_capture.sanitization import check_for_pii, sanitize_har, sanitize_html
+
+        clear_pattern_cache()
+        second = tmp_path / "custom.json"
+        second.write_text(json.dumps(case["custom"]))
+        base = case["custom"] if isinstance(case["custom"], dict) else {}
+        custom = {**base, "fields": {"auto_redact_patterns": ["vendorsecret"]}}
+        with caplog.at_level(logging.WARNING, logger="har_capture.patterns.loader"):
+            sanitize_html("<p>MAC aa:bb:cc:dd:ee:01</p>", salt=None, custom_patterns=custom)
+            check_for_pii("<p>MAC aa:bb:cc:dd:ee:01</p>", custom_patterns=custom)
+            har = {
+                "log": {
+                    "entries": [
+                        {
+                            "request": {
+                                "method": "POST",
+                                "url": "http://h/",
+                                "headers": [],
+                                "postData": {
+                                    "mimeType": "application/json",
+                                    "text": '{"vendorsecret": "abc12345"}',
+                                },
+                            },
+                            "response": {
+                                "status": 200,
+                                "headers": [],
+                                "content": {"mimeType": "text/html", "text": "x"},
+                            },
+                        }
+                    ]
+                }
+            }
+            out, _ = sanitize_har(har, salt=None, custom_patterns=custom)
+            merge_pattern_files([resolve_patterns_arg("network-device"), second])
+            load_capture_settings(second)
+        assert "abc12345" not in json.dumps(out["log"]["entries"])
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)

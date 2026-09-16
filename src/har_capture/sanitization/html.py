@@ -1197,12 +1197,11 @@ def _sanitize_html_impl(
 
     # 13. Password script variables a pattern file names (script_variables.password)
     def replace_script_password(match: re.Match[str]) -> str:
-        if is_redacted(match.group(2), custom_patterns):
+        value = match.group("script_value")
+        if is_redacted(value, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("password")
-        prefix = match.group(1)
-        suffix = match.group(3)
-        return f"{prefix}{hasher.hash_generic(match.group(2), 'PASS')}{suffix}"
+        return f"{match.group('script_head')}{hasher.hash_generic(value, 'PASS')}{match.group('script_tail')}"
 
     for variable_re in compile_script_variables(sensitive, "password"):
         html = variable_re.sub(replace_script_password, html)
@@ -1218,9 +1217,9 @@ def _sanitize_html_impl(
         without its surrounding whitespace, and reassembles with that
         whitespace written back: the blob's spacing is not the pass's to change.
         """
-        prefix = match.group(1)
-        values_str = match.group(2)
-        suffix = match.group(3)
+        prefix = match.group("script_head")
+        values_str = match.group("script_value")
+        suffix = match.group("script_tail")
 
         values = values_str.split("|")
         sanitized_values: list[str] = []
@@ -1410,7 +1409,7 @@ def _match_value(match: re.Match[str], value_group: object) -> str:
         isinstance(value_group, int)
         and not isinstance(value_group, bool)
         and 0 <= value_group <= match.re.groups
-    ):
+    ) or (isinstance(value_group, str) and value_group in match.re.groupindex):
         value = match.group(value_group)
         if value is not None:
             return value
@@ -1514,7 +1513,7 @@ def check_for_pii(
     if route == "html":
         # Pass 13's password variables, named by the pattern files.
         patterns.extend(
-            ("script_password", regex, {"value_group": 2})
+            ("script_password", regex, {"value_group": "script_value"})
             for regex in compile_script_variables(load_sensitive_patterns(custom_patterns), "password")
         )
     allowlist = load_allowlist(custom_patterns)

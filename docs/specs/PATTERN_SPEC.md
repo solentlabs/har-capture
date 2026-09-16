@@ -342,8 +342,11 @@ names none: without a pattern file that lists them, no script variable is read b
 | `pipe_delimited` | object\[\] | Names whose value is split on `\|` and judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics)             |
 
 Each entry is `{"regex": "NAME", "flags": [...]}`. The regex matches the variable name and becomes
-`var\s+(?:NAME)\s*=\s*['"]VALUE['"]`; the flags apply to the whole assignment. An entry that is not an object, or whose
-regex is not a string or does not compile, is skipped with a warning. Lists extend across pattern files.
+`var\s+(?:NAME)\s*=\s*['"]VALUE['"]`, whose head, value and closing quote are named groups, so a group inside NAME
+(`Current(Pw|Password)`) is allowed; the flags apply to the whole assignment. The value stops at the first quote of
+either kind: a value holding the other quote (`var CurrentPw = "ab'cd"`) is redacted only up to it (0 fleet values). An
+entry that is not an object, or whose regex is not a string or does not compile, is skipped with a warning. Lists extend
+across pattern files.
 
 `network-device` lists Motorola's `Current(?:Pw|Password)…` (ignoring case) as `password`, and Netgear's `tagValueList`
 plus `connectedDevices`/`deviceList`/`systemInfo`-style names as `pipe_delimited`. Across the CMM fleet (480 HARs) they
@@ -743,6 +746,10 @@ holds no cookie at all. `SET_COOKIE_HEADERS` names the headers read with Set-Coo
    `--patterns custom.json`, pii.json and sensitive.json are always present.
 1. **Invalid regex is non-fatal** — `compile_pattern()` returns `None` on invalid regex. The pattern is skipped, other
    patterns continue to work.
+1. **A malformed pattern file is non-fatal** — Every custom file or dict passes through `_well_typed_sections()` when it
+   loads: a known section, list or entry of the wrong type (`"heuristics": null`, a string where a detector pattern
+   object belongs, a non-integer `min_length`, a non-string `include_patterns` entry) is dropped with one warning, and
+   the rest of the file applies. Only a file that is missing, unreadable or not JSON raises `PatternLoadError`.
 1. **Underscore keys are metadata** — Any key starting with `_` in a pattern file is skipped during merge. This is a
    convention for comments and metadata.
 1. **Lists extend, dicts update** — This is the universal merge semantic. Custom lists are appended (never replace),

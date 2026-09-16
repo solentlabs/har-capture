@@ -125,7 +125,7 @@ def validate(
             report = analyze_har_file(file_path)
         except HarValidationError as e:
             unreadable = str(e)
-        except (ValueError, OSError, EOFError) as e:
+        except (ValueError, OSError, EOFError, RecursionError) as e:
             unreadable = f"Not a readable HAR: {e}"
         else:
             unreadable = ""

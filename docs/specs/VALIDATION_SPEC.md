@@ -587,8 +587,9 @@ har-capture validate capture.har --patterns <domain|custom.json>
 - Loads and validates a single HAR file
 - Prints findings to stdout with severity, location, field, value
 - Checks `.har`/`.har.gz` pair freshness (see above)
-- A file it cannot read as a HAR — invalid JSON, a corrupt or truncated gzip, a field of the wrong type — is one
-  `[ERROR] [file]` naming why, and the scan continues with the next file
+- A file it cannot read as a HAR — invalid JSON, JSON nested past the interpreter's recursion limit, a corrupt or
+  truncated gzip, a field of the wrong type — is one `[ERROR] [file]` naming why, and the scan continues with the next
+  file
 - Exit code 0 if no findings, 1 if findings detected
 - Supports custom patterns via `--patterns`
 

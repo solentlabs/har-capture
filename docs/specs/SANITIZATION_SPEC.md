@@ -117,12 +117,12 @@ def sanitize_entry(
 `sanitize_har()` (and so `sanitize_har_file()`), `validate_har()` and `analyze_har_file()` first run
 `check_har_types()`: a field either tool reads that is present has its HAR 1.2 type, or the call raises
 `HarValidationError` naming the field (`log.entries[3].request.headers`). `null` is accepted only where both tools read
-the field as absent: `queryString`, `cookies`, `postData`, `postData.text`/`mimeType`, content
-`text`/`mimeType`/`encoding`, and a query/cookie pair's name or value. A required container (`log`, `entries`, an entry,
-`request`, `response`, `headers`, `content`), a header's name or value, a URL and a form parameter's name may not be
-`null`. An absent field is not rejected here — `validate_har_structure()` judges presence. `sanitize_entry()` checks its
-entry against the same table (paths start at `entry`). One boundary, rather than a check in each walker, gives both
-tools the same answer. Across the CMM fleet (480 HARs, 26,253 entries) no field breaks the rule.
+the field as absent: `queryString`, `cookies`, `postData`, `postData.text`, content `text`/`mimeType`/`encoding`, and a
+query/cookie pair's name or value. A required container (`log`, `entries`, an entry, `request`, `response`, `headers`,
+`content`), `postData.mimeType`, a header's name or value, a URL and a form parameter's name may not be `null`. An
+absent field is not rejected here — `validate_har_structure()` judges presence. `sanitize_entry()` checks its entry
+against the same table (paths start at `entry`). One boundary, rather than a check in each walker, gives both tools the
+same answer. Across the CMM fleet (480 HARs, 26,253 entries) no field breaks the rule.
 
 ### TLS Certificate Names
 

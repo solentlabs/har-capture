@@ -29,6 +29,7 @@
       {"id": "post_text_number",       "set": ["log", "entries", 0, "request", "postData", "text"],    "value": 5,      "error_path": "log.entries[0].request.postData.text"},
       {"id": "params_null",            "set": ["log", "entries", 0, "request", "postData", "params"],  "value": null,   "error_path": "log.entries[0].request.postData.params"},
       {"id": "param_name_null",        "set": ["log", "entries", 0, "request", "postData", "params", 0, "name"], "value": null, "error_path": "log.entries[0].request.postData.params[0].name"},
+      {"id": "post_mime_type_null",    "set": ["log", "entries", 0, "request", "postData", "mimeType"], "value": null, "error_path": "log.entries[0].request.postData.mimeType"},
       {"id": "response_headers_number","set": ["log", "entries", 0, "response", "headers"],            "value": 5,      "error_path": "log.entries[0].response.headers"},
       {"id": "content_null",           "set": ["log", "entries", 0, "response", "content"],            "value": null,   "error_path": "log.entries[0].response.content"},
       {"id": "content_text_bool",      "set": ["log", "entries", 0, "response", "content", "text"],    "value": true,   "error_path": "log.entries[0].response.content.text"},

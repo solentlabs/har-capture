@@ -80,7 +80,7 @@ class TestValidateUnreadableFile:
     @pytest.mark.parametrize("case", UNREADABLE_FILE_CASES, ids=[c["id"] for c in UNREADABLE_FILE_CASES])
     def test_reported_and_scan_continues(self, case: dict, tmp_path: Path) -> None:
         """The unreadable file is one [ERROR] with its reason; the clean file beside it is still checked."""
-        (tmp_path / case["filename"]).write_bytes(case["content"].encode("latin-1"))
+        (tmp_path / case["filename"]).write_bytes((case["content"] * case.get("repeat", 1)).encode("latin-1"))
         _write_fixture_har(tmp_path, "clean_har", "clean.har")
         result = runner.invoke(app, ["validate", "--dir", str(tmp_path), "--patterns", "base"])
         assert result.exit_code == 1, result.output

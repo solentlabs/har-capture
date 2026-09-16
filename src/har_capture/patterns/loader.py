@@ -138,7 +138,138 @@ def _load_custom_patterns(custom: Path | str | dict[str, Any]) -> dict[str, Any]
         data = load_json_file(custom)
         source = str(custom)
     _warn_on_json_regex_escape_traps(data, source)
-    return data
+    return _well_typed_sections(data, source)
+
+
+# The shape each known section of a pattern file must have. A pattern file is
+# user input: a part of the wrong type is dropped with a warning and the rest
+# of the file still applies, rather than failing the run.
+_STRING_LIST_SECTIONS = {
+    "headers": ("full_redact", "cookie_redact", "scheme_redact"),
+    "fields": ("auto_redact_patterns", "flag_patterns", "patterns"),
+    "tagValueList": ("safe_values",),
+    "static_placeholders": ("values",),
+    "hash_prefixes": ("values",),
+    "redaction_patterns": ("values",),
+    "session_cookies": ("name_patterns",),
+    "password_fields": ("name_patterns",),
+}
+_TOP_STRING_LISTS = ("include_patterns", "preserved_gateway_ips")
+
+
+@functools.lru_cache(maxsize=128)
+def _warn_malformed_section(source: str, path: str, expected: str) -> None:
+    _LOGGER.warning("Pattern file %s: skipping %s, which is not %s", source, path, expected)
+
+
+def _string_list(value: Any, source: str, path: str) -> list[str] | None:
+    """The strings of a list, dropping other entries; None (with a warning) when not a list."""
+    if not isinstance(value, list):
+        _warn_malformed_section(source, path, "a list")
+        return None
+    strings = [item for item in value if isinstance(item, str)]
+    if len(strings) != len(value):
+        _warn_malformed_section(source, f"{path} entries", "strings")
+    return strings
+
+
+def _object_list(value: Any, source: str, path: str) -> list[dict[str, Any]] | None:
+    """The objects of a list, dropping other entries; None (with a warning) when not a list."""
+    if not isinstance(value, list):
+        _warn_malformed_section(source, path, "a list")
+        return None
+    objects = [item for item in value if isinstance(item, dict)]
+    if len(objects) != len(value):
+        _warn_malformed_section(source, f"{path} entries", "objects")
+    return objects
+
+
+def _well_typed_sections(data: Any, source: str) -> dict[str, Any]:
+    """A copy of a pattern file keeping only the parts that have their section's type.
+
+    Sections the loader does not know pass through unchanged. Regexes are
+    checked where they are compiled (``compile_pattern``).
+    """
+    if not isinstance(data, dict):
+        _warn_malformed_section(source, "the file", "an object")
+        return {}
+    result: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in _STRING_LIST_SECTIONS or key in (
+            "heuristics",
+            "script_variables",
+            "patterns",
+            "format_preserving_patterns",
+            "bloat_extensions",
+        ):
+            if not isinstance(value, dict):
+                _warn_malformed_section(source, key, "an object")
+                continue
+            section = dict(value)
+            for name in _STRING_LIST_SECTIONS.get(key, ()):
+                if name in section:
+                    strings = _string_list(section[name], source, f"{key}.{name}")
+                    if strings is None:
+                        del section[name]
+                    else:
+                        section[name] = strings
+            if key == "bloat_extensions":
+                for name in [n for n in section if not n.startswith("_")]:
+                    strings = _string_list(section[name], source, f"{key}.{name}")
+                    if strings is None:
+                        del section[name]
+                    else:
+                        section[name] = strings
+            elif key == "script_variables":
+                for name in list(section):
+                    if not name.startswith("_") and not isinstance(section[name], list):
+                        _warn_malformed_section(source, f"{key}.{name}", "a list")
+                        del section[name]
+            elif key == "format_preserving_patterns":
+                for name in list(section):
+                    entry = section[name]
+                    if not name.startswith("_") and not (
+                        isinstance(entry, dict) and isinstance(entry.get("pattern"), str)
+                    ):
+                        _warn_malformed_section(source, f"{key}.{name}", "an object with a string pattern")
+                        del section[name]
+            elif key == "heuristics":
+                if "safe_value_patterns" in section:
+                    objects = _object_list(
+                        section["safe_value_patterns"], source, "heuristics.safe_value_patterns"
+                    )
+                    if objects is None:
+                        del section["safe_value_patterns"]
+                    else:
+                        section["safe_value_patterns"] = objects
+                if "detectors" in section:
+                    detectors = _object_list(section["detectors"], source, "heuristics.detectors")
+                    if detectors is None:
+                        del section["detectors"]
+                    else:
+                        section["detectors"] = [_well_typed_detector(d, source) for d in detectors]
+            result[key] = section
+        elif key in _TOP_STRING_LISTS:
+            strings = _string_list(value, source, key)
+            if strings is not None:
+                result[key] = strings
+        else:
+            result[key] = value
+    return result
+
+
+def _well_typed_detector(detector: dict[str, Any], source: str) -> dict[str, Any]:
+    """A detector with non-object patterns and non-integer length bounds dropped (defaults apply)."""
+    detector = dict(detector)
+    category = str(detector.get("category", "unknown"))
+    if "patterns" in detector:
+        patterns = _object_list(detector["patterns"], source, f"heuristics.detectors[{category}].patterns")
+        detector["patterns"] = patterns or []
+    for bound in ("min_length", "max_length"):
+        if bound in detector and (not isinstance(detector[bound], int) or isinstance(detector[bound], bool)):
+            _warn_malformed_section(source, f"heuristics.detectors[{category}].{bound}", "an integer")
+            del detector[bound]
+    return detector
 
 
 # Control characters that almost certainly indicate a JSON-vs-regex escape mistake
@@ -386,7 +517,7 @@ def load_capture_settings(custom_path: Path | str | None = None) -> dict[str, An
     builtin = load_json_file(_get_builtin_path("capture.json"))
 
     if custom_path:
-        custom = load_json_file(custom_path)
+        custom = _load_custom_patterns(custom_path)
         if "bloat_extensions" in custom:
             for category, extensions in custom["bloat_extensions"].items():
                 if category.startswith("_"):
@@ -674,8 +805,9 @@ def compile_script_variables(sensitive_data: dict[str, Any], kind: str) -> list[
     """Compile a pattern file's script variable names of one kind into assignment regexes.
 
     Each name entry (``{"regex": ..., "flags": [...]}``) becomes a regex for
-    ``var NAME = '<value>'`` (either quote): group 1 is everything before the
-    value, group 2 the value, group 3 the closing quote. The flags apply to the whole assignment. An
+    ``var NAME = '<value>'`` (either quote), with named groups ``script_head``
+    (everything before the value), ``script_value`` and ``script_tail`` (the
+    closing quote) — named, so a group inside NAME cannot shift them. The flags apply to the whole assignment. An
     entry that is not an object, or whose regex is not a string or does not
     compile, is skipped with a warning.
 
@@ -698,7 +830,10 @@ def compile_script_variables(sensitive_data: dict[str, Any], kind: str) -> list[
             continue
         regex = compile_pattern(
             {
-                "regex": r"(var\s+(?:" + name + r")\s*=\s*['\"])([^'\"]+)(['\"])",
+                "regex": (
+                    r"(?P<script_head>var\s+(?:" + name + r")\s*=\s*['\"])"
+                    r"(?P<script_value>[^'\"]+)(?P<script_tail>['\"])"
+                ),
                 "flags": entry.get("flags", ()),
                 "replacement_prefix": label,
             }
@@ -757,9 +892,9 @@ def merge_pattern_files(paths: list[Path]) -> dict[str, Any]:
     if not paths:
         return {}
 
-    merged = load_json_file(paths[0])
+    merged = _load_custom_patterns(paths[0])
     for path in paths[1:]:
-        extra = load_json_file(path)
+        extra = _load_custom_patterns(path)
         # Merge each known section
         for section in ("headers", "fields", "tagValueList", "heuristics", "patterns", "script_variables"):
             if section not in extra:

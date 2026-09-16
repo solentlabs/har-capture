@@ -99,5 +99,33 @@
       {"id": "invalid_file_skipped", "files": {"good_one.json": "{\"_description\": \"Good\"}", "broken.json": "{ nope"}, "names": ["good-one"]},
       {"id": "missing_directory",    "files": null,                                                                           "names": []}
     ]
+  },
+
+  "malformed_custom_cases": {
+    "_comment": "A pattern file is user input: a section, list or entry of the wrong type is skipped with a warning, and the rest of the file still applies. Each row runs sanitize_html, check_for_pii and sanitize_har with the dict, and merge_pattern_files with network-device plus the dict as a second file; none may raise. The valid `fields` entry must still apply.",
+    "cases": [
+      {"id": "script_variables_list",       "custom": {"script_variables": []}},
+      {"id": "heuristics_null",             "custom": {"heuristics": null}},
+      {"id": "heuristics_number",           "custom": {"heuristics": 5}},
+      {"id": "tag_value_list_null",         "custom": {"tagValueList": null}},
+      {"id": "safe_values_number",          "custom": {"tagValueList": {"safe_values": 5}}},
+      {"id": "detector_pattern_string",     "custom": {"heuristics": {"detectors": [{"category": "x", "patterns": ["^abc$"]}]}}},
+      {"id": "detector_not_object",         "custom": {"heuristics": {"detectors": ["x"]}}},
+      {"id": "detector_min_length_string",  "custom": {"heuristics": {"detectors": [{"category": "serial_number", "confidence": "high", "min_length": "13", "patterns": [{"regex": "^A"}]}]}}},
+      {"id": "safe_value_pattern_string",   "custom": {"heuristics": {"safe_value_patterns": ["^ok$"]}}},
+      {"id": "include_patterns_number",     "custom": {"include_patterns": [5, "mac_address"]}},
+      {"id": "headers_list",                "custom": {"headers": ["cookie"]}},
+      {"id": "full_redact_string",          "custom": {"headers": {"full_redact": "x-token"}}},
+      {"id": "hash_prefixes_null",          "custom": {"hash_prefixes": null}},
+      {"id": "format_preserving_list",      "custom": {"format_preserving_patterns": ["x"]}},
+      {"id": "script_variables_kind_string", "custom": {"script_variables": {"password": "adminPw"}}},
+      {"id": "format_preserving_pattern_number", "custom": {"format_preserving_patterns": {"vin": {"pattern": 5}}}},
+      {"id": "safe_value_patterns_string",  "custom": {"heuristics": {"safe_value_patterns": "^ok$"}}},
+      {"id": "detectors_string",            "custom": {"heuristics": {"detectors": "serial"}}},
+      {"id": "detector_patterns_string",    "custom": {"heuristics": {"detectors": [{"category": "x", "patterns": "^abc$"}]}}},
+      {"id": "bloat_extensions_string",     "custom": {"bloat_extensions": {"_comment": "kept", "images": "png"}}},
+      {"id": "file_is_list",                "custom": []},
+      {"id": "preserved_ips_string",        "custom": {"preserved_gateway_ips": "10.0.0.1"}}
+    ]
   }
 }

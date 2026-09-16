@@ -284,6 +284,8 @@
       {"id": "custom_password_flags_honoured",    "patterns": {"script_variables": {"password": [{"regex": "adminPw"}]}},       "input_html": "var ADMINPW = 'hunter2xyz';", "kept": "hunter2xyz"},
       {"id": "custom_pipe_variable",              "patterns": {"script_variables": {"pipe_delimited": [{"regex": "statusBlob"}]}}, "heuristics": "redact", "input_html": "var statusBlob = '0|Good||P@ssw0rd!123|data';", "removed": "P@ssw0rd!123", "placeholder": "0|Good||***CRED***"},
       {"id": "custom_invalid_regex_skipped",      "patterns": {"script_variables": {"password": [{"regex": "("}, "adminPw", {"regex": 7}, {"regex": "adminPw"}]}}, "input_html": "var adminPw = 'hunter2xyz';", "removed": "hunter2xyz", "placeholder": "var adminPw = '***PASS***'"},
+      {"id": "custom_password_name_with_group",   "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "input_html": "<script>var AdminPw = 'hunter2x';</script>", "removed": "hunter2x", "placeholder": "var AdminPw = '***PASS***';"},
+      {"id": "custom_pipe_name_with_group",       "patterns": {"script_variables": {"pipe_delimited": [{"regex": "status(Blob|List)"}]}}, "heuristics": "redact", "input_html": "var statusBlob = '0|Good||P@ssw0rd!123|data';", "removed": "P@ssw0rd!123", "placeholder": "var statusBlob = '0|Good||***CRED***"},
       {"id": "custom_section_not_a_dict",         "patterns": {"script_variables": ["adminPw"]},                              "input_html": "var adminPw = 'hunter2xyz';", "kept": "hunter2xyz"}
     ]
   },
@@ -295,6 +297,8 @@
       {"id": "domain_reported",          "patterns": "network-device", "content": "<script>var CurrentPw = 'hunter2xyz';</script>",    "findings": [["script_password", "var CurrentPw = 'hunter2xyz'"]]},
       {"id": "domain_placeholder_clean", "patterns": "network-device", "content": "<script>var CurrentPw = 'PASS_a1b2c3d4';</script>", "findings": []},
       {"id": "domain_not_markup",        "patterns": "network-device", "content": "var CurrentPw = 'hunter2xyz';",                     "findings": []},
+      {"id": "custom_name_with_group_reported", "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "content": "<script>var AdminPw = 'hunter2x';</script>", "findings": [["script_password", "var AdminPw = 'hunter2x'"]]},
+      {"id": "custom_name_with_group_clean",    "patterns": {"script_variables": {"password": [{"regex": "Admin(Pw|Pass)"}]}}, "content": "<script>var AdminPw = 'PASS_a1b2c3d4';</script>", "findings": []},
       {"id": "custom_reported",          "patterns": {"script_variables": {"password": [{"regex": "adminPw", "flags": ["IGNORECASE"]}]}}, "content": "<script>var ADMINPW = 'hunter2xyz';</script>", "findings": [["script_password", "var ADMINPW = 'hunter2xyz'"]]}
     ]
   },

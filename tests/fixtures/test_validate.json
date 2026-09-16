@@ -7,6 +7,7 @@
       {"id": "wrong_field_type", "filename": "bad.har",    "content": "{\"log\": {\"entries\": [{\"request\": null}]}}", "reason": "log.entries[0].request"},
       {"id": "invalid_json",     "filename": "bad.har",    "content": "{ not json",                                    "reason": "Not a readable HAR"},
       {"id": "corrupt_gzip",     "filename": "bad.har.gz", "content": "\u001f\u008b garbage",                        "reason": "Not a readable HAR"},
+      {"id": "nested_past_recursion_limit", "filename": "bad.har", "content": "[", "repeat": 100000, "reason": "Not a readable HAR"},
       {"id": "truncated_gzip",   "filename": "bad.har.gz", "content": "\u001f\u008b\b\u0000\u0000\u0000\u0000\u0000\u0000\u0003", "reason": "Not a readable HAR"}
     ]
   },

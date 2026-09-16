@@ -213,7 +213,7 @@ _POST_DATA = _HarField(
     dict,
     nullable=True,
     fields=(
-        ("mimeType", _OPTIONAL_STRING),
+        ("mimeType", _STRING),
         ("text", _OPTIONAL_STRING),
         (
             "params",
