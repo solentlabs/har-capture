@@ -872,12 +872,14 @@ Handles vendor-specific data structures like Netgear's tagValueList (`"val1|val2
 1. Match a variable assignment whose name a pattern file lists in `script_variables.pipe_delimited` (PATTERN_SPEC); the
    core names none, so without `--patterns network-device` (or a file of your own) no blob is read
 1. Split value by `|` delimiter
-1. For each value:
+1. For each value, judged without its surrounding whitespace:
    - Skip if empty or matches safe values (`sensitive.tagValueList.safe_values`)
    - Skip if already redacted (contains hash prefix or format-preserving pattern)
    - Auto-redact if MAC pattern, serial number pattern (`SN-`, `S/N-`, `SN_`, `S-N-`)
    - If heuristics enabled: run through `analyze_value()` from heuristics.py
-1. Reassemble pipe-delimited string
+1. Reassemble the pipe-delimited string with each value's whitespace written back around the value or its placeholder —
+   the blob's spacing is not the pass's to change (19 Netgear captures in the CMM fleet space their `tagValueList`
+   values)
 
 ### `sanitize_html()` Signature
 

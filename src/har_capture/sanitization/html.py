@@ -1214,8 +1214,9 @@ def _sanitize_html_impl(
     def sanitize_pipe_variable(match: re.Match[str]) -> str:
         """Sanitize a pipe-delimited script variable's values.
 
-        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``,
-        and reassembles.
+        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``
+        without its surrounding whitespace, and reassembles with that
+        whitespace written back: the blob's spacing is not the pass's to change.
         """
         prefix = match.group(1)
         values_str = match.group(2)
@@ -1223,10 +1224,17 @@ def _sanitize_html_impl(
 
         values = values_str.split("|")
         sanitized_values: list[str] = []
+        written: list[str] = []
 
         for val in values:
+            stripped = val.strip()
+            if not stripped:
+                sanitized_values.append(stripped)
+                written.append(val)
+                continue
+            start = val.index(stripped)
             result = _sanitize_pipe_value(
-                val.strip(),
+                stripped,
                 hasher=hasher,
                 collector=collector,
                 safe_values=safe_values,
@@ -1238,8 +1246,9 @@ def _sanitize_html_impl(
                 all_values=values,
             )
             sanitized_values.append(result)
+            written.append(val[:start] + result + val[start + len(stripped) :])
 
-        return prefix + "|".join(sanitized_values) + suffix
+        return prefix + "|".join(written) + suffix
 
     for variable_re in compile_script_variables(sensitive, "pipe_delimited"):
         html = variable_re.sub(sanitize_pipe_variable, html)

@@ -310,6 +310,18 @@
     ]
   },
 
+  "pipe_whitespace_cases": {
+    "_comment": "The pipe-delimited pass judges each value without its surrounding whitespace and writes that whitespace back around the value or its placeholder: the blob's spacing is not the pass's to change. patterns: network-device; salt=None; output is the exact result.",
+    "cases": [
+      {"id": "spaces_kept_nothing_redacted", "heuristics": "disabled", "input_html": "var tagValueList = 'Locked | 3 |  602000000 Hz | ok';",  "output": "var tagValueList = 'Locked | 3 |  602000000 Hz | ok';"},
+      {"id": "spaces_kept_around_mac",       "heuristics": "disabled", "input_html": "var tagValueList = 'ok | AA:BB:CC:DD:EE:01 | good';",     "output": "var tagValueList = 'ok | XX:XX:XX:XX:XX:XX | good';"},
+      {"id": "spaces_kept_around_redaction", "heuristics": "redact",   "input_html": "var tagValueList = '0 | Good | P@ssw0rd!123 | data';",   "output": "var tagValueList = '0 | Good | ***CRED*** | ***SENSITIVE***';"},
+      {"id": "whitespace_only_segment_kept", "heuristics": "disabled", "input_html": "var tagValueList = 'a |  | b';",                        "output": "var tagValueList = 'a |  | b';"},
+      {"id": "tabs_and_newline_escape_kept", "heuristics": "disabled", "input_html": "var tagValueList = 'a\t| b |c ';",                       "output": "var tagValueList = 'a\t| b |c ';"},
+      {"id": "unspaced_blob_unchanged",      "heuristics": "redact",   "input_html": "var tagValueList = '0|Good||P@ssw0rd!123|data';",       "output": "var tagValueList = '0|Good||***CRED***|***SENSITIVE***';"}
+    ]
+  },
+
   "pipe_serial_cases": [
     {"input_html": "var tagValueList = 'enabled|SN-N6MAA10816|WPA3';",  "should_not_contain": "SN-N6MAA10816",  "should_contain": "SERIAL_",  "id": "pipe_serial_sn_dash"},
     {"input_html": "var tagValueList = 'active|S/N-ABC123456|locked';",  "should_not_contain": "S/N-ABC123456",  "should_contain": "SERIAL_",  "id": "pipe_serial_s_n_prefix"},

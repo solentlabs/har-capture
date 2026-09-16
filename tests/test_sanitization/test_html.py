@@ -30,8 +30,9 @@ from pathlib import Path
 
 import pytest
 
-from har_capture.patterns import load_allowlist, load_pii_patterns
+from har_capture.patterns import Hasher, load_allowlist, load_pii_patterns
 from har_capture.patterns.loader import resolve_patterns_arg
+from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
     ACCOUNT_LABEL_RE,
     CSRF_META_RE,
@@ -110,6 +111,7 @@ PIPE_SERIAL_CASES = [
 
 PIPE_CONTEXT_CASES = _FIXTURE["pipe_context_cases"]["cases"]
 SCRIPT_VARIABLE_CASES = _FIXTURE["script_variable_cases"]["cases"]
+PIPE_WHITESPACE_CASES = _FIXTURE["pipe_whitespace_cases"]["cases"]
 PII_SCRIPT_VARIABLE_CASES = _FIXTURE["pii_script_variable_cases"]["cases"]
 
 
@@ -861,6 +863,39 @@ class TestSanitizeHtmlCustomFieldPatterns:
 # =============================================================================
 # Serial Numbers in Pipe-Delimited Strings
 # =============================================================================
+
+
+class TestPipeWhitespace:
+    """The pipe-delimited pass keeps each value's surrounding whitespace."""
+
+    # ┌──────────────────────────────┬──────────────────────────────────────────────────────┐
+    # │ blob                         │ output                                               │
+    # ├──────────────────────────────┼──────────────────────────────────────────────────────┤
+    # │ spaced, nothing redacted     │ byte-identical                                       │
+    # │ spaced, a value redacted     │ placeholder in the value's place, spacing unchanged  │
+    # │ whitespace-only segment      │ kept as written                                      │
+    # └──────────────────────────────┴──────────────────────────────────────────────────────┘
+    @pytest.mark.parametrize("case", PIPE_WHITESPACE_CASES, ids=[c["id"] for c in PIPE_WHITESPACE_CASES])
+    def test_output(self, case: dict) -> None:
+        """Values are judged stripped and written back with their whitespace."""
+        result = sanitize_html(
+            case["input_html"],
+            salt=None,
+            custom_patterns=str(resolve_patterns_arg("network-device")),
+            heuristics=HeuristicMode(case["heuristics"]),
+        )
+        assert result == case["output"]
+
+    def test_flagged_value_is_stripped(self) -> None:
+        """A flagged value is offered without the blob's spacing, so the review replaces it where it sits."""
+        collector = RedactionCollector(hasher=Hasher.create(None))
+        sanitize_html(
+            "var tagValueList = '0 | Good | HomeNetwork-5G | data';",
+            custom_patterns=str(resolve_patterns_arg("network-device")),
+            heuristics=HeuristicMode.FLAG,
+            collector=collector,
+        )
+        assert "HomeNetwork-5G" in [f.original_value for f in collector.flagged]
 
 
 class TestPipeSerialNumber:
