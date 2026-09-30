@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Redacting a labeled password, key or token no longer overwrites JavaScript.** Code after the label —
+  `sjclEncryptObj.password = password;`, `password: password.value`, `password: {`, `currentpassword == 0` — was
+  replaced with a placeholder, and the punctuation after it went too; on an Arris TG3442S login page that removed the
+  key-derivation call the capture was meant to show. In script code only a literal is replaced now: a quoted string, or
+  a number, whose `;` stays. A secret in a string, in markup or in a URL is redacted as before, and `.js` files a device
+  serves as `text/html` are read as script. Captures already sanitized keep their damage.
+
 ## [0.13.0] - 2026-09-16
 
 ### Security

@@ -84,7 +84,9 @@ Underscore-prefixed keys are skipped during the merge process.
 | credit_card\_\* | CC                  | Visa/MC/Amex with Luhn validation                                                |
 
 The labeled and tag patterns are the sanitizer's compiled regexes verbatim, pinned by a test, so `check_for_pii` reports
-what the HTML engine replaces.
+what the HTML engine replaces. A regex cannot see where its match sits, so for `password_field` and `session_token` both
+tools add the same position check (`labeled_literal`): in script code only a number is a value (SANITIZATION_SPEC, "In
+script code only a literal is a value").
 
 **`preserved_gateway_ips`**: Array of IP addresses that should never be redacted. These are common router gateway
 addresses that appear in every device capture and don't constitute PII (e.g., `192.168.1.1`, `192.168.0.1`, `10.0.0.1`).

@@ -25,7 +25,7 @@ import ipaddress
 import json
 import re
 from collections.abc import Callable, Iterator, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from har_capture.patterns import (
     Hasher,
@@ -342,10 +342,179 @@ KEY_FIELD_RE = re.compile(
     r"(?<![A-Za-z0-9_$])(key)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"+)",
     re.IGNORECASE,
 )
+# A session token is a value of at least this many characters.
+SESSION_TOKEN_MIN_LENGTH = 20
 SESSION_TOKEN_RE = re.compile(
-    r"(session|token|auth|cookie)" + _LABELED_SEPARATOR + r"(" + _LABELED_VALUE_CHAR + r"{20,})",
+    r"(session|token|auth|cookie)"
+    + _LABELED_SEPARATOR
+    + r"("
+    + _LABELED_VALUE_CHAR
+    + rf"{{{SESSION_TOKEN_MIN_LENGTH},}})",
     re.IGNORECASE,
 )
+
+# A labeled value's position decides what it is (`labeled_literal`). In script
+# code — inside a `<script>` element, outside its strings, comments and regex
+# literals — an unquoted value is JavaScript: `password = password;`,
+# `password: password.value`, `password: {`, `currentpassword == 0`. Only a
+# number there is a literal. Anywhere else (markup text, an attribute, a JS
+# string's contents, a URL) a bare token is a literal, as a quoted value is:
+# the value after a quote sits inside the string the quote opens.
+#
+# A script body runs to the first `</script`, as a browser reads it. Anything
+# the scanner cannot be sure is script stays data, so a misread redacts rather
+# than keeps: a `<script` tag whose attribute run is broken, one with no
+# `</script` after it, one whose `type` is not JavaScript (`text/x-tmpl` and
+# `text/template` bodies are markup templates), and one inside an HTML
+# comment. A body with no markup that opens as JavaScript (`//`, `/*`, `var`,
+# `let`, `const`, `function`, `(function`, `!function`) is one script: a
+# firmware serving its `.js` files as `text/html` routes them here.
+_SCRIPT_OPEN_RE = re.compile(rf"<!--|<script\b({_TAG_RUN})>", re.IGNORECASE)
+_SCRIPT_CLOSE_RE = re.compile(r"</script", re.IGNORECASE)
+_NON_JS_TYPE_RE = re.compile(
+    r"""\btype\s*=\s*\\?["']?\s*(?!(?:(?:text|application)/(?:x-)?(?:java|ecma|j)script|module)\b)[^\s"'\\>]""",
+    re.IGNORECASE,
+)
+_JS_BODY_RE = re.compile(r"[\ufeff\s]*(?=//|/\*|(?:var|let|const|function)\b|[(!]\s*function\b)")
+_JS_TOKEN_RE = re.compile(
+    r"""(?P<space>\s+)|(?P<quote>['"`])|(?P<line_comment>//|<!--)|(?P<block_comment>/\*)|(?P<slash>/)"""
+    r"""|(?P<html_close>-->)"""
+    r"""|(?P<word>[A-Za-z_$][\w$]*)|(?P<number>\d[\w.]*)|(?P<close>[)\]])|(?P<punct>[\s\S])"""
+)
+# A quoted string stops at its closing quote or, unterminated, at the line end
+# (a template literal spans lines); an unterminated string is data to the line
+# end, so a misread never turns string contents into code.
+_JS_STRING_RE = {
+    "'": re.compile(r"'(?:[^'\\\n]|\\[\s\S])*'?"),
+    '"': re.compile(r'"(?:[^"\\\n]|\\[\s\S])*"?'),
+    "`": re.compile(r"`(?:[^`\\]|\\[\s\S])*`?"),
+}
+_JS_REGEX_LITERAL_RE = re.compile(r"/(?:[^/\\\[\n]|\\.|\[(?:[^\]\\\n]|\\.)*\])+/[A-Za-z]*")
+# After one of these words a `/` opens a regex literal; after any other word,
+# a number or a closing bracket it divides.
+_JS_OPERATOR_WORDS = frozenset(
+    {
+        "return",
+        "typeof",
+        "case",
+        "do",
+        "else",
+        "in",
+        "of",
+        "new",
+        "delete",
+        "void",
+        "throw",
+        "instanceof",
+        "yield",
+    }
+)
+_CODE_LITERAL_RE = re.compile(r"\d[\w.]*")
+
+
+def _script_body_code_spans(html: str, start: int, end: int, spans: list[tuple[int, int]]) -> None:
+    """Append the code spans of the script body ``html[start:end]`` to ``spans``."""
+    pos = code_start = start
+    divides = False  # whether a `/` here divides rather than opening a regex
+    while pos < end:
+        # The last alternative matches any character, so a token always matches.
+        token = cast("re.Match[str]", _JS_TOKEN_RE.match(html, pos, end))
+        kind = token.lastgroup
+        skip_to = None
+        if kind == "quote":
+            skip_to = cast("re.Match[str]", _JS_STRING_RE[token.group()].match(html, pos, end)).end()
+            divides = True
+        elif kind == "line_comment":
+            newline = html.find("\n", pos, end)
+            skip_to = end if newline < 0 else newline
+        elif kind == "html_close" and not html[html.rfind("\n", start, pos) + 1 : pos].strip():
+            # `-->` opening a line is a comment, as `<!--` is anywhere.
+            newline = html.find("\n", pos, end)
+            skip_to = end if newline < 0 else newline
+        elif kind == "block_comment":
+            close = html.find("*/", pos + 2, end)
+            skip_to = end if close < 0 else close + 2
+        elif kind == "slash" and not divides:
+            regex_literal = _JS_REGEX_LITERAL_RE.match(html, pos, end)
+            if regex_literal is not None:
+                skip_to = regex_literal.end()
+                divides = True
+        elif kind == "word":
+            divides = token.group() not in _JS_OPERATOR_WORDS
+        elif kind in ("number", "close"):
+            divides = True
+        elif kind != "space":
+            divides = False
+        if skip_to is None:
+            pos = token.end()
+            continue
+        if pos > code_start:
+            spans.append((code_start, pos))
+        pos = code_start = skip_to
+    if end > code_start:
+        spans.append((code_start, end))
+
+
+def script_code_spans(html: str) -> list[tuple[int, int]]:
+    """Return the sorted ``(start, end)`` offsets of script code in ``html``.
+
+    Script code is a JavaScript ``<script>`` element's body, or a whole body
+    that opens as JavaScript, less its strings, comments and regex literals.
+    """
+    spans: list[tuple[int, int]] = []
+    if (javascript := _JS_BODY_RE.match(html)) is not None:
+        _script_body_code_spans(html, javascript.end(), len(html), spans)
+        return spans
+    pos = 0
+    while (opening := _SCRIPT_OPEN_RE.search(html, pos)) is not None:
+        if opening.group(1) is None:  # an HTML comment
+            close = html.find("-->", opening.end())
+            if close < 0:
+                break
+            pos = close + 3
+            continue
+        closing = _SCRIPT_CLOSE_RE.search(html, opening.end())
+        if closing is None:
+            break
+        if _NON_JS_TYPE_RE.search(opening.group(1)) is None:
+            _script_body_code_spans(html, opening.end(), closing.start(), spans)
+        pos = closing.start()
+    return spans
+
+
+class ScriptCode:
+    """Answers whether an offset of one text is script code, scanning the text on first use."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._starts: list[int] | None = None
+        self._ends: list[int] = []
+
+    def contains(self, offset: int) -> bool:
+        """Whether ``offset`` lies in script code."""
+        if self._starts is None:
+            spans = script_code_spans(self._text)
+            self._starts = [start for start, _ in spans]
+            self._ends = [end for _, end in spans]
+        index = bisect.bisect_right(self._starts, offset) - 1
+        return index >= 0 and offset < self._ends[index]
+
+
+def labeled_literal(match: re.Match[str], code: ScriptCode, min_length: int = 1) -> str | None:
+    """Return the literal a labeled-value match (group 3) replaces, or ``None`` when it is code.
+
+    Outside script code the whole value is the literal. In script code only a
+    number is (`password = 12345678;` replaces `12345678`, so the `;` stays);
+    an identifier, member, object or operator is JavaScript and is kept.
+    ``min_length`` is the pattern's own value length (``SESSION_TOKEN_MIN_LENGTH``).
+    """
+    value = match.group(3)
+    if not code.contains(match.start(3)):
+        return value
+    number = _CODE_LITERAL_RE.match(value)
+    if number is None or len(number.group()) < min_length:
+        return None
+    return number.group()
 
 
 # Of the patterns with a pass of their own (DEDICATED_PASS_PATTERNS), the ones
@@ -1053,20 +1222,26 @@ def _sanitize_html_impl(
 
     html = PUBLIC_IP_RE.sub(replace_public_ip, html)
 
-    # 7. Passwords/Passphrases in HTML forms or text
+    # 7. Passwords/Passphrases in HTML forms or text. In script code only a
+    # literal is replaced (labeled_literal); the rest of the value stays.
     def replace_password(match: re.Match[str]) -> str:
-        if is_redacted(match.group(3), custom_patterns):
+        literal = labeled_literal(match, code)
+        if literal is None or is_redacted(literal, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("password")
-        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'PASS')}"
+        rest = match.group(3)[len(literal) :]
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(literal, 'PASS')}{rest}"
 
+    code = ScriptCode(html)
     html = PASSWORD_FIELD_RE.sub(replace_password, html)
 
     # 7-key. A bare `key` label: offered for review, never replaced here.
+    code = ScriptCode(html)
     for match in KEY_FIELD_RE.finditer(html):
-        if not is_redacted(match.group(3), custom_patterns):
+        literal = labeled_literal(match, code)
+        if literal is not None and not is_redacted(literal, custom_patterns):
             collector.flag_value(
-                match.group(3),
+                literal,
                 "credential",
                 ConfidenceLevel.LOW,
                 match.group(0)[:80],
@@ -1154,11 +1329,14 @@ def _sanitize_html_impl(
 
     # 9. Session tokens/cookies (long alphanumeric strings)
     def replace_token(match: re.Match[str]) -> str:
-        if is_redacted(match.group(3), custom_patterns):
+        literal = labeled_literal(match, code, SESSION_TOKEN_MIN_LENGTH)
+        if literal is None or is_redacted(literal, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("token")
-        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'TOKEN')}"
+        rest = match.group(3)[len(literal) :]
+        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(literal, 'TOKEN')}{rest}"
 
+    code = ScriptCode(html)
     html = SESSION_TOKEN_RE.sub(replace_token, html)
 
     # 10. CSRF tokens in meta tags
@@ -1451,13 +1629,24 @@ def _fixture_text_findings(
     # An IPv4-mapped IPv6 address is one address, which the sanitizer hashes
     # whole: its IPv4 tail is not reported again as IPv4.
     ipv6_spans = ipv6_host_spans(text)
+    # The labeled passes replace only a literal (labeled_literal): in script
+    # code an identifier or expression after the label is not reported.
+    code = ScriptCode(text)
+    labeled_min_length = {"password_field": 1, "session_token": SESSION_TOKEN_MIN_LENGTH}
 
     for pattern_name, regex, pattern_def in patterns:
         for match in regex.finditer(text):
             matched_text = match.group(0)
+            value = _match_value(match, pattern_def.get("value_group", 0))
+            if pattern_name in labeled_min_length:
+                literal = labeled_literal(match, code, labeled_min_length[pattern_name])
+                if literal is None:
+                    continue
+                value = literal
+                matched_text = matched_text[: match.start(3) - match.start() + len(literal)]
             # The allowlist judges the value, not the label around it: a
             # sanitized `Serial Number: SERIAL_<hash>` is clean.
-            if is_allowlisted(_match_value(match, pattern_def.get("value_group", 0)), allowlist):
+            if is_allowlisted(value, allowlist):
                 continue
             if pattern_def.get("require_hex_letter") and not re.search(r"[a-f]", matched_text, re.IGNORECASE):
                 continue

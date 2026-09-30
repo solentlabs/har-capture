@@ -1288,6 +1288,9 @@ def test_word_runs_do_not_backtrack_through_a_label() -> None:
         ("obj.key = value123", ["value123"]),
         ("wifikey=abc123xyz", []),
         ("wpakey=abc123xyz", []),
+        ("<script>var key = window.event ? e.keyCode : e.which;</script>", []),
+        ("<script>var key = 'QWERTY_CONST';</script>", ["QWERTY_CONST"]),
+        ("<script>x = {key: 123456, y: 1};</script>", ["123456"]),
     ],
     ids=[
         "text_label",
@@ -1295,6 +1298,9 @@ def test_word_runs_do_not_backtrack_through_a_label() -> None:
         "property_access_offered",
         "glued_label_redacted",
         "wpa_key_redacted",
+        "script_code_not_offered",
+        "script_string_offered",
+        "script_number_offered_without_punctuation",
     ],
 )
 def test_bare_key_label_is_offered_for_review(html: str, offered: list[str]) -> None:
@@ -1319,3 +1325,16 @@ def test_two_run_tag_regexes_stop_at_the_first_anchor(name: str) -> None:
     import har_capture.sanitization.html as html_module
 
     assert "(?:(?!" in getattr(html_module, name).pattern
+
+
+LABELED_VALUE_POSITION_CASES = _FIXTURE["labeled_value_position_cases"]["cases"]
+
+
+@pytest.mark.parametrize(
+    "case", LABELED_VALUE_POSITION_CASES, ids=[c["id"] for c in LABELED_VALUE_POSITION_CASES]
+)
+def test_labeled_value_in_script_code_is_kept_unless_literal(case: dict) -> None:
+    """A labeled value is replaced only when it is a literal; script code after the label survives."""
+    assert sanitize_html(case["input_html"], salt=None) == case["output"]
+    reported = any(f["pattern"] == "password_field" for f in check_for_pii(case["input_html"]))
+    assert reported is case["reported"]
