@@ -701,13 +701,13 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
 | 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
-| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`; bare `key`: `KEY_FIELD_RE`, offered | `hasher.hash_value(val, "PASS")`        |
+| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`        |
 | 7a   | SSID text labels               | SSID labels in HTML text nodes                           | `hasher.hash_value(val, "WIFI")`        |
 | 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
 | 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")` |
 | 8    | Password inputs                | `<input type="password" value="...">`                    | `hasher.hash_value(val, "PASS")`        |
 | 8b   | SSID inputs                    | SSID-related input fields                                | `hasher.hash_value(val, "WIFI")`        |
-| 9    | Session tokens                 | `SESSION_TOKEN_RE`: 20+ char value after a label         | `hasher.hash_value(val, "TOKEN")`       |
+| 9    | Session tokens                 | `SESSION_TOKEN_RE`: 20+ char literal after a label       | `hasher.hash_value(val, "TOKEN")`       |
 | 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`        |
 | 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                  | `hasher.hash_email()`                   |
 | 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
@@ -967,8 +967,28 @@ no value). An unquoted value that is code by syntax — a negation (`password:!0
 trade: an unquoted password that begins with `!` or `&`, or reads as a call (`abc(`), is left; the fleet has none. `key`
 is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`); a bare `key` is a script variable as
 often as a label — all 44 of its unredacted fleet matches are JavaScript assignments — so its value is offered for
-review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it. What remains: a glued
-`…Key=` followed by a minified member expression (`Key=Y.util…;`, 8 matches in 4 captures) still reads as a credential.
+review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it.
+
+**In script code only a literal is a value** (`labeled_literal`, ADR-19; passes 7 and 9, the bare-`key` offer, and
+`check_for_pii`'s `password_field` and `session_token`). Script code is a JavaScript `<script>` element's body less its
+strings, comments and regex literals (`script_code_spans`), or the whole of a body that opens as JavaScript (`//`, `/*`,
+`var`, `let`, `const`, `function`, `(function`, `!function`) — a firmware serving its `.js` files as `text/html` routes
+them to this engine (45 fleet bodies). There, an unquoted value is JavaScript — an identifier
+(`sjclEncryptObj.password = password;`), a member (`password: password.value`), an object (`password: {`), an operator
+(`currentpassword == 0`) — and is kept; only a number is a literal, replaced up to its end so the `;` after it stays
+(`password = ***PASS***;`). A quoted value sits inside the string its quote opens, so it is data and is replaced
+everywhere (`password = "…"`, `'&sessionKey=…'`, a `document.write` string). Outside script code a bare token is a
+literal, as before (`<p>Password: hunter2</p>`, `?password=hunter2`).
+
+The scanner errs toward data, so a misread redacts rather than keeps: a `<script>` with no `</script>` after it, one
+whose `type` is not JavaScript (the fleet's 164 `text/x-tmpl` and `text/template` bodies are markup templates), one
+inside an HTML comment, and one whose tag run is broken are data; a string unterminated at its line end is data to the
+line end. Checked against a JavaScript tokenizer (acorn) over the fleet's 848 parseable script bodies, it reads no
+string, comment or regex character as code and no code as data. Accepted limits, each with no fleet occurrence: a regex
+literal directly after `)` or `]` that holds a quote (`if (x) /'/.test(s)`) is read as division, which can turn the rest
+of that line's string contents into code; code in an event-handler attribute, a `javascript:` URL or a template
+literal's `${…}` is data and is replaced as before; an unquoted value in data keeps running through `&`, `)`, `}` and a
+backtick (`?password=a&b=1` takes `a&b=1`).
 
 ## Heuristic Engine (heuristics.py)
 

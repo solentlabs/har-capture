@@ -506,3 +506,37 @@ disagreement impossible by construction, and would give up that independent chec
 **Consequence.** A change that widens either tool adds harness rows in the same commit. A rule a shared predicate can
 express lives in `patterns/redaction.py` and is called by both tools; one that cannot is written twice and pinned by
 harness rows.
+
+## ADR-19: In Script Code, Only a Literal Follows a Credential Label
+
+**Context.** The labeled passes (`password_field`, `session_token`, the bare-`key` offer) read the text after a label as
+the secret. In JavaScript that text is usually code: `sjclEncryptObj.password = password;`,
+`{username: username.value, password: password.value}`, `password: {` in a validate rules block,
+`if (currentpassword == 0)`. Replacing it destroys the code a reader needs — on an Arris TG3442S login page the value
+after `key` is the key-derivation call (`sjclEncryptObj.key = sjcl.misc.pbkdf2(password, …)`), the fact the capture
+exists to show. A regex cannot tell `password = pw;` in code from `"a=b; password=hunter2;"` in a string: the difference
+is where the text sits, not what it looks like.
+
+**Decision.** A labeled value's position decides whether it is a literal (`labeled_literal`, on `script_code_spans`):
+
+1. **In script code an unquoted value is kept unless it is a number.** Script code is a JavaScript `<script>` body, or a
+   whole body that opens as JavaScript, less its strings, comments and regex literals. A number there is replaced up to
+   its end, so the punctuation after it stays.
+1. **A quoted value is always a literal.** It sits inside the string its quote opens, which is data.
+1. **Outside script code a bare token is a literal**: markup text, attributes, URLs, a JS string's contents.
+1. **What the scanner cannot place is data.** An unclosed `<script>`, a non-JavaScript `type`, a `<script>` inside an
+   HTML comment, a broken tag, and a string unterminated at its line end are data, so a misread redacts rather than
+   keeps.
+1. **Both tools apply it.** The sanitizer's passes and `check_for_pii` call the same function, so a kept code value is
+   neither replaced nor reported.
+
+**ADR-12 accounting.** This narrows redaction. *Leak opened:* none observed — across the fleet's 848 parseable script
+bodies the scanner reads no string, comment or regex character as code (checked against the acorn tokenizer), and a
+JavaScript identifier is by definition not a string literal. *Accepted limit:* a regex literal directly after `)` or `]`
+that holds a quote is read as division, which can expose one line's string contents as code; the fleet has none.
+*Fidelity restored:* identifiers, members, objects and comparisons after a credential label survive, as does the
+punctuation after a replaced number.
+
+**Consequence.** Code after `password`, `key` and `token` labels in inline and served-as-HTML scripts survives
+sanitization; quoted secrets, secrets in strings and secrets in markup are replaced as before. Captures already
+sanitized keep their damage — the original text is not recoverable.
