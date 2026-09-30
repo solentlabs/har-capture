@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-09-30
+
 ### Fixed
 
 - **Redacting a labeled password, key or token no longer overwrites JavaScript.** Code after the label —
@@ -1401,6 +1403,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.5]: https://github.com/solentlabs/har-capture/compare/v0.12.4...v0.12.5
 [0.12.6]: https://github.com/solentlabs/har-capture/compare/v0.12.5...v0.12.6
 [0.13.0]: https://github.com/solentlabs/har-capture/compare/v0.12.6...v0.13.0
+[0.13.1]: https://github.com/solentlabs/har-capture/compare/v0.13.0...v0.13.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1428,4 +1431,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.1...HEAD
