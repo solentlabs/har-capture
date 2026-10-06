@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **One raw value keeps one placeholder across header, body and URL.** A token returned in a login response and sent
+  back as `Authorization: Bearer <token>` was hashed `FIELD_` in the body and `AUTH_` in the header, so nothing linked
+  them. A value now keeps the placeholder the first surface that redacted it gave it.
+
 ## [0.13.1] - 2026-09-30
 
 ### Fixed

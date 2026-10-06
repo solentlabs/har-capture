@@ -4358,6 +4358,20 @@ class TestRedactedValuePropagation:
 
         assert token not in json.dumps(sanitized), "token survived somewhere in the HAR"
 
+    def test_one_value_one_placeholder_across_body_header_url(self) -> None:
+        """The response token, the Bearer header and the URL segment share one placeholder."""
+        token = "eba954f1f10817e8f36607c4db106999"
+        har = _token_flow_har(token)
+        har["log"]["entries"][1]["request"]["headers"] = [
+            {"name": "Authorization", "value": f"Bearer {token}"}
+        ]
+        sanitized, _ = sanitize_har(har, salt="test")
+
+        text = json.dumps(sanitized)
+        placeholders = set(re.findall(r"(?:FIELD|AUTH)_[0-9a-f]{8}", text))
+        assert len(placeholders) == 1, f"one raw value gave {placeholders}"
+        assert token not in text
+
     def test_url_structure_is_preserved(self) -> None:
         """Redaction replaces the segment without changing the URL's shape."""
         token = "eba954f1f10817e8f36607c4db106999"

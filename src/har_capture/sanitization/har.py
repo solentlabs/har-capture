@@ -691,7 +691,12 @@ def _redact_value(
         return value
     if collector:
         collector.record_auto_redaction(category.lower())
-    placeholder = hasher.hash_generic(value, category) if hasher else REDACTED
+    # The first surface to redact a value names it; the same raw value on a later
+    # surface (header, body, URL) reuses that placeholder instead of hashing
+    # under its own category prefix.
+    placeholder = collector.redacted_values.get(value) if collector else None
+    if placeholder is None:
+        placeholder = hasher.hash_generic(value, category) if hasher else REDACTED
     if collector:
         # Feeds the Pass 1b propagation sweep in sanitize_har. Recorded for every
         # redaction; eligibility is decided at sweep time by _is_propagation_eligible.
