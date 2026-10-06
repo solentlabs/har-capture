@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-06
+
 ### Fixed
 
 - **One raw value keeps one placeholder across header, body and URL.** A token returned in a login response and sent
@@ -1416,6 +1418,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.12.6]: https://github.com/solentlabs/har-capture/compare/v0.12.5...v0.12.6
 [0.13.0]: https://github.com/solentlabs/har-capture/compare/v0.12.6...v0.13.0
 [0.13.1]: https://github.com/solentlabs/har-capture/compare/v0.13.0...v0.13.1
+[0.13.2]: https://github.com/solentlabs/har-capture/compare/v0.13.1...v0.13.2
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1443,4 +1446,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.2...HEAD
