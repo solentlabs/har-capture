@@ -39,6 +39,8 @@ regardless of what else is in the PR).
 
 - [ ] Version bumped in **both** `pyproject.toml` and `src/har_capture/__init__.py`
 - [ ] `CHANGELOG.md` has a `## [X.Y.Z] - YYYY-MM-DD` section with changes
+- [ ] If the release changes what the sanitizer writes, `MIN_SANITIZER_VERSION` in `validation/provenance.py` is set to
+  `X.Y.Z`
 - [ ] `CHANGELOG.md` has a `[X.Y.Z]` comparison link at the bottom
 - [ ] `CHANGELOG.md` `[unreleased]` link updated to compare from `vX.Y.Z`
 - [ ] Tests pass: `.venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"`

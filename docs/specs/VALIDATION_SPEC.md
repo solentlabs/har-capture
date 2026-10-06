@@ -18,6 +18,7 @@ Both run over any HAR regardless of origin.
 | `src/har_capture/validation/secrets.py`        | PII leak detection: `validate_har()`, `check_json_fields()`, finding dataclass |
 | `src/har_capture/validation/completeness.py`   | Capture-completeness: mid-session detection, POST coverage, `load_har()`       |
 | `src/har_capture/validation/artifacts.py`      | `.har`/`.har.gz` pair consistency: `stale_compressed_sibling()`                |
+| `src/har_capture/validation/provenance.py`     | Sanitizer-version floor: `MIN_SANITIZER_VERSION`, `stale_sanitizer_version()`  |
 | `src/har_capture/cli/_completeness_display.py` | Shared renderer used by `get`, `sanitize`, and `validate`                      |
 | `src/har_capture/patterns/redaction.py`        | `is_redacted()` — checks if a value has already been sanitized                 |
 | `src/har_capture/patterns/sensitive.json`      | Sensitive header and field patterns used by validation                         |
@@ -576,6 +577,17 @@ The review itself regenerates the `.gz` when it records its outcome (`record_rev
 [SANITIZATION_SPEC](SANITIZATION_SPEC.md)), so this check is the backstop for artifacts produced outside that flow —
 hand-edited files, older tool versions, interrupted runs.
 
+## Sanitizer-Version Provenance Check
+
+Every sanitized HAR records the producing release in `log._har_capture.sanitization.version`. `validate_har()` reports
+one **warning** finding (location `Sanitization metadata`) when that version is below `MIN_SANITIZER_VERSION`
+(`validation/provenance.py`): the capture carries output a later release corrected, and only a re-run from the raw
+capture repairs it. A file that records no readable version is not reported — there is nothing to compare.
+
+`MIN_SANITIZER_VERSION` is the oldest release whose sanitized output is current. A release that changes what the
+sanitizer writes sets it to its own version in the release commit ([RELEASE](../RELEASE.md#pr-checklist-before-merge)).
+It is a warning, not an error: the capture is not a leak, and `--strict` makes it fail a gate that wants it fixed.
+
 ## CLI Command vs Pre-Commit Hook
 
 ### `har-capture validate` CLI Command
@@ -587,6 +599,7 @@ har-capture validate capture.har --patterns <domain|custom.json>
 - Loads and validates a single HAR file
 - Prints findings to stdout with severity, location, field, value
 - Checks `.har`/`.har.gz` pair freshness (see above)
+- Warns when a capture was sanitized by a release older than `MIN_SANITIZER_VERSION` (see above)
 - A file it cannot read as a HAR — invalid JSON, JSON nested past the interpreter's recursion limit, a corrupt or
   truncated gzip, a field of the wrong type — is one `[ERROR] [file]` naming why, and the scan continues with the next
   file
