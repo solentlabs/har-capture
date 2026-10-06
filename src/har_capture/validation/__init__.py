@@ -26,6 +26,7 @@ from har_capture.validation.completeness import (
     analyze_har_file,
     load_har,
 )
+from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
 from har_capture.validation.secrets import (
     MAC_PATTERN,
     SENSITIVE_FIELDS,
@@ -47,6 +48,9 @@ __all__ = [
     # Artifact consistency
     "compressed_sibling_pair",
     "stale_compressed_sibling",
+    # Sanitizer-version provenance
+    "MIN_SANITIZER_VERSION",
+    "stale_sanitizer_version",
     # Capture-completeness validation
     "analyze_capture_completeness",
     "analyze_har_file",

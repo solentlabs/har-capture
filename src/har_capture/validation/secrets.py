@@ -74,6 +74,7 @@ from har_capture.sanitization.html import (
     iter_ssid_option_values,
 )
 from har_capture.validation.completeness import load_har
+from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
 
 # Cookie attribute-only values (not actual session data)
 MAC_PATTERN = MAC_RE
@@ -1234,6 +1235,21 @@ def validate_har(
 
     log = har_data.get("log", {})
     entries = log.get("entries", [])
+
+    stale_version = stale_sanitizer_version(log)
+    if stale_version is not None:
+        findings.append(
+            Finding(
+                severity="warning",
+                location="Sanitization metadata",
+                field="version",
+                value=stale_version,
+                reason=(
+                    f"Sanitized by har-capture {stale_version}, before {MIN_SANITIZER_VERSION} corrected "
+                    "sanitizer output; re-sanitize from the raw capture"
+                ),
+            )
+        )
 
     # Entries whose URL credentials were sanitized by har-capture — the sanitizer
     # already applied the server-token preservation heuristic to their response
