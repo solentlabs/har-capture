@@ -678,7 +678,7 @@ def _redact_value(
     Args:
         value: The sensitive value to redact
         hasher: Optional hasher for correlation-preserving redaction
-        category: Hash category (FIELD, AUTH, COOKIE) for hasher
+        category: Hash category (FIELD, AUTH, COOKIE, STORAGE) for hasher
         collector: Optional collector to record the redaction
 
     Returns:

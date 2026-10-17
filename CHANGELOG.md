@@ -7,13 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-10-17
+
+### Changed
+
+- **Documented which redactions share a placeholder across surfaces.** The sanitization spec now states that field,
+  credential, cookie and storage redactions keep one placeholder per raw value across header, body and URL, and that the
+  HTML and serial/MAC/IP/email redactions keep their own prefix. The 0.13.2 notes below are narrowed to match. Sanitized
+  output is unchanged.
+
 ## [0.13.2] - 2026-10-06
 
 ### Fixed
 
 - **One raw value keeps one placeholder across header, body and URL.** A token returned in a login response and sent
   back as `Authorization: Bearer <token>` was hashed `FIELD_` in the body and `AUTH_` in the header, so nothing linked
-  them. A value now keeps the placeholder the first surface that redacted it gave it.
+  them. A value redacted as a field, credential, cookie or storage item now keeps the placeholder the first of those
+  surfaces gave it. Values redacted by the HTML and serial/MAC/IP/email routes keep their own prefix.
 
 ### Changed
 
@@ -1419,6 +1429,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.13.0]: https://github.com/solentlabs/har-capture/compare/v0.12.6...v0.13.0
 [0.13.1]: https://github.com/solentlabs/har-capture/compare/v0.13.0...v0.13.1
 [0.13.2]: https://github.com/solentlabs/har-capture/compare/v0.13.1...v0.13.2
+[0.13.3]: https://github.com/solentlabs/har-capture/compare/v0.13.2...v0.13.3
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1446,4 +1457,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.2...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.3...HEAD
