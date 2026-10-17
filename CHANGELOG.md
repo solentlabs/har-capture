@@ -13,7 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **One raw value keeps one placeholder across header, body and URL.** A token returned in a login response and sent
   back as `Authorization: Bearer <token>` was hashed `FIELD_` in the body and `AUTH_` in the header, so nothing linked
-  them. A value now keeps the placeholder the first surface that redacted it gave it.
+  them. A value redacted as a field, credential, cookie or storage item now keeps the placeholder the first of those
+  surfaces gave it. Values redacted by the HTML and serial/MAC/IP/email routes keep their own prefix.
 
 ### Changed
 

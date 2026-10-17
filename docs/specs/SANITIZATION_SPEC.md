@@ -1214,12 +1214,16 @@ layout):
 - Enables correlation preservation: if `AA:BB:CC:DD:EE:FF` appears in 50 entries, it maps to the same
   `02:xx:xx:xx:xx:xx` every time (and the same digits in any other layout)
 
-The prefix is part of the cache key, so a value redacted on two surfaces under different prefixes receives two different
-placeholders — a session token in a response body becomes `FIELD_<a>` while the same token in an `Authorization` header
-becomes `AUTH_<b>`. Correlation therefore holds within a surface, not across surfaces. This is a property of the current
-design, not a guarantee the spec makes: a reader cannot conclude from a sanitized HAR that `FIELD_<a>` and `AUTH_<b>`
-are the same secret. [Pass 1b](#pass-1b-redacted-value-propagation) is unaffected — it reuses whichever placeholder the
-value was first given, so a propagated copy always matches its source.
+The prefix is part of the cache key, so the hasher alone gives one raw value a different placeholder under each prefix.
+Routes through `_redact_value` (the `FIELD`, `AUTH`, `COOKIE` and `STORAGE` redactions in `har.py`) override that: they
+reuse the placeholder the value was first given in the collector's registry, so a session token in a response body, an
+`Authorization` header and a URL carries one placeholder, named by whichever surface redacted it first. Routes that call
+`hash_generic` directly with their own prefix (the `html.py` redactions, and `SERIAL`, MAC, IP, email and
+`hash_sensitive_value` in `har.py`) keep that prefix, so the same raw value reaching one of them and a `_redact_value`
+route can carry two placeholders. That is an accepted limit: across the 433 parseable fleet captures no raw value split
+across a direct-hash prefix (`PASS`, `TOKEN`, `WIFI`, `SERIAL`, …) and a `_redact_value` prefix.
+[Pass 1b](#pass-1b-redacted-value-propagation) reuses the registry placeholder too, so a propagated copy always matches
+its source.
 
 ### Static Fallbacks (salt=None)
 
@@ -1328,11 +1332,12 @@ def _propagate_redacted_values(har_data: dict, registry: dict[str, str]) -> int:
 ```
 
 The registry (`RedactionCollector.redacted_values`) maps original value → assigned placeholder and is populated by
-`_redact_value` on every auto-redaction, so a value keeps the placeholder its first surface gave it. The sweep runs
-before `_embed_sanitization_metadata`, and its replacement count is recorded under the `propagated` category in
-`auto_redacted_counts`. It is one substring scan per needle over the serialized HAR, so it costs needles × size: across
-the fleet no capture has more than 5 needles (0.05 s at most); a synthetic capture whose session cookie rotates on each
-of 8,000 requests takes about 19 s. A multi-needle matcher is not built for a shape the fleet does not have.
+`_redact_value` on every redaction it makes (`FIELD`, `AUTH`, `COOKIE`, `STORAGE`), so a value keeps the placeholder its
+first such surface gave it; direct-hash routes do not register. The sweep runs before `_embed_sanitization_metadata`,
+and its replacement count is recorded under the `propagated` category in `auto_redacted_counts`. It is one substring
+scan per needle over the serialized HAR, so it costs needles × size: across the fleet no capture has more than 5 needles
+(0.05 s at most); a synthetic capture whose session cookie rotates on each of 8,000 requests takes about 19 s. A
+multi-needle matcher is not built for a shape the fleet does not have.
 
 **Review queue.** An eligible value with no surviving occurrence is withdrawn from `report.flagged`
 (`RedactionCollector.drop_flagged()`) — presenting it would ask the user for a decision that cannot change the output.
