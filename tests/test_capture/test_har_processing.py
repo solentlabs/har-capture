@@ -12,6 +12,7 @@ import pytest
 from har_capture.capture.browser import (
     CaptureOptions,
     _add_capture_metadata,
+    _length_matches_header,
     _patch_missing_bodies,
     filter_and_compress_har,
     strip_browser_internal_entries,
@@ -257,6 +258,25 @@ class TestFilterAndCompressHar:
         # Should only filter sourcemaps
         assert stats["filtered_entries"] == 6  # all except .map
 
+    @pytest.mark.parametrize(
+        "options",
+        [
+            CaptureOptions(),
+            CaptureOptions(include_fonts=True, include_images=True, include_media=True),
+        ],
+        ids=["defaults", "all_included"],
+    )
+    def test_root_request_and_body_survive(self, tmp_path: Path, options: CaptureOptions) -> None:
+        """The device root request and its stored body are never filtered."""
+        har_file = _write_har(tmp_path, "har_with_root_among_bloat", "root.har")
+
+        compressed_path, _stats = filter_and_compress_har(har_file, options)
+
+        with gzip.open(compressed_path, "rt") as f:
+            kept = json.load(f)["log"]["entries"]
+        root = next(e for e in kept if e["request"]["url"] == "http://192.168.100.1/")
+        assert root["response"]["content"]["text"] == "<html>landing page</html>"
+
     @pytest.mark.parametrize("case", REPEATED_REQUEST_CASES)
     def test_repeated_requests_all_kept(self, tmp_path: Path, case: str) -> None:
         """Repeated requests all survive, in recorder order."""
@@ -337,13 +357,13 @@ class TestFilterAndCompressHar:
 PATCH_BODIES_CASES = [
     (
         "har_missing_body",
-        {"GET|http://192.168.100.1/|200": b"<html><input type='hidden' name='csrf'/></html>"},
+        {"GET|http://192.168.100.1/|200": [b"<html><input type='hidden' name='csrf'/></html>"]},
         True,
         "missing_body_patched_from_cache",
     ),
     (
         "har_body_present",
-        {"GET|http://192.168.100.1/|200": b"<html>SHOULD NOT REPLACE</html>"},
+        {"GET|http://192.168.100.1/|200": [b"<html>SHOULD NOT REPLACE</html>"]},
         False,
         "existing_body_not_overwritten",
     ),
@@ -355,13 +375,13 @@ PATCH_BODIES_CASES = [
     ),
     (
         "har_missing_body",
-        {"GET|http://192.168.100.1/WRONG|200": b"wrong url"},
+        {"GET|http://192.168.100.1/WRONG|200": [b"wrong url"]},
         False,
         "cache_miss_no_patch",
     ),
     (
         "har_missing_body_no_size",
-        {"GET|http://192.168.100.1/empty|204": b""},
+        {"GET|http://192.168.100.1/empty|204": [b""]},
         False,
         "zero_bodysize_not_patched",
     ),
@@ -381,7 +401,7 @@ class TestPatchMissingBodies:
         self,
         tmp_path: Path,
         fixture_key: str,
-        captured_bodies: dict[str, bytes],
+        captured_bodies: dict[str, list[bytes | None]],
         expect_patch: bool,
         desc: str,
     ) -> None:
@@ -403,7 +423,7 @@ class TestPatchMissingBodies:
         """Verify the patched body matches the eagerly captured content."""
         har_file = _write_har(tmp_path, "har_missing_body", "test.har")
         html = "<html><input type='hidden' name='csrf' value='abc'/></html>"
-        bodies = {"GET|http://192.168.100.1/|200": html.encode("utf-8")}
+        bodies = {"GET|http://192.168.100.1/|200": [html.encode("utf-8")]}
 
         _patch_missing_bodies(har_file, bodies)
 
@@ -418,8 +438,8 @@ class TestPatchMissingBodies:
         """In a HAR with mixed entries, only missing bodies get patched."""
         har_file = _write_har(tmp_path, "har_mixed_bodies", "test.har")
         bodies = {
-            "GET|http://192.168.100.1/|200": b"<html>login</html>",
-            "GET|http://192.168.100.1/api/status|200": b'{"status":"ok"}',
+            "GET|http://192.168.100.1/|200": [b"<html>login</html>"],
+            "GET|http://192.168.100.1/api/status|200": [b'{"status":"ok"}'],
         }
 
         patched_count = _patch_missing_bodies(har_file, bodies)
@@ -441,7 +461,7 @@ class TestPatchMissingBodies:
         """Non-UTF-8 text body falls back to base64 encoding."""
         har_file = _write_har(tmp_path, "har_missing_body", "test.har")
         body = b"\xff\xfe<html>latin1</html>"
-        bodies = {"GET|http://192.168.100.1/|200": body}
+        bodies = {"GET|http://192.168.100.1/|200": [body]}
 
         _patch_missing_bodies(har_file, bodies)
 
@@ -458,9 +478,114 @@ class TestPatchMissingBodies:
         har_file = tmp_path / "bad.har"
         har_file.write_text("not json")
 
-        result = _patch_missing_bodies(har_file, {"GET|http://x/|200": b"body"})
+        result = _patch_missing_bodies(har_file, {"GET|http://x/|200": [b"body"]})
 
         assert result == 0
+
+
+# Synthetic stand-ins for a device whose login page POSTs back to itself and
+# answers success with a tiny meta-refresh page (lengths match the fixtures).
+REDIRECT_PAGE = b'<html><head><meta http-equiv="refresh" content="0;url=status_cgi"</head>'
+WRONG_PASSWORD_PAGE = b"<html><body>Invalid user name or password</body></html>"
+FULL_STATUS_PAGE = b"<html><body>Status: connected, 4 channels locked</body></html>"
+POST_KEY = "POST|http://192.168.100.1/cgi-bin/basic_pwd_cgi|200"
+GET_KEY = "GET|http://192.168.100.1/cgi-bin/status_cgi|200"
+
+# ┌─────────────────────────┬──────────┬─────────────────────────────────────────────┬────────────────────────────┬──────────────────────┐
+# │ fixture_key             │ key      │ slots                                       │ expect_text                │ id                   │
+# ├─────────────────────────┼──────────┼─────────────────────────────────────────────┼────────────────────────────┼──────────────────────┤
+SAME_KEY_CASES = [
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, REDIRECT_PAGE, REDIRECT_PAGE],
+        [WRONG_PASSWORD_PAGE, REDIRECT_PAGE, REDIRECT_PAGE],
+        "post_back_each_entry_own_body",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, None, None],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "post_back_evicted_redirects_stay_empty",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, WRONG_PASSWORD_PAGE, WRONG_PASSWORD_PAGE],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "content_length_mismatch_never_patched",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "fewer_slots_than_entries",
+    ),
+    (
+        "har_redirect_before_login",
+        GET_KEY,
+        [None, FULL_STATUS_PAGE],
+        [None, FULL_STATUS_PAGE],
+        "get_redirect_page_then_full_page",
+    ),
+    (
+        "har_redirect_before_login",
+        GET_KEY,
+        [FULL_STATUS_PAGE, FULL_STATUS_PAGE],
+        [None, FULL_STATUS_PAGE],
+        "get_full_page_never_fills_redirect_entry",
+    ),
+]
+# └─────────────────────────┴──────────┴─────────────────────────────────────────────┴────────────────────────────┴──────────────────────┘
+
+
+class TestPatchSameKeyResponses:
+    """Responses sharing method, URL and status each get only their own body."""
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "key", "slots", "expect_texts", "desc"),
+        SAME_KEY_CASES,
+        ids=[c[4] for c in SAME_KEY_CASES],
+    )
+    def test_each_entry_gets_own_body_or_none(
+        self,
+        tmp_path: Path,
+        fixture_key: str,
+        key: str,
+        slots: list[bytes | None],
+        expect_texts: list[bytes | None],
+        desc: str,
+    ) -> None:
+        har_file = _write_har(tmp_path, fixture_key, "test.har")
+
+        _patch_missing_bodies(har_file, {key: slots})
+
+        with open(har_file) as f:
+            entries = json.load(f)["log"]["entries"]
+        actual = [e["response"]["content"].get("text") for e in entries]
+        assert actual == [t.decode() if t is not None else None for t in expect_texts]
+
+    @pytest.mark.parametrize(
+        ("headers", "body_length", "expect"),
+        [
+            ([{"name": "Content-Length", "value": "5"}], 5, True),
+            ([{"name": "content-length", "value": "5"}], 6, False),
+            (
+                [{"name": "Content-Length", "value": "5"}, {"name": "Content-Encoding", "value": "gzip"}],
+                9,
+                True,
+            ),
+            ([{"name": "Content-Length", "value": "abc"}], 9, True),
+            ([], 9, True),
+        ],
+        ids=["equal", "differs", "compressed_skipped", "unparsable_skipped", "absent"],
+    )
+    def test_length_matches_header(
+        self, headers: list[dict[str, str]], body_length: int, expect: bool
+    ) -> None:
+        assert _length_matches_header(headers, body_length) is expect
 
 
 class TestCaptureWriterLineEndings:

@@ -1041,10 +1041,6 @@
             "status": 200,
             "headers": [
               {
-                "name": "Content-Length",
-                "value": "611"
-              },
-              {
                 "name": "Content-type",
                 "value": "text/html"
               }
@@ -1270,6 +1266,229 @@
           "response": {
             "status": 200,
             "content": {}
+          }
+        }
+      ]
+    }
+  },
+  "har_with_root_among_bloat": {
+    "_comment": "A capture whose device root and its stored body sit among bloat entries. filter_and_compress_har removes by file extension only, so the root request and its body must survive every option combination.",
+    "log": {
+      "version": "1.2",
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/logo.png",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 22,
+              "text": "<html>landing page</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/font.woff2",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/app.js.map",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        }
+      ]
+    }
+  },
+  "har_login_posts_back": {
+    "_comment": "A login form POSTing back to its own URL: a wrong password, then right ones answered by a tiny meta-refresh page. All three bodies are empty, as when the redirect evicts them before Playwright flushes.",
+    "log": {
+      "version": "1.2",
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "55"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
+            "bodySize": 55,
+            "_transferSize": 255
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "72"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
+            "bodySize": 72,
+            "_transferSize": 272
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "72"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
+            "bodySize": 72,
+            "_transferSize": 272
+          }
+        }
+      ]
+    }
+  },
+  "har_redirect_before_login": {
+    "_comment": "The same GET before login (meta-refresh page) and after login (full page).",
+    "log": {
+      "version": "1.2",
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cgi-bin/status_cgi",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "72"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
+            "bodySize": 72,
+            "_transferSize": 272
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cgi-bin/status_cgi",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "62"
+              },
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1,
+              "mimeType": "text/html",
+              "compression": 0
+            },
+            "bodySize": 62,
+            "_transferSize": 262
           }
         }
       ]

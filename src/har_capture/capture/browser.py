@@ -351,8 +351,11 @@ class BrowserSessionResult:
         web_storage_local: localStorage entries per origin
         web_storage_session: sessionStorage key/value pairs
         captured_bodies: Eagerly captured response bodies keyed by
-            ``"<method>|<url>|<status>"`` — used to patch HAR entries
-            whose bodies were evicted before Playwright flushed the HAR.
+            ``"<method>|<url>|<status>"``. Each key holds one slot per
+            response seen, in arrival order (``None`` when the body could
+            not be read), so the Nth HAR entry with that key is patched
+            from the Nth slot only. Used to patch HAR entries whose bodies
+            were evicted before Playwright flushed the HAR.
         dialogs: Browser dialogs observed during interactive capture.
             For headed, user-driven runs, each entry records the dialog type,
             message, default value, inferred action (accept/dismiss), and that
@@ -381,7 +384,7 @@ class BrowserSessionResult:
     browser_cookies: list[Any] = dataclasses.field(default_factory=list)
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
-    captured_bodies: dict[str, bytes] = dataclasses.field(default_factory=dict)
+    captured_bodies: dict[str, list[bytes | None]] = dataclasses.field(default_factory=dict)
     dialogs: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -728,15 +731,26 @@ def _run_browser_session(
         # response from Chrome's buffer before the flush, the body is lost.
         # Capturing here while the response is still live lets us patch
         # missing bodies into the HAR afterward.
+        #
+        # Every response claims a slot under its key, even when no body can
+        # be read, so slot N lines up with the Nth HAR entry for that key.
+        # Responses sharing method, URL and status (a login form POSTing
+        # back to itself) must never be confused with one another.
         def _on_response(response: Any) -> None:
+            try:
+                key = f"{response.request.method}|{response.url}|{response.status}"
+            except Exception:
+                return
+            slots = result.captured_bodies.setdefault(key, [])
+            slots.append(None)
+            index = len(slots) - 1
             try:
                 ct = response.headers.get("content-type", "")
                 if not any(t in ct for t in ("text/", "application/json", "application/xml")):
                     return
                 body = response.body()
                 if body:
-                    key = f"{response.request.method}|{response.url}|{response.status}"
-                    result.captured_bodies[key] = body
+                    slots[index] = body
             except Exception:  # noqa: S110 — response may be aborted/streaming
                 pass
 
@@ -913,9 +927,24 @@ def _save_pending_downloads(
     return records
 
 
+def _length_matches_header(headers: list[dict[str, Any]], body_length: int) -> bool:
+    """Check a captured body against the response's ``Content-Length``.
+
+    Only meaningful for uncompressed responses; a missing, unparsable, or
+    compressed-transfer header gives no evidence of a mismatch.
+    """
+    values = {str(h.get("name", "")).lower(): str(h.get("value", "")).strip() for h in headers}
+    if values.get("content-encoding", "identity").lower() not in ("", "identity"):
+        return True
+    try:
+        return int(values["content-length"]) == body_length
+    except (KeyError, ValueError):
+        return True
+
+
 def _patch_missing_bodies(
     temp_path: Path,
-    captured_bodies: dict[str, bytes],
+    captured_bodies: dict[str, list[bytes | None]],
 ) -> int:
     """Patch missing response bodies into the raw HAR.
 
@@ -928,10 +957,17 @@ def _patch_missing_bodies(
     This function fills the gap using bodies eagerly captured via
     ``page.on("response")`` during the live session.
 
+    A body is only ever taken from the response the entry records: the Nth
+    HAR entry for a ``"<method>|<url>|<status>"`` key takes the Nth slot for
+    that key.  An entry whose slot is empty stays empty, and so does one
+    whose body length contradicts an uncompressed ``Content-Length`` — a
+    wrong body is worse than a missing one.
+
     Args:
         temp_path: Path to the raw HAR temp file (modified in-place).
-        captured_bodies: Map of ``"<method>|<url>|<status>"`` → raw
-            response bytes captured during the browser session.
+        captured_bodies: Map of ``"<method>|<url>|<status>"`` → one slot
+            per response in arrival order (raw bytes, or ``None`` when the
+            body was not captured).
 
     Returns:
         Number of HAR entries whose bodies were patched.
@@ -946,9 +982,20 @@ def _patch_missing_bodies(
         return 0
 
     patched = 0
+    seen: dict[str, int] = {}
     for entry in har.get("log", {}).get("entries", []):
         response = entry.get("response", {})
         content = response.get("content", {})
+
+        method = entry.get("request", {}).get("method", "GET")
+        url = entry.get("request", {}).get("url", "")
+        status = response.get("status", 0)
+        key = f"{method}|{url}|{status}"
+
+        # Every entry advances its key's ordinal, patched or not, so the
+        # Nth entry lines up with the Nth captured response.
+        ordinal = seen.get(key, 0)
+        seen[key] = ordinal + 1
 
         # Skip entries that already have body content
         if content.get("text"):
@@ -958,15 +1005,16 @@ def _patch_missing_bodies(
         if response.get("bodySize", 0) <= 0 and response.get("_transferSize", 0) <= 0:
             continue
 
-        method = entry.get("request", {}).get("method", "GET")
-        url = entry.get("request", {}).get("url", "")
-        status = response.get("status", 0)
-        key = f"{method}|{url}|{status}"
-
-        if key not in captured_bodies:
+        slots = captured_bodies.get(key, [])
+        body = slots[ordinal] if ordinal < len(slots) else None
+        if not body:
             continue
 
-        body = captured_bodies[key]
+        if not _length_matches_header(response.get("headers", []), len(body)):
+            _LOGGER.warning(
+                "Not patching %s %s: captured body length disagrees with Content-Length", method, url
+            )
+            continue
         mime = content.get("mimeType", "")
 
         # Text content types are stored as plain text in the HAR

@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A patched response body always comes from its own response.** Eagerly captured bodies were keyed by method, URL and
+  status alone, so a login page that POSTs back to its own URL (or a GET answered by a redirect page before login and
+  the full page after) could have a later response's body written into an earlier, evicted entry — a successful login
+  recorded as "Invalid user name or password". Bodies are now matched by order of occurrence; an entry with no matching
+  capture stays empty, and a body whose length disagrees with an uncompressed `Content-Length` is never patched.
+
+### Added
+
+- **Completeness check warns when the device root was never requested.** A capture that starts at a deep link holds no
+  landing reply, so the device cannot be identified from it. The warning tells the contributor to re-record starting at
+  the bare device address.
+- **Completeness check warns when an HTML document response has no stored body.** A 2xx `text/html` response with no
+  `content.text` (size `-1` or unstored) cannot be read later; the warning names the pages and asks for a re-record.
+
 ## [0.13.3] - 2026-10-17
 
 ### Changed

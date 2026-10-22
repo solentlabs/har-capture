@@ -356,7 +356,7 @@ class BrowserSessionResult:
     browser_cookies: list[Any]               # Cookies after page load
     web_storage_local: list[dict[str, Any]]  # localStorage entries per origin
     web_storage_session: dict[str, str]      # sessionStorage key/value pairs
-    captured_bodies: dict[str, bytes]        # Eagerly captured response bodies
+    captured_bodies: dict[str, list[bytes | None]]  # Eagerly captured bodies, one slot per response
     dialogs: list[dict[str, Any]]            # Dialog audit trail (headed interactive runs)
     popups: list[dict[str, Any]]             # Popup/new-page audit trail
     downloads: list[dict[str, Any]]          # Saved browser downloads (audit records)
@@ -529,11 +529,19 @@ triggering a navigation that supersedes the first response.
 
 Before navigation, a `page.on("response")` listener is registered that eagerly calls `response.body()` for text-based
 content types (`text/*`, `application/json`, `application/xml`). Bodies are stored in
-`BrowserSessionResult.captured_bodies` keyed by `"<method>|<url>|<status>"`.
+`BrowserSessionResult.captured_bodies` keyed by `"<method>|<url>|<status>"`. Each key holds a list with one slot per
+response seen, in arrival order; a response whose body cannot be read (evicted by a fast navigation, non-text type)
+still claims its slot as `None`. Responses that share a key — a login form POSTing back to its own URL, a GET that
+redirects before login and renders after — therefore never overwrite one another.
 
 After Playwright writes the HAR and before metadata injection, `_patch_missing_bodies()` scans HAR entries for responses
-that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. For each missing body, it looks up the key in the
-captured bodies cache and patches the body into the HAR entry.
+that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. The Nth HAR entry for a key takes the Nth slot
+for that key, so a patched body always comes from the response the entry records. An entry whose slot is empty stays
+empty — a wrong body is worse than a missing one. As a safety net, a body whose length disagrees with an uncompressed
+`Content-Length` header is never patched.
+
+Very short bodies (a `<meta http-equiv="refresh">` page the browser leaves at once) are often evicted before either the
+eager listener or Playwright can read them; those entries stay honestly empty.
 
 Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to base64 encoding with
 `content.encoding = "base64"`. Sanitization decodes such a body again — as latin-1 when its type is text and no charset
@@ -543,8 +551,9 @@ is declared — and writes it back as plain text (see
 #### `_patch_missing_bodies(temp_path, captured_bodies) -> int`
 
 - Reads the raw HAR from `temp_path`
-- For each entry missing `content.text` with `bodySize > 0` or `_transferSize > 0`: looks up `"<method>|<url>|<status>"`
-  in `captured_bodies` and patches the body
+- For each entry missing `content.text` with `bodySize > 0` or `_transferSize > 0`: takes the slot at the entry's
+  per-key ordinal in `captured_bodies["<method>|<url>|<status>"]` and patches the body unless the slot is empty or the
+  length contradicts an uncompressed `Content-Length`
 - Writes the patched HAR back to `temp_path`
 - Returns the number of entries patched
 - Handles corrupt HAR files gracefully (returns 0)
@@ -671,11 +680,12 @@ har_data["log"]["_solentlabs"] = {
 
 Before sanitization, `analyze_capture_completeness()` inspects the raw HAR and attaches a `CaptureCompletenessReport` to
 `CaptureResult.completeness`. It runs against the **raw** HAR because bloat filtering can remove the true first entry,
-and the first request is the mid-session signal.
+and the first request is the mid-session signal. `--minimal` only skips pre-flight and changes the page-load strategy;
+neither it nor the bloat filter (extension-only) removes the root request or its body.
 
 The check itself lives in `validation/` and is shared with `har-capture sanitize` / `har-capture validate` — see
-[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the three warning codes,
-what counts as a credential submission, and the ordering rule.
+[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the five warning codes, what
+counts as a credential submission, and the ordering rule.
 
 ### Sanitization
 
