@@ -84,7 +84,7 @@ MAC_PATTERN = MAC_RE
 SERIAL_PATTERNS: list[re.Pattern[str]] = [SERIAL_LABEL_RE]
 
 # Public IP pattern (not private ranges)
-IP_PATTERN = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+IP_PATTERN = re.compile(r"(?<!\d\.)\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b(?!\.\d)")
 
 # Factory-default usernames shipped fixed on device families. These carry no
 # identifying content — flagging them turns the validate gate red on every

@@ -315,7 +315,8 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 
 **Public IPs:**
 
-- Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost)
+- Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost) — a dotted quad that is part of a longer
+  dotted number (an SNMP OID) is not an address and is not reported
 - Excludes redacted placeholders (10.255.x.x, 192.0.2.x)
 - Excludes netmasks (`is_netmask()`: contiguous-bit masks like 255.255.252.0), reserved first octets (255.x, 0.x), and
   version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them would put
