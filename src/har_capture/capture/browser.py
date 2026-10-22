@@ -356,6 +356,10 @@ class BrowserSessionResult:
             not be read), so the Nth HAR entry with that key is patched
             from the Nth slot only. Used to patch HAR entries whose bodies
             were evicted before Playwright flushed the HAR.
+        network_bodies: Response bodies read at the network level (Chromium
+            only), keyed and slotted like ``captured_bodies``. The browser
+            holds each response until its body is read, so a quick
+            navigation cannot evict it first.
         dialogs: Browser dialogs observed during interactive capture.
             For headed, user-driven runs, each entry records the dialog type,
             message, default value, inferred action (accept/dismiss), and that
@@ -385,6 +389,7 @@ class BrowserSessionResult:
     web_storage_local: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     web_storage_session: dict[str, str] = dataclasses.field(default_factory=dict)
     captured_bodies: dict[str, list[bytes | None]] = dataclasses.field(default_factory=dict)
+    network_bodies: dict[str, list[bytes | None]] = dataclasses.field(default_factory=dict)
     dialogs: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     popups: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -683,6 +688,12 @@ def _run_browser_session(
             result.pre_capture_cookies = []
 
         page = context.new_page()
+        # Playwright answers Basic Auth challenges through the same CDP domain;
+        # a second Fetch client makes those fail, so credentialed runs keep
+        # only the eager read.
+        network_capture = browser_type is p.chromium and not http_credentials
+        if network_capture:
+            _attach_network_body_capture(context, page, result.network_bodies)
         interactive_dialog_capture = not headless and timeout is None
         if interactive_dialog_capture:
             # Two-event model. (1) `page.on("dialog")` fires when the native
@@ -792,6 +803,8 @@ def _run_browser_session(
         # entries are interleaved with the main page's.
         def _on_new_page(popup_page: Any) -> None:
             try:
+                if network_capture:
+                    _attach_network_body_capture(context, popup_page, result.network_bodies)
                 popup_page.on("response", _on_response)
                 if downloads_dir is not None:
                     popup_page.on("download", _on_download)
@@ -936,6 +949,118 @@ def _save_pending_downloads(
             _LOGGER.warning("Failed to save download %r: %s", record.get("suggested_filename"), e)
         records.append(record)
     return records
+
+
+_TEXT_CONTENT_TYPES = ("text/", "application/json", "application/xml")
+
+
+def _record_paused_response(
+    network_bodies: dict[str, list[bytes | None]],
+    event: dict[str, Any],
+    read_body: Callable[[str], bytes | None],
+) -> None:
+    """Claim a slot for a response the browser has paused and fill it when readable.
+
+    Redirects and non-text types claim a slot but are not read. The slot
+    sequence per ``method|url|status`` key mirrors ``_claim_body_slot``.
+
+    Args:
+        network_bodies: Slots per key, appended to in response order
+        event: CDP ``Fetch.requestPaused`` event paused at the response stage
+        read_body: Reads the paused response's body by request id
+    """
+    request = event.get("request", {})
+    status = event.get("responseStatusCode")
+    key = f"{request.get('method')}|{request.get('url')}|{status}"
+    slots = network_bodies.setdefault(key, [])
+    slots.append(None)
+    index = len(slots) - 1
+    if not isinstance(status, int) or 300 <= status < 400:
+        return
+    content_type = next(
+        (
+            h.get("value", "")
+            for h in event.get("responseHeaders") or []
+            if h.get("name", "").lower() == "content-type"
+        ),
+        "",
+    )
+    if not any(t in content_type for t in _TEXT_CONTENT_TYPES):
+        return
+    try:
+        body = read_body(event["requestId"])
+    except Exception:
+        return
+    if body:
+        slots[index] = body
+
+
+def _attach_network_body_capture(
+    context: Any, page: Any, network_bodies: dict[str, list[bytes | None]]
+) -> None:
+    """Read response bodies while the browser holds them (Chromium only).
+
+    Playwright's HAR recorder and its ``response`` event both read a body
+    after the fact, so a reply the page leaves at once (a ``0``-second
+    ``<meta http-equiv="refresh">``) is gone by then. The CDP ``Fetch``
+    domain pauses each response before the page can act on it; the body is
+    read and the response released unchanged, so traffic is not altered.
+
+    Args:
+        context: Playwright browser context
+        page: Page to watch
+        network_bodies: Slots per key, filled in response order
+    """
+    try:
+        session = context.new_cdp_session(page)
+
+        def read_body(request_id: str) -> bytes | None:
+            result = session.send("Fetch.getResponseBody", {"requestId": request_id})
+            raw = result.get("body", "")
+            return base64.b64decode(raw) if result.get("base64Encoded") else raw.encode()
+
+        def on_paused(event: dict[str, Any]) -> None:
+            try:
+                _record_paused_response(network_bodies, event, read_body)
+            finally:
+                try:
+                    if event.get("responseStatusCode") is None and event.get("responseErrorReason") is None:
+                        session.send("Fetch.continueRequest", {"requestId": event["requestId"]})
+                    else:
+                        session.send("Fetch.continueResponse", {"requestId": event["requestId"]})
+                except Exception:  # noqa: S110 — page closed while paused
+                    pass
+
+        session.on("Fetch.requestPaused", on_paused)
+        session.send("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]})
+    except Exception as e:
+        _LOGGER.warning("Network-level body capture unavailable: %s", e)
+
+
+def _merge_body_slots(
+    network: dict[str, list[bytes | None]], eager: dict[str, list[bytes | None]]
+) -> dict[str, list[bytes | None]]:
+    """Combine the two body sources, preferring the network-level read.
+
+    Slots of a key line up only when both sources saw the same number of
+    responses for it; otherwise the eager list is kept whole rather than
+    risk pairing a body with the wrong response.
+
+    Args:
+        network: Bodies read while the browser held the response
+        eager: Bodies read from Playwright ``response`` events
+
+    Returns:
+        One slot list per key
+    """
+    merged = {key: list(slots) for key, slots in eager.items()}
+    for key, net_slots in network.items():
+        eager_slots = merged.get(key)
+        if eager_slots is None:
+            merged[key] = list(net_slots)
+        elif len(eager_slots) == len(net_slots):
+            merged[key] = [n if n is not None else e for n, e in zip(net_slots, eager_slots, strict=True)]
+    return merged
 
 
 def _claim_body_slot(captured_bodies: dict[str, list[bytes | None]], response: Any) -> None:
@@ -1457,7 +1582,7 @@ def capture_device_har(
             )
 
     # 3. Patch any response bodies that Playwright missed
-    _patch_missing_bodies(paths.temp_path, session.captured_bodies)
+    _patch_missing_bodies(paths.temp_path, _merge_body_slots(session.network_bodies, session.captured_bodies))
 
     # 4. Inject metadata
     _inject_har_metadata(paths.temp_path, paths.target_url, probes, session)

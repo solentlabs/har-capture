@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Short redirect pages are kept in headed Chromium captures.** A reply the page leaves at once (a login success or
+  logout `<meta http-equiv="refresh">` stub, the device root) was often lost before Playwright could read it, leaving an
+  empty entry. Bodies are now also read while the browser holds the response, and the response is released unchanged.
+  Runs with `--username`/`--password`, Firefox and WebKit keep the earlier behavior.
 - **SNMP OID strings in firmware JavaScript are no longer rewritten as IP addresses.** The IPv4 patterns matched the
   last four numbers of a longer dotted number, so an OID like `1.3.6.1.4.1.4115.1.20.1.1.3.42.1.20` in a device's
   `mib.js` became `1.3.6.1.4.1.4115.1.20.1.1.192.0.2.229`. A match glued to a longer dotted number is now left alone.

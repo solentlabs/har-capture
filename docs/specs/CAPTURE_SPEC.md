@@ -545,7 +545,15 @@ empty — a wrong body is worse than a missing one. As a safety net, a body whos
 `Content-Length` header is never patched.
 
 Very short bodies (a `<meta http-equiv="refresh">` page the browser leaves at once) are often evicted before either the
-eager listener or Playwright can read them; those entries stay honestly empty.
+eager listener or Playwright can read them. Chromium runs therefore also read bodies at the network level: the CDP
+`Fetch` domain pauses each response at the response stage, the body of a non-redirect text, JSON or XML reply is read
+while the browser holds it, and the response is released unchanged. A headless run keeps stub bodies anyway; a headed
+run loses them intermittently without this (the eager read returns nothing and the HAR entry has `content.size` -1).
+Network-level bodies fill the same per-key slots as the eager ones and are preferred, falling back to the eager body for
+a slot the network read missed; when the two sources saw a different number of responses for a key, the eager slots are
+used whole. Runs given `--username`/`--password` skip the network read (a second `Fetch` client breaks Playwright's
+Basic Auth answers), and Firefox and WebKit have no such domain; those runs keep only the eager read, so a stub the page
+leaves at once can stay empty.
 
 Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to base64 encoding with
 `content.encoding = "base64"`. Sanitization decodes such a body again — as latin-1 when its type is text and no charset
