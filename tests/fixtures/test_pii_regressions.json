@@ -98,5 +98,55 @@
       "id": "serial_td_whitespace_between_tags",
       "source": "Technicolor CGM4981COM — table-cell variant with newlines between tags, same tag-chain construct in the table pass"
     }
+  ],
+  "oid_keyed_json_cases": [
+    {
+      "id": "arris_ssid_24ghz_snmpget",
+      "endpoint": "snmpGet",
+      "oid": "1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.10001",
+      "value": "SynthNetHome",
+      "redacted": true,
+      "source": "ARRIS SBG7400AC2 :8080/snmpGet — SSID under a bare OID key"
+    },
+    {
+      "id": "arris_ssid_5ghz_snmpget",
+      "endpoint": "snmpGet",
+      "oid": "1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.10101",
+      "value": "SynthNetHome-5G",
+      "redacted": true,
+      "source": "ARRIS SBG7400AC2 :8080/snmpGet — 5 GHz index"
+    },
+    {
+      "id": "arris_ssid_walk",
+      "endpoint": "walk",
+      "oid": "1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.10201",
+      "value": "SynthGuest",
+      "redacted": true,
+      "source": "same OID column on /walk, any row index"
+    },
+    {
+      "id": "neighbor_column_untouched",
+      "endpoint": "snmpGet",
+      "oid": "1.3.6.1.4.1.4115.1.20.1.1.3.22.1.3.10001",
+      "value": "SynthColumn",
+      "redacted": false,
+      "source": "only the SSID column (.2) is a Wi-Fi name"
+    },
+    {
+      "id": "model_name_untouched",
+      "endpoint": "snmpGet",
+      "oid": "1.3.6.1.2.1.1.5.0",
+      "value": "SBG7400AC2",
+      "redacted": false,
+      "source": "sysName holds the model, not user data"
+    },
+    {
+      "id": "language_untouched",
+      "endpoint": "snmpGet",
+      "oid": "1.3.6.1.4.1.4115.1.20.1.1.5.6.0",
+      "value": "English",
+      "redacted": false,
+      "source": "UI language setting"
+    }
   ]
 }

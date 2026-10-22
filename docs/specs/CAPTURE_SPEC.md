@@ -88,6 +88,10 @@ response to detect whether the device has a live session that would cause the ca
 
 1. If the response is non-200 (401, 403, redirect) → clean state, auth is required
 1. If the response is 200 with a body under 100 bytes → clean (redirect stub)
+1. If the response is a redirect-only page (`<meta http-equiv="refresh" content="N;url=...">`, or a JS `location`
+   assignment on a page under 512 bytes) → the redirect is followed (up to 3 hops, relative targets resolved against the
+   requested URL) and the page it lands on is judged by the rules here. A redirect that never settles, or points back at
+   the same URL, is never treated as data
 1. If the response body contains login-page indicators (`password`, `login`, `sign in`, `signin`, `log in`,
    `authenticate`) → clean, login page is being served
 1. If the response is 200 with substantial content and no login indicators → **contaminated** — the device is serving

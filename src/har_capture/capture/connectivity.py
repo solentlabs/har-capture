@@ -13,9 +13,11 @@ and har-capture must not pull playwright into CMM).
 from __future__ import annotations
 
 import logging
+import re
 import socket
 import ssl
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -410,12 +412,56 @@ def check_basic_auth(url: str, timeout: int = 5) -> tuple[bool, str | None]:
         return False, None
 
 
+_MAX_REDIRECT_HOPS = 3
+
+_META_REFRESH_RE = re.compile(
+    rb"<meta[^>]+http-equiv\s*=\s*[\"']?refresh[\"']?[^>]*?content\s*=\s*[\"']?\s*[\d.]*\s*;\s*url\s*=\s*['\"]?([^\"'>\s]+)",
+    re.IGNORECASE,
+)
+_JS_REDIRECT_RE = re.compile(
+    rb"(?:window\.|document\.|top\.|self\.)?location(?:\.href)?\s*=\s*[\"']([^\"']+)[\"']"
+    rb"|location\.(?:replace|assign)\(\s*[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
+# A JS location assignment only marks a redirect-only stub when the page is tiny;
+# a full data page can mention location handling without being a stub.
+_JS_REDIRECT_MAX_BYTES = 512
+
+
+def _redirect_target(body: bytes, base_url: str) -> str | None:
+    """Return the absolute URL a redirect-only page sends the browser to.
+
+    Recognises ``<meta http-equiv="refresh" content="N;url=...">`` and, for
+    tiny pages, a JS ``location`` assignment.  Returns ``None`` when the page
+    does not redirect, or redirects to itself or another host.
+    """
+    match = _META_REFRESH_RE.search(body)
+    target = match.group(1) if match else None
+    if target is None and len(body) < _JS_REDIRECT_MAX_BYTES:
+        js = _JS_REDIRECT_RE.search(body)
+        if js:
+            target = js.group(1) or js.group(2)
+    if not target:
+        return None
+    absolute: str = urllib.parse.urljoin(base_url, target.decode("utf-8", errors="replace"))
+    if (
+        absolute == base_url
+        or urllib.parse.urlsplit(absolute).netloc != urllib.parse.urlsplit(base_url).netloc
+    ):
+        return None
+    return absolute
+
+
 def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str | None]:
     """Check if the target has a live session that would skip the login flow.
 
     Makes an unauthenticated GET and inspects the response.  If the device
     returns 200 with data content (no login-page indicators), it means a
     previous session is still active — the capture would miss the auth flow.
+
+    A page that only redirects (meta refresh or JS ``location``) is never
+    treated as data: the redirect is followed (up to a few hops) and the page
+    it lands on is judged instead.  An unfollowable redirect counts as clean.
 
     Args:
         url: Target URL with scheme (e.g., ``http://192.168.100.1/``)
@@ -427,31 +473,42 @@ def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str |
         session.  *message* contains a human-readable warning.
     """
     try:
-        resp = _urlopen_with_ssl(url, timeout=timeout)
+        current = url
+        for _ in range(_MAX_REDIRECT_HOPS + 1):
+            resp = _urlopen_with_ssl(current, timeout=timeout)
 
-        # Non-200 → auth challenge or redirect → clean state
-        if resp.status != 200:
-            return False, None
-
-        body = resp.read(4096).lower()
-
-        # If the body contains login-page indicators, the device is
-        # presenting a login form → no live session.  Check keywords
-        # before the size threshold so small JS-shell login pages
-        # (e.g. <html><script src=/app.js></script>) are caught.
-        for indicator in _LOGIN_PAGE_INDICATORS:
-            if indicator in body:
+            # Non-200 → auth challenge or redirect → clean state
+            if resp.status != 200:
                 return False, None
 
-        # Empty or tiny response → redirect stub or placeholder
-        if len(body) < 100:
-            return False, None
+            body = resp.read(4096).lower()
+            landed = resp.url if isinstance(getattr(resp, "url", None), str) else current
 
-        # 200 with substantial content and no login indicators → live session
-        return True, (
-            "Browser has a live session \u2014 clear cookies or use a clean "
-            "profile. The device returned data content without requiring login."
-        )
+            # If the body contains login-page indicators, the device is
+            # presenting a login form → no live session.  Check keywords
+            # before the size threshold so small JS-shell login pages
+            # (e.g. <html><script src=/app.js></script>) are caught.
+            for indicator in _LOGIN_PAGE_INDICATORS:
+                if indicator in body:
+                    return False, None
+
+            # Redirect-only page → judge the page it leads to
+            target = _redirect_target(body, landed)
+            if target is not None:
+                current = target
+                continue
+
+            # Empty or tiny response → redirect stub or placeholder
+            if len(body) < 100:
+                return False, None
+
+            # 200 with substantial content and no login indicators → live session
+            return True, (
+                "Browser has a live session \u2014 clear cookies or use a clean "
+                "profile. The device returned data content without requiring login."
+            )
+        # Redirect chain never settled → can't tell, don't block capture
+        return False, None
     except urllib.error.HTTPError:
         # 401/403/etc. → auth required → clean state
         return False, None

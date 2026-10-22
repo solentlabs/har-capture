@@ -246,6 +246,10 @@ A domain file can contain any combination of these sections:
     "safe_values": ["domain-specific-safe-value"]
   },
 
+  "fields": {
+    "auto_redact_patterns": ["^oid-key-regex$"]
+  },
+
   "script_variables": {
     "password": [{"regex": "CurrentPw[A-Za-z]*", "flags": ["IGNORECASE"]}],
     "pipe_delimited": [{"regex": "tagValueList"}]
@@ -414,6 +418,9 @@ The built-in network device domain provides:
   7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
   deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
+- A `fields.auto_redact_patterns` rule for the ARRIS Wi-Fi SSID OIDs (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index>`).
+  SNMP-over-JSON endpoints (`snmpGet`, `walk`) key each value by a bare OID with no descriptive name, so only a key
+  regex can see them; the sanitizer redacts the value and `validate` reports it
 
 ## Merge Order
 

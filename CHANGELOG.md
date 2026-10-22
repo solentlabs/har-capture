@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A meta-refresh or JS-redirect root page no longer aborts capture with a false "live session" error.** The session
+  check now follows a redirect-only page (up to 3 same-host hops) and judges the page it lands on, so a device whose
+  root is a stub like `<meta http-equiv="Refresh" content="0;url=/cgi-bin/status_cgi">` is no longer counted as serving
+  data. Previously the only way past it was `--minimal`.
+- **Wi-Fi SSIDs under bare SNMP OID keys are redacted.** With `--patterns network-device`, the ARRIS SSID OIDs
+  (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.*`) in `snmpGet` / `walk` JSON responses are redacted, and `har-capture validate`
+  flags them when present. Key-based rules could not see a value keyed only by an OID.
 - **A patched response body always comes from its own response.** Eagerly captured bodies were keyed by method, URL and
   status alone, so a login page that POSTs back to its own URL (or a GET answered by a redirect page before login and
   the full page after) could have a later response's body written into an earlier, evicted entry — a successful login
