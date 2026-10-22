@@ -206,8 +206,9 @@ read, so this list carries no PII risk.
 to count credential submissions (a `POST`/`PUT`/`PATCH` body with a non-empty value under a password-named form field or
 JSON key, among the [other kinds](VALIDATION_SPEC.md#capture-completeness-validation)), which drives the
 `single_credential_submission` warning. Entries are case-insensitive substring-match regexes tested against field
-**names**; of a value, only whether it is empty is read. The list is deliberately narrower than `sensitive.json`
-`auto_redact_patterns` — token/secret fields ride along on every form and would inflate the count.
+**names** (`^arguments$` is anchored: the packed base64 `user:pass` field of ARRIS-style form logins); of a value, only
+whether it is empty is read. The list is deliberately narrower than `sensitive.json` `auto_redact_patterns` —
+token/secret fields ride along on every form and would inflate the count.
 
 **Merge semantics:** a custom capture-settings file extends all three sections. `bloat_extensions` categories extend
 per-category (unknown categories are added); `session_cookies.name_patterns` and `password_fields.name_patterns` extend

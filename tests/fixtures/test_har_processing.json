@@ -1493,5 +1493,93 @@
         }
       ]
     }
+  },
+  "har_credential_annotation_after_bloat": {
+    "_comment": "Bloat entries ahead of the annotated login; _sanitized_credentials names entries by position, so filtering must re-point it (and drop the annotation of a removed entry).",
+    "log": {
+      "version": "1.2",
+      "creator": {
+        "name": "test",
+        "version": "1.0"
+      },
+      "_har_capture": {
+        "_sanitized_credentials": [
+          {
+            "entry_index": 0,
+            "location": "url_query_param"
+          },
+          {
+            "entry_index": 3,
+            "location": "url_query_param"
+          }
+        ]
+      },
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/logo.png",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/font.woff2",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/data.html",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "text": "<html>d</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1:8080/login?t=AUTH_x",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {}
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/status.html",
+            "headers": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "text": "<html>s</html>"
+            }
+          }
+        }
+      ]
+    }
   }
 }

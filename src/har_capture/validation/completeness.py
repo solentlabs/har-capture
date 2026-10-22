@@ -61,6 +61,12 @@ _ROOT_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*/?(?:[?#].*)?$")
 # How many document URLs a body-less warning names before summarizing.
 _MAX_NAMED_DOCUMENTS = 3
 
+# A body-less document whose Content-Length is at most this is a redirect
+# stub (a meta-refresh page the browser leaves at once, 72-122 bytes on the
+# SBG7400AC2): its body is gone before any recorder can read it, so
+# re-recording cannot help and it does not warn.
+_REDIRECT_STUB_MAX_BYTES = 256
+
 
 @dataclass(frozen=True)
 class CompletenessWarning:
@@ -98,6 +104,9 @@ class CaptureCompletenessReport:
             Exactly one submission in the whole capture means no refused
             login was recorded — auth-failure evidence is as valuable as the
             success and cannot be reconstructed later.
+        redirect_stub_documents: URLs of body-less documents small enough to be
+            redirect stubs (see ``_REDIRECT_STUB_MAX_BYTES``). Recorded for
+            transparency; never a warning, since no re-record can capture them.
         warnings: Gaps found; empty when the capture looks complete
     """
 
@@ -107,6 +116,7 @@ class CaptureCompletenessReport:
     set_cookie_responses: int = 0
     first_request_session_cookies: list[str] = field(default_factory=list)
     credential_submission_counts: dict[str, int] = field(default_factory=dict)
+    redirect_stub_documents: list[str] = field(default_factory=list)
     warnings: list[CompletenessWarning] = field(default_factory=list)
 
     @property
@@ -313,6 +323,23 @@ def _is_unstored_document(response: dict[str, Any]) -> bool:
     return not content.get("text") and content.get("size") != 0
 
 
+def _declared_length(response: dict[str, Any]) -> int | None:
+    """Return the response's ``Content-Length`` as an int, or ``None`` when absent or unparsable."""
+    for header in response.get("headers") or []:
+        if isinstance(header, dict) and str(header.get("name", "")).lower() == "content-length":
+            try:
+                return int(str(header.get("value", "")).strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _is_redirect_stub(response: dict[str, Any]) -> bool:
+    """True if a response declares a body small enough to be a redirect stub."""
+    length = _declared_length(response)
+    return length is not None and 0 < length <= _REDIRECT_STUB_MAX_BYTES
+
+
 def _first_entry(entries: list[Any]) -> dict[str, Any] | None:
     """Return the chronologically first entry.
 
@@ -402,8 +429,9 @@ def analyze_capture_completeness(
         response = entry.get("response")
         if isinstance(response, dict) and _is_unstored_document(response):
             document_url = _submission_url(url)
-            if document_url not in unstored_documents:
-                unstored_documents.append(document_url)
+            bucket = report.redirect_stub_documents if _is_redirect_stub(response) else unstored_documents
+            if document_url not in bucket:
+                bucket.append(document_url)
         credential_headers = _credential_header_values(request)
         new_header = not header_values.issuperset(credential_headers)
         header_values.update(credential_headers)

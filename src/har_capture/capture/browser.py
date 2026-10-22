@@ -447,6 +447,29 @@ def strip_browser_internal_entries(har: dict[str, Any]) -> int:
     return removed
 
 
+def _remap_credential_annotation(log: dict[str, Any], new_index: dict[int, int]) -> None:
+    """Re-point ``_sanitized_credentials`` at the entries that survived filtering.
+
+    The annotation names entries by position, so removing entries ahead of
+    one shifts it onto a different request.  Annotations for removed entries
+    are dropped; malformed items are left alone for their readers to skip.
+    """
+    meta = log.get("_har_capture")
+    if not isinstance(meta, dict):
+        return
+    items = meta.get("_sanitized_credentials")
+    if not isinstance(items, list):
+        return
+    remapped: list[Any] = []
+    for item in items:
+        index = item.get("entry_index") if isinstance(item, dict) else None
+        if not isinstance(index, int) or isinstance(index, bool):
+            remapped.append(item)
+        elif index in new_index:
+            remapped.append({**item, "entry_index": new_index[index]})
+    meta["_sanitized_credentials"] = remapped
+
+
 def filter_and_compress_har(
     har_path: Path,
     options: CaptureOptions | None = None,
@@ -477,9 +500,10 @@ def filter_and_compress_har(
     # Filter entries by file type only. Repeated requests are never collapsed:
     # a repeat can differ from the first in outcome or content, and that
     # difference is the evidence (ADR-15).
-    filtered_entries = []
+    filtered_entries: list[Any] = []
+    new_index: dict[int, int] = {}
 
-    for entry in har["log"]["entries"]:
+    for old_index, entry in enumerate(har["log"]["entries"]):
         url = entry.get("request", {}).get("url", "")
 
         # Skip bloat file types
@@ -487,9 +511,11 @@ def filter_and_compress_har(
         if any(url_lower.endswith(ext) for ext in bloat_extensions):
             continue
 
+        new_index[old_index] = len(filtered_entries)
         filtered_entries.append(entry)
 
     har["log"]["entries"] = filtered_entries
+    _remap_credential_annotation(har["log"], new_index)
     filtered_count = len(filtered_entries)
 
     # Write filtered HAR (pretty-printed for readability). newline="\n" keeps

@@ -97,6 +97,12 @@ WARNING_CASES = [
     ("document_truly_empty",              [],                                               "html_size_zero_is_empty_not_lost"),
     ("bodyless_redirect",                 [],                                               "non_2xx_not_a_document"),
     ("bodyless_non_html",                 [],                                               "non_html_not_a_document"),
+    ("packed_credential_form_two",        [],                                               "packed_arguments_form_counted_with_snmp_get"),
+    ("packed_credential_form_one",        [SINGLE_CREDENTIAL_SUBMISSION],                   "packed_arguments_form_is_a_submission"),
+    ("packed_credential_empty_value",     [],                                               "empty_packed_value_not_a_submission"),
+    ("document_redirect_stub",            [],                                               "small_content_length_is_redirect_stub"),
+    ("document_large_with_length",        [DOCUMENT_WITHOUT_BODY],                          "large_content_length_is_truncated_page"),
+    ("document_unparsable_length",        [DOCUMENT_WITHOUT_BODY],                          "unparsable_content_length_is_not_a_stub"),
 ]
 # fmt: on
 
@@ -192,6 +198,22 @@ class TestWarnings:
         assert "p0.html" in message
         assert "?x=1" not in message
         assert "and 2 more" in message
+
+    def test_packed_credential_form_counts_by_post_url_not_snmp_get(self) -> None:
+        """Test the packed `arguments` login form is the submission, never a GET beside it."""
+        report = analyze_capture_completeness(_har("packed_credential_form_two"))
+
+        assert report.credential_submission_counts == {"http://192.168.100.1/cgi-bin/basic_pwd_cgi": 2}
+
+    def test_redirect_stubs_recorded_without_warning(self) -> None:
+        """Test small body-less documents are listed on the report, not warned about."""
+        report = analyze_capture_completeness(_har("document_redirect_stub"))
+
+        assert report.redirect_stub_documents == [
+            "http://192.168.100.1/",
+            "http://192.168.100.1/cgi-bin/status_cgi",
+        ]
+        assert report.complete
 
     def test_warnings_do_not_mutate_the_har(self) -> None:
         """Test analysis leaves the HAR untouched (captures are evidence)."""

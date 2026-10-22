@@ -277,6 +277,18 @@ class TestFilterAndCompressHar:
         root = next(e for e in kept if e["request"]["url"] == "http://192.168.100.1/")
         assert root["response"]["content"]["text"] == "<html>landing page</html>"
 
+    def test_credential_annotation_follows_surviving_entries(self, tmp_path: Path) -> None:
+        """_sanitized_credentials is re-pointed at the kept entries; removed ones are dropped."""
+        har_file = _write_har(tmp_path, "har_credential_annotation_after_bloat", "annot.har")
+
+        compressed_path, _stats = filter_and_compress_har(har_file, CaptureOptions())
+
+        with gzip.open(compressed_path, "rt") as f:
+            log = json.load(f)["log"]
+        annotated = [i["entry_index"] for i in log["_har_capture"]["_sanitized_credentials"]]
+        assert annotated == [1]
+        assert "login" in log["entries"][1]["request"]["url"]
+
     @pytest.mark.parametrize("case", REPEATED_REQUEST_CASES)
     def test_repeated_requests_all_kept(self, tmp_path: Path, case: str) -> None:
         """Repeated requests all survive, in recorder order."""

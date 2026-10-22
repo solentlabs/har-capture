@@ -254,6 +254,28 @@ class TestCompletenessReporting:
         assert plain.exit_code == 0
         assert strict.exit_code == 0
 
+    def test_summary_line_accounts_for_printed_gaps(self, tmp_path: Path) -> None:
+        """Test the Summary line mentions the gaps it deliberately does not count."""
+        har = self._write(tmp_path, "no_credential_submission", "gaps.har")
+
+        result = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+
+        gaps = result.output.count("WARNING:")
+        assert gaps >= 1
+        assert (
+            f"Summary: 0 errors, 0 warnings (plus {gaps} capture-completeness gap(s), not counted)"
+            in result.output
+        )
+
+    def test_summary_line_plain_when_complete(self, tmp_path: Path) -> None:
+        """Test a capture with no gaps adds nothing to the summary line."""
+        har = self._write(tmp_path, "clean_login_flow", "clean_flow.har")
+
+        result = runner.invoke(app, ["validate", str(har), "--patterns", "base"])
+
+        assert "Summary:" in result.output
+        assert "capture-completeness gap" not in result.output
+
     def test_directory_scan_suppresses_summary(self, tmp_path: Path) -> None:
         """Test multi-file scans print warnings only, keeping pre-commit quiet."""
         self._write(tmp_path, "mid_session_and_no_submission", "a.har")

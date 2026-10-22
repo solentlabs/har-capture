@@ -714,6 +714,9 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
    - Nothing else is removed. Repeated requests are **never** collapsed: a failed request and its successful retry, a
      pre-login and a post-login visit to the same data URL, and identical retries all survive, in recorder order. See
      [ADR-15](../ARCHITECTURE_DECISIONS.md#adr-15-repeated-requests-are-never-collapsed).
+1. **Re-point `_sanitized_credentials`**: the annotation names entries by position, so each `entry_index` is mapped to
+   the entry's new position and annotations of removed entries are dropped. Without this an index would name a different
+   request in the filtered file
 1. **Write filtered HAR**: Pretty-printed JSON, LF line endings (`newline="\n"` — see
    [Sanitization Spec](SANITIZATION_SPEC.md#constraints--invariants) for why every writer pins it)
 1. **Gzip compress**: Compression level 9, output to `.har.gz`

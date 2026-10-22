@@ -31,7 +31,8 @@
       "pass(?:word|wd|phrase)?",
       "pwd",
       "pws",
-      "psk"
+      "psk",
+      "^arguments$"
     ]
   }
 }

@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **`validate` no longer points a URL-credential annotation at the wrong request.** `filter_and_compress_har` removed
+  bloat entries but left `_sanitized_credentials` indices unchanged, so on a filtered capture the annotation named a
+  different request (an unrelated `snmpGet`), producing a false "only one credential submission" warning. The indices
+  are now re-pointed at the surviving entries.
+- **The packed `arguments` login form is recognised as a credential submission.** ARRIS-style `POST` forms carrying a
+  base64 `user:pass` in `arguments` beside an `ar_nonce` now count, so a wrong-password attempt plus the real login no
+  longer reads as one submission.
+- **Redirect-stub documents no longer draw a "re-record" warning.** A body-less `text/html` response with a
+  `Content-Length` of 256 bytes or less is a meta-refresh stub no recording can capture; it is listed on the report but
+  not warned about. Larger or unsized body-less pages still warn.
+- **`validate`'s summary line accounts for printed completeness gaps.** It still counts PII findings only (gaps never
+  change the exit code) but now says how many gaps were printed above it.
 - **A meta-refresh or JS-redirect root page no longer aborts capture with a false "live session" error.** The session
   check now follows a redirect-only page (up to 3 same-host hops) and judges the page it lands on, so a device whose
   root is a stub like `<meta http-equiv="Refresh" content="0;url=/cgi-bin/status_cgi">` is no longer counted as serving
