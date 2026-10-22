@@ -483,6 +483,9 @@ Five gaps are detected, each emitting a `CompletenessWarning(code, message, reme
 | `no_root_request`              | No request in the capture addresses the device root (`http://host` or `http://host/`, query ignored, any method)      | The landing reply a device is identified by was never recorded — the capture started at a deep link. Re-record from the bare address                                                             |
 | `document_without_body`        | A 2xx `text/html` (or XHTML) response has no `content.text`, `content.size` is not `0`, and it is not a redirect stub | The page existed but its body was lost (size `-1` or unstored), so it cannot be read. Size `0` is a genuinely empty reply and does not warn                                                      |
 
+A response whose `bodySize` is `0` received no bytes — a lost body keeps its real `bodySize` — so it is an empty reply,
+not a gap, and does not warn. (Fleet: 6 such entries in 4 of 361 captures, none with a `Content-Length`.)
+
 A body-less document whose `Content-Length` is 1–256 bytes is a **redirect stub** (a meta-refresh page the browser
 leaves at once; 72–122 bytes on the SBG7400AC2). Its body is gone before any recorder can read it, so re-recording
 cannot help: it is listed in `redirect_stub_documents` and does not warn. A body-less document with a larger, absent or

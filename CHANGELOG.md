@@ -18,7 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   longer reads as one submission.
 - **Redirect-stub documents no longer draw a "re-record" warning.** A body-less `text/html` response with a
   `Content-Length` of 256 bytes or less is a meta-refresh stub no recording can capture; it is listed on the report but
-  not warned about. Larger or unsized body-less pages still warn.
+  not warned about. A response whose `bodySize` is `0` is an empty reply, not a lost body, and does not warn either.
+  Larger or unsized body-less pages still warn.
 - **`validate`'s summary line accounts for printed completeness gaps.** It still counts PII findings only (gaps never
   change the exit code) but now says how many gaps were printed above it.
 - **A meta-refresh or JS-redirect root page no longer aborts capture with a false "live session" error.** The session

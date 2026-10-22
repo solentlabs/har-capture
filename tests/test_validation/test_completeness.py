@@ -102,6 +102,8 @@ WARNING_CASES = [
     ("packed_credential_empty_value",     [],                                               "empty_packed_value_not_a_submission"),
     ("document_redirect_stub",            [],                                               "small_content_length_is_redirect_stub"),
     ("document_large_with_length",        [DOCUMENT_WITHOUT_BODY],                          "large_content_length_is_truncated_page"),
+    ("document_zero_body_size",           [],                                               "zero_body_size_is_empty_reply"),
+    ("document_lost_body_keeps_size",     [DOCUMENT_WITHOUT_BODY],                          "nonzero_body_size_is_lost_body"),
     ("document_unparsable_length",        [DOCUMENT_WITHOUT_BODY],                          "unparsable_content_length_is_not_a_stub"),
 ]
 # fmt: on

@@ -3238,5 +3238,151 @@
         }
       ]
     }
+  },
+  "document_zero_body_size": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            },
+            "bodySize": 0
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_lost_body_keeps_size": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            },
+            "bodySize": 900
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
   }
 }

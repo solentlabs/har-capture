@@ -312,11 +312,15 @@ def _is_unstored_document(response: dict[str, Any]) -> bool:
     """True if a 2xx ``text/html`` response has no stored body.
 
     A response that really was empty reports ``content.size`` 0 and is not a
-    gap. Size ``-1`` (unknown) or a size with no ``text`` means the body
-    existed and was lost: the page cannot be read later.
+    gap; neither is one whose ``bodySize`` is 0 (no bytes arrived — a lost
+    body keeps its real ``bodySize``). Size ``-1`` (unknown) or a size with
+    no ``text`` means the body existed and was lost: the page cannot be read
+    later.
     """
     status = response.get("status")
     if not isinstance(status, int) or not 200 <= status < 300 or not _is_html_document(response):
+        return False
+    if response.get("bodySize") == 0:
         return False
     content = response.get("content")
     content = content if isinstance(content, dict) else {}

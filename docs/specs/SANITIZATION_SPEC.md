@@ -281,6 +281,11 @@ base64 character, never as a space), and the two things URLSearchParams does bef
 array — `+` decoded to a space, and padding split off into the value at the first `=`. The array entry is rejoined into
 its segment (`query_param_segment()`) before reading, so both representations get the same answer and the same hash.
 
+A base64 `user:` with an empty password is not a credential (`is_base64_credential` needs text on both sides of the
+colon), so the packed `arguments` field of a refused, empty-password login keeps its value: a bare username is
+flag-tier, not auto-redact
+([ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract)).
+
 Stripped or miscounted padding is restored only for a candidate of at least 11 characters without padding (the length of
 `base64("admin:pw")`) whose decoded text is printable. Below that, short hex and alphanumeric tokens — cache-busters,
 short commit SHAs — decode to a colon-bearing string by chance (`?v=0406a0` does), so a credential shorter than
