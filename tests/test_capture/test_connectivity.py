@@ -395,6 +395,8 @@ JS_STUB = b"<html><script>window.location.href='/cgi-bin/status_cgi';</script></
 OFF_HOST_STUB = b'<html><meta http-equiv="refresh" content="0;url=http://example.com/status"></html>'
 SELF_REFRESH_STUB = b'<html><meta http-equiv="refresh" content="5;url=http://192.168.100.1/"></html>'
 
+HOP_STUBS = [b'<html><meta http-equiv="refresh" content="0;url=/hop%d"></html>' % n for n in range(1, 5)]
+
 # ┌───────────────────────────────┬──────────────────────────────────────┬───────────────┬────────────────────────┐
 # │ responses (in request order)  │ desc                                 │ contaminated  │ id                     │
 # ├───────────────────────────────┼──────────────────────────────────────┼───────────────┼────────────────────────┤
@@ -404,6 +406,7 @@ SESSION_CONTAMINATION_REDIRECT_CASES = [
     ([JS_STUB, LOGIN_PAGE],                False, "js_location_to_login"),
     ([JS_STUB, DATA_PAGE],                 True,  "js_location_to_live_data"),
     ([ROOT_STUB, STATUS_STUB, STATUS_STUB, STATUS_STUB, STATUS_STUB], False, "endless_chain_not_data"),
+    (HOP_STUBS,                            False, "chain_longer_than_hop_limit"),
     ([SELF_REFRESH_STUB],                  False, "self_refresh_stub_not_data"),
     ([OFF_HOST_STUB],                      False, "off_host_redirect_not_followed"),
 ]

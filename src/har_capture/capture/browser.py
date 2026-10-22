@@ -763,22 +763,7 @@ def _run_browser_session(
         # Responses sharing method, URL and status (a login form POSTing
         # back to itself) must never be confused with one another.
         def _on_response(response: Any) -> None:
-            try:
-                key = f"{response.request.method}|{response.url}|{response.status}"
-            except Exception:
-                return
-            slots = result.captured_bodies.setdefault(key, [])
-            slots.append(None)
-            index = len(slots) - 1
-            try:
-                ct = response.headers.get("content-type", "")
-                if not any(t in ct for t in ("text/", "application/json", "application/xml")):
-                    return
-                body = response.body()
-                if body:
-                    slots[index] = body
-            except Exception:  # noqa: S110 — response may be aborted/streaming
-                pass
+            _claim_body_slot(result.captured_bodies, response)
 
         page.on("response", _on_response)
 
@@ -951,6 +936,34 @@ def _save_pending_downloads(
             _LOGGER.warning("Failed to save download %r: %s", record.get("suggested_filename"), e)
         records.append(record)
     return records
+
+
+def _claim_body_slot(captured_bodies: dict[str, list[bytes | None]], response: Any) -> None:
+    """Claim the next slot for ``response`` and fill it with its body when readable.
+
+    Every response claims a slot under ``method|url|status``, even when no
+    body can be read, so slot N lines up with the Nth HAR entry for that key.
+
+    Args:
+        captured_bodies: Slots per key, appended to in response order
+        response: Playwright response object
+    """
+    try:
+        key = f"{response.request.method}|{response.url}|{response.status}"
+    except Exception:
+        return
+    slots = captured_bodies.setdefault(key, [])
+    slots.append(None)
+    index = len(slots) - 1
+    try:
+        ct = response.headers.get("content-type", "")
+        if not any(t in ct for t in ("text/", "application/json", "application/xml")):
+            return
+        body = response.body()
+        if body:
+            slots[index] = body
+    except Exception:  # noqa: S110 — response may be aborted/streaming
+        pass
 
 
 def _length_matches_header(headers: list[dict[str, Any]], body_length: int) -> bool:

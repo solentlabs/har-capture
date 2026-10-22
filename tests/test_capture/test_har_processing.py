@@ -6,12 +6,15 @@ import copy
 import gzip
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from har_capture.capture.browser import (
     CaptureOptions,
     _add_capture_metadata,
+    _claim_body_slot,
     _length_matches_header,
     _patch_missing_bodies,
     filter_and_compress_har,
@@ -637,3 +640,58 @@ class TestCaptureWriterLineEndings:
         filter_and_compress_har(basic_har)
 
         assert json.loads(basic_har.read_text())["log"]["entries"]
+
+
+def _fake_response(content_type: str = "text/html", body: Any = b"<p>x</p>", url: str = "http://d/a") -> Any:
+    """A Playwright-shaped response; ``body`` may be an exception to raise."""
+
+    def read_body() -> bytes:
+        if isinstance(body, Exception):
+            raise body
+        return body  # type: ignore[no-any-return]
+
+    return SimpleNamespace(
+        request=SimpleNamespace(method="GET"),
+        url=url,
+        status=200,
+        headers={"content-type": content_type},
+        body=read_body,
+    )
+
+
+# ┌──────────────────────────┬──────────────────┬──────────────────────┬───────────────┐
+# │ response                 │ desc             │ expected slot        │ id            │
+# ├──────────────────────────┼──────────────────┼──────────────────────┼───────────────┤
+CLAIM_BODY_SLOT_CASES = [
+    (_fake_response(), b"<p>x</p>", "readable_text"),
+    (_fake_response("image/png"), None, "binary_not_read"),
+    (_fake_response(body=RuntimeError("evicted")), None, "body_raises"),
+    (_fake_response(body=b""), None, "empty_body"),
+]
+# └──────────────────────────┴──────────────────┴──────────────────────┴───────────────┘
+
+
+class TestClaimBodySlot:
+    """Every response claims a slot, filled only when its body is readable."""
+
+    @pytest.mark.parametrize(
+        ("response", "expect_slot", "desc"),
+        CLAIM_BODY_SLOT_CASES,
+        ids=[c[2] for c in CLAIM_BODY_SLOT_CASES],
+    )
+    def test_slot_claimed(self, response: Any, expect_slot: bytes | None, desc: str) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, response)
+        assert captured == {"GET|http://d/a|200": [expect_slot]}, desc
+
+    def test_repeat_responses_take_successive_slots(self) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, _fake_response(body=b"one"))
+        _claim_body_slot(captured, _fake_response(body=RuntimeError("evicted")))
+        _claim_body_slot(captured, _fake_response(body=b"three"))
+        assert captured == {"GET|http://d/a|200": [b"one", None, b"three"]}
+
+    def test_unreadable_request_claims_nothing(self) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, SimpleNamespace())
+        assert captured == {}

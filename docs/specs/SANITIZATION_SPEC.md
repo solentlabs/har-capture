@@ -623,7 +623,10 @@ Card- and SSN-shaped numbers are the pattern file's (`credit_card_*`, `ssn`), ha
 HTML engine's rules, so a domain that leaves them out of `include_patterns` leaves them out on every route. A
 private-range match is an address when every octet is 255 or less: zero-padded as some devices print it
 (`192.168.001.100`) it is redacted, and `192.168.1.999` is not an address on either route. The same holds inside an
-IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address, hashed whole as IPv6 rather than its tail as IPv4.
+IPv4-mapped IPv6 address: `::ffff:192.168.001.100` is one address, hashed whole as IPv6 rather than its tail as IPv4. A
+dotted quad that is the tail or head of a longer dotted number (an SNMP OID such as
+`1.3.6.1.4.1.4115.1.20.1.1.3.42.1.20`) is not an address and is left whole: both IPv4 patterns reject a match preceded
+by `digit.` or followed by `.digit`.
 
 **ADR-12 accounting** (IPv6 and `10.x` in JSON and text bodies):
 

@@ -664,6 +664,21 @@ class TestIdempotencyBoundary:
         ("<p>192.0.2.5</p>", "192.0.2.5", "public_ip_test_net"),
     ]
 
+    LONGER_DOTTED_NUMBER_CASES = [
+        ("<p>1.3.6.1.4.1.4115.1.20.1.1.3.42.1.20</p>", "snmp_oid_public_tail"),
+        ("<p>1.3.6.1.4.1.4115.1.20.1.1.192.168.5.9</p>", "snmp_oid_private_tail"),
+        ("<p>10.1.2.3.4.5</p>", "private_head_of_longer_number"),
+    ]
+
+    @pytest.mark.parametrize(
+        ("html", "desc"),
+        LONGER_DOTTED_NUMBER_CASES,
+        ids=[c[1] for c in LONGER_DOTTED_NUMBER_CASES],
+    )
+    def test_longer_dotted_numbers_are_not_addresses(self, html: str, desc: str) -> None:
+        """An OID's trailing four numbers are not an IPv4 address; the OID stays whole."""
+        assert sanitize_html(html, salt="fixed-salt") == html, desc
+
     @pytest.mark.parametrize(
         ("html", "value", "desc"),
         FORMAT_PRESERVING_CASES,

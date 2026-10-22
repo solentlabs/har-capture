@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **SNMP OID strings in firmware JavaScript are no longer rewritten as IP addresses.** The IPv4 patterns matched the
+  last four numbers of a longer dotted number, so an OID like `1.3.6.1.4.1.4115.1.20.1.1.3.42.1.20` in a device's
+  `mib.js` became `1.3.6.1.4.1.4115.1.20.1.1.192.0.2.229`. A match glued to a longer dotted number is now left alone.
 - **`validate` no longer points a URL-credential annotation at the wrong request.** `filter_and_compress_har` removed
   bloat entries but left `_sanitized_credentials` indices unchanged, so on a filtered capture the annotation named a
   different request (an unrelated `snmpGet`), producing a false "only one credential submission" warning. The indices
