@@ -419,9 +419,10 @@ The built-in network device domain provides:
   7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
   deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
-- A `fields.auto_redact_patterns` rule for the ARRIS Wi-Fi SSID OIDs (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index>`).
-  SNMP-over-JSON endpoints (`snmpGet`, `walk`) key each value by a bare OID with no descriptive name, so only a key
-  regex can see them; the sanitizer redacts the value and `validate` reports it
+- `fields.auto_redact_patterns` rules for three ARRIS OIDs: the Wi-Fi SSID column
+  (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index>`), the Wi-Fi passphrase column (`…3.26.1.2.<index>`) and the unit serial
+  number (`1.3.6.1.4.1.4115.1.20.1.1.5.8.0`). SNMP-over-JSON endpoints (`snmpGet`, `walk`) key each value by a bare OID
+  with no descriptive name, so only a key regex can see them; the sanitizer redacts the value and `validate` reports it
 
 ## Merge Order
 
