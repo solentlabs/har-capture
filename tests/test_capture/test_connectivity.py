@@ -386,6 +386,31 @@ SESSION_CONTAMINATION_DATA_PAGES = [
     (b"<html><body><h1>Device Status</h1><table><tr><td>Downstream</td><td>Channel 1</td></tr></table>" + b"x" * 100, "admin data page"),
     (b'{"systemInfo":{"model":"MB8611","firmware":"2.3.1"},"uptime":123456}' + b" " * 50,                              "JSON device data"),
 ]
+
+ROOT_STUB = b'<html><head><title>Touchstone Status</title>\n\n<meta http-equiv="Refresh" content="0;url=/cgi-bin/status_cgi">\n</html>'
+STATUS_STUB = b'<html><head><meta http-equiv="Refresh" content="0;url=/cgi-bin/login_cgi"></head></html>'
+LOGIN_PAGE = b"<html><body><form><input type='password'></form></body></html>"
+DATA_PAGE = b"<html><body><h1>Device Status</h1><table><tr><td>Downstream</td></tr></table></body></html>" + b"x" * 100
+JS_STUB = b"<html><script>window.location.href='/cgi-bin/status_cgi';</script></html>"
+OFF_HOST_STUB = b'<html><meta http-equiv="refresh" content="0;url=http://example.com/status"></html>'
+SELF_REFRESH_STUB = b'<html><meta http-equiv="refresh" content="5;url=http://192.168.100.1/"></html>'
+
+HOP_STUBS = [b'<html><meta http-equiv="refresh" content="0;url=/hop%d"></html>' % n for n in range(1, 5)]
+
+# ┌───────────────────────────────┬──────────────────────────────────────┬───────────────┬────────────────────────┐
+# │ responses (in request order)  │ desc                                 │ contaminated  │ id                     │
+# ├───────────────────────────────┼──────────────────────────────────────┼───────────────┼────────────────────────┤
+SESSION_CONTAMINATION_REDIRECT_CASES = [
+    ([ROOT_STUB, STATUS_STUB, LOGIN_PAGE], False, "meta_refresh_chain_to_login"),
+    ([ROOT_STUB, DATA_PAGE],               True,  "meta_refresh_to_live_data"),
+    ([JS_STUB, LOGIN_PAGE],                False, "js_location_to_login"),
+    ([JS_STUB, DATA_PAGE],                 True,  "js_location_to_live_data"),
+    ([ROOT_STUB, STATUS_STUB, STATUS_STUB, STATUS_STUB, STATUS_STUB], False, "endless_chain_not_data"),
+    (HOP_STUBS,                            False, "chain_longer_than_hop_limit"),
+    ([SELF_REFRESH_STUB],                  False, "self_refresh_stub_not_data"),
+    ([OFF_HOST_STUB],                      False, "off_host_redirect_not_followed"),
+]
+# └───────────────────────────────┴──────────────────────────────────────┴───────────────┴────────────────────────┘
 # fmt: on
 
 
@@ -470,6 +495,45 @@ class TestCheckSessionContamination:
         assert contaminated is True, f"{desc}: data page should be flagged"
         assert message is not None
         assert "live session" in message
+
+    @pytest.mark.parametrize(
+        ("bodies", "expect_contaminated", "desc"),
+        SESSION_CONTAMINATION_REDIRECT_CASES,
+        ids=[c[2] for c in SESSION_CONTAMINATION_REDIRECT_CASES],
+    )
+    @patch("urllib.request.urlopen")
+    def test_redirect_only_page_is_followed(
+        self,
+        mock_urlopen: MagicMock,
+        bodies: list[bytes],
+        expect_contaminated: bool,
+        desc: str,
+    ) -> None:
+        """A redirect-only page is judged by the page it leads to, never as data."""
+        responses = []
+        for body in bodies:
+            resp = MagicMock()
+            resp.status = 200
+            resp.read.return_value = body
+            responses.append(resp)
+        mock_urlopen.side_effect = responses
+
+        contaminated, _message = check_session_contamination("http://192.168.100.1/")
+
+        assert contaminated is expect_contaminated, desc
+
+    @patch("urllib.request.urlopen")
+    def test_redirect_follows_relative_target_on_same_host(self, mock_urlopen: MagicMock) -> None:
+        """The stub's /cgi-bin path resolves against the requested host."""
+        first, second = MagicMock(), MagicMock()
+        first.status = second.status = 200
+        first.read.return_value = ROOT_STUB
+        second.read.return_value = LOGIN_PAGE
+        mock_urlopen.side_effect = [first, second]
+
+        check_session_contamination("http://192.168.100.1/")
+
+        assert mock_urlopen.call_args_list[1].args[0].full_url == "http://192.168.100.1/cgi-bin/status_cgi"
 
     @patch("urllib.request.urlopen")
     def test_tiny_response_means_clean(self, mock_urlopen: MagicMock) -> None:

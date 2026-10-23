@@ -6,13 +6,20 @@ import copy
 import gzip
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from har_capture.capture.browser import (
     CaptureOptions,
     _add_capture_metadata,
+    _attach_network_body_capture,
+    _claim_body_slot,
+    _length_matches_header,
+    _merge_body_slots,
     _patch_missing_bodies,
+    _record_paused_response,
     filter_and_compress_har,
     strip_browser_internal_entries,
 )
@@ -257,6 +264,37 @@ class TestFilterAndCompressHar:
         # Should only filter sourcemaps
         assert stats["filtered_entries"] == 6  # all except .map
 
+    @pytest.mark.parametrize(
+        "options",
+        [
+            CaptureOptions(),
+            CaptureOptions(include_fonts=True, include_images=True, include_media=True),
+        ],
+        ids=["defaults", "all_included"],
+    )
+    def test_root_request_and_body_survive(self, tmp_path: Path, options: CaptureOptions) -> None:
+        """The device root request and its stored body are never filtered."""
+        har_file = _write_har(tmp_path, "har_with_root_among_bloat", "root.har")
+
+        compressed_path, _stats = filter_and_compress_har(har_file, options)
+
+        with gzip.open(compressed_path, "rt") as f:
+            kept = json.load(f)["log"]["entries"]
+        root = next(e for e in kept if e["request"]["url"] == "http://192.168.100.1/")
+        assert root["response"]["content"]["text"] == "<html>landing page</html>"
+
+    def test_credential_annotation_follows_surviving_entries(self, tmp_path: Path) -> None:
+        """_sanitized_credentials is re-pointed at the kept entries; removed ones are dropped."""
+        har_file = _write_har(tmp_path, "har_credential_annotation_after_bloat", "annot.har")
+
+        compressed_path, _stats = filter_and_compress_har(har_file, CaptureOptions())
+
+        with gzip.open(compressed_path, "rt") as f:
+            log = json.load(f)["log"]
+        annotated = [i["entry_index"] for i in log["_har_capture"]["_sanitized_credentials"]]
+        assert annotated == [1]
+        assert "login" in log["entries"][1]["request"]["url"]
+
     @pytest.mark.parametrize("case", REPEATED_REQUEST_CASES)
     def test_repeated_requests_all_kept(self, tmp_path: Path, case: str) -> None:
         """Repeated requests all survive, in recorder order."""
@@ -337,13 +375,13 @@ class TestFilterAndCompressHar:
 PATCH_BODIES_CASES = [
     (
         "har_missing_body",
-        {"GET|http://192.168.100.1/|200": b"<html><input type='hidden' name='csrf'/></html>"},
+        {"GET|http://192.168.100.1/|200": [b"<html><input type='hidden' name='csrf'/></html>"]},
         True,
         "missing_body_patched_from_cache",
     ),
     (
         "har_body_present",
-        {"GET|http://192.168.100.1/|200": b"<html>SHOULD NOT REPLACE</html>"},
+        {"GET|http://192.168.100.1/|200": [b"<html>SHOULD NOT REPLACE</html>"]},
         False,
         "existing_body_not_overwritten",
     ),
@@ -355,13 +393,13 @@ PATCH_BODIES_CASES = [
     ),
     (
         "har_missing_body",
-        {"GET|http://192.168.100.1/WRONG|200": b"wrong url"},
+        {"GET|http://192.168.100.1/WRONG|200": [b"wrong url"]},
         False,
         "cache_miss_no_patch",
     ),
     (
         "har_missing_body_no_size",
-        {"GET|http://192.168.100.1/empty|204": b""},
+        {"GET|http://192.168.100.1/empty|204": [b""]},
         False,
         "zero_bodysize_not_patched",
     ),
@@ -381,7 +419,7 @@ class TestPatchMissingBodies:
         self,
         tmp_path: Path,
         fixture_key: str,
-        captured_bodies: dict[str, bytes],
+        captured_bodies: dict[str, list[bytes | None]],
         expect_patch: bool,
         desc: str,
     ) -> None:
@@ -403,7 +441,7 @@ class TestPatchMissingBodies:
         """Verify the patched body matches the eagerly captured content."""
         har_file = _write_har(tmp_path, "har_missing_body", "test.har")
         html = "<html><input type='hidden' name='csrf' value='abc'/></html>"
-        bodies = {"GET|http://192.168.100.1/|200": html.encode("utf-8")}
+        bodies = {"GET|http://192.168.100.1/|200": [html.encode("utf-8")]}
 
         _patch_missing_bodies(har_file, bodies)
 
@@ -418,8 +456,8 @@ class TestPatchMissingBodies:
         """In a HAR with mixed entries, only missing bodies get patched."""
         har_file = _write_har(tmp_path, "har_mixed_bodies", "test.har")
         bodies = {
-            "GET|http://192.168.100.1/|200": b"<html>login</html>",
-            "GET|http://192.168.100.1/api/status|200": b'{"status":"ok"}',
+            "GET|http://192.168.100.1/|200": [b"<html>login</html>"],
+            "GET|http://192.168.100.1/api/status|200": [b'{"status":"ok"}'],
         }
 
         patched_count = _patch_missing_bodies(har_file, bodies)
@@ -441,7 +479,7 @@ class TestPatchMissingBodies:
         """Non-UTF-8 text body falls back to base64 encoding."""
         har_file = _write_har(tmp_path, "har_missing_body", "test.har")
         body = b"\xff\xfe<html>latin1</html>"
-        bodies = {"GET|http://192.168.100.1/|200": body}
+        bodies = {"GET|http://192.168.100.1/|200": [body]}
 
         _patch_missing_bodies(har_file, bodies)
 
@@ -458,9 +496,114 @@ class TestPatchMissingBodies:
         har_file = tmp_path / "bad.har"
         har_file.write_text("not json")
 
-        result = _patch_missing_bodies(har_file, {"GET|http://x/|200": b"body"})
+        result = _patch_missing_bodies(har_file, {"GET|http://x/|200": [b"body"]})
 
         assert result == 0
+
+
+# Synthetic stand-ins for a device whose login page POSTs back to itself and
+# answers success with a tiny meta-refresh page (lengths match the fixtures).
+REDIRECT_PAGE = b'<html><head><meta http-equiv="refresh" content="0;url=status_cgi"</head>'
+WRONG_PASSWORD_PAGE = b"<html><body>Invalid user name or password</body></html>"
+FULL_STATUS_PAGE = b"<html><body>Status: connected, 4 channels locked</body></html>"
+POST_KEY = "POST|http://192.168.100.1/cgi-bin/basic_pwd_cgi|200"
+GET_KEY = "GET|http://192.168.100.1/cgi-bin/status_cgi|200"
+
+# ┌─────────────────────────┬──────────┬─────────────────────────────────────────────┬────────────────────────────┬──────────────────────┐
+# │ fixture_key             │ key      │ slots                                       │ expect_text                │ id                   │
+# ├─────────────────────────┼──────────┼─────────────────────────────────────────────┼────────────────────────────┼──────────────────────┤
+SAME_KEY_CASES = [
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, REDIRECT_PAGE, REDIRECT_PAGE],
+        [WRONG_PASSWORD_PAGE, REDIRECT_PAGE, REDIRECT_PAGE],
+        "post_back_each_entry_own_body",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, None, None],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "post_back_evicted_redirects_stay_empty",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE, WRONG_PASSWORD_PAGE, WRONG_PASSWORD_PAGE],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "content_length_mismatch_never_patched",
+    ),
+    (
+        "har_login_posts_back",
+        POST_KEY,
+        [WRONG_PASSWORD_PAGE],
+        [WRONG_PASSWORD_PAGE, None, None],
+        "fewer_slots_than_entries",
+    ),
+    (
+        "har_redirect_before_login",
+        GET_KEY,
+        [None, FULL_STATUS_PAGE],
+        [None, FULL_STATUS_PAGE],
+        "get_redirect_page_then_full_page",
+    ),
+    (
+        "har_redirect_before_login",
+        GET_KEY,
+        [FULL_STATUS_PAGE, FULL_STATUS_PAGE],
+        [None, FULL_STATUS_PAGE],
+        "get_full_page_never_fills_redirect_entry",
+    ),
+]
+# └─────────────────────────┴──────────┴─────────────────────────────────────────────┴────────────────────────────┴──────────────────────┘
+
+
+class TestPatchSameKeyResponses:
+    """Responses sharing method, URL and status each get only their own body."""
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "key", "slots", "expect_texts", "desc"),
+        SAME_KEY_CASES,
+        ids=[c[4] for c in SAME_KEY_CASES],
+    )
+    def test_each_entry_gets_own_body_or_none(
+        self,
+        tmp_path: Path,
+        fixture_key: str,
+        key: str,
+        slots: list[bytes | None],
+        expect_texts: list[bytes | None],
+        desc: str,
+    ) -> None:
+        har_file = _write_har(tmp_path, fixture_key, "test.har")
+
+        _patch_missing_bodies(har_file, {key: slots})
+
+        with open(har_file) as f:
+            entries = json.load(f)["log"]["entries"]
+        actual = [e["response"]["content"].get("text") for e in entries]
+        assert actual == [t.decode() if t is not None else None for t in expect_texts]
+
+    @pytest.mark.parametrize(
+        ("headers", "body_length", "expect"),
+        [
+            ([{"name": "Content-Length", "value": "5"}], 5, True),
+            ([{"name": "content-length", "value": "5"}], 6, False),
+            (
+                [{"name": "Content-Length", "value": "5"}, {"name": "Content-Encoding", "value": "gzip"}],
+                9,
+                True,
+            ),
+            ([{"name": "Content-Length", "value": "abc"}], 9, True),
+            ([], 9, True),
+        ],
+        ids=["equal", "differs", "compressed_skipped", "unparsable_skipped", "absent"],
+    )
+    def test_length_matches_header(
+        self, headers: list[dict[str, str]], body_length: int, expect: bool
+    ) -> None:
+        assert _length_matches_header(headers, body_length) is expect
 
 
 class TestCaptureWriterLineEndings:
@@ -500,3 +643,217 @@ class TestCaptureWriterLineEndings:
         filter_and_compress_har(basic_har)
 
         assert json.loads(basic_har.read_text())["log"]["entries"]
+
+
+def _fake_response(content_type: str = "text/html", body: Any = b"<p>x</p>", url: str = "http://d/a") -> Any:
+    """A Playwright-shaped response; ``body`` may be an exception to raise."""
+
+    def read_body() -> bytes:
+        if isinstance(body, Exception):
+            raise body
+        return body  # type: ignore[no-any-return]
+
+    return SimpleNamespace(
+        request=SimpleNamespace(method="GET"),
+        url=url,
+        status=200,
+        headers={"content-type": content_type},
+        body=read_body,
+    )
+
+
+# ┌──────────────────────────┬──────────────────┬──────────────────────┬───────────────┐
+# │ response                 │ desc             │ expected slot        │ id            │
+# ├──────────────────────────┼──────────────────┼──────────────────────┼───────────────┤
+CLAIM_BODY_SLOT_CASES = [
+    (_fake_response(), b"<p>x</p>", "readable_text"),
+    (_fake_response("image/png"), None, "binary_not_read"),
+    (_fake_response(body=RuntimeError("evicted")), None, "body_raises"),
+    (_fake_response(body=b""), None, "empty_body"),
+]
+# └──────────────────────────┴──────────────────┴──────────────────────┴───────────────┘
+
+
+class TestClaimBodySlot:
+    """Every response claims a slot, filled only when its body is readable."""
+
+    @pytest.mark.parametrize(
+        ("response", "expect_slot", "desc"),
+        CLAIM_BODY_SLOT_CASES,
+        ids=[c[2] for c in CLAIM_BODY_SLOT_CASES],
+    )
+    def test_slot_claimed(self, response: Any, expect_slot: bytes | None, desc: str) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, response)
+        assert captured == {"GET|http://d/a|200": [expect_slot]}, desc
+
+    def test_repeat_responses_take_successive_slots(self) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, _fake_response(body=b"one"))
+        _claim_body_slot(captured, _fake_response(body=RuntimeError("evicted")))
+        _claim_body_slot(captured, _fake_response(body=b"three"))
+        assert captured == {"GET|http://d/a|200": [b"one", None, b"three"]}
+
+    def test_unreadable_request_claims_nothing(self) -> None:
+        captured: dict[str, list[bytes | None]] = {}
+        _claim_body_slot(captured, SimpleNamespace())
+        assert captured == {}
+
+
+# =============================================================================
+# Network-level body capture (CDP Fetch)
+# =============================================================================
+
+
+def _paused(
+    status: int | None = 200,
+    content_type: str | None = "text/html",
+    url: str = "http://d/a",
+    method: str = "GET",
+) -> dict[str, Any]:
+    """A ``Fetch.requestPaused`` event at the response stage."""
+    event: dict[str, Any] = {"requestId": "r1", "request": {"method": method, "url": url}}
+    if status is not None:
+        event["responseStatusCode"] = status
+    if content_type is not None:
+        event["responseHeaders"] = [{"name": "Content-type", "value": content_type}]
+    return event
+
+
+def _reader(body: bytes | Exception) -> Any:
+    def read(request_id: str) -> bytes:
+        if isinstance(body, Exception):
+            raise body
+        return body
+
+    return read
+
+
+# ┌───────────────────────────────────────┬──────────────────────┬───────────────┬──────────────────┐
+# │ paused event                          │ reader result        │ expected slot │ id               │
+# ├───────────────────────────────────────┼──────────────────────┼───────────────┼──────────────────┤
+RECORD_PAUSED_CASES = [
+    (_paused(), b"<meta>", b"<meta>", "text_reply"),
+    (_paused(content_type="application/json"), b"{}", b"{}", "json_reply"),
+    (_paused(status=302), b"moved", None, "redirect_not_read"),
+    (_paused(content_type="image/gif"), b"GIF", None, "binary_not_read"),
+    (_paused(content_type=None), b"x", None, "no_content_type"),
+    (_paused(status=None), b"x", None, "no_status"),
+    (_paused(), RuntimeError("gone"), None, "read_raises"),
+    (_paused(), b"", None, "empty_body"),
+]
+# └───────────────────────────────────────┴──────────────────────┴───────────────┴──────────────────┘
+
+
+class TestNetworkBodyCapture:
+    """Bodies read while the browser holds the response, before the page can leave it."""
+
+    @pytest.mark.parametrize(
+        ("event", "body", "expect_slot", "desc"),
+        RECORD_PAUSED_CASES,
+        ids=[c[3] for c in RECORD_PAUSED_CASES],
+    )
+    def test_record_paused_response(
+        self, event: dict[str, Any], body: bytes | Exception, expect_slot: bytes | None, desc: str
+    ) -> None:
+        slots: dict[str, list[bytes | None]] = {}
+        _record_paused_response(slots, event, _reader(body))
+        assert list(slots.values()) == [[expect_slot]], desc
+
+    def test_slots_follow_response_order(self) -> None:
+        slots: dict[str, list[bytes | None]] = {}
+        _record_paused_response(slots, _paused(), _reader(b"one"))
+        _record_paused_response(slots, _paused(), _reader(RuntimeError("gone")))
+        _record_paused_response(slots, _paused(), _reader(b"three"))
+        assert slots == {"GET|http://d/a|200": [b"one", None, b"three"]}
+
+    @staticmethod
+    def _attach(
+        read_result: dict[str, Any] | Exception,
+        send_fails: bool = False,
+    ) -> tuple[dict[str, list[bytes | None]], list[tuple[str, dict[str, Any]]], Any]:
+        """Attach to a fake CDP session; return the slots, sent commands and the handler."""
+        sent: list[tuple[str, dict[str, Any]]] = []
+        handlers: dict[str, Any] = {}
+
+        def send(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+            sent.append((method, params or {}))
+            if method == "Fetch.getResponseBody":
+                if isinstance(read_result, Exception):
+                    raise read_result
+                return read_result
+            if send_fails and method.startswith("Fetch.continue"):
+                raise RuntimeError("page closed")
+            return {}
+
+        def on(name: str, handler: Any) -> None:
+            handlers[name] = handler
+
+        session = SimpleNamespace(send=send, on=on)
+        context = SimpleNamespace(new_cdp_session=lambda page: session)
+        slots: dict[str, list[bytes | None]] = {}
+        _attach_network_body_capture(context, object(), slots)
+        return slots, sent, handlers["Fetch.requestPaused"]
+
+    def test_enables_response_stage_pausing(self) -> None:
+        _slots, sent, _handler = self._attach({"body": ""})
+        assert sent == [("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Response"}]})]
+
+    @pytest.mark.parametrize(
+        ("read_result", "expect_slot"),
+        [
+            ({"body": "<p>hi</p>", "base64Encoded": False}, b"<p>hi</p>"),
+            ({"body": "PGI+aGk8L2I+", "base64Encoded": True}, b"<b>hi</b>"),
+            (RuntimeError("no body"), None),
+        ],
+        ids=["utf8_text", "base64_text", "read_fails_still_released"],
+    )
+    def test_paused_response_read_then_released(
+        self, read_result: dict[str, Any] | Exception, expect_slot: bytes | None
+    ) -> None:
+        slots, sent, handler = self._attach(read_result)
+        handler(_paused())
+        assert slots == {"GET|http://d/a|200": [expect_slot]}
+        assert sent[-1] == ("Fetch.continueResponse", {"requestId": "r1"})
+
+    def test_request_stage_event_is_continued_as_request(self) -> None:
+        _slots, sent, handler = self._attach({"body": ""})
+        handler(_paused(status=None))
+        assert sent[-1] == ("Fetch.continueRequest", {"requestId": "r1"})
+
+    def test_release_failure_is_swallowed(self) -> None:
+        _slots, _sent, handler = self._attach({"body": "x"}, send_fails=True)
+        handler(_paused())
+
+    def test_unavailable_session_does_not_raise(self) -> None:
+        def refuse(page: Any) -> Any:
+            raise RuntimeError("no cdp")
+
+        _attach_network_body_capture(SimpleNamespace(new_cdp_session=refuse), object(), {})
+
+    # ┌──────────────────────────┬──────────────────────────┬─────────────────────────┬────────────┐
+    # │ network slots            │ eager slots              │ merged                  │ id         │
+    # ├──────────────────────────┼──────────────────────────┼─────────────────────────┼────────────┤
+    MERGE_CASES = [
+        ({"k": [b"n"]}, {"k": [None]}, {"k": [b"n"]}, "network_fills_gap"),
+        ({"k": [None]}, {"k": [b"e"]}, {"k": [b"e"]}, "eager_fills_gap"),
+        ({"k": [b"n"]}, {"k": [b"e"]}, {"k": [b"n"]}, "network_preferred"),
+        ({"k": [b"n"]}, {}, {"k": [b"n"]}, "network_only_key"),
+        ({"k": [b"n", b"m"]}, {"k": [None]}, {"k": [None]}, "length_mismatch_keeps_eager"),
+        ({}, {"k": [b"e"]}, {"k": [b"e"]}, "eager_only_key"),
+    ]
+    # └──────────────────────────┴──────────────────────────┴─────────────────────────┴────────────┘
+
+    @pytest.mark.parametrize(
+        ("network", "eager", "expect", "desc"),
+        MERGE_CASES,
+        ids=[c[3] for c in MERGE_CASES],
+    )
+    def test_merge_body_slots(
+        self,
+        network: dict[str, list[bytes | None]],
+        eager: dict[str, list[bytes | None]],
+        expect: dict[str, list[bytes | None]],
+        desc: str,
+    ) -> None:
+        assert _merge_body_slots(network, eager) == expect, desc

@@ -315,7 +315,8 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 
 **Public IPs:**
 
-- Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost)
+- Non-private IPv4 addresses (excludes 10.x, 172.16-31.x, 192.168.x, localhost) — a dotted quad that is part of a longer
+  dotted number (an SNMP OID) is not an address and is not reported
 - Excludes redacted placeholders (10.255.x.x, 192.0.2.x)
 - Excludes netmasks (`is_netmask()`: contiguous-bit masks like 255.255.252.0), reserved first octets (255.x, 0.x), and
   version-string shapes (via `is_valid_ip_address()`) — the sanitizer preserves all of these, so flagging them would put
@@ -466,19 +467,30 @@ class CaptureCompletenessReport:
     set_cookie_responses: int                     # Responses carrying Set-Cookie (not proof of a session)
     first_request_session_cookies: list[str]      # Session cookies already on request #1
     credential_submission_counts: dict[str, int]  # Credential submissions per request URL (see Keys)
+    redirect_stub_documents: list[str]            # Body-less documents small enough to be redirect stubs (no warning)
     warnings: list[CompletenessWarning]           # Gaps found (empty == complete)
 
     credential_submission_count: int  # property — total credential submissions
     complete: bool                    # property — no warnings
 ```
 
-Three gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
+Five gaps are detected, each emitting a `CompletenessWarning(code, message, remedy)`:
 
-| Code                           | Trigger                                                              | Meaning                                                                                                                                                                                          |
-| ------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mid_session_capture`          | Session cookie present on the **first** request                      | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
-| `no_credential_submission`     | No credential submission, and no `POST`/`PUT`/`PATCH` request at all | Nothing that could carry a login was recorded                                                                                                                                                    |
-| `single_credential_submission` | Exactly one credential submission in the capture                     | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
+| Code                           | Trigger                                                                                                               | Meaning                                                                                                                                                                                          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mid_session_capture`          | Session cookie present on the **first** request                                                                       | Browser was already logged in; the auth exchange predates the capture                                                                                                                            |
+| `no_credential_submission`     | No credential submission, and no `POST`/`PUT`/`PATCH` request at all                                                  | Nothing that could carry a login was recorded                                                                                                                                                    |
+| `single_credential_submission` | Exactly one credential submission in the capture                                                                      | No deliberately refused login was recorded — how the device rejects bad credentials cannot be reconstructed later (CM2500 evidence: every login outcome is a 302 told apart by `Location` alone) |
+| `no_root_request`              | No request in the capture addresses the device root (`http://host` or `http://host/`, query ignored, any method)      | The landing reply a device is identified by was never recorded — the capture started at a deep link. Re-record from the bare address                                                             |
+| `document_without_body`        | A 2xx `text/html` (or XHTML) response has no `content.text`, `content.size` is not `0`, and it is not a redirect stub | The page existed but its body was lost (size `-1` or unstored), so it cannot be read. Size `0` is a genuinely empty reply and does not warn                                                      |
+
+A response whose `bodySize` is `0` received no bytes — a lost body keeps its real `bodySize` — so it is an empty reply,
+not a gap, and does not warn. (Fleet: 6 such entries in 4 of 361 captures, none with a `Content-Length`.)
+
+A body-less document whose `Content-Length` is 1–256 bytes is a **redirect stub** (a meta-refresh page the browser
+leaves at once; 72–122 bytes on the SBG7400AC2). Its body is gone before any recorder can read it, so re-recording
+cannot help: it is listed in `redirect_stub_documents` and does not warn. A body-less document with a larger, absent or
+unparsable `Content-Length` still warns.
 
 "First request" is resolved by `startedDateTime` when every entry carries one (index-tiebroken for same-millisecond
 stamps), falling back to file order otherwise — foreign HARs are not guaranteed to be sorted, and the mid-session signal
@@ -511,9 +523,10 @@ is.
 
 **Why "no submission" also needs no write request.** Many logins cannot be read by field name: across the 480 CMM fleet
 captures, 117 hold a `POST` but no readable submission — HNAP captures holding only the challenge phase (27), encrypted
-`AuthData`/`EncryptData` form logins (19), encrypted LuCI `arguments` (13). A write request can carry a login the tool
-cannot read (a JSON `PUT` login is one), so the no-submission gap is reported only when nothing in the capture could
-have carried a login.
+`AuthData`/`EncryptData` form logins (19), encrypted LuCI forms (13). The packed `arguments` field (base64 `user:pass`,
+posted beside an `ar_nonce`) is read by name through `password_fields.name_patterns`. A write request can carry a login
+the tool cannot read (a JSON `PUT` login is one), so the no-submission gap is reported only when nothing in the capture
+could have carried a login.
 
 **Keys.** `credential_submission_counts` is keyed by the request URL with its query, fragment and userinfo dropped
 (split by hand; `urlparse` raises on an unbalanced IPv6 bracket). Those parts can carry the credential itself, and `get`
@@ -545,6 +558,10 @@ the check is logged and degrades `completeness` to `None`; it never fails the ca
 | `har-capture get`      | Raw HAR, before bloat filtering | Summary + warnings after `CAPTURE COMPLETE`             |
 | `har-capture sanitize` | The sanitized output file       | Summary + warnings after the compression line           |
 | `har-capture validate` | Each file scanned               | Summary for an explicit file; warnings only for `--dir` |
+
+`validate`'s closing `Summary: N errors, M warnings` counts PII findings only, since gaps never drive the exit code.
+When gaps were printed it appends `(plus K capture-completeness gap(s), not counted)` so the line matches the output
+above it.
 
 `validate` suppresses the coverage block for `--dir` scans (the pre-commit context) so only actionable warnings appear.
 The choice keys on invocation *mode*, not match count, so a `--dir` run renders identically whether it matches one file

@@ -267,7 +267,7 @@
     }
   },
   "mid_session_duplicate_sources": {
-    "_comment": "Same session cookie in both the cookies array and the Cookie header, plus a malformed header \u2014 names must dedupe to one, case-insensitively",
+    "_comment": "Same session cookie in both the cookies array and the Cookie header, plus a malformed header — names must dedupe to one, case-insensitively",
     "log": {
       "entries": [
         {
@@ -1958,5 +1958,1431 @@
       "url": "http://[fe80::1/login?pwd=x1",
       "shown": "http://[fe80::1/login"
     }
-  ]
+  ],
+  "no_root_request": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/status.html",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "root_without_slash": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "root_with_query": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/?lang=en",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "root_post_counts": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "document_size_unknown": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "document_empty_text": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html; charset=utf-8",
+              "size": 512,
+              "text": ""
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "document_stored": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 5,
+              "text": "<html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "document_truly_empty": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 0
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "bodyless_redirect": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 302,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "bodyless_non_html": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "image/png",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "document_header_mime": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              }
+            ],
+            "content": {
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "documents_many_unstored": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p0.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p0.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p1.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p2.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p3.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/p4.html?x=1",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 302,
+            "headers": []
+          }
+        }
+      ]
+    }
+  },
+  "packed_credential_form_two": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>x</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "arguments",
+                  "value": "dXNlcjo="
+                },
+                {
+                  "name": "ar_nonce",
+                  "value": "12345678"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 16,
+              "text": "<html>bad</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "arguments",
+                  "value": "dXNlcjo="
+                },
+                {
+                  "name": "ar_nonce",
+                  "value": "12345678"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 15,
+              "text": "<html>ok</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1:8080/snmpGet?oids=1.3.6",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/json",
+              "size": 11,
+              "text": "{\"1.3\":\"x\"}"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "packed_credential_form_one": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>x</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "arguments",
+                  "value": "dXNlcjo="
+                },
+                {
+                  "name": "ar_nonce",
+                  "value": "12345678"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 15,
+              "text": "<html>ok</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "packed_credential_empty_value": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>x</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/cgi-bin/basic_pwd_cgi",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "arguments",
+                  "value": ""
+                },
+                {
+                  "name": "ar_nonce",
+                  "value": "1"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>x</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_redirect_stub": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "122"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/cgi-bin/status_cgi",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "72"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_large_with_length": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "5000"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_unparsable_length": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [
+              {
+                "name": "Content-Length",
+                "value": "abc"
+              }
+            ],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_zero_body_size": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            },
+            "bodySize": 0
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "document_lost_body_keeps_size": {
+    "log": {
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.100.1/",
+            "headers": [],
+            "cookies": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": -1
+            },
+            "bodySize": 900
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>a</html>"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.100.1/login",
+            "headers": [],
+            "cookies": [],
+            "postData": {
+              "params": [
+                {
+                  "name": "loginPassword",
+                  "value": "x"
+                }
+              ]
+            }
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "size": 14,
+              "text": "<html>b</html>"
+            }
+          }
+        }
+      ]
+    }
+  }
 }

@@ -88,6 +88,10 @@ response to detect whether the device has a live session that would cause the ca
 
 1. If the response is non-200 (401, 403, redirect) → clean state, auth is required
 1. If the response is 200 with a body under 100 bytes → clean (redirect stub)
+1. If the response is a redirect-only page (`<meta http-equiv="refresh" content="N;url=...">`, or a JS `location`
+   assignment on a page under 512 bytes) → the redirect is followed (up to 3 hops, relative targets resolved against the
+   requested URL) and the page it lands on is judged by the rules here. A redirect that never settles, or points back at
+   the same URL, is never treated as data
 1. If the response body contains login-page indicators (`password`, `login`, `sign in`, `signin`, `log in`,
    `authenticate`) → clean, login page is being served
 1. If the response is 200 with substantial content and no login indicators → **contaminated** — the device is serving
@@ -356,7 +360,7 @@ class BrowserSessionResult:
     browser_cookies: list[Any]               # Cookies after page load
     web_storage_local: list[dict[str, Any]]  # localStorage entries per origin
     web_storage_session: dict[str, str]      # sessionStorage key/value pairs
-    captured_bodies: dict[str, bytes]        # Eagerly captured response bodies
+    captured_bodies: dict[str, list[bytes | None]]  # Eagerly captured bodies, one slot per response
     dialogs: list[dict[str, Any]]            # Dialog audit trail (headed interactive runs)
     popups: list[dict[str, Any]]             # Popup/new-page audit trail
     downloads: list[dict[str, Any]]          # Saved browser downloads (audit records)
@@ -529,11 +533,27 @@ triggering a navigation that supersedes the first response.
 
 Before navigation, a `page.on("response")` listener is registered that eagerly calls `response.body()` for text-based
 content types (`text/*`, `application/json`, `application/xml`). Bodies are stored in
-`BrowserSessionResult.captured_bodies` keyed by `"<method>|<url>|<status>"`.
+`BrowserSessionResult.captured_bodies` keyed by `"<method>|<url>|<status>"`. Each key holds a list with one slot per
+response seen, in arrival order; a response whose body cannot be read (evicted by a fast navigation, non-text type)
+still claims its slot as `None`. Responses that share a key — a login form POSTing back to its own URL, a GET that
+redirects before login and renders after — therefore never overwrite one another.
 
 After Playwright writes the HAR and before metadata injection, `_patch_missing_bodies()` scans HAR entries for responses
-that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. For each missing body, it looks up the key in the
-captured bodies cache and patches the body into the HAR entry.
+that have `bodySize > 0` or `_transferSize > 0` but no `content.text`. The Nth HAR entry for a key takes the Nth slot
+for that key, so a patched body always comes from the response the entry records. An entry whose slot is empty stays
+empty — a wrong body is worse than a missing one. As a safety net, a body whose length disagrees with an uncompressed
+`Content-Length` header is never patched.
+
+Very short bodies (a `<meta http-equiv="refresh">` page the browser leaves at once) are often evicted before either the
+eager listener or Playwright can read them. Chromium runs therefore also read bodies at the network level: the CDP
+`Fetch` domain pauses each response at the response stage, the body of a non-redirect text, JSON or XML reply is read
+while the browser holds it, and the response is released unchanged. A headless run keeps stub bodies anyway; a headed
+run loses them intermittently without this (the eager read returns nothing and the HAR entry has `content.size` -1).
+Network-level bodies fill the same per-key slots as the eager ones and are preferred, falling back to the eager body for
+a slot the network read missed; when the two sources saw a different number of responses for a key, the eager slots are
+used whole. Runs given `--username`/`--password` skip the network read (a second `Fetch` client breaks Playwright's
+Basic Auth answers), and Firefox and WebKit have no such domain; those runs keep only the eager read, so a stub the page
+leaves at once can stay empty.
 
 Text bodies are stored as plain UTF-8 strings. Non-UTF-8 bodies fall back to base64 encoding with
 `content.encoding = "base64"`. Sanitization decodes such a body again — as latin-1 when its type is text and no charset
@@ -543,8 +563,9 @@ is declared — and writes it back as plain text (see
 #### `_patch_missing_bodies(temp_path, captured_bodies) -> int`
 
 - Reads the raw HAR from `temp_path`
-- For each entry missing `content.text` with `bodySize > 0` or `_transferSize > 0`: looks up `"<method>|<url>|<status>"`
-  in `captured_bodies` and patches the body
+- For each entry missing `content.text` with `bodySize > 0` or `_transferSize > 0`: takes the slot at the entry's
+  per-key ordinal in `captured_bodies["<method>|<url>|<status>"]` and patches the body unless the slot is empty or the
+  length contradicts an uncompressed `Content-Length`
 - Writes the patched HAR back to `temp_path`
 - Returns the number of entries patched
 - Handles corrupt HAR files gracefully (returns 0)
@@ -671,11 +692,12 @@ har_data["log"]["_solentlabs"] = {
 
 Before sanitization, `analyze_capture_completeness()` inspects the raw HAR and attaches a `CaptureCompletenessReport` to
 `CaptureResult.completeness`. It runs against the **raw** HAR because bloat filtering can remove the true first entry,
-and the first request is the mid-session signal.
+and the first request is the mid-session signal. `--minimal` only skips pre-flight and changes the page-load strategy;
+neither it nor the bloat filter (extension-only) removes the root request or its body.
 
 The check itself lives in `validation/` and is shared with `har-capture sanitize` / `har-capture validate` — see
-[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the three warning codes,
-what counts as a credential submission, and the ordering rule.
+[Validation Spec](VALIDATION_SPEC.md#capture-completeness-validation) for the report shape, the five warning codes, what
+counts as a credential submission, and the ordering rule.
 
 ### Sanitization
 
@@ -700,6 +722,9 @@ def filter_and_compress_har(har_path, options=None) -> (Path, dict):
    - Nothing else is removed. Repeated requests are **never** collapsed: a failed request and its successful retry, a
      pre-login and a post-login visit to the same data URL, and identical retries all survive, in recorder order. See
      [ADR-15](../ARCHITECTURE_DECISIONS.md#adr-15-repeated-requests-are-never-collapsed).
+1. **Re-point `_sanitized_credentials`**: the annotation names entries by position, so each `entry_index` is mapped to
+   the entry's new position and annotations of removed entries are dropped. Without this an index would name a different
+   request in the filtered file
 1. **Write filtered HAR**: Pretty-printed JSON, LF line endings (`newline="\n"` — see
    [Sanitization Spec](SANITIZATION_SPEC.md#constraints--invariants) for why every writer pins it)
 1. **Gzip compress**: Compression level 9, output to `.har.gz`

@@ -40,6 +40,8 @@ from har_capture.sanitization.har import check_har_types
 MID_SESSION_CAPTURE = "mid_session_capture"
 NO_CREDENTIAL_SUBMISSION = "no_credential_submission"
 SINGLE_CREDENTIAL_SUBMISSION = "single_credential_submission"
+NO_ROOT_REQUEST = "no_root_request"
+DOCUMENT_WITHOUT_BODY = "document_without_body"
 
 # Methods whose body can submit a login: a form, or JSON (the SB8200 PHP
 # firmware logs in with a JSON PUT).
@@ -51,6 +53,19 @@ _CREDENTIAL_SCHEMES = frozenset({"basic", "digest"})
 
 # Userinfo ahead of the host, up to its last '@' (a password can hold one).
 _USERINFO_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@")
+
+
+# Path of the device root once scheme, authority, query and fragment are gone.
+_ROOT_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*/?(?:[?#].*)?$")
+
+# How many document URLs a body-less warning names before summarizing.
+_MAX_NAMED_DOCUMENTS = 3
+
+# A body-less document whose Content-Length is at most this is a redirect
+# stub (a meta-refresh page the browser leaves at once, 72-122 bytes on the
+# SBG7400AC2): its body is gone before any recorder can read it, so
+# re-recording cannot help and it does not warn.
+_REDIRECT_STUB_MAX_BYTES = 256
 
 
 @dataclass(frozen=True)
@@ -89,6 +104,9 @@ class CaptureCompletenessReport:
             Exactly one submission in the whole capture means no refused
             login was recorded — auth-failure evidence is as valuable as the
             success and cannot be reconstructed later.
+        redirect_stub_documents: URLs of body-less documents small enough to be
+            redirect stubs (see ``_REDIRECT_STUB_MAX_BYTES``). Recorded for
+            transparency; never a warning, since no re-record can capture them.
         warnings: Gaps found; empty when the capture looks complete
     """
 
@@ -98,6 +116,7 @@ class CaptureCompletenessReport:
     set_cookie_responses: int = 0
     first_request_session_cookies: list[str] = field(default_factory=list)
     credential_submission_counts: dict[str, int] = field(default_factory=dict)
+    redirect_stub_documents: list[str] = field(default_factory=list)
     warnings: list[CompletenessWarning] = field(default_factory=list)
 
     @property
@@ -267,6 +286,64 @@ def _has_set_cookie(response: dict[str, Any]) -> bool:
     )
 
 
+def _is_root_url(url: str) -> bool:
+    """True if a URL addresses the device root (``http://host`` or ``http://host/``)."""
+    return _ROOT_URL_RE.match(url) is not None
+
+
+def _is_html_document(response: dict[str, Any]) -> bool:
+    """True if a response declares ``text/html`` (or XHTML) content.
+
+    Reads ``content.mimeType``, falling back to the ``Content-Type`` header
+    for producers that fill only one.
+    """
+    content = response.get("content")
+    declared = content.get("mimeType") if isinstance(content, dict) else None
+    if not declared:
+        for header in response.get("headers") or []:
+            if isinstance(header, dict) and str(header.get("name", "")).lower() == "content-type":
+                declared = header.get("value")
+                break
+    media_type = str(declared or "").split(";", 1)[0].strip().lower()
+    return media_type in {"text/html", "application/xhtml+xml"}
+
+
+def _is_unstored_document(response: dict[str, Any]) -> bool:
+    """True if a 2xx ``text/html`` response has no stored body.
+
+    A response that really was empty reports ``content.size`` 0 and is not a
+    gap; neither is one whose ``bodySize`` is 0 (no bytes arrived — a lost
+    body keeps its real ``bodySize``). Size ``-1`` (unknown) or a size with
+    no ``text`` means the body existed and was lost: the page cannot be read
+    later.
+    """
+    status = response.get("status")
+    if not isinstance(status, int) or not 200 <= status < 300 or not _is_html_document(response):
+        return False
+    if response.get("bodySize") == 0:
+        return False
+    content = response.get("content")
+    content = content if isinstance(content, dict) else {}
+    return not content.get("text") and content.get("size") != 0
+
+
+def _declared_length(response: dict[str, Any]) -> int | None:
+    """Return the response's ``Content-Length`` as an int, or ``None`` when absent or unparsable."""
+    for header in response.get("headers") or []:
+        if isinstance(header, dict) and str(header.get("name", "")).lower() == "content-length":
+            try:
+                return int(str(header.get("value", "")).strip())
+            except ValueError:
+                return None
+    return None
+
+
+def _is_redirect_stub(response: dict[str, Any]) -> bool:
+    """True if a response declares a body small enough to be a redirect stub."""
+    length = _declared_length(response)
+    return length is not None and 0 < length <= _REDIRECT_STUB_MAX_BYTES
+
+
 def _first_entry(entries: list[Any]) -> dict[str, Any] | None:
     """Return the chronologically first entry.
 
@@ -337,6 +414,8 @@ def analyze_capture_completeness(
     header_values: set[str] = set()
 
     urls: set[str] = set()
+    root_requested = False
+    unstored_documents: list[str] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
@@ -350,6 +429,13 @@ def analyze_capture_completeness(
         url = str(request.get("url") or "")
         if url:
             urls.add(url)
+            root_requested = root_requested or _is_root_url(url)
+        response = entry.get("response")
+        if isinstance(response, dict) and _is_unstored_document(response):
+            document_url = _submission_url(url)
+            bucket = report.redirect_stub_documents if _is_redirect_stub(response) else unstored_documents
+            if document_url not in bucket:
+                bucket.append(document_url)
         credential_headers = _credential_header_values(request)
         new_header = not header_values.issuperset(credential_headers)
         header_values.update(credential_headers)
@@ -422,6 +508,40 @@ def analyze_capture_completeness(
                 ),
                 remedy=(
                     "Re-record and complete the full login (submit the form) while the capture is running."
+                ),
+            )
+        )
+
+    if not root_requested:
+        report.warnings.append(
+            CompletenessWarning(
+                code=NO_ROOT_REQUEST,
+                message=(
+                    "No request for the device root (/) was captured, so the landing "
+                    "reply a device is identified by is NOT in this file."
+                ),
+                remedy=(
+                    "Re-record starting at the bare device address (for example "
+                    "http://192.168.100.1/), not a deep link or a bookmarked page."
+                ),
+            )
+        )
+
+    if unstored_documents:
+        named = ", ".join(unstored_documents[:_MAX_NAMED_DOCUMENTS])
+        extra = len(unstored_documents) - _MAX_NAMED_DOCUMENTS
+        if extra > 0:
+            named += f" and {extra} more"
+        report.warnings.append(
+            CompletenessWarning(
+                code=DOCUMENT_WITHOUT_BODY,
+                message=(
+                    f"A text/html document response has no stored body ({named}), "
+                    "so the page cannot be read from this file."
+                ),
+                remedy=(
+                    "Re-record and let each page finish loading before moving on; "
+                    "the browser can drop a body it has not fully received."
                 ),
             )
         )

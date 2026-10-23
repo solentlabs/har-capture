@@ -31,8 +31,10 @@ import pytest
 from har_capture.patterns import clear_pattern_cache, get_password_field_patterns, get_session_cookie_patterns
 from har_capture.sanitization import sanitize_har
 from har_capture.validation.completeness import (
+    DOCUMENT_WITHOUT_BODY,
     MID_SESSION_CAPTURE,
     NO_CREDENTIAL_SUBMISSION,
+    NO_ROOT_REQUEST,
     SINGLE_CREDENTIAL_SUBMISSION,
     analyze_capture_completeness,
 )
@@ -71,7 +73,7 @@ WARNING_CASES = [
     ("mid_session_and_no_submission",     [MID_SESSION_CAPTURE, NO_CREDENTIAL_SUBMISSION],  "both_gaps_reported"),
     ("no_credential_submission",          [NO_CREDENTIAL_SUBMISSION],                       "gets_only"),
     ("benign_first_request_cookie",       [],                                               "non_session_cookie_ignored"),
-    ("empty_har",                         [NO_CREDENTIAL_SUBMISSION],                       "empty_capture"),
+    ("empty_har",                         [NO_CREDENTIAL_SUBMISSION, NO_ROOT_REQUEST],                           "empty_capture"),
     ("single_credential_submission",      [SINGLE_CREDENTIAL_SUBMISSION],                   "one_login_no_refused_attempt"),
     ("two_credential_submissions",        [],                                               "refused_plus_real_login"),
     ("post_without_password_field",       [],                                               "action_post_is_not_a_login"),
@@ -84,6 +86,25 @@ WARNING_CASES = [
     ("url_token_raw",                     [SINGLE_CREDENTIAL_SUBMISSION],                   "url_credential_counted"),
     ("url_token_sanitized_metadata",      [SINGLE_CREDENTIAL_SUBMISSION],                   "annotated_url_credential_counted"),
     ("put_without_credential",            [],                                               "put_write_request_not_no_submission"),
+    ("no_root_request",                   [NO_ROOT_REQUEST],                                "deep_link_start_no_root"),
+    ("root_without_slash",                [],                                               "bare_authority_is_root"),
+    ("root_with_query",                   [],                                               "root_with_query_is_root"),
+    ("root_post_counts",                  [],                                               "any_method_to_root_counts"),
+    ("document_size_unknown",             [DOCUMENT_WITHOUT_BODY],                          "html_size_minus_one_no_text"),
+    ("document_empty_text",               [DOCUMENT_WITHOUT_BODY],                          "html_empty_text_nonzero_size"),
+    ("document_header_mime",              [DOCUMENT_WITHOUT_BODY],                          "html_from_content_type_header"),
+    ("document_stored",                   [],                                               "html_with_body"),
+    ("document_truly_empty",              [],                                               "html_size_zero_is_empty_not_lost"),
+    ("bodyless_redirect",                 [],                                               "non_2xx_not_a_document"),
+    ("bodyless_non_html",                 [],                                               "non_html_not_a_document"),
+    ("packed_credential_form_two",        [],                                               "packed_arguments_form_counted_with_snmp_get"),
+    ("packed_credential_form_one",        [SINGLE_CREDENTIAL_SUBMISSION],                   "packed_arguments_form_is_a_submission"),
+    ("packed_credential_empty_value",     [],                                               "empty_packed_value_not_a_submission"),
+    ("document_redirect_stub",            [],                                               "small_content_length_is_redirect_stub"),
+    ("document_large_with_length",        [DOCUMENT_WITHOUT_BODY],                          "large_content_length_is_truncated_page"),
+    ("document_zero_body_size",           [],                                               "zero_body_size_is_empty_reply"),
+    ("document_lost_body_keeps_size",     [DOCUMENT_WITHOUT_BODY],                          "nonzero_body_size_is_lost_body"),
+    ("document_unparsable_length",        [DOCUMENT_WITHOUT_BODY],                          "unparsable_content_length_is_not_a_stub"),
 ]
 # fmt: on
 
@@ -162,6 +183,39 @@ class TestWarnings:
         report = analyze_capture_completeness(_har("partial_timestamps"))
 
         assert report.first_request_session_cookies == ["PHPSESSID"]
+
+    def test_no_root_remedy_says_bare_address(self) -> None:
+        """Test the no-root warning tells the contributor how to re-record."""
+        warning = analyze_capture_completeness(_har("no_root_request")).warnings[0]
+
+        assert "root" in warning.message
+        assert "re-record" in warning.remedy.lower()
+        assert "bare" in warning.remedy
+
+    def test_unstored_documents_named_once_without_query(self) -> None:
+        """Test body-less documents are listed deduped, query-free, and capped."""
+        report = analyze_capture_completeness(_har("documents_many_unstored"))
+
+        message = next(w.message for w in report.warnings if w.code == DOCUMENT_WITHOUT_BODY)
+        assert "p0.html" in message
+        assert "?x=1" not in message
+        assert "and 2 more" in message
+
+    def test_packed_credential_form_counts_by_post_url_not_snmp_get(self) -> None:
+        """Test the packed `arguments` login form is the submission, never a GET beside it."""
+        report = analyze_capture_completeness(_har("packed_credential_form_two"))
+
+        assert report.credential_submission_counts == {"http://192.168.100.1/cgi-bin/basic_pwd_cgi": 2}
+
+    def test_redirect_stubs_recorded_without_warning(self) -> None:
+        """Test small body-less documents are listed on the report, not warned about."""
+        report = analyze_capture_completeness(_har("document_redirect_stub"))
+
+        assert report.redirect_stub_documents == [
+            "http://192.168.100.1/",
+            "http://192.168.100.1/cgi-bin/status_cgi",
+        ]
+        assert report.complete
 
     def test_warnings_do_not_mutate_the_har(self) -> None:
         """Test analysis leaves the HAR untouched (captures are evidence)."""
@@ -368,7 +422,7 @@ class TestCoverageSummary:
         report = analyze_capture_completeness({})
 
         assert report.total_entries == 0
-        assert [w.code for w in report.warnings] == [NO_CREDENTIAL_SUBMISSION]
+        assert [w.code for w in report.warnings] == [NO_CREDENTIAL_SUBMISSION, NO_ROOT_REQUEST]
 
 
 class TestSessionCookiePatternLoading:

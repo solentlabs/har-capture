@@ -17,6 +17,15 @@
     "config_path"
   ],
 
+  "fields": {
+    "_comment": "Field names that auto-redact their value. SNMP-over-JSON endpoints (ARRIS snmpGet/walk) key each value by a bare OID with no descriptive name: 1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index> is the Wi-Fi SSID column (index 10001 = 2.4 GHz, 10101 = 5 GHz); the same table's .26.1.2.<index> column is the Wi-Fi passphrase, and 1.3.6.1.4.1.4115.1.20.1.1.5.8.0 is the unit serial number.",
+    "auto_redact_patterns": [
+      "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.3\\.22\\.1\\.2\\.\\d+$",
+      "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.3\\.26\\.1\\.2\\.\\d+$",
+      "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.5\\.8\\.0$"
+    ]
+  },
+
   "script_variables": {
     "_comment": "JavaScript variables (var NAME = '...') whose string value the HTML engine reads. password: redacted whole (Motorola CurrentPwAdmin/CurrentPwUser). pipe_delimited: split on | and each value judged alone (Netgear tagValueList).",
     "password": [

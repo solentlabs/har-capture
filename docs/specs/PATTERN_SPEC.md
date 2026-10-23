@@ -206,8 +206,9 @@ read, so this list carries no PII risk.
 to count credential submissions (a `POST`/`PUT`/`PATCH` body with a non-empty value under a password-named form field or
 JSON key, among the [other kinds](VALIDATION_SPEC.md#capture-completeness-validation)), which drives the
 `single_credential_submission` warning. Entries are case-insensitive substring-match regexes tested against field
-**names**; of a value, only whether it is empty is read. The list is deliberately narrower than `sensitive.json`
-`auto_redact_patterns` — token/secret fields ride along on every form and would inflate the count.
+**names** (`^arguments$` is anchored: the packed base64 `user:pass` field of ARRIS-style form logins); of a value, only
+whether it is empty is read. The list is deliberately narrower than `sensitive.json` `auto_redact_patterns` —
+token/secret fields ride along on every form and would inflate the count.
 
 **Merge semantics:** a custom capture-settings file extends all three sections. `bloat_extensions` categories extend
 per-category (unknown categories are added); `session_cookies.name_patterns` and `password_fields.name_patterns` extend
@@ -244,6 +245,10 @@ A domain file can contain any combination of these sections:
 
   "tagValueList": {
     "safe_values": ["domain-specific-safe-value"]
+  },
+
+  "fields": {
+    "auto_redact_patterns": ["^oid-key-regex$"]
   },
 
   "script_variables": {
@@ -414,6 +419,10 @@ The built-in network device domain provides:
   7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
   deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
+- `fields.auto_redact_patterns` rules for three ARRIS OIDs: the Wi-Fi SSID column
+  (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index>`), the Wi-Fi passphrase column (`…3.26.1.2.<index>`) and the unit serial
+  number (`1.3.6.1.4.1.4115.1.20.1.1.5.8.0`). SNMP-over-JSON endpoints (`snmpGet`, `walk`) key each value by a bare OID
+  with no descriptive name, so only a key regex can see them; the sanitizer redacts the value and `validate` reports it
 
 ## Merge Order
 

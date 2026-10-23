@@ -92,6 +92,7 @@ def validate(
 
     total_errors = 0
     total_warnings = 0
+    total_gaps = 0
 
     # Completeness gaps are reported, never counted as findings: they say what
     # evidence the file lacks, not that it leaked something. Exit codes and
@@ -151,13 +152,15 @@ def validate(
         else:
             typer.echo(f"[OK] {file_path}: Clean")
 
+        total_gaps += len(report.warnings)
         if show_summary or report.warnings:
             typer.echo()
             if not show_summary:
                 typer.echo(f"{file_path}:")
             display_completeness(report, summary=show_summary)
 
-    typer.echo(f"\nSummary: {total_errors} errors, {total_warnings} warnings")
+    gaps = f" (plus {total_gaps} capture-completeness gap(s), not counted)" if total_gaps else ""
+    typer.echo(f"\nSummary: {total_errors} errors, {total_warnings} warnings{gaps}")
 
     if total_errors > 0:
         raise typer.Exit(1)

@@ -7,6 +7,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-22
+
+### Fixed
+
+- **Short redirect pages are kept in headed Chromium captures.** A reply the page leaves at once (a login success or
+  logout `<meta http-equiv="refresh">` stub, the device root) was often lost before Playwright could read it, leaving an
+  empty entry. Bodies are now also read while the browser holds the response, and the response is released unchanged.
+  Runs with `--username`/`--password`, Firefox and WebKit keep the earlier behavior.
+- **`validate` no longer flags the digits of an SNMP OID as a public IP address.** Its address pattern matched any four
+  numbers inside a longer dotted number, so a firmware `mib.js` full of OIDs drew dozens of "Potential public IP"
+  warnings. A match glued to a longer dotted number is skipped, as in the sanitizer.
+- **SNMP OID strings in firmware JavaScript are no longer rewritten as IP addresses.** The IPv4 patterns matched the
+  last four numbers of a longer dotted number, so an OID like `1.3.6.1.4.1.4115.1.20.1.1.3.42.1.20` in a device's
+  `mib.js` became `1.3.6.1.4.1.4115.1.20.1.1.192.0.2.229`. A match glued to a longer dotted number is now left alone.
+- **`validate` no longer points a URL-credential annotation at the wrong request.** `filter_and_compress_har` removed
+  bloat entries but left `_sanitized_credentials` indices unchanged, so on a filtered capture the annotation named a
+  different request (an unrelated `snmpGet`), producing a false "only one credential submission" warning. The indices
+  are now re-pointed at the surviving entries.
+- **The packed `arguments` login form is recognised as a credential submission.** ARRIS-style `POST` forms carrying a
+  base64 `user:pass` in `arguments` beside an `ar_nonce` now count, so a wrong-password attempt plus the real login no
+  longer reads as one submission.
+- **Redirect-stub documents no longer draw a "re-record" warning.** A body-less `text/html` response with a
+  `Content-Length` of 256 bytes or less is a meta-refresh stub no recording can capture; it is listed on the report but
+  not warned about. A response whose `bodySize` is `0` is an empty reply, not a lost body, and does not warn either.
+  Larger or unsized body-less pages still warn.
+- **`validate`'s summary line accounts for printed completeness gaps.** It still counts PII findings only (gaps never
+  change the exit code) but now says how many gaps were printed above it.
+- **A meta-refresh or JS-redirect root page no longer aborts capture with a false "live session" error.** The session
+  check now follows a redirect-only page (up to 3 same-host hops) and judges the page it lands on, so a device whose
+  root is a stub like `<meta http-equiv="Refresh" content="0;url=/cgi-bin/status_cgi">` is no longer counted as serving
+  data. Previously the only way past it was `--minimal`.
+- **Wi-Fi names, Wi-Fi keys and the unit serial under bare SNMP OID keys are redacted.** With
+  `--patterns network-device`, the ARRIS SSID OIDs (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.*`), Wi-Fi passphrase OIDs
+  (`…3.26.1.2.*`) and serial-number OID (`…1.1.5.8.0`) in `snmpGet` / `walk` JSON responses are redacted, and
+  `har-capture validate` flags them when present. Key-based rules could not see a value keyed only by an OID.
+- **A patched response body always comes from its own response.** Eagerly captured bodies were keyed by method, URL and
+  status alone, so a login page that POSTs back to its own URL (or a GET answered by a redirect page before login and
+  the full page after) could have a later response's body written into an earlier, evicted entry — a successful login
+  recorded as "Invalid user name or password". Bodies are now matched by order of occurrence; an entry with no matching
+  capture stays empty, and a body whose length disagrees with an uncompressed `Content-Length` is never patched.
+
+### Added
+
+- **Completeness check warns when the device root was never requested.** A capture that starts at a deep link holds no
+  landing reply, so the device cannot be identified from it. The warning tells the contributor to re-record starting at
+  the bare device address.
+- **Completeness check warns when an HTML document response has no stored body.** A 2xx `text/html` response with no
+  `content.text` (size `-1` or unstored) cannot be read later; the warning names the pages and asks for a re-record.
+
 ## [0.13.3] - 2026-10-17
 
 ### Changed
@@ -1430,6 +1479,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.13.1]: https://github.com/solentlabs/har-capture/compare/v0.13.0...v0.13.1
 [0.13.2]: https://github.com/solentlabs/har-capture/compare/v0.13.1...v0.13.2
 [0.13.3]: https://github.com/solentlabs/har-capture/compare/v0.13.2...v0.13.3
+[0.14.0]: https://github.com/solentlabs/har-capture/compare/v0.13.3...v0.14.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1457,4 +1507,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.13.3...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.14.0...HEAD

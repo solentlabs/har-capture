@@ -570,18 +570,18 @@ def iter_json_strings(data: dict[str, Any] | list[Any]) -> Iterator[str]:
 # what the engines keep: preserved gateway addresses, version strings, and
 # IPv6 candidates that are not host addresses.
 PRIVATE_IP_RE = re.compile(
-    r"\b(?:"
+    r"(?<!\d\.)\b(?:"
     r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
     r"172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|"
     r"192\.168\.\d{1,3}\.\d{1,3}"
-    r")\b"
+    r")\b(?!\.\d)"
 )
 PUBLIC_IP_RE = re.compile(
-    r"\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)(?!127\.)(?!0\.)(?!255\.)"
+    r"(?<!\d\.)\b(?!10\.)(?!172\.(?:1[6-9]|2[0-9]|3[01])\.)(?!192\.168\.)(?!127\.)(?!0\.)(?!255\.)"
     r"(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
     r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
     r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\."
-    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b"
+    r"(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\b(?!\.\d)"
 )
 # An IPv6 candidate: two to seven colon-terminated hex groups and a last
 # group — hex, or the dotted quad of an IPv4-mapped address (`::ffff:1.2.3.4`)
