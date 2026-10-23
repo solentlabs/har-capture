@@ -1071,5 +1071,21 @@
       {"id": "custom_safe_pattern", "text": "{\"ssid\": \"Lab-Net-7\"}", "patterns": {"heuristics": {"safe_value_patterns": [{"regex": "^Lab-Net-\\d+$"}]}}, "flagged": []},
       {"id": "network_name_offered", "text": "{\"ssid\": \"HomeNet-5G\"}", "patterns": "network-device", "flagged": ["HomeNet-5G"]}
     ]
+  },
+  "whole_body_cookie_cases": {
+    "_comment": "A device stores its login response as a cookie, so the cookie value is the entire body of that response. payload is the body's JSON text, sent base64-wrapped; every string in it must be redacted, with its keys, types and nesting kept. An opaque body has no structure and is the token sweep's, one token for one token.",
+    "wrapped_json": [
+      {"id": "spaced_object", "payload": "{ \"unique\":\"abc123def\", \"family\":\"SB7\", \"modelname\":\"SBG7400AC2\", \"tech\":false, \"moca\":0, \"wifi\":8, \"nested\":{\"tags\":[\"alpha\",\"beta\"],\"empty\":\"\"} }"},
+      {"id": "compact_object", "payload": "{\"unique\":\"zq81xk3vn\",\"name\":\"gateway-01\",\"count\":3,\"on\":true,\"none\":null}"},
+      {"id": "array_of_objects", "payload": "[{\"serial\":\"X1Y2Z3W4V5\",\"n\":1},{\"serial\":\"Q9R8S7T6U5\",\"n\":2}]"}
+    ],
+    "opaque": [
+      {"id": "opaque_token", "body": "tok4Zk81Xv3NqA92LmTe7Rw5"}
+    ],
+    "no_entries": [
+      {"id": "log_without_entries", "har": {"log": {}}},
+      {"id": "entries_not_a_list", "har": {"log": {"entries": "none"}}},
+      {"id": "no_log", "har": {}}
+    ]
   }
 }

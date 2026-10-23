@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A login response stored as a cookie is no longer replaced by a token.** When a device (ARRIS SBG7400AC2) keeps its
+  base64 JSON login response as a cookie, the cookie value is the whole response body, and the sanitizer turned the body
+  into `COOKIE_<hash>`; cable_modem_monitor then rejected the capture as over-sanitized. The body now keeps its keys and
+  structure with every string value redacted, and `sanitize` warns for any response body left far smaller than the size
+  the capture recorded.
+
 ## [0.14.0] - 2026-10-22
 
 ### Fixed

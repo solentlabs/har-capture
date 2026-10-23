@@ -553,3 +553,20 @@ Python API (`sanitize_har_file`, then `filter_and_compress_har`).
 
 **Consequence.** A user who captures with the CLI gets the sanitized, filtered, compressed file with no further steps. A
 user with an existing HAR gets a sanitized copy with every entry intact, so nothing is dropped from it unseen.
+
+## ADR-21: Sanitize Never Collapses a Body
+
+**Context.** A device can store its login response as a cookie, so one value is both a cookie and the entire body of a
+response. Pass 1b (SANITIZATION_SPEC § Pass 1b) replaces a redacted value wherever it survives verbatim; applied to a
+whole body, it turns a 248-byte JSON payload into a 15-character token. The capture then carries no usable data for that
+endpoint, and cable_modem_monitor's `validate_har` rejects it as over-sanitized.
+
+**Decision.** Sanitization replaces values and never structure. A response body that is itself a redacted value, and is
+a base64-wrapped JSON payload, keeps its keys, nesting and layout with every string value redacted. After the sweep,
+`find_collapsed_bodies()` applies cable_modem_monitor's collapse rule (recorded `content.size` at least 4 times the text
+and at least 100 bytes larger), and `sanitize_har` warns for each body it finds.
+
+**Consequence.** A body that is a session value is redacted in place instead of replaced, and the redaction covers every
+string in it, since nothing marks which one is the secret; non-string values and field names stay readable as evidence
+of the device's API. A whole-body match with no structure (one opaque token) is still replaced by its placeholder. The
+warning is a report, not a refusal: the capture is written either way.
