@@ -16,6 +16,7 @@ import pytest
 from har_capture.capture.browser import (
     BrowserSessionResult,
     _run_driver,
+    capture_device_har,
     require_timeout_when_headless,
 )
 from har_capture.capture.driver import (
@@ -180,7 +181,8 @@ class TestSettle:
 
     @pytest.mark.parametrize("case", _FIXTURE["settle_cases"], ids=lambda c: c["id"])
     def test_settle(self, case: dict) -> None:
-        assert settle(_FakePage(case), quiescence_s=0.05, timeout_s=0.7) is case["expect"]
+        quiescence_s = case.get("quiescence_s", 0.05)
+        assert settle(_FakePage(case), quiescence_s=quiescence_s, timeout_s=0.7) is case["expect"]
 
 
 class TestRunDriver:
@@ -233,3 +235,50 @@ class TestWorkflowWiring:
         assert result.capture is not None
         assert result.capture.driver_exception is boom
         assert result.capture_success is False
+
+
+class TestDriverSession:
+    """capture_device_har runs the driver inside the recorded session (Playwright mocked)."""
+
+    @staticmethod
+    def _capture(tmp_path: Path, driver: Any) -> tuple[Any, MagicMock, MagicMock]:
+        mock_pw = MagicMock()
+        context = mock_pw.chromium.launch.return_value.new_context.return_value
+        page = context.new_page.return_value
+        with (
+            patch("playwright.sync_api.sync_playwright") as sync_pw,
+            patch("har_capture.capture.browser.check_device_connectivity", return_value=(True, "http", None)),
+            patch("har_capture.capture.browser.check_playwright", return_value=True),
+            patch("har_capture.capture.browser._wait_for_network_quiescence"),
+        ):
+            sync_pw.return_value.__enter__.return_value = mock_pw
+            result = capture_device_har(
+                ip="127.0.0.1",
+                output=str(tmp_path / "t.har"),
+                headless=True,
+                sanitize=False,
+                compress=False,
+                wait_for_data=True,
+                driver=driver,
+            )
+        return result, page, context
+
+    def test_driver_runs_without_navigation_handler(self, tmp_path: Path) -> None:
+        """A driver paces itself: no per-navigation wait is registered, and it receives the page."""
+        seen: list[Any] = []
+        result, page, _ = self._capture(tmp_path, seen.append)
+
+        assert seen == [page]
+        assert result.driver_exception is None
+        assert "framenavigated" not in [c[0][0] for c in page.on.call_args_list]
+
+    def test_driver_failure_fails_the_capture_and_is_returned(self, tmp_path: Path) -> None:
+        def broken(page: Any) -> None:
+            raise RuntimeError("driver bug")
+
+        result, _, _ = self._capture(tmp_path, broken)
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error.startswith("Capture driver raised")
+        assert isinstance(result.driver_exception, RuntimeError)

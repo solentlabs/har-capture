@@ -63,25 +63,29 @@ pre-push hook runs, mirrors the `test` job on every Python version in CI's matri
 declared floor (`typer>=…`) is a promise to users with older packages installed; the lowest-dependencies job is what
 keeps it true.
 
-| Gate              | Command                                                                                                                         | Where CI runs it                     | Threshold                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------- |
-| Tests             | `.venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"`                                                         | `test`, Python 3.10–3.13             | 0 failures                                                            |
-| Coverage          | included in pytest run via `pyproject.toml`                                                                                     | `test`, Python 3.10–3.13             | `fail_under = 90`                                                     |
-| Lint + format     | `ruff check .` and `ruff format --check .`                                                                                      | `test`, Python 3.10–3.13             | 0 violations                                                          |
-| Type check        | `mypy src/`                                                                                                                     | `test`, Python 3.10–3.13             | 0 errors                                                              |
-| Module floors     | `.venv/bin/python3 scripts/check_coverage_floors.py` (after the pytest run)                                                     | `test`, Python 3.10–3.13             | every module listed in `FLOORS` meets its floor                       |
-| Dependency floors | tests with every direct dependency at the lowest version `pyproject.toml` allows (`scripts/install-ci-deps.sh <python> lowest`) | `test-lowest-deps`, Python 3.10      | 0 failures                                                            |
-| Pre-commit        | `.venv/bin/python3 -m pre_commit run --all-files`                                                                               | `lint` (ruff and mypy run in `test`) | all hooks pass                                                        |
-| Codecov patch     | reported by `codecov.yml`                                                                                                       | `coverage`                           | 80% informational (CLI entrypoints have low patch coverage by design) |
+| Gate              | Command                                                                                                                         | Where CI runs it                     | Threshold                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| Tests             | `.venv/bin/python3 -m pytest tests/ -v --tb=short -m "not integration"`                                                         | `test`, Python 3.10–3.13             | 0 failures                                                              |
+| Coverage          | included in pytest run via `pyproject.toml`                                                                                     | `test`, Python 3.10–3.13             | `fail_under = 90`                                                       |
+| Lint + format     | `ruff check .` and `ruff format --check .`                                                                                      | `test`, Python 3.10–3.13             | 0 violations                                                            |
+| Type check        | `mypy src/`                                                                                                                     | `test`, Python 3.10–3.13             | 0 errors                                                                |
+| Module floors     | `.venv/bin/python3 scripts/check_coverage_floors.py` (after the pytest run)                                                     | `test`, Python 3.10–3.13             | every module listed in `FLOORS` meets its floor                         |
+| Patch coverage    | `.venv/bin/python3 scripts/check_patch_coverage.py` (after the pytest run)                                                      | `test`, Python 3.10–3.13             | every changed line under `src/har_capture` executed, every branch taken |
+| Dependency floors | tests with every direct dependency at the lowest version `pyproject.toml` allows (`scripts/install-ci-deps.sh <python> lowest`) | `test-lowest-deps`, Python 3.10      | 0 failures                                                              |
+| Pre-commit        | `.venv/bin/python3 -m pre_commit run --all-files`                                                                               | `lint` (ruff and mypy run in `test`) | all hooks pass                                                          |
+| Codecov patch     | reported by `codecov.yml`                                                                                                       | `coverage`                           | 80% informational; the patch coverage gate above is the blocking check  |
 
 **One version per tool.** ruff and mypy are pinned in `pyproject.toml` (`[project.optional-dependencies] dev`), and each
 pin must equal its hook's `rev` in `.pre-commit-config.yaml`. CI installs the pinned version; the commit hook runs the
 hook's. Two versions of one tool disagree about the same tree, so a mismatch means a file the hook formats one way fails
 CI's check the other way.
 
-**Don't game coverage.** If a module is hard to test, restructure it. Codecov's patch target is informational because
-CLI entrypoints are thin wrappers and a 100% patch target would push contributors to write hollow tests. Coverage drops
-on existing code are blocked by the codecov project target (`threshold: 5%` from base).
+**Don't game coverage.** If a module is hard to test, restructure it: extract the logic into a module-level function and
+test that. The patch coverage gate blocks any changed line that is not executed or whose branch is not taken, so the fix
+for a gap is a test with fixture inputs, not a hollow assertion. A line that cannot run under test (a platform guard, a
+defensive `raise`) gets `# pragma: no cover` with the reason beside it. Codecov's own patch target stays informational
+because it only reports; the gate is what blocks. Coverage drops on existing code are blocked by the codecov project
+target (`threshold: 5%` from base).
 
 ## Source File Standards
 

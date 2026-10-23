@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-23
+
+### Changed
+
+- **Driver-mode capture is covered by unit tests.** The session path that hands the page to a driver (no per-navigation
+  wait, a driver failure carried back on the result) and the quiet-but-not-yet-settled branch of `settle()` are now
+  exercised without a browser. Captures and sanitized output are unchanged.
+
 ## [0.15.0] - 2026-10-23
 
 ### Added
@@ -1507,6 +1515,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.14.0]: https://github.com/solentlabs/har-capture/compare/v0.13.3...v0.14.0
 [0.14.1]: https://github.com/solentlabs/har-capture/compare/v0.14.0...v0.14.1
 [0.15.0]: https://github.com/solentlabs/har-capture/compare/v0.14.1...v0.15.0
+[0.15.1]: https://github.com/solentlabs/har-capture/compare/v0.15.0...v0.15.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1534,4 +1543,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.15.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.15.1...HEAD

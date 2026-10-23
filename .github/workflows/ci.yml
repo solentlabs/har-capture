@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # check_patch_coverage.py diffs against the merge base
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -42,6 +44,9 @@ jobs:
 
       - name: Enforce per-module coverage floors
         run: python scripts/check_coverage_floors.py
+
+      - name: Require every changed source line to be covered
+        run: python scripts/check_patch_coverage.py
 
   # Every direct dependency at the lowest version pyproject.toml allows, on
   # the oldest supported Python — the corner a declared floor has to hold.
