@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-23
+
+### Added
+
+- **A capture can be scripted: `capture_device_har(..., driver=fn)`.** `fn` receives the Playwright page once capture is
+  recording and the capture ends when it returns, so a repeatable end-to-end run (two web servers, a restart, a refused
+  login) no longer needs hand-clicking. It goes through the same pipeline as an interactive capture. A driver runs
+  headed or headless without a `timeout` (which is rejected with a driver) and needs chromium. If it raises, the capture
+  so far is still written and sanitized, and the result carries `success=False`, a credential-free `error` and
+  `driver_exception`. `run_capture_workflow` and `run_capture_phase` take the same `driver`.
+- **`har_capture.capture.settle(page)`** waits for a page to stop loading, navigating and fetching, which includes the
+  0-second meta-refresh pages the in-flight request count cannot see.
+- **Dialogs a driver answers are recorded one by one**, with `action` (`accept` or `dismiss`) and `resolved_by="driver"`
+  in `_solentlabs.dialogs`. A dialog with no driver listener is dismissed and recorded `auto_dismiss`.
+
 ## [0.14.1] - 2026-10-23
 
 ### Fixed
@@ -1491,6 +1506,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.13.3]: https://github.com/solentlabs/har-capture/compare/v0.13.2...v0.13.3
 [0.14.0]: https://github.com/solentlabs/har-capture/compare/v0.13.3...v0.14.0
 [0.14.1]: https://github.com/solentlabs/har-capture/compare/v0.14.0...v0.14.1
+[0.15.0]: https://github.com/solentlabs/har-capture/compare/v0.14.1...v0.15.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1518,4 +1534,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.14.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.15.0...HEAD

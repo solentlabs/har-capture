@@ -12,6 +12,7 @@ workflow gates each step.
 | File                                      | Role                                                                                                               |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `src/har_capture/capture/browser.py`      | Core capture orchestration: Playwright session, wait-for-data, HAR recording, state capture, filtering/compression |
+| `src/har_capture/capture/driver.py`       | Driver mode: mode checks, `settle()`, driver dialog record, scrub of a driver's exception                          |
 | `src/har_capture/capture/workflow.py`     | Multi-phase workflow: browser check → connectivity → probes → auth → capture                                       |
 | `src/har_capture/capture/probes.py`       | Pre-capture diagnostics: auth challenge, HEAD support, ICMP ping                                                   |
 | `src/har_capture/capture/connectivity.py` | Reachability check, protocol auto-detection (TCP+TLS probe), Basic Auth detection                                  |
@@ -320,6 +321,7 @@ def capture_device_har(
     wait_for_data: bool = True,                       # Enable async data tracking
     target_url: str | None = None,                    # Pre-computed URL (skips internal connectivity check)
     page_load_strategy: str = "networkidle",          # Playwright wait_until for page.goto
+    driver: Callable[[Page], None] | None = None,     # Drives the page; capture ends when it returns
 ) -> CaptureResult
 ```
 
@@ -337,6 +339,7 @@ class CaptureResult:
     sanitization_report: SanitizationReport | None
     completeness: CaptureCompletenessReport | None  # What the capture contains + gaps
     downloads: list[dict[str, Any]]                 # Saved browser downloads (NOT sanitized)
+    driver_exception: Exception | None              # What a driver raised; the capture was still written
 ```
 
 ### `CapturePathInfo` Dataclass
@@ -596,6 +599,9 @@ sanitization pipeline entirely), and `log._solentlabs.downloads` in the HAR (fil
 
 ### Timeout vs Interactive Mode
 
+A third mode, [Driver Mode](#driver-mode), ends when the driver returns and takes neither a `timeout` nor an interactive
+wait.
+
 **Timeout mode** (`timeout=N` in the Python API — not exposed as a CLI flag; a headless capture requires it, and
 `capture_device_har()` / `run_capture_workflow()` raise `ValueError` for `headless=True` without one, before any request
 — see [ADR-2](../ARCHITECTURE_DECISIONS.md#adr-2-minimal-pre-flight-in-interactive-mode)):
@@ -610,6 +616,58 @@ sanitization pipeline entirely), and `log._solentlabs.downloads` in the HAR (fil
 - Browser stays open until the user manually closes the window
 - Uses `page.wait_for_event("close")` to block until closure
 - Required for devices with in-browser auth (HNAP, form-based login) where the user needs to interact
+
+### Driver Mode
+
+`driver=fn` lets a script run the capture a person would run by hand. The session is set up as in an interactive run —
+clean context, HAR recording, CDP body capture, response/popup/download handlers, the first `page.goto(target_url)` —
+and then `fn(page)` is called. The capture ends when `fn` returns: there is no interactive wait, and the browser may be
+headed or headless.
+
+| Setting            | Rule                                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `headless`         | Allowed without `timeout`; the driver ends the capture                                                                                   |
+| `timeout`          | Rejected with `ValueError` — a driver's own Playwright timeouts are its clock, and sync Playwright cannot be preempted                   |
+| `browser`          | `chromium` only (`ValueError` otherwise): only chromium reads a response before the page leaves, which keeps the 0-second redirect pages |
+| `http_credentials` | Unused by design for form-login devices; a driver reads any password from its own environment                                            |
+| `wait_for_data`    | The XHR/fetch counter stays installed; the per-navigation wait in the `framenavigated` handler does not run                              |
+
+**Order.** Connect → first load → `driver(page)` → wait for in-flight requests (10 s cap) → cookie/web-storage snapshot
+→ save downloads → close context (writes the HAR) → the normal post-capture pipeline. The snapshot comes after the
+driver so `browser_cookies` and storage describe the end of the session; interactive and timeout runs keep taking it
+right after the first load.
+
+**`settle(page, quiescence_s=2.0, timeout_s=30.0) -> bool`** returns True once the document was fully loaded, its URL
+unchanged and no XHR/fetch in flight for `quiescence_s` seconds. The in-flight count alone cannot see a navigation (a
+0-second meta refresh), so URL and `readyState` count as activity. A page that does not settle returns False and is not
+an error. A script that acts after a delay (a timer setting a cookie) needs the driver to wait on its own condition.
+
+**Device failures are evidence.** Playwright's HAR records a request the device fails or leaves hanging as an entry, and
+nothing in the pipeline drops it:
+
+| Device behavior                         | Entry                                                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| HTTP error status                       | `status` as sent, body as sent                                                                               |
+| Connection reset / refused              | `status: -1`, `response._failureText: "net::ERR_CONNECTION_RESET"`, `content.size: -1`, no text              |
+| Body cut short                          | `status` as sent, `_failureText: "net::ERR_CONTENT_LENGTH_MISMATCH"`, `content.size: -1`                     |
+| Request never answered (step timed out) | `status: -1`, no `_failureText`, `content.size: -1`, `time: -1`; it stays in flight until the context closes |
+
+Body patching skips an entry with no recorded body size, completeness checks only 2xx documents, sanitization keeps the
+`_failureText` field, and bloat filtering is by file extension. A driver's per-step timeout against the device is
+therefore caught and ignored by the driver, not allowed to fail the run.
+
+**Driver exceptions.** Only `Exception` is caught (an interrupt ends the run as ever). The session still snapshots,
+closes the context and runs the whole pipeline, so the HAR so far is written and sanitized. The result then has
+`success=False`, `error="Capture driver raised <Type>: <message>"` with every URL in the message passed through the
+sanitizer's URL rules (a login URL can carry a credential), and the exception object in `driver_exception` for the
+caller to re-raise.
+
+**Dialogs.** One `_solentlabs.dialogs` record per dialog, in order, each with `action` (`accept`, `dismiss`, or
+`unresolved`) and `resolved_by`. The driver resolves a dialog from its own `page.on("dialog", ...)`; the record notes
+what it called (`prompt_text_provided` for a prompt, never the text). Playwright dismisses a dialog itself only when
+nothing listens, and the recorder's listener makes something listen, so a dialog the driver has no listener for is
+dismissed by the recorder and recorded `resolved_by="auto_dismiss"`. Counting listeners uses Playwright's emitter, which
+its public API does not expose; if that is unavailable the dialog is left for the driver to resolve.
 
 ### Browser State Capture
 
@@ -769,7 +827,7 @@ class CaptureOptions:
    crashes, or sanitization fails, it stays in the temp dir (a failure names it so the capture can be finished).
 1. **Sanitization runs before compression** — The compressed `.har.gz` always contains sanitized content.
 1. **Browser state capture happens after navigation** — Cookies and storage are captured after `page.goto()` completes
-   and any wait-for-data polling finishes.
+   and any wait-for-data polling finishes; in driver mode, after the driver returns.
 1. **Phase ordering is strict** — Connectivity must be checked before auth, browser must be checked before capture.
    Reordering phases would break the workflow.
 1. **Wait-for-data is opt-out** — `wait_for_data=True` is the default. Disabling it reverts to Playwright's basic

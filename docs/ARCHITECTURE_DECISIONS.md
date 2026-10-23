@@ -570,3 +570,20 @@ and at least 100 bytes larger), and `sanitize_har` warns for each body it finds.
 string in it, since nothing marks which one is the secret; non-string values and field names stay readable as evidence
 of the device's API. A whole-body match with no structure (one opaque token) is still replaced by its placeholder. The
 warning is a report, not a refusal: the capture is written either way.
+
+## ADR-22: A Capture Can Be Scripted; the Script Drives, har-capture Records
+
+**Context.** A device with two web servers, separate logins, a restart and a deliberately wrong login takes many clicks
+to capture by hand, and every rerun repeats them. A script driving its own Playwright recording would bypass what makes
+a har-capture capture trustworthy: a clean context, network-level body reads, merged bodies, and the sanitize pipeline.
+
+**Decision.** `capture_device_har(..., driver=fn)` hands the Playwright page to `fn` after capture is recording and ends
+when `fn` returns (CAPTURE_SPEC § Driver Mode). The pipeline is the interactive one; only the wait changes. A driver
+runs headed or headless, takes no `timeout`, and needs chromium. What the device does to the driver (an error status, a
+refused login, a reset, a request that never answers) is evidence and stays in the HAR; what the driver does wrong is
+the driver's, reported on the result with the capture still written. A script's own dialog handling is recorded per
+dialog with its outcome.
+
+**Consequence.** The capture a script produces is the capture a person would have produced by hand, from the same code
+path. The driver owns its steps and its timeouts, and `settle()` is the one wait helper har-capture provides, because
+the in-flight request count it builds on cannot see a page that redirects at once.

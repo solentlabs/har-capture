@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from har_capture.capture.driver import DriverFn, require_valid_driver_mode
+
 # =============================================================================
 # Phase-specific result types
 # =============================================================================
@@ -97,6 +99,8 @@ class CaptureResult:
         completeness: What the capture contains and any gaps found in it
         downloads: Browser downloads saved during the session (raw device
             output — NOT sanitized)
+        driver_exception: The exception a capture ``driver`` raised, if any;
+            the capture files were still written
     """
 
     success: bool = False
@@ -108,6 +112,7 @@ class CaptureResult:
     sanitization_report: Any | None = None  # SanitizationReport when available
     completeness: Any | None = None  # CaptureCompletenessReport when available
     downloads: list[dict[str, Any]] = field(default_factory=list)
+    driver_exception: Exception | None = None
 
 
 # =============================================================================
@@ -417,6 +422,7 @@ def run_capture_phase(
     wait_for_data: bool = True,
     target_url: str | None = None,
     page_load_strategy: str = "networkidle",
+    driver: DriverFn | None = None,
 ) -> CaptureWorkflowResult:
     """Run the actual capture.
 
@@ -440,6 +446,8 @@ def run_capture_phase(
         wait_for_data: Wait for async data fetches before navigating
         target_url: Pre-computed URL from connectivity check (skips dup check)
         page_load_strategy: Playwright wait_until for page.goto
+        driver: Function that drives the page; the capture ends when it
+            returns (see ``capture_device_har``)
 
     Returns:
         CaptureWorkflowResult with capture status
@@ -471,6 +479,7 @@ def run_capture_phase(
         wait_for_data=wait_for_data,
         target_url=target_url,
         page_load_strategy=page_load_strategy,
+        driver=driver,
     )
 
     result.capture = CaptureResult(
@@ -483,6 +492,7 @@ def run_capture_phase(
         sanitization_report=capture_result.sanitization_report,
         completeness=capture_result.completeness,
         downloads=capture_result.downloads,
+        driver_exception=capture_result.driver_exception,
     )
 
     if capture_result.success:
@@ -512,6 +522,7 @@ def run_capture_workflow(
     page_load_strategy: str = "networkidle",
     custom_patterns: str | dict[str, Any] | None = None,
     interactive: bool = True,
+    driver: DriverFn | None = None,
 ) -> CaptureWorkflowResult:
     """Run the complete capture workflow.
 
@@ -545,13 +556,17 @@ def run_capture_workflow(
         custom_patterns: Custom patterns file path or pre-loaded dict (resolve a
             domain name such as ``network-device`` with ``resolve_patterns_arg``)
         interactive: Flag suspicious values for interactive review
+        driver: Function that drives the page; the capture ends when it
+            returns (see ``capture_device_har``)
 
     Returns:
         CaptureWorkflowResult with workflow status
 
     Raises:
-        ValueError: If ``headless`` is set without a ``timeout`` — raised
-            before any phase runs, so nothing is sent to the device
+        ValueError: If ``headless`` is set without a ``timeout`` and no
+            ``driver``, or a ``driver`` is combined with ``timeout`` or a
+            browser other than chromium — raised before any phase runs, so
+            nothing is sent to the device
 
     Example:
         >>> result = run_capture_workflow("http://192.168.1.1", headless=True, timeout=10)
@@ -568,7 +583,8 @@ def run_capture_workflow(
     """
     from har_capture.capture.browser import require_timeout_when_headless
 
-    require_timeout_when_headless(headless, timeout)
+    require_timeout_when_headless(headless, timeout, driver)
+    require_valid_driver_mode(browser, timeout, driver)
 
     # Phase 1: Browser check
     if not skip_browser_check:
@@ -620,6 +636,7 @@ def run_capture_workflow(
         wait_for_data=wait_for_data,
         target_url=result.target_url,
         page_load_strategy=page_load_strategy,
+        driver=driver,
     )
 
     return result

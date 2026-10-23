@@ -1,0 +1,42 @@
+{
+  "mode_cases": [
+    {"id": "no_driver_any_browser", "browser": "firefox", "timeout": null, "driver": false, "error": null},
+    {"id": "driver_chromium", "browser": "chromium", "timeout": null, "driver": true, "error": null},
+    {"id": "driver_with_timeout", "browser": "chromium", "timeout": 5, "driver": true, "error": "timeout"},
+    {"id": "driver_firefox", "browser": "firefox", "timeout": null, "driver": true, "error": "chromium"},
+    {"id": "driver_webkit", "browser": "webkit", "timeout": null, "driver": true, "error": "chromium"}
+  ],
+  "headless_cases": [
+    {"id": "headless_no_timeout_no_driver", "headless": true, "timeout": null, "driver": false, "error": true},
+    {"id": "headless_timeout", "headless": true, "timeout": 5, "driver": false, "error": false},
+    {"id": "headless_driver", "headless": true, "timeout": null, "driver": true, "error": false},
+    {"id": "headed_no_timeout", "headless": false, "timeout": null, "driver": false, "error": false}
+  ],
+  "scrub_cases": [
+    {
+      "id": "login_url_credential",
+      "message": "Page.goto: Timeout 3000ms exceeded.\nCall log:\n  navigating to \"http://192.168.100.1:8080/login?arg=YWRtaW46aHVudGVyMnBhc3M=&_n=1\", waiting until \"load\"",
+      "absent": ["YWRtaW46aHVudGVyMnBhc3M="],
+      "present": ["Page.goto: Timeout 3000ms exceeded.", "192.168.100.1:8080/login"]
+    },
+    {
+      "id": "no_url",
+      "message": "locator.click: element not found",
+      "absent": [],
+      "present": ["locator.click: element not found"]
+    }
+  ],
+  "dialog_cases": [
+    {"id": "listener_elsewhere", "listeners": 2, "resolved_by": "driver", "action": "unresolved", "auto_dismissed": false},
+    {"id": "recorder_alone", "listeners": 1, "resolved_by": "auto_dismiss", "action": "dismiss", "auto_dismissed": true},
+    {"id": "listeners_unknown", "listeners": null, "resolved_by": "driver", "action": "unresolved", "auto_dismissed": false}
+  ],
+  "settle_cases": [
+    {"id": "quiet_page_settles", "states": [["complete", 0]], "urls": ["u"], "closed": false, "expect": true},
+    {"id": "pending_request_never_settles", "states": [["complete", 1]], "urls": ["u"], "closed": false, "expect": false},
+    {"id": "still_loading_never_settles", "states": [["loading", 0]], "urls": ["u"], "closed": false, "expect": false},
+    {"id": "url_keeps_changing", "states": [["complete", 0]], "urls": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"], "closed": false, "expect": false},
+    {"id": "context_destroyed", "states": ["raise"], "urls": ["u"], "closed": false, "expect": false},
+    {"id": "page_closed", "states": [["complete", 0]], "urls": ["u"], "closed": true, "expect": false}
+  ]
+}

@@ -30,6 +30,12 @@ from har_capture.capture.deps import (
     install_browser,
     install_browser_deps,
 )
+from har_capture.capture.driver import (
+    DriverFn,
+    attach_dialog_recording,
+    require_valid_driver_mode,
+    scrub_driver_error,
+)
 from har_capture.patterns import get_bloat_extensions
 from har_capture.sanitization.report import HeuristicMode
 from har_capture.validation.completeness import (
@@ -283,6 +289,10 @@ class CaptureResult:
             the local path it was saved to, and an error message when
             saving failed. Saved files are raw device output — NOT
             sanitized.
+        driver_exception: The exception a ``driver`` raised, if any. The HAR
+            was still written and sanitized; ``error`` holds the scrubbed text
+            and ``success`` is False. Re-raise it to stop a script on a
+            driver bug.
     """
 
     har_path: Path | None = None
@@ -294,6 +304,7 @@ class CaptureResult:
     downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
+    driver_exception: Exception | None = None
 
 
 @dataclass
@@ -360,11 +371,14 @@ class BrowserSessionResult:
             only), keyed and slotted like ``captured_bodies``. The browser
             holds each response until its body is read, so a quick
             navigation cannot evict it first.
-        dialogs: Browser dialogs observed during interactive capture.
-            For headed, user-driven runs, each entry records the dialog type,
-            message, default value, inferred action (accept/dismiss), and that
-            the dialog was resolved by the browser UI. Headless or timed
-            captures keep Playwright's default auto-dismiss behavior.
+        dialogs: Browser dialogs observed during interactive or driver
+            capture. For headed, user-driven runs, each entry records the
+            dialog type, message, default value, inferred action
+            (accept/dismiss), and that the dialog was resolved by the browser
+            UI. In driver mode each entry records the action the driver took
+            (``resolved_by="driver"``), or ``auto_dismiss`` when no driver
+            listener existed. Headless or timed captures keep Playwright's
+            default auto-dismiss behavior.
         popups: One entry per page opened in the context after the initial
             page (i.e., popups via ``window.open`` / ``target="_blank"`` /
             ``context.new_page``). Each entry records the popup's initial
@@ -382,6 +396,8 @@ class BrowserSessionResult:
             sanitized.
         success: True if the session completed without error
         error: Error message if session failed
+        driver_error: Scrubbed text of the exception a driver raised
+        driver_exception: The exception itself, for the caller to re-raise
     """
 
     pre_capture_cookies: list[Any] = dataclasses.field(default_factory=list)
@@ -395,6 +411,8 @@ class BrowserSessionResult:
     downloads: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     success: bool = True
     error: str | None = None
+    driver_error: str | None = None
+    driver_exception: Exception | None = None
 
 
 def _add_capture_metadata(har: dict[str, Any], tool_name: str = "har-capture") -> None:
@@ -608,6 +626,62 @@ def _resolve_capture_paths(
     )
 
 
+def _snapshot_browser_state(context: Any, page: Any, result: BrowserSessionResult) -> None:
+    """Record the cookie jar and web storage as they stand now."""
+    try:
+        result.browser_cookies = context.cookies()
+    except Exception:
+        result.browser_cookies = []
+
+    try:
+        storage_state = context.storage_state()
+        result.web_storage_local = [
+            {"origin": o["origin"], "items": o["localStorage"]}
+            for o in storage_state.get("origins", [])
+            if o.get("localStorage")
+        ]
+    except Exception:
+        result.web_storage_local = []
+
+    try:
+        result.web_storage_session = page.evaluate("() => Object.fromEntries(Object.entries(sessionStorage))")
+    except Exception:
+        result.web_storage_session = {}
+
+
+def _wait_out_capture(page: Any, timeout: int | None, wait_for_data: bool) -> None:
+    """Hold the session open: for ``timeout`` seconds, or until the user closes the browser."""
+    if timeout is not None:
+        if wait_for_data:
+            page.wait_for_timeout(timeout * 1000)
+            _wait_for_network_quiescence(page, timeout_s=10.0)
+        else:
+            time.sleep(timeout)
+    else:
+        _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
+        try:
+            page.wait_for_event("close", timeout=0)
+        except Exception as e:
+            _LOGGER.warning("Error waiting for page close: %s", e)
+
+
+def _run_driver(driver: DriverFn, page: Any, result: BrowserSessionResult, wait_for_data: bool) -> None:
+    """Run the driver; whatever it raises is kept, so the capture is still written.
+
+    Only ``Exception`` is caught: an interrupt (Ctrl-C) ends the run as it
+    always has.
+    """
+    try:
+        driver(page)
+    except Exception as e:
+        _LOGGER.warning("Capture driver raised %s; writing the capture so far", type(e).__name__)
+        result.driver_exception = e
+        result.driver_error = scrub_driver_error(e)
+    if wait_for_data:
+        # The driver's last step may have started requests; let them finish.
+        _wait_for_network_quiescence(page, timeout_s=10.0)
+
+
 def _run_browser_session(
     target_url: str,
     temp_path: Path,
@@ -618,6 +692,7 @@ def _run_browser_session(
     wait_for_data: bool = True,
     page_load_strategy: str = "networkidle",
     downloads_dir: Path | None = None,
+    driver: DriverFn | None = None,
 ) -> BrowserSessionResult:
     """Launch Playwright browser and capture HAR.
 
@@ -637,6 +712,9 @@ def _run_browser_session(
         page_load_strategy: Playwright wait_until value for page.goto()
         downloads_dir: Directory to save browser downloads into (created
             lazily on first download). ``None`` disables download saving.
+        driver: Function that drives the page once capture is recording; the
+            session ends when it returns. An exception it raises is kept on
+            the result, and the HAR is still written.
 
     Returns:
         BrowserSessionResult with captured browser state
@@ -694,7 +772,9 @@ def _run_browser_session(
         network_capture = browser_type is p.chromium and not http_credentials
         if network_capture:
             _attach_network_body_capture(context, page, result.network_bodies)
-        interactive_dialog_capture = not headless and timeout is None
+        if driver is not None:
+            attach_dialog_recording(context, result.dialogs)
+        interactive_dialog_capture = driver is None and not headless and timeout is None
         if interactive_dialog_capture:
             # Two-event model. (1) `page.on("dialog")` fires when the native
             # dialog OPENS — we create the record and log it. (2) The exposed
@@ -760,7 +840,10 @@ def _run_browser_session(
                 except Exception:  # noqa: S110
                     pass
 
-            page.on("framenavigated", _on_frame_navigated)
+            # A driver paces its own steps (settle()); a handler waiting inside
+            # every navigation would run under the driver's calls.
+            if driver is None:
+                page.on("framenavigated", _on_frame_navigated)
 
         # Eagerly capture response bodies for text content types.
         # Playwright's HAR recorder fetches bodies lazily at context.close()
@@ -840,42 +923,14 @@ def _run_browser_session(
         if wait_for_data and not _quiescence_disabled[0]:
             _wait_for_network_quiescence(page)
 
-        # Capture browser cookie state after page load
-        try:
-            result.browser_cookies = context.cookies()
-        except Exception:
-            result.browser_cookies = []
-
-        # Web Storage snapshot
-        try:
-            storage_state = context.storage_state()
-            result.web_storage_local = [
-                {"origin": o["origin"], "items": o["localStorage"]}
-                for o in storage_state.get("origins", [])
-                if o.get("localStorage")
-            ]
-        except Exception:
-            result.web_storage_local = []
-
-        try:
-            result.web_storage_session = page.evaluate(
-                "() => Object.fromEntries(Object.entries(sessionStorage))"
-            )
-        except Exception:
-            result.web_storage_session = {}
-
-        if timeout is not None:
-            if wait_for_data:
-                page.wait_for_timeout(timeout * 1000)
-                _wait_for_network_quiescence(page, timeout_s=10.0)
-            else:
-                time.sleep(timeout)
+        if driver is not None:
+            _run_driver(driver, page, result, wait_for_data)
+            # After the driver: cookies and storage describe the end of the
+            # session, not the page the script started from.
+            _snapshot_browser_state(context, page, result)
         else:
-            _LOGGER.info("Browser opened. Interact with your device, then close the browser.")
-            try:
-                page.wait_for_event("close", timeout=0)
-            except Exception as e:
-                _LOGGER.warning("Error waiting for page close: %s", e)
+            _snapshot_browser_state(context, page, result)
+            _wait_out_capture(page, timeout, wait_for_data)
 
         # Save downloads BEFORE context.close() — closing the context
         # deletes Playwright's artifacts directory and the files with it.
@@ -1374,16 +1429,19 @@ def _run_post_capture_pipeline(
     return result
 
 
-def require_timeout_when_headless(headless: bool, timeout: int | None) -> None:
+def require_timeout_when_headless(
+    headless: bool, timeout: int | None, driver: DriverFn | None = None
+) -> None:
     """Reject a headless capture with no timeout.
 
     Without a timeout a capture ends when the user closes the browser, and a
-    headless browser has no window to close: it would wait forever.
+    headless browser has no window to close: it would wait forever. A driver
+    ends the capture by returning, so it needs neither.
 
     Raises:
-        ValueError: If ``headless`` is set and ``timeout`` is None
+        ValueError: If ``headless`` is set and ``timeout`` is None, with no driver
     """
-    if headless and timeout is None:
+    if headless and timeout is None and driver is None:
         raise ValueError(
             "headless capture needs a timeout: with no window, nobody can close the browser to end it"
         )
@@ -1408,6 +1466,7 @@ def capture_device_har(
     wait_for_data: bool = True,
     target_url: str | None = None,
     page_load_strategy: str = "networkidle",
+    driver: DriverFn | None = None,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -1443,13 +1502,24 @@ def capture_device_har(
         page_load_strategy: Playwright ``wait_until`` value for ``page.goto()``.
             Default ``"networkidle"``.  Use ``"domcontentloaded"`` for devices
             with persistent polling that prevent network idle.
+        driver: Function called with the Playwright page once capture is
+            recording and the first page has loaded. The capture ends when it
+            returns; there is no interactive wait. Headed or headless, no
+            ``timeout`` (a driver cannot be combined with one) and chromium
+            only. If it raises, the HAR so far is still written and sanitized,
+            and the result carries ``success=False``, the scrubbed message in
+            ``error`` and the exception in ``driver_exception``. Requests the
+            device fails, refuses or leaves hanging are recorded in the HAR,
+            not raised. See ``har_capture.capture.settle``.
 
     Returns:
         CaptureResult with paths to generated files
 
     Raises:
         ImportError: If Playwright is not installed
-        ValueError: If ``headless`` is set without a ``timeout``
+        ValueError: If ``headless`` is set without a ``timeout`` and no
+            ``driver``, or a ``driver`` is combined with ``timeout`` or a
+            browser other than chromium
 
     Example:
         >>> result = capture_device_har("router.local")
@@ -1457,8 +1527,14 @@ def capture_device_har(
 
         # Automated capture (headless with timeout)
         >>> result = capture_device_har("example.com", headless=True, timeout=10)
+
+        # Scripted capture: the driver ends it by returning
+        >>> result = capture_device_har(
+        ...     "example.com", headless=True, driver=lambda page: page.click("a")
+        ... )
     """
-    require_timeout_when_headless(headless, timeout)
+    require_timeout_when_headless(headless, timeout, driver)
+    require_valid_driver_mode(browser, timeout, driver)
 
     capture_options = CaptureOptions(
         include_fonts=include_fonts,
@@ -1518,6 +1594,7 @@ def capture_device_har(
             wait_for_data=wait_for_data,
             page_load_strategy=page_load_strategy,
             downloads_dir=paths.output_path.parent / f"{paths.output_path.stem}_downloads",
+            driver=driver,
         )
 
     def _cleanup_temp() -> None:
@@ -1600,4 +1677,9 @@ def capture_device_har(
         custom_patterns=custom_patterns,
     )
     result.downloads = session.downloads
+    if session.driver_exception is not None:
+        result.success = False
+        failure = f"Capture driver raised {session.driver_error}"
+        result.error = f"{failure}. {result.error}" if result.error else failure
+        result.driver_exception = session.driver_exception
     return result

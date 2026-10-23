@@ -40,6 +40,7 @@ from har_capture.capture.deps import (
     install_browser_deps,
     install_playwright,
 )
+from har_capture.capture.driver import DriverFn, settle
 from har_capture.capture.probes import (
     probe_auth_challenge,
     probe_head_support,
@@ -70,6 +71,8 @@ __all__ = [
     "capture_device_har",
     "filter_and_compress_har",
     "require_timeout_when_headless",
+    "DriverFn",
+    "settle",
     "CaptureResult",
     "CaptureOptions",
     "CapturePathInfo",
