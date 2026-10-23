@@ -37,6 +37,7 @@
     {"id": "still_loading_never_settles", "states": [["loading", 0]], "urls": ["u"], "closed": false, "expect": false},
     {"id": "url_keeps_changing", "states": [["complete", 0]], "urls": ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"], "closed": false, "expect": false},
     {"id": "context_destroyed", "states": ["raise"], "urls": ["u"], "closed": false, "expect": false},
-    {"id": "page_closed", "states": [["complete", 0]], "urls": ["u"], "closed": true, "expect": false}
+    {"id": "page_closed", "states": [["complete", 0]], "urls": ["u"], "closed": true, "expect": false},
+    {"id": "quiet_but_cap_reached_first", "states": [["complete", 0]], "urls": ["u"], "closed": false, "quiescence_s": 5.0, "expect": false}
   ]
 }
