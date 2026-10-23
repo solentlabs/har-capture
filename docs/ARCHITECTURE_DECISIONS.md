@@ -540,3 +540,16 @@ punctuation after a replaced number.
 **Consequence.** Code after `password`, `key` and `token` labels in inline and served-as-HTML scripts survives
 sanitization; quoted secrets, secrets in strings and secrets in markup are replaced as before. Captures already
 sanitized keep their damage — the original text is not recoverable.
+
+## ADR-20: Filtering and Compression Belong to Capture; `sanitize` Only Sanitizes
+
+**Context.** A user's path is `har-capture capture`: record, sanitize, drop bloat (images, fonts and similar), and write
+the `.har.gz`. The standalone `har-capture sanitize` takes a HAR the user already has and removes PII from it. A raw HAR
+that must be re-run through the whole capture output (sanitize, then filter and compress) can go through the Python API.
+
+**Decision.** `sanitize` does not filter or compress, and it has no flag that does. The capture command is the one place
+the full pipeline runs, so the file a user shares is the same whether they captured it just now or in a rerun of the
+Python API (`sanitize_har_file`, then `filter_and_compress_har`).
+
+**Consequence.** A user who captures with the CLI gets the sanitized, filtered, compressed file with no further steps. A
+user with an existing HAR gets a sanitized copy with every entry intact, so nothing is dropped from it unseen.
