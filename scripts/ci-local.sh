@@ -122,6 +122,13 @@ if [ "$MATRIX" = false ]; then
         echo -e "${RED}✗ floors${NC}"
         FAILED=1
     fi
+
+    if "$PYTHON" scripts/check_patch_coverage.py; then
+        echo -e "${GREEN}✓ patch coverage${NC}"
+    else
+        echo -e "${RED}✗ patch coverage${NC}"
+        FAILED=1
+    fi
 else
     echo -e "\n${YELLOW}[2/3] unit tests + coverage gate + floors: Python ${MATRIX_VERSIONS}, and lowest dependencies${NC}"
     if ! command -v uv >/dev/null 2>&1; then
@@ -159,7 +166,8 @@ else
                 export COVERAGE_FILE="$VENV/.coverage"
                 "$VENV/bin/python" -m pytest -q -p no:cacheprovider -m "$MARKER" \
                     --cov=har_capture --cov-report=term --cov-report="html:$VENV/htmlcov" \
-                    && "$VENV/bin/python" scripts/check_coverage_floors.py
+                    && "$VENV/bin/python" scripts/check_coverage_floors.py \
+                    && "$VENV/bin/python" scripts/check_patch_coverage.py
             ) > "$VENV/.last-run.log" 2>&1 &
             PIDS="$PIDS $!:$RUN"
         done

@@ -1,0 +1,14 @@
+{
+  "parse_cases": [
+    {"id": "single_hunk", "diff": "+++ b/src/har_capture/a.py\n@@ -10,0 +11,3 @@ def f\n+x\n", "expect": {"src/har_capture/a.py": [11, 12, 13]}},
+    {"id": "default_count_is_one", "diff": "+++ b/src/har_capture/a.py\n@@ -5 +5 @@\n+x\n", "expect": {"src/har_capture/a.py": [5]}},
+    {"id": "pure_deletion_adds_nothing", "diff": "+++ b/src/har_capture/a.py\n@@ -5,2 +4,0 @@\n-x\n", "expect": {}},
+    {"id": "two_files_two_hunks", "diff": "+++ b/src/har_capture/a.py\n@@ -1 +1 @@\n+x\n@@ -9,0 +20,2 @@\n+y\n+++ b/src/har_capture/b.py\n@@ -2,0 +3 @@\n+z\n", "expect": {"src/har_capture/a.py": [1, 20, 21], "src/har_capture/b.py": [3]}}
+  ],
+  "uncovered_cases": [
+    {"id": "missing_line_in_diff", "added": [10, 11], "missing": [11, 50], "partial": [], "expect": [11]},
+    {"id": "partial_branch_in_diff", "added": [10, 11], "missing": [], "partial": [10], "expect": [10]},
+    {"id": "gap_outside_diff_ignored", "added": [10], "missing": [50], "partial": [60], "expect": []},
+    {"id": "both_sorted", "added": [30, 5, 6], "missing": [30], "partial": [5], "expect": [5, 30]}
+  ]
+}
