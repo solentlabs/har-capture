@@ -13,7 +13,7 @@ from typing import Any
 
 # The oldest release whose sanitized output is current. A release that changes
 # what the sanitizer writes sets this to its own version in the release commit.
-MIN_SANITIZER_VERSION = "0.14.0"
+MIN_SANITIZER_VERSION = "0.14.1"
 
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 

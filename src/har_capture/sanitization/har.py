@@ -2438,15 +2438,25 @@ def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
     return sorted(needles.items(), key=lambda item: -len(item[0]))
 
 
-def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str]) -> int:
+def _propagate_redacted_values(
+    har_data: dict[str, Any],
+    registry: dict[str, str],
+    hasher: Hasher | None = None,
+    collector: RedactionCollector | None = None,
+) -> int:
     """Replace remaining verbatim occurrences of already-redacted values in-place.
 
     Substitution is one token for one token, so path segment count, query shape,
-    and delimiters are preserved. Matching is exact and case-sensitive.
+    and delimiters are preserved. Matching is exact and case-sensitive. A value
+    that is a response's entire body is the exception to "one token": swapping
+    it for a placeholder would collapse the body, so a base64-wrapped JSON body
+    is redacted inside instead (``_propagate_whole_bodies``).
 
     Args:
         har_data: The sanitized HAR data (mutated in place)
         registry: Original value -> placeholder, from RedactionCollector
+        hasher: Optional hasher for the placeholders inside a rewritten body
+        collector: Optional collector to record those redactions
 
     Returns:
         Number of occurrences replaced
@@ -2455,11 +2465,13 @@ def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str
     if not search_keys:
         return 0
 
+    whole_bodies = _propagate_whole_bodies(har_data, {needle for needle, _ in search_keys}, hasher, collector)
+
     try:
         content = json.dumps(har_data)
     except (TypeError, ValueError) as e:
         _LOGGER.warning("Propagation skipped, HAR is not serializable: %s", e)
-        return 0
+        return whole_bodies
 
     replacements = 0
     for needle, placeholder in search_keys:
@@ -2472,17 +2484,118 @@ def _propagate_redacted_values(har_data: dict[str, Any], registry: dict[str, str
             replacements += occurrences
 
     if not replacements:
-        return 0
+        return whole_bodies
 
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as e:
         _LOGGER.warning("Propagation reverted, HAR did not survive round-trip: %s", e)
-        return 0
+        return whole_bodies
 
     har_data.clear()
     har_data.update(parsed)
-    return replacements
+    return whole_bodies + replacements
+
+
+# A body counts as collapsed when its recorded size dwarfs its text: at least
+# this ratio larger and this many bytes larger. The rule cable_modem_monitor's
+# validate_har applies, so a HAR it would reject is reported here first.
+_COLLAPSE_SIZE_RATIO = 4
+_COLLAPSE_SIZE_FLOOR_BYTES = 100
+
+
+def find_collapsed_bodies(entries: list[Any]) -> list[str]:
+    """List the 2xx responses whose body is a stub of the size the device sent.
+
+    ``content.size`` is the length the capture recorded; sanitization never
+    rewrites it, so a text far shorter than it means something replaced the
+    body wholesale. Empty text is "no body captured", a different case.
+
+    Args:
+        entries: ``log.entries`` of a sanitized HAR
+
+    Returns:
+        The request URL of each collapsed response, query string included
+    """
+    collapsed: list[str] = []
+    for entry in entries:
+        response = entry.get("response") if isinstance(entry, dict) else None
+        if not isinstance(response, dict) or not 200 <= response.get("status", 0) < 300:
+            continue
+        content = response.get("content")
+        content = content if isinstance(content, dict) else {}
+        size, text = content.get("size", 0), content.get("text", "")
+        if not isinstance(size, int) or not isinstance(text, str) or not text or size <= 0:
+            continue
+        if size >= len(text) * _COLLAPSE_SIZE_RATIO and size - len(text) >= _COLLAPSE_SIZE_FLOOR_BYTES:
+            collapsed.append(str(entry.get("request", {}).get("url", "")))
+    return collapsed
+
+
+def _redact_json_strings(node: Any, hasher: Hasher | None, collector: RedactionCollector | None) -> Any:
+    """Copy a parsed JSON tree with every string value redacted.
+
+    Object keys, nesting, array lengths, numbers, booleans and nulls are kept,
+    so the tree has the shape the device sent. An empty string stays empty.
+    """
+    if isinstance(node, dict):
+        return {key: _redact_json_strings(value, hasher, collector) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_redact_json_strings(item, hasher, collector) for item in node]
+    if isinstance(node, str):
+        return _redact_value(node, hasher, "FIELD", collector)
+    return node
+
+
+def _propagate_whole_bodies(
+    har_data: dict[str, Any],
+    needles: set[str],
+    hasher: Hasher | None,
+    collector: RedactionCollector | None,
+) -> int:
+    """Rewrite each body that is itself a redacted value, keeping its shape.
+
+    A device that stores its login response as a cookie makes the cookie value
+    the whole body of that response. Propagating the cookie's placeholder would
+    replace the body with a token, so a base64-wrapped JSON body keeps its
+    keys and structure and has every string value redacted instead. Any other
+    whole-body match is left to the token sweep: it is one opaque value with no
+    structure to keep.
+
+    Args:
+        har_data: The sanitized HAR data (mutated in place)
+        needles: Eligible redacted values, as the sweep would search for them
+        hasher: Optional hasher for the placeholders inside the body
+        collector: Optional collector to record those redactions
+
+    Returns:
+        Number of bodies rewritten
+    """
+    entries = har_data.get("log", {}).get("entries")
+    if not isinstance(entries, list):
+        return 0
+    rewritten = 0
+    for entry in entries:
+        response = entry.get("response") if isinstance(entry, dict) else None
+        content = response.get("content") if isinstance(response, dict) else None
+        if not isinstance(content, dict):
+            continue
+        text = content.get("text")
+        if not isinstance(text, str) or text.strip() not in needles:
+            continue
+        stripped = text.strip()
+        payload_text = decode_base64_payload(stripped)
+        payload = parse_json_container(payload_text) if payload_text is not None else None
+        if payload_text is None or payload is None:
+            continue
+        with _flags_muted(collector):
+            redacted = _redact_json_strings(payload, hasher, collector)
+        inner = _dump_json_like(redacted, payload, payload_text)
+        lead = text[: len(text) - len(text.lstrip())]
+        trail = text[len(text.rstrip()) :]
+        content["text"] = lead + _rewrap_payload(stripped, inner, quoted=False) + trail
+        rewritten += 1
+    return rewritten
 
 
 def sanitize_har(
@@ -2627,7 +2740,7 @@ def sanitize_har(
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
     # surfaces with no field name to match (most commonly a URL path segment).
-    propagated = _propagate_redacted_values(result, collector.redacted_values)
+    propagated = _propagate_redacted_values(result, collector.redacted_values, hasher, collector)
     if propagated:
         collector.auto_redacted_counts["propagated"] = propagated
         # A value with no surviving occurrence left would give the user a review
@@ -2645,6 +2758,11 @@ def sanitize_har(
                 if v in collector.redacted_values and _is_propagation_eligible(v) and v not in readable
             }
         )
+
+    # Pass 1b replaced result's contents, so `log` is no longer the sanitized one.
+    final_entries = result["log"].get("entries")
+    for url in find_collapsed_bodies(final_entries if isinstance(final_entries, list) else []):
+        _LOGGER.warning("Response body is a stub of its recorded size: %s", url.split("?", 1)[0])
 
     # Create report with all collected data
     report = collector.to_report("", "", actual_salt)

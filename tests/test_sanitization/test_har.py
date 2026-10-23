@@ -42,12 +42,14 @@ from har_capture.sanitization.har import (
     _is_echoed_credential,
     _parse_cookie_names,
     _parse_set_cookie_name,
+    _propagate_whole_bodies,
     _sanitize_body_string,
     _sanitize_form_urlencoded,
     _sanitize_headers,
     _sanitize_json_recursive,
     _scan_url_credentials,
     apply_user_redactions,
+    find_collapsed_bodies,
     is_flaggable_field,
     is_sensitive_field,
     sanitize_entry,
@@ -4346,6 +4348,116 @@ def _token_flow_har(token: str, *, path_segment: str | None = None) -> dict:
             ],
         }
     }
+
+
+_WHOLE_BODY = _HAR_FIXTURE["whole_body_cookie_cases"]
+
+
+def _whole_body_har(body: str) -> dict:
+    """A login whose response body is the value every later request sends as a cookie."""
+    return {
+        "log": {
+            "entries": [
+                {
+                    "request": {"method": "GET", "url": "http://10.0.0.1/login", "headers": []},
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {"size": len(body), "mimeType": "text/html", "text": body},
+                    },
+                },
+                {
+                    "request": {
+                        "method": "GET",
+                        "url": "http://10.0.0.1/status",
+                        "headers": [{"name": "Cookie", "value": f"credential={body}"}],
+                        "cookies": [{"name": "credential", "value": body}],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {"size": 2, "mimeType": "text/html", "text": "ok"},
+                    },
+                },
+            ]
+        }
+    }
+
+
+def _json_strings(node: object) -> list[str]:
+    """Every string value in a parsed JSON tree."""
+    if isinstance(node, dict):
+        return [s for value in node.values() for s in _json_strings(value)]
+    if isinstance(node, list):
+        return [s for item in node for s in _json_strings(item)]
+    return [node] if isinstance(node, str) else []
+
+
+def _json_shape(node: object) -> object:
+    """A parsed JSON tree with its string values blanked: keys, nesting and other types stay."""
+    if isinstance(node, dict):
+        return {key: _json_shape(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_json_shape(item) for item in node]
+    return "" if isinstance(node, str) else node
+
+
+class TestWholeBodyPropagation:
+    """A body that is itself a redacted value keeps its shape instead of collapsing to a token."""
+
+    @pytest.mark.parametrize("case", _WHOLE_BODY["wrapped_json"], ids=lambda c: c["id"])
+    def test_wrapped_json_body_keeps_its_structure(self, case: dict) -> None:
+        """Keys, nesting and non-string values survive; no string value does."""
+        original = json.loads(case["payload"])
+        body = base64.b64encode(case["payload"].encode()).decode()
+        sanitized, _ = sanitize_har(_whole_body_har(body), salt="test")
+
+        text = sanitized["log"]["entries"][0]["response"]["content"]["text"]
+        decoded = json.loads(base64.b64decode(text))
+        assert _json_shape(decoded) == _json_shape(original), "structure changed"
+        for value in _json_strings(original):
+            if value:
+                assert value not in json.dumps(sanitized), f"{value!r} survived"
+
+    @pytest.mark.parametrize("case", _WHOLE_BODY["wrapped_json"], ids=lambda c: c["id"])
+    def test_wrapped_json_body_is_not_collapsed(self, case: dict) -> None:
+        """The body clears the size check a downstream validator applies."""
+        body = base64.b64encode(case["payload"].encode()).decode()
+        sanitized, _ = sanitize_har(_whole_body_har(body), salt="test")
+
+        assert find_collapsed_bodies(sanitized["log"]["entries"]) == []
+
+    def test_cookie_still_redacted(self) -> None:
+        """The cookie that carried the body is redacted where it travels."""
+        case = _WHOLE_BODY["wrapped_json"][0]
+        body = base64.b64encode(case["payload"].encode()).decode()
+        sanitized, _ = sanitize_har(_whole_body_har(body), salt="test")
+
+        request = sanitized["log"]["entries"][1]["request"]
+        assert body not in json.dumps(request), "cookie value survived"
+        assert request["cookies"][0]["value"].startswith("COOKIE_")
+
+    @pytest.mark.parametrize("case", _WHOLE_BODY["opaque"], ids=lambda c: c["id"])
+    def test_opaque_body_is_the_token_sweeps(self, case: dict) -> None:
+        """A body with no structure is replaced by the cookie's placeholder."""
+        sanitized, _ = sanitize_har(_whole_body_har(case["body"]), salt="test")
+
+        text = sanitized["log"]["entries"][0]["response"]["content"]["text"]
+        assert re.fullmatch(r"COOKIE_[0-9a-f]{8}", text), text
+
+    @pytest.mark.parametrize("case", _WHOLE_BODY["no_entries"], ids=lambda c: c["id"])
+    def test_har_without_entries_is_skipped(self, case: dict) -> None:
+        """A HAR with no entry list has no body to rewrite."""
+        assert _propagate_whole_bodies(case["har"], {"tok4Zk81Xv3NqA92LmTe7Rw5"}, None, None) == 0
+
+    def test_collapse_is_reported(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A stub body is named in a warning rather than shipped silently."""
+        body = "tok4Zk81Xv3NqA92LmTe7Rw5" * 10
+        with caplog.at_level("WARNING", logger="har_capture.sanitization.har"):
+            sanitized, _ = sanitize_har(_whole_body_har(body), salt="test")
+
+        assert find_collapsed_bodies(sanitized["log"]["entries"]) == ["http://10.0.0.1/login"]
+        assert "stub of its recorded size" in caplog.text
 
 
 class TestRedactedValuePropagation:

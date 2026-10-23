@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-23
+
+### Fixed
+
+- **A login response stored as a cookie is no longer replaced by a token.** When a device (ARRIS SBG7400AC2) keeps its
+  base64 JSON login response as a cookie, the cookie value is the whole response body, and the sanitizer turned the body
+  into `COOKIE_<hash>`; cable_modem_monitor then rejected the capture as over-sanitized. The body now keeps its keys and
+  structure with every string value redacted, and `sanitize` warns for any response body left far smaller than the size
+  the capture recorded.
+
 ## [0.14.0] - 2026-10-22
 
 ### Fixed
@@ -1480,6 +1490,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.13.2]: https://github.com/solentlabs/har-capture/compare/v0.13.1...v0.13.2
 [0.13.3]: https://github.com/solentlabs/har-capture/compare/v0.13.2...v0.13.3
 [0.14.0]: https://github.com/solentlabs/har-capture/compare/v0.13.3...v0.14.0
+[0.14.1]: https://github.com/solentlabs/har-capture/compare/v0.14.0...v0.14.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1507,4 +1518,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.14.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.14.1...HEAD

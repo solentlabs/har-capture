@@ -69,7 +69,8 @@ The file is organized into 9 groups:
    the type says nothing)
 1. **Text Outside the HTML Engine** — `_sanitize_body_string()`: the pattern-file pass (custom patterns, cards, SSNs),
    MACs, IPv6 and IPv4, emails, phone numbers, and the positional passes between them
-1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`
+1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`,
+   `_propagate_whole_bodies()`, `find_collapsed_bodies()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
 
@@ -1315,6 +1316,20 @@ would rewrite unrelated bytes across the file.
 Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
 delimiters are untouched.
 
+**A value that is a whole response body.** A device that stores its login response as a cookie makes the cookie value
+the entire body of that response, and one token for one token would collapse the body to a placeholder. Before the
+sweep, `_propagate_whole_bodies` finds each response whose `content.text` is an eligible value and, when the text is a
+base64-wrapped JSON object or array, redacts **every string value** inside it, keeping object keys, nesting, array
+lengths, numbers, booleans, nulls and the JSON layout (`_dump_json_like`), and wraps it again in its transport form.
+Every string is redacted because nothing in the body says which one is the secret. A whole-body match that is not a
+base64-wrapped JSON payload is one opaque value with no structure to keep, and the sweep replaces it with the
+placeholder. The fleet holds no such body.
+
+**Collapse check.** After the sweep, `find_collapsed_bodies()` lists each 2xx response whose recorded `content.size` is
+at least 4 times its text length and at least 100 bytes larger — the rule cable_modem_monitor's `validate_har` applies.
+`sanitize_har` logs one warning per response it finds, so a body that sanitization collapsed is named at sanitize time
+rather than rejected downstream. `content.size` is never rewritten, which is what makes the comparison meaningful.
+
 **Needle expansion and ordering** (`_propagation_search_keys`). Each eligible value contributes two needles — its
 literal form and its percent-encoded form (`quote(value, safe="")`) — both mapping to the same placeholder. A secret
 that had to be escaped to sit in a URL path is otherwise missed entirely, against the rule the form-urlencoded branch
@@ -1335,8 +1350,14 @@ def _is_propagation_eligible(value: str) -> bool:
 def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
     """Expand eligible values into (needle, placeholder) pairs, longest needle first."""
 
-def _propagate_redacted_values(har_data: dict, registry: dict[str, str]) -> int:
-    """Replace remaining verbatim occurrences of redacted values. Returns replacement count."""
+def _propagate_redacted_values(har_data: dict, registry: dict[str, str], hasher=None, collector=None) -> int:
+    """Rewrite whole-body matches in shape, then replace remaining verbatim occurrences. Returns the count."""
+
+def _propagate_whole_bodies(har_data: dict, needles: set[str], hasher, collector) -> int:
+    """Redact every string inside a base64-wrapped JSON body that is itself a redacted value."""
+
+def find_collapsed_bodies(entries: list) -> list[str]:
+    """URLs of 2xx responses whose body is a stub of the recorded size."""
 ```
 
 The registry (`RedactionCollector.redacted_values`) maps original value → assigned placeholder and is populated by
