@@ -631,6 +631,7 @@ class TestRunCapturePhase:
             wait_for_data=True,
             target_url=None,
             page_load_strategy="networkidle",
+            driver=None,
         )
 
     @patch("har_capture.capture.browser.capture_device_har")
