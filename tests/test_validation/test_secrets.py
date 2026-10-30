@@ -247,6 +247,21 @@ class TestCheckPostData:
         check_post_data(post_data, "request", findings)
         assert len(findings) == 0
 
+    @pytest.mark.parametrize(
+        ("value", "expected_findings"),
+        [("seeksalthash", 0), ("seeksalthash1", 1), ("SeekSaltHash", 1)],
+        ids=["keyword_kept", "suffix_near_miss", "case_near_miss"],
+    )
+    def test_protocol_keyword_is_not_a_leak(self, value: str, expected_findings: int) -> None:
+        """A protocol keyword in a credential field is not reported; a near miss still is."""
+        post_data = {
+            "params": [{"name": "password", "value": value}],
+            "mimeType": "application/x-www-form-urlencoded",
+        }
+        findings: list[Finding] = []
+        check_post_data(post_data, "request", findings)
+        assert len(findings) == expected_findings
+
     def test_handles_empty_post_data(self) -> None:
         """Test empty post data doesn't cause errors."""
         findings: list[Finding] = []

@@ -56,6 +56,7 @@ from har_capture.patterns import (
     is_fully_redacted,
     is_ipv6_host_address,
     is_mac_placeholder,
+    is_protocol_keyword,
     is_redacted,
     is_ssid_key,
     iter_json_strings,
@@ -683,11 +684,16 @@ def _redact_value(
 
     Returns:
         Hashed value if hasher provided, otherwise REDACTED placeholder;
-        an empty value comes back empty
+        an empty value or a protocol keyword (allowlist ``protocol_keywords``,
+        FIELD category) comes back unchanged
     """
     if value == "":
         # Nothing to hide, and a placeholder would invent a value the capture
         # never sent (an empty default password), as the JSON route never has.
+        return value
+    if category == "FIELD" and is_protocol_keyword(value):
+        # A protocol keyword (a PBKDF2 firmware's salt trigger), not a
+        # credential: the capture needs it as sent to show the login flow.
         return value
     if collector:
         collector.record_auto_redaction(category.lower())

@@ -157,6 +157,7 @@ Names match exactly (case-insensitive), in the sanitizer and `validate` alike: `
     "mac": {"pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$", "description": "Locally administered MAC"}
   },
   "hash_prefixes": {"values": ["SERIAL_", "PASS_", "WIFI_", "…"]},
+  "protocol_keywords": {"values": ["seeksalthash"]},
   "redaction_patterns": {"values": ["\\[REDACTED\\]", "\\*\\*\\*[A-Z]+\\*\\*\\*", "MAC_[a-f0-9]{8}", "…"]}
 }
 ```
@@ -165,6 +166,12 @@ The excerpt shows each section's shape; [`allowlist.json`](../../src/har_capture
 lists. `hash_prefixes` lists the prefixes of the built-in passes and of the hasher's heuristic categories
 (`Hasher.hash_sensitive_value` requires each of its prefixes to be listed); pass 0's card-number `CC_` and a custom
 pattern's own prefix are not listed, and no rule matches those placeholders again.
+
+`protocol_keywords` is the one section that does not recognize a redaction: it lists exact, case-sensitive values a
+client submits under a credential-named field to drive a login handshake, which are not credentials (`seeksalthash`, the
+salt trigger of PBKDF2 firmware such as Technicolor CGA). `is_protocol_keyword(value)` tests membership; the sanitizer
+keeps such a value as sent and `validate` does not report it. The section is built in only; a custom allowlist does not
+extend it.
 
 Used by `is_redacted()` in `redaction.py` to determine whether a value has already been sanitized.
 

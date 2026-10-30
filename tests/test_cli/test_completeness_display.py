@@ -27,8 +27,19 @@ FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_complet
 
 
 def _report(fixture_key: str) -> Any:
-    """Analyze a fixture HAR and return its completeness report."""
-    return analyze_capture_completeness(copy.deepcopy(FIXTURES[fixture_key]))
+    """Analyze a fixture HAR and return its completeness report.
+
+    The fixtures model a capture-window recording, where the device sets a
+    cookie: a fixture with no cookie gets a Set-Cookie on its first response so a row shows only the gap
+    it names (the cookie-less shape is covered in test_completeness.py).
+    """
+    har = copy.deepcopy(FIXTURES[fixture_key])
+    dumped = json.dumps(har).lower()
+    if '"set-cookie"' not in dumped and '"cookie"' not in dumped:
+        har["log"]["entries"][0].setdefault("response", {}).setdefault("headers", []).append(
+            {"name": "Set-Cookie", "value": "lang=en"}
+        )
+    return analyze_capture_completeness(har)
 
 
 # fmt: off

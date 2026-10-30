@@ -4906,6 +4906,7 @@ FLAG_LABEL_CASES = _HAR_FIXTURE["flag_label_cases"]["cases"]
 ENTRY_SECURITY_DETAILS_CASES = _HAR_FIXTURE["entry_security_details_cases"]["cases"]
 SSID_SAFE_VALUE_CASES = _HAR_FIXTURE["ssid_safe_value_cases"]["cases"]
 EMPTY_VALUE_CASES = _HAR_FIXTURE["empty_value_cases"]["cases"]
+PROTOCOL_KEYWORD_CASES = _HAR_FIXTURE["protocol_keyword_cases"]["cases"]
 
 
 class TestJsonIdentityBodies:
@@ -4954,7 +4955,11 @@ class TestJsonIdentityBodies:
 class TestEmptyValues:
     """An empty credential value is kept on every route, as the JSON route keeps it."""
 
-    @pytest.mark.parametrize("case", EMPTY_VALUE_CASES, ids=[c["id"] for c in EMPTY_VALUE_CASES])
+    @pytest.mark.parametrize(
+        "case",
+        EMPTY_VALUE_CASES + PROTOCOL_KEYWORD_CASES,
+        ids=[c["id"] for c in EMPTY_VALUE_CASES] + ["keyword_" + c["id"] for c in PROTOCOL_KEYWORD_CASES],
+    )
     def test_empty_value(self, case: dict) -> None:
         request = {"method": "POST", "url": "http://192.168.100.1/login", "headers": [], "cookies": []}
         request.update(copy.deepcopy(case["request"]))

@@ -59,6 +59,13 @@
     ]
   },
 
+  "protocol_keywords": {
+    "_comment": "Exact values a client submits under a credential-named field as a protocol keyword, not a credential; kept as sent",
+    "values": [
+      "seeksalthash"
+    ]
+  },
+
   "redaction_patterns": {
     "_comment": "Regex patterns that indicate a value is already redacted",
     "values": [

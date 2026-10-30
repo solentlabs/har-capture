@@ -106,6 +106,17 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
 _PLACEHOLDER_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-.:@\[\]*/]+")
 
 
+def is_protocol_keyword(value: str) -> bool:
+    """Check if a value is a protocol keyword (allowlist ``protocol_keywords``).
+
+    A keyword a client submits under a credential-named field to drive a
+    login handshake (a PBKDF2 firmware's salt trigger) is not a credential:
+    the sanitizer keeps it as sent and the validator does not report it.
+    The match is exact and case-sensitive.
+    """
+    return value in load_allowlist().get("protocol_keywords", {}).get("values", ())
+
+
 def is_fully_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
     """Check if a string is *entirely* a redaction placeholder.
 
