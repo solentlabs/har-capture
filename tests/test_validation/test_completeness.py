@@ -32,6 +32,7 @@ from har_capture.patterns import clear_pattern_cache, get_password_field_pattern
 from har_capture.sanitization import sanitize_har
 from har_capture.validation.completeness import (
     DOCUMENT_WITHOUT_BODY,
+    LOGIN_WITHOUT_COOKIES,
     MID_SESSION_CAPTURE,
     NO_CREDENTIAL_SUBMISSION,
     NO_ROOT_REQUEST,
@@ -43,9 +44,21 @@ FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "test_completeness.j
 FIXTURES = json.loads(FIXTURES_PATH.read_text())
 
 
-def _har(key: str) -> dict[str, Any]:
-    """Return a deep copy of a fixture HAR."""
-    return copy.deepcopy(FIXTURES[key])
+def _har(key: str, *, cookies: bool = True) -> dict[str, Any]:
+    """Return a deep copy of a fixture HAR.
+
+    The fixtures model a capture recorded by the capture window, where the
+    device sets a cookie: ``cookies`` gives the first response a Set-Cookie
+    header, so a row tests only the gap it names. ``cookies=False`` keeps the
+    fixture as a browser export that left cookies out.
+    """
+    har = copy.deepcopy(FIXTURES[key])
+    if cookies:
+        entries = har.get("log", {}).get("entries") or []
+        response = entries[0].get("response") if entries and isinstance(entries[0], dict) else None
+        if isinstance(response, dict) and isinstance(response.get("headers"), list):
+            response["headers"].append({"name": "Set-Cookie", "value": "lang=en"})
+    return har
 
 
 def _cookie_har(name: str) -> dict[str, Any]:
@@ -550,3 +563,104 @@ class TestPipelineIntegration:
 
         assert result.completeness is None
         assert result.success
+
+
+# (fixture_key, cookie placed on the first exchange, expected_codes, description)
+# A form login with no cookie anywhere is the DevTools-export shape; any cookie
+# on either side clears it, and a header-auth device (no form login) is never
+# asked to re-record for cookies it may not use.
+# fmt: off
+LOGIN_COOKIE_CASES = [
+    ("clean_login_flow",      None,                                                               [LOGIN_WITHOUT_COOKIES], "form_login_no_cookies"),
+    ("clean_login_flow",      {"response_header": {"name": "Set-Cookie", "value": "auth=abc"}},   [],                      "set_cookie_header"),
+    ("clean_login_flow",      {"request_header": {"name": "Cookie", "value": "auth=abc"}},        [],                      "cookie_header"),
+    ("clean_login_flow",      {"request_cookies": [{"name": "auth", "value": "abc"}]},            [],                      "request_cookies_array"),
+    ("clean_login_flow",      {"response_cookies": [{"name": "auth", "value": "abc"}]},           [],                      "response_cookies_array"),
+    ("basic_auth_only",       None,                                                               [SINGLE_CREDENTIAL_SUBMISSION], "header_auth_not_asked_for_cookies"),
+    ("no_credential_submission", None,                                                            [NO_CREDENTIAL_SUBMISSION], "no_login_no_cookie_warning"),
+]
+# fmt: on
+
+
+def _with_cookie(fixture_key: str, cookie: dict[str, Any] | None) -> dict[str, Any]:
+    """A fixture HAR stripped of every cookie, plus the given one on its first exchange."""
+    har = _har(fixture_key, cookies=False)
+    for item in har["log"]["entries"]:
+        for side in (item["request"], item["response"]):
+            side.pop("cookies", None)
+            side["headers"] = [
+                h for h in side["headers"] if h["name"].lower() not in ("cookie", "set-cookie")
+            ]
+    entry = har["log"]["entries"][0]
+    for name, value in (cookie or {}).items():
+        if name == "response_header":
+            entry["response"].setdefault("headers", []).append(value)
+        elif name == "request_header":
+            entry["request"].setdefault("headers", []).append(value)
+        elif name == "request_cookies":
+            entry["request"]["cookies"] = value
+        elif name == "response_cookies":
+            entry["response"]["cookies"] = value
+    return har
+
+
+class TestLoginWithoutCookies:
+    """A form login recorded without any cookie asks for a recapture."""
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "cookie", "expected_codes", "description"),
+        LOGIN_COOKIE_CASES,
+        ids=[c[3] for c in LOGIN_COOKIE_CASES],
+    )
+    def test_warning_codes(
+        self, fixture_key: str, cookie: dict[str, Any] | None, expected_codes: list[str], description: str
+    ) -> None:
+        """Test each cookie placement produces exactly the expected gaps."""
+        report = analyze_capture_completeness(_with_cookie(fixture_key, cookie))
+
+        assert [w.code for w in report.warnings] == expected_codes, description
+
+    @pytest.mark.parametrize(
+        ("fixture_key", "cookie", "expected_codes", "description"),
+        LOGIN_COOKIE_CASES,
+        ids=[c[3] for c in LOGIN_COOKIE_CASES],
+    )
+    def test_same_gaps_after_sanitizing(
+        self, fixture_key: str, cookie: dict[str, Any] | None, expected_codes: list[str], description: str
+    ) -> None:
+        """Test the sanitizer neither hides nor invents the cookie gap."""
+        sanitized, _ = sanitize_har(_with_cookie(fixture_key, cookie))
+
+        report = analyze_capture_completeness(sanitized)
+
+        assert [w.code for w in report.warnings] == expected_codes, description
+
+    @pytest.mark.parametrize(
+        ("creator", "expected_codes"),
+        [
+            ("Playwright", []),
+            ("playwright", []),
+            ("WebInspector", [LOGIN_WITHOUT_COOKIES]),
+            ("composite (hybrid of two same-device captures)", [LOGIN_WITHOUT_COOKIES]),
+            (None, [LOGIN_WITHOUT_COOKIES]),
+        ],
+        ids=["playwright", "playwright_lowercase", "devtools", "composite", "no_creator"],
+    )
+    def test_capture_window_files_are_not_asked_to_recapture(
+        self, creator: str | None, expected_codes: list[str]
+    ) -> None:
+        """Test a cookieless file the capture window recorded is trusted; any other producer is not."""
+        har = _with_cookie("clean_login_flow", None)
+        har["log"].pop("creator", None)
+        if creator is not None:
+            har["log"]["creator"] = {"name": creator, "version": "1"}
+
+        for source in (har, sanitize_har(copy.deepcopy(har))[0]):
+            assert [w.code for w in analyze_capture_completeness(source).warnings] == expected_codes
+
+    def test_remedy_names_the_capture_command(self) -> None:
+        """Test the remedy points at har-capture's own capture, not the browser export."""
+        warning = analyze_capture_completeness(_with_cookie("clean_login_flow", None)).warnings[0]
+
+        assert "har-capture get" in warning.remedy
+        assert "developer tools" in warning.remedy

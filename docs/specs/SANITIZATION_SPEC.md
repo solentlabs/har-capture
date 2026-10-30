@@ -427,6 +427,12 @@ looks redacted (`TP_LINK_20231105`, `WIFI_Home2024`, `00000000`). Across the fle
 stops 480 of the sanitizer's own placeholders being hashed again (46 in POST JSON, 434 in responses), 27 empty passwords
 in POST JSON stay empty, and 4 look-alike values under a credential key are replaced.
 
+A submitted value that is a **protocol keyword** (`is_protocol_keyword()`, allowlist `protocol_keywords`:
+`seeksalthash`) is kept as sent, not counted, and not reported by `validate`, on every route that redacts a submitted
+credential (`_redact_value()` returns it unchanged for the `FIELD` category). It is the string a PBKDF2 login sends to
+ask the device for its salt; redacting it hides the one request that shows the handshake. The match is exact:
+`seeksalthash1` and `SeekSaltHash` are credentials.
+
 Every other route keeps an empty value the same way: an empty form field (`params` and urlencoded text), query
 parameter, cookie or credential header comes back empty and is not counted (`_redact_value()` returns it unchanged). A
 placeholder there would invent a submission the capture never made: an empty default password would read as a real one,

@@ -49,6 +49,7 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_fully_redacted,
     is_mac_placeholder,
+    is_protocol_keyword,
     iter_json_strings,
     json_members,
     mime_kind,
@@ -643,6 +644,8 @@ def _classify_field_finding(
     """
     matched = next((p for p in tiers.auto_redact if p.search(name)), None)
     if matched:
+        if is_protocol_keyword(value):
+            return None
         return ("error", matched)
     matched = next((p for p in tiers.flag if p.search(name)), None)
     if matched:

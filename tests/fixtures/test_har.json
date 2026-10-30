@@ -799,6 +799,18 @@
       {"id": "labeled_values_hasher_only", "mime": "text/plain",           "text": "Serial Number: 4131N12345678 <span>Password:</span><span>hunter2x</span>", "absent": ["4131N12345678", "hunter2x"], "present": ["Serial Number: SERIAL_", "<span>Password:</span><span>PASS_"]}
     ]
   },
+  "protocol_keyword_cases": {
+    "_comment": "A protocol keyword (allowlist protocol_keywords) a client submits under a credential-named field is kept as sent and not counted, on every route that redacts a submitted credential; a near miss is still a credential. check as in empty_value_cases.",
+    "cases": [
+      {"id": "form_text", "request": {"postData": {"mimeType": "application/x-www-form-urlencoded", "text": "username=user&password=seeksalthash"}}, "check": [["postData", "text"], "username=user&password=seeksalthash"]},
+      {"id": "form_params", "request": {"postData": {"params": [{"name": "password", "value": "seeksalthash"}]}}, "check": [["postData", "params", 0, "value"], "seeksalthash"]},
+      {"id": "json_body", "request": {"postData": {"mimeType": "application/json", "text": "{\"password\": \"seeksalthash\"}"}}, "check": [["postData", "text"], "{\"password\": \"seeksalthash\"}"]},
+      {"id": "query_array", "request": {"queryString": [{"name": "password", "value": "seeksalthash"}]}, "check": [["queryString", 0, "value"], "seeksalthash"]},
+      {"id": "near_miss_suffix", "request": {"postData": {"params": [{"name": "password", "value": "seeksalthash1"}]}}, "check": [["postData", "params", 0, "value"], "FIELD_*"], "counted": true},
+      {"id": "near_miss_case", "request": {"postData": {"mimeType": "application/x-www-form-urlencoded", "text": "password=SeekSaltHash"}}, "check": [["postData", "text"], "password=FIELD_*"], "counted": true}
+    ]
+  },
+
   "empty_value_cases": {
     "_comment": "An empty value under a credential name, header or cookie is kept and not counted: there is nothing to hide, and a placeholder would invent a value the capture never sent (an empty default password). The JSON route always kept it; the form, query, cookie and header routes wrote a placeholder. The last row is the other side of the rule. check: [path into the sanitized request, expected value, or a prefix ending in '*'].",
     "cases": [

@@ -42,6 +42,7 @@ NO_CREDENTIAL_SUBMISSION = "no_credential_submission"
 SINGLE_CREDENTIAL_SUBMISSION = "single_credential_submission"
 NO_ROOT_REQUEST = "no_root_request"
 DOCUMENT_WITHOUT_BODY = "document_without_body"
+LOGIN_WITHOUT_COOKIES = "login_without_cookies"
 
 # Methods whose body can submit a login: a form, or JSON (the SB8200 PHP
 # firmware logs in with a JSON PUT).
@@ -286,6 +287,30 @@ def _has_set_cookie(response: dict[str, Any]) -> bool:
     )
 
 
+def _has_cookie_data(entry: dict[str, Any]) -> bool:
+    """True if the entry shows a cookie on either side of the exchange.
+
+    Reads the ``Cookie`` and ``Set-Cookie`` headers and both ``cookies``
+    arrays: HAR producers populate some, all or none of them.
+    """
+    request = entry.get("request")
+    response = entry.get("response")
+    if isinstance(request, dict) and (_request_cookie_names(request) or request.get("cookies")):
+        return True
+    return isinstance(response, dict) and (_has_set_cookie(response) or bool(response.get("cookies")))
+
+
+def _recorded_by_capture_window(log: dict[str, Any]) -> bool:
+    """True if the capture window recorded the file (``creator.name`` is Playwright).
+
+    Its HAR keeps every cookie the browser saw, so a missing cookie there
+    means the device set none. Any other creator (browser developer tools,
+    a proxy, a hand-built file) may have dropped them.
+    """
+    creator = log.get("creator")
+    return isinstance(creator, dict) and str(creator.get("name", "")).strip().lower() == "playwright"
+
+
 def _is_root_url(url: str) -> bool:
     """True if a URL addresses the device root (``http://host`` or ``http://host/``)."""
     return _ROOT_URL_RE.match(url) is not None
@@ -415,12 +440,15 @@ def analyze_capture_completeness(
 
     urls: set[str] = set()
     root_requested = False
+    cookie_seen = False
+    form_login_seen = False
     unstored_documents: list[str] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         if _has_set_cookie(entry.get("response") or {}):
             report.set_cookie_responses += 1
+        cookie_seen = cookie_seen or _has_cookie_data(entry)
         request = entry.get("request")
         if not isinstance(request, dict):
             continue
@@ -439,8 +467,10 @@ def analyze_capture_completeness(
         credential_headers = _credential_header_values(request)
         new_header = not header_values.issuperset(credential_headers)
         header_values.update(credential_headers)
+        body_login = method in _SUBMISSION_METHODS and _body_has_password(request, password_patterns)
+        form_login_seen = form_login_seen or body_login
         if (
-            (method in _SUBMISSION_METHODS and _body_has_password(request, password_patterns))
+            body_login
             or index in annotated
             or next(iter_url_credentials(request), None) is not None
             or new_header
@@ -508,6 +538,24 @@ def analyze_capture_completeness(
                 ),
                 remedy=(
                     "Re-record and complete the full login (submit the form) while the capture is running."
+                ),
+            )
+        )
+
+    if form_login_seen and not cookie_seen and not _recorded_by_capture_window(log):
+        report.warnings.append(
+            CompletenessWarning(
+                code=LOGIN_WITHOUT_COOKIES,
+                message=(
+                    "A login was submitted but no cookie appears anywhere in this file "
+                    "(no Cookie or Set-Cookie header, no cookies entries), and it was not "
+                    "recorded by har-capture. Browser DevTools exports leave cookies out, "
+                    "and a session cookie the device sets at login is the session token "
+                    "a later analysis needs."
+                ),
+                remedy=(
+                    "Re-record with `har-capture get <device address>` instead of "
+                    "exporting from the browser's developer tools, and log in inside the capture."
                 ),
             )
         )
