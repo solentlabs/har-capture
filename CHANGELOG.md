@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-30
+
 ### Added
 
 - **`validate` warns when a login was captured without any cookie.** A HAR with a form login (a `POST`, `PUT` or `PATCH`
@@ -1531,6 +1533,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.14.1]: https://github.com/solentlabs/har-capture/compare/v0.14.0...v0.14.1
 [0.15.0]: https://github.com/solentlabs/har-capture/compare/v0.14.1...v0.15.0
 [0.15.1]: https://github.com/solentlabs/har-capture/compare/v0.15.0...v0.15.1
+[0.16.0]: https://github.com/solentlabs/har-capture/compare/v0.15.1...v0.16.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1558,4 +1561,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.15.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.16.0...HEAD
