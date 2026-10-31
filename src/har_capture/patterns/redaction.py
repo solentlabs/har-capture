@@ -333,8 +333,7 @@ MAC_KEY_RE = re.compile(r"(?:(?<!^h)(?<!_h)mac(?:_?addr(?:ess)?)?|hw_?addr(?:ess
 _SERIAL_VALUE_RE = re.compile(r"(?=\S*\d)\S{5,}")
 
 # A key naming a Wi-Fi network name (`ssid`, `ssid_24g`, `WiFiSSID`): its value
-# identifies a network rather than authenticating to it, so it is offered for
-# review, never auto-redacted.
+# identifies a household, so the JSON sanitizer redacts it.
 SSID_KEY_RE = re.compile(r"(?:^|_)ssid(?:_|$)")
 
 

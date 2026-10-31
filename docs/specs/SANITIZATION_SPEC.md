@@ -403,16 +403,22 @@ Traverses objects and arrays recursively. Every string leaf goes through the
    output holds it (after the string patterns), so choosing to redact it in the review removes it. A value the string
    patterns turned wholly into a placeholder (a username that is just an email) is not offered — nothing is left to
    review, and in static mode redacting `x@x.invalid` would rewrite every static email placeholder. The field's flag
-   takes over a narrower flag on the same text (a username that is exactly a phone number is a `field` item). SSID keys
-   and served prose below are flagged the same way.
+   takes over a narrower flag on the same text (a username that is exactly a phone number is a `field` item). Served
+   prose below is flagged the same way.
 
 1. **SSID key** (`is_ssid_key()`: one of the key's words is `ssid` — `ssid`, `ssid_24g`, `guestSSID`) holding a network
-   name that is not a safe value (the call's `safe_value_patterns`, domain and custom ones included) or a placeholder →
-   flagged for review (`wifi_ssid`, MEDIUM), never auto-redacted: the name identifies a network rather than
-   authenticating to it. The HTML engine auto-redacts a *labeled* SSID on a page (passes 7a, 7c, 16), so one network
-   name could be `WIFI_<hash>` there and raw under a JSON key; across the fleet, 307 distinct raw names sit under JSON
-   SSID keys in 29 captures, every one offered for review, and none is also redacted on a page of the same capture.
-   Auto-redacting JSON SSID keys would name no leak and cost those 307 names, so the rule is review-only (ADR-12).
+   name → **auto-redacted** to `WIFI_<hash>` (`***WIFI***` without a hasher), counted as `wifi_ssid`, and not offered
+   for review. The name identifies a household and can be located from public Wi-Fi databases; no catalog consumer
+   parses its value, so the placeholder in the same position costs no structure. Kept as sent: an empty value, a value
+   with no letter or a switch word (`SSIDEnable: "1"`, `"true"`), a placeholder already written, and a safe value (the
+   call's `safe_value_patterns`, domain and custom ones included, e.g. a band name). This matches the HTML engine, which
+   auto-redacts a *labeled* SSID on a page (passes 7a, 7c, 16), so one network name is never `WIFI_<hash>` on a page and
+   raw under a JSON key. A review the user skips therefore cannot ship the name.
+
+   **ADR-12 accounting.** *Leak closed:* a raw network name under a JSON SSID key, which the review-only rule shipped
+   whenever the review was skipped. *Fidelity cost:* the name's value only; key, type and position survive, and
+   cross-entry correlation is kept by the hash. *Cannot-be-structure proof:* the rule fires on the key naming the value
+   a network name, and the switch and no-letter exclusions keep flags and counts under SSID-named keys.
 
 1. Anything else → traversed.
 

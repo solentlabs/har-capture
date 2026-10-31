@@ -72,7 +72,7 @@ Severity levels:
 (`sensitive.json fields`): a name matching `auto_redact_patterns` asserts a credential — an unredacted value is an
 **error**; a name matching `flag_patterns` asserts identity-adjacent content the sanitizer itself only flags for review
 — an unredacted value is a **warning**. A flag-tier field whose value is a factory-default username
-(`KNOWN_DEFAULT_USERNAMES`, currently `admin`) is **suppressed entirely**: the value is fixed per device family and
+(`KNOWN_DEFAULT_USERNAMES`: `admin`, `user`) is **suppressed entirely**: the value is fixed per device family and
 carries no identifying content, and a gate that is red on every healthy capture trains contributors to ignore it.
 Suppression never applies to auto-redact-tier names — `admin` in a password field is a real credential leak. The model
 applies uniformly to form params, urlencoded bodies, JSON fields, XML elements/attributes, and URL query parameters via

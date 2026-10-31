@@ -1121,13 +1121,28 @@ def _sanitize_xml_fields(
     return ET.tostring(root, encoding="unicode")
 
 
-def _is_reviewable_ssid(key: str, value: object) -> bool:
-    """True for a network name under an SSID-named key — offered for review, never redacted."""
+# A value under an SSID-named key that is a switch or a count, not a network
+# name: `SSIDEnable: "true"`, `SSIDNumberOfEntries: "2"`.
+_SSID_KEY_SWITCH_VALUES = frozenset(
+    {"true", "false", "on", "off", "yes", "no", "enable", "enabled", "disable", "disabled", "none", "null"}
+)
+
+
+def _is_redactable_ssid(key: str, value: object) -> bool:
+    """True for a network name under an SSID-named key: redacted, since it identifies a household.
+
+    Kept: an empty value, a switch or count (``SSIDEnable: "1"``), a
+    placeholder already written, an allowlisted value and a safe value.
+    """
     if not (isinstance(value, str) and value and is_ssid_key(key)):
         return False
     from har_capture.sanitization.heuristics import is_safe_value
 
     active = _active_call_patterns()
+    if not any(c.isalpha() for c in value) or value.strip().lower() in _SSID_KEY_SWITCH_VALUES:
+        return False
+    if is_redacted(value, active.custom_patterns):
+        return False
     return not is_allowlisted(value, active.allowlist) and not is_safe_value(value, list(active.safe_values))
 
 
@@ -1316,21 +1331,10 @@ def _sanitize_json_recursive(
                         f"Flaggable field name '{key}' in JSON",
                         supersede_since=mark,
                     )
-            elif collector and _is_reviewable_ssid(key, value):
-                # Flagged as the output holds it, so the review can replace it.
-                mark = collector.flag_mark()
-                result[out_key] = _sanitize_json_recursive(
-                    value, hasher, collector, _depth + 1, served=served
-                )
-                if _offerable(result[out_key]):
-                    collector.flag_value(
-                        result[out_key],
-                        "wifi_ssid",
-                        ConfidenceLevel.MEDIUM,
-                        f"JSON key '{key}'",
-                        f"Wi-Fi network name under SSID key '{key}' in JSON",
-                        supersede_since=mark,
-                    )
+            elif _is_redactable_ssid(key, value):
+                if collector:
+                    collector.record_auto_redaction("wifi_ssid")
+                result[out_key] = hasher.hash_generic(str(value), "WIFI") if hasher else "***WIFI***"
             else:
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
