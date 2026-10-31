@@ -93,7 +93,7 @@ IP_PATTERN = re.compile(r"(?<!\d\.)\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b(?!\.
 # training contributors to ignore the gate. Suppression applies ONLY to
 # flag-tier (identity) field matches; a default string in a password-named
 # field is still a real credential leak and stays an error.
-KNOWN_DEFAULT_USERNAMES: frozenset[str] = frozenset({"admin"})
+KNOWN_DEFAULT_USERNAMES: frozenset[str] = frozenset({"admin", "user"})
 
 
 def _load_header_sets(

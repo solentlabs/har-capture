@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **`sanitize` now redacts a Wi-Fi network name under a JSON SSID key.** A name under `ssid`, `SSID`, `ssid_24g` or
+  `guestSSID` used to be offered for review and kept raw until the user redacted it, so a skipped review shipped it. It
+  now becomes `WIFI_<hash>` like a labeled SSID on an HTML page. Empty values, switches such as `SSIDEnable: "1"`,
+  placeholders and safe values (a band name) are kept.
+
+### Fixed
+
+- **`validate` no longer warns on the factory-default username `user`.** Technicolor CGA firmware ships `user` as its
+  fixed login, and every healthy capture of it drew a warning on the username field. `user` joins `admin` as a default
+  username that carries no identifying content. A password-named field holding `user` is still an error.
+
 ## [0.16.0] - 2026-10-30
 
 ### Added

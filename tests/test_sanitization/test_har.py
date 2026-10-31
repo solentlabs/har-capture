@@ -4928,12 +4928,14 @@ class TestJsonIdentityBodies:
         for kept in case["present"]:
             assert kept in out
 
-    def test_ssid_key_offered_for_review(self) -> None:
-        """A network name under an SSID-named key is flagged, not redacted."""
+    def test_ssid_key_redacted_not_offered(self) -> None:
+        """A network name under an SSID-named key is redacted, so a skipped review cannot ship it."""
         entry = _entry_with_response_body('{"ssid_24g": "HomeNet-5G"}')
         entry["response"]["content"]["mimeType"] = "application/json"
         _, report = sanitize_har({"log": {"entries": [entry]}}, salt="ssid", heuristics=HeuristicMode.FLAG)
-        assert [(f.original_value, f.category) for f in report.flagged] == [("HomeNet-5G", "wifi_ssid")]
+        assert report.flagged == []
+        assert "HomeNet-5G" not in json.dumps(_)
+        assert report.auto_redacted_counts
 
     @pytest.mark.parametrize("case", POST_TEXT_CASES, ids=[c["id"] for c in POST_TEXT_CASES])
     def test_post_text(self, case: dict) -> None:
@@ -5268,7 +5270,7 @@ def test_flagged_json_value_is_reachable_by_review(case: dict) -> None:
 
 @pytest.mark.parametrize("case", SSID_SAFE_VALUE_CASES, ids=[c["id"] for c in SSID_SAFE_VALUE_CASES])
 def test_json_ssid_review_honors_safe_values(case: dict) -> None:
-    """A JSON SSID-key value a safe-value pattern recognizes is not offered for review."""
+    """A JSON SSID-key value is never offered for review: redacted, or kept when a safe-value pattern recognizes it."""
     from har_capture.patterns.loader import resolve_patterns_arg
 
     patterns = case["patterns"]

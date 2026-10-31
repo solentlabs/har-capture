@@ -703,7 +703,13 @@
       {"id": "serial_key_holding_placeholder_dash", "mime": "application/json",       "text": "{\"serialNumber\": \"-\"}",                                                                                   "absent": [],                    "present": ["\"serialNumber\": \"-\""]},
       {"id": "mac_filter_flag_kept",                "mime": "application/json",       "text": "{\"MacAddressFilterEnabled\": \"true\"}",                                                                     "absent": [],                    "present": ["\"MacAddressFilterEnabled\": \"true\""]},
       {"id": "i18n_serial_label_kept",              "mime": "application/json",       "text": "{\"PAGE_STATUS_SYSTEM_SERIAL_NUMBER\": \"Seriennummer\"}",                                                    "absent": [],                    "present": ["Seriennummer"]},
-      {"id": "ssid_key_flag_only",                  "mime": "application/json",       "text": "{\"ssid_24g\": \"HomeNet-5G\", \"ch\": 6}",                                                                   "absent": [],                    "present": ["\"ssid_24g\": \"HomeNet-5G\""]},
+      {"id": "ssid_key_redacted", "mime": "application/json", "text": "{\"ssid_24g\": \"HomeNet-5G\", \"ch\": 6}", "absent": ["HomeNet-5G"], "present": ["\"ssid_24g\": \"WIFI_", "\"ch\": 6"]},
+      {"id": "ssid_exact_upper_key_redacted", "mime": "application/json", "text": "{\"SSID\": \"Vodafone-726C\", \"BSSID\": \"x\"}", "absent": ["Vodafone-726C"], "present": ["\"SSID\": \"WIFI_", "\"BSSID\""]},
+      {"id": "ssid_guest_camel_key_redacted", "mime": "application/json", "text": "{\"guestSSID\": \"Guest Net\"}", "absent": ["Guest Net"], "present": ["\"guestSSID\": \"WIFI_"]},
+      {"id": "ssid_enable_flag_numeric_kept", "mime": "application/json", "text": "{\"SSIDEnable\": \"1\"}", "absent": [], "present": ["\"SSIDEnable\": \"1\""]},
+      {"id": "ssid_enable_flag_word_kept", "mime": "application/json", "text": "{\"SSIDEnable\": \"true\", \"ssid_enabled\": \"false\"}", "absent": [], "present": ["\"SSIDEnable\": \"true\"", "\"ssid_enabled\": \"false\""]},
+      {"id": "ssid_empty_kept", "mime": "application/json", "text": "{\"SSID\": \"\"}", "absent": [], "present": ["\"SSID\": \"\""]},
+      {"id": "ssid_already_placeholder_kept", "mime": "application/json", "text": "{\"SSID\": \"WIFI_0123abcd\"}", "absent": [], "present": ["\"SSID\": \"WIFI_0123abcd\""]},
       {"id": "json_in_text_plain",                  "mime": "text/plain",             "text": "{\"serial\": \"4131N12345678\"}",                                                                             "absent": ["4131N12345678"],     "present": ["\"SERIAL_"]},
       {"id": "large_text_body_scanned",             "mime": "application/javascript", "text": "var cm = '3C:7A:8A:12:34:56';",                                                                               "absent": ["3C:7A:8A:12:34:56"], "present": ["var cm = '02:"],                                                              "pad": 1100000}
     ]
@@ -781,6 +787,7 @@
       {"id": "text_mac",   "mime": "text/plain",       "text": "mac 3C:7A:8A:12:34:56",           "present": "mac ***MAC***"},
       {"id": "text_ipv6",  "mime": "text/plain",       "text": "wan 2600:1700::1a",               "present": "wan ***IPV6***"},
       {"id": "json_email", "mime": "application/json", "text": "{\"c\": \"a@example.com\"}",     "present": "{\"c\": \"***EMAIL***\"}"},
+      {"id": "json_ssid_key", "mime": "application/json", "text": "{\"SSID\": \"HomeNet-5G\"}",   "present": "{\"SSID\": \"***WIFI***\"}"},
       {"id": "json_shadowed_flag_tier", "mime": "application/json", "text": "{\"username\": \"bobsmith\", \"username\": \"admin\"}", "present": "{\"username\": \"admin\"}"}
     ]
   },
@@ -1069,7 +1076,7 @@
     "_comment": "Every value the JSON walker offers for review is flagged as the output holds it (after the string patterns), so choosing to redact it in the review removes it. text: a response JSON body; flagged: [category, regex] per value offered. gone_after_review: text that must not survive once every offered value is redacted \u2014 an outer value is replaced before the inner one it contains.",
     "cases": [
       {"id": "flag_tier_field_with_address", "text": "{\"username\": \"bob at 192.168.1.5\"}", "flagged": [["field", "^bob at 10\\.255\\.\\d{1,3}\\.\\d{1,3}$"]]},
-      {"id": "ssid_with_email", "text": "{\"ssid\": \"Net of bob@example.com\"}", "flagged": [["wifi_ssid", "^Net of user_[0-9a-f]+@redacted\\.invalid$"]]},
+      {"id": "ssid_with_email_redacted_not_offered", "text": "{\"ssid\": \"Net of bob@example.com\"}", "flagged": []},
       {"id": "served_prose_with_email", "text": "{\"wifi_passphrase\": \"admin@home.net rocks 42\"}", "flagged": [["credential", "^user_[0-9a-f]+@redacted\\.invalid rocks 42$"]]},
       {"id": "flag_tier_field_holding_phone", "text": "{\"username\": \"bob 555-123-4567\"}", "flagged": [["phone", "^555-123-4567$"], ["field", "^bob 555-123-4567$"]], "gone_after_review": ["bob"]},
       {"id": "flag_tier_value_wholly_our_placeholder", "text": "{\"username\": \"bob@example.com\"}", "flagged": []},
@@ -1077,11 +1084,11 @@
     ]
   },
   "ssid_safe_value_cases": {
-    "_comment": "A network name under a JSON SSID key is offered for review unless a safe-value pattern the call's patterns carry (built-in, domain or custom) recognizes it. patterns: a built-in domain name or a custom patterns dict (or null); flagged: the values offered.",
+    "_comment": "A network name under a JSON SSID key is redacted unless a safe-value pattern the call's patterns carry (built-in, domain or custom) recognizes it; it is never offered for review. patterns: a built-in domain name or a custom patterns dict (or null); flagged: the values offered (always empty).",
     "cases": [
       {"id": "band_name_domain_safe", "text": "{\"ssid\": \"5GHz\"}", "patterns": "network-device", "flagged": []},
       {"id": "custom_safe_pattern", "text": "{\"ssid\": \"Lab-Net-7\"}", "patterns": {"heuristics": {"safe_value_patterns": [{"regex": "^Lab-Net-\\d+$"}]}}, "flagged": []},
-      {"id": "network_name_offered", "text": "{\"ssid\": \"HomeNet-5G\"}", "patterns": "network-device", "flagged": ["HomeNet-5G"]}
+      {"id": "network_name_redacted_not_offered", "text": "{\"ssid\": \"HomeNet-5G\"}", "patterns": "network-device", "flagged": []}
     ]
   },
   "whole_body_cookie_cases": {
