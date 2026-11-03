@@ -1106,5 +1106,40 @@
       {"id": "entries_not_a_list", "har": {"log": {"entries": "none"}}},
       {"id": "no_log", "har": {}}
     ]
+  },
+  "cookie_header_echo_cases": {
+    "_comment": "A request header whose value equals a cookie value (CSRF double-submit) must map to the same placeholder as the cookie, whatever the token shape, header order, Set-Cookie presence, or salt mode.",
+    "tokens": [
+      {"id": "long_token", "value": "a1B2c3D4e5F6g7H8i9J0kLmNoPqRsTuV"},
+      {"id": "short_token", "value": "abc123"},
+      {"id": "hex_token", "value": "deadbeef"},
+      {"id": "escaped_token", "value": "tok%2Bvalue/with=pad=="}
+    ],
+    "header_names": ["X-CSRF-TOKEN", "X-Vendor-Anti-Forgery"],
+    "orders": ["header_first", "cookie_first", "no_set_cookie"],
+    "salts": ["echo-salt", null],
+    "kept_cases": [
+      {"id": "registered_content_length", "cookie": "dnt=1", "header": ["Content-Length", "1"]},
+      {"id": "registered_upgrade_insecure", "cookie": "flag=1", "header": ["Upgrade-Insecure-Requests", "1"]},
+      {"id": "registered_accept_language_mixed_case", "cookie": "lang=en", "header": ["aCCept-Language", "en"]},
+      {"id": "vendor_header_protocol_keyword", "cookie": "mode=seeksalthash", "header": ["X-Vendor-Mode", "seeksalthash"]},
+      {"id": "vendor_header_different_value", "cookie": "sid=abc123", "header": ["X-Vendor-Anti-Forgery", "abc124"]},
+      {"id": "vendor_header_substring_only", "cookie": "sid=abc123", "header": ["X-Vendor-Anti-Forgery", "abc123-suffix"]}
+    ],
+    "response_cases": [
+      {"id": "response_vendor_header", "token": "abc123", "header": "X-Vendor-Token"}
+    ],
+    "malformed_shape_cases": [
+      {"id": "log_without_entries", "har": {"log": {}}},
+      {"id": "entries_not_a_list", "har": {"log": {"entries": "none"}}},
+      {"id": "no_log", "har": {}},
+      {"id": "entry_not_a_dict", "har": {"log": {"entries": ["x"]}}},
+      {"id": "message_not_a_dict", "har": {"log": {"entries": [{"request": "x", "response": null}]}}},
+      {"id": "headers_not_a_list", "har": {"log": {"entries": [{"request": {"headers": "x"}}]}}},
+      {"id": "header_not_a_dict", "har": {"log": {"entries": [{"request": {"headers": ["x"]}}]}}},
+      {"id": "value_not_a_string", "har": {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": 7}]}}]}}},
+      {"id": "name_not_a_string", "har": {"log": {"entries": [{"request": {"headers": [{"name": 7, "value": "abc123"}]}}]}}},
+      {"id": "value_not_a_cookie_value", "har": {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": "other"}]}}]}}}
+    ]
   }
 }

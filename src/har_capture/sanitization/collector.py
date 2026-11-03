@@ -48,6 +48,7 @@ class RedactionCollector:
         auto_redacted_counts: Counts by category for auto-redacted values
         flagged: List of values flagged for user review
         redacted_values: Original value -> placeholder, for Pass 1b propagation
+        cookie_values: Raw values redacted as cookie data, for the header-echo sweep
         _flag_index: Flagged value -> its entry (for deduplication)
         _flag_created, _flag_touched: Flagged value -> the flag call that
             created it, and the latest that counted it (see ``flag_mark``)
@@ -57,6 +58,7 @@ class RedactionCollector:
     auto_redacted_counts: dict[str, int] = field(default_factory=dict)
     flagged: list[FlaggedValue] = field(default_factory=list)
     redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
+    cookie_values: set[str] = field(default_factory=set, repr=False)
     _flag_index: dict[str, FlaggedValue] = field(default_factory=dict, repr=False)
     _flag_created: dict[str, int] = field(default_factory=dict, repr=False)
     _flag_touched: dict[str, int] = field(default_factory=dict, repr=False)

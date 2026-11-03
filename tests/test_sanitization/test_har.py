@@ -5294,3 +5294,123 @@ def test_call_patterns_resolved_once_per_har(monkeypatch: pytest.MonkeyPatch) ->
     entries = [_entry_with_response_body('{"a": "CUST-1234"}') for _ in range(3)]
     sanitize_har({"log": {"entries": entries}}, salt="once", custom_patterns=custom)
     assert len(calls) == 1
+
+
+def _cookie_echo_params() -> list[tuple[str, str, str, str, str | None]]:
+    """Expand the ``cookie_header_echo_cases`` matrix into (id, token, header, order, salt)."""
+    spec = _HAR_FIXTURE["cookie_header_echo_cases"]
+    return [
+        (
+            f"{t['id']}-{header}-{order}-{'static' if salt is None else 'hashed'}",
+            t["value"],
+            header,
+            order,
+            salt,
+        )
+        for t in spec["tokens"]
+        for header in spec["header_names"]
+        for order in spec["orders"]
+        for salt in spec["salts"]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("token", "header_name", "order", "salt"),
+    [p[1:] for p in _cookie_echo_params()],
+    ids=[p[0] for p in _cookie_echo_params()],
+)
+def test_header_echoing_cookie_value_shares_its_placeholder(
+    token: str, header_name: str, order: str, salt: str | None
+) -> None:
+    """A header carrying a cookie's value (CSRF double-submit) sanitizes to the cookie's placeholder."""
+    cookie_header = {"name": "Cookie", "value": f"sessionid={token}"}
+    echo_header = {"name": header_name, "value": token}
+    request_headers = (
+        [echo_header, cookie_header] if order == "header_first" else [cookie_header, echo_header]
+    )
+    request = _entry_with_response_body("{}")
+    request["request"]["headers"] = request_headers
+    request["request"]["cookies"] = [{"name": "sessionid", "value": token}]
+    entries = [request]
+    if order != "no_set_cookie":
+        login = _entry_with_response_body("{}")
+        login["response"]["headers"] = [
+            {"name": "Set-Cookie", "value": f"sessionid={token}; Path=/; HttpOnly"}
+        ]
+        login["response"]["cookies"] = [{"name": "sessionid", "value": token}]
+        entries.insert(0, login)
+
+    sanitized, _ = sanitize_har({"log": {"entries": entries}}, salt=salt)
+
+    out = sanitized["log"]["entries"][-1]["request"]
+    echoed = next(h["value"] for h in out["headers"] if h["name"] == header_name)
+    cookie = next(h["value"] for h in out["headers"] if h["name"] == "Cookie").split("=", 1)[1]
+    assert token not in echoed
+    assert echoed == cookie == out["cookies"][0]["value"]
+
+
+_COOKIE_ECHO = _HAR_FIXTURE["cookie_header_echo_cases"]
+
+
+@pytest.mark.parametrize(
+    "case", _COOKIE_ECHO["kept_cases"], ids=[c["id"] for c in _COOKIE_ECHO["kept_cases"]]
+)
+def test_header_not_equal_to_cookie_value_or_registered_is_kept(case: dict) -> None:
+    """A registered header, a protocol keyword, or a value that only resembles the cookie is left as sent."""
+    name, value = case["header"]
+    entry = _entry_with_response_body("{}")
+    entry["request"]["headers"] = [
+        {"name": "Cookie", "value": case["cookie"]},
+        {"name": name, "value": value},
+    ]
+
+    sanitized, _ = sanitize_har({"log": {"entries": [entry]}}, salt="kept")
+
+    headers = {h["name"]: h["value"] for h in sanitized["log"]["entries"][0]["request"]["headers"]}
+    assert headers[name] == value
+
+
+@pytest.mark.parametrize(
+    "case", _COOKIE_ECHO["response_cases"], ids=[c["id"] for c in _COOKIE_ECHO["response_cases"]]
+)
+def test_response_header_echoing_cookie_value_shares_its_placeholder(case: dict) -> None:
+    """The echo rule covers response headers too: a device that serves the cookie value back in a vendor header."""
+    token = case["token"]
+    entry = _entry_with_response_body("{}")
+    entry["request"]["headers"] = [{"name": "Cookie", "value": f"sid={token}"}]
+    entry["response"]["headers"] = [{"name": case["header"], "value": token}]
+
+    sanitized, report = sanitize_har({"log": {"entries": [entry]}}, salt="resp")
+
+    out = sanitized["log"]["entries"][0]
+    cookie = out["request"]["headers"][0]["value"].split("=", 1)[1]
+    assert out["response"]["headers"][0]["value"] == cookie != token
+    assert report.auto_redacted_counts["cookie_echo"] == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    _COOKIE_ECHO["malformed_shape_cases"],
+    ids=[c["id"] for c in _COOKIE_ECHO["malformed_shape_cases"]],
+)
+def test_cookie_echo_sweep_tolerates_malformed_shapes(case: dict) -> None:
+    """The sweep leaves a HAR whose entries, messages or headers are not the expected shapes untouched."""
+    from har_capture.sanitization.har import _propagate_cookie_echoes
+
+    collector = RedactionCollector(hasher=Hasher.create("shape"))
+    collector.cookie_values.add("abc123")
+    collector.redacted_values["abc123"] = "COOKIE_x"
+    har = copy.deepcopy(case["har"])
+
+    assert _propagate_cookie_echoes(har, collector) == 0
+    assert har == case["har"]
+
+
+def test_cookie_echo_sweep_without_cookie_values_is_a_noop() -> None:
+    """A capture that redacted no cookie data has nothing to echo."""
+    from har_capture.sanitization.har import _propagate_cookie_echoes
+
+    collector = RedactionCollector(hasher=Hasher.create("none"))
+    har = {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": "abc123"}]}}]}}
+
+    assert _propagate_cookie_echoes(har, collector) == 0

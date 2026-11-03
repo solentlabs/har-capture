@@ -117,6 +117,15 @@ def is_protocol_keyword(value: str) -> bool:
     return value in load_allowlist().get("protocol_keywords", {}).get("values", ())
 
 
+def is_registered_header(name: str) -> bool:
+    """Check if a header name is a standard HTTP header (allowlist ``registered_headers``).
+
+    The match is case-insensitive. A name outside the list is vendor-defined,
+    so its value is not protocol structure.
+    """
+    return name.lower() in load_allowlist().get("registered_headers", {}).get("values", ())
+
+
 def is_fully_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None) -> bool:
     """Check if a string is *entirely* a redaction placeholder.
 
