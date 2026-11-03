@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sanitize` no longer leaves a session token raw in a vendor header that echoes a cookie.** A CSRF double-submit
+  device sends its cookie value back in a header such as `X-CSRF-TOKEN`. When the header name was not on the sensitive
+  list and the token was short, all letters or percent-encoded, the cookie was redacted and the header kept the real
+  token. The header now takes the cookie's placeholder, so the header-equals-cookie relationship survives at any token
+  length. Standard HTTP headers (`Content-Length`, `Accept-Language`, ...) are never touched.
+
 ## [0.16.1] - 2026-10-31
 
 ### Changed

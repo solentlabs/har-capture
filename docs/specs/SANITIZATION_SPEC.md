@@ -70,7 +70,7 @@ The file is organized into 9 groups:
 1. **Text Outside the HTML Engine** — `_sanitize_body_string()`: the pattern-file pass (custom patterns, cards, SSNs),
    MACs, IPv6 and IPv4, emails, phone numbers, and the positional passes between them
 1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`,
-   `_propagate_whole_bodies()`, `find_collapsed_bodies()`
+   `_propagate_whole_bodies()`, `_propagate_cookie_echoes()`, `find_collapsed_bodies()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
 
@@ -1327,6 +1327,27 @@ would rewrite unrelated bytes across the file.
 
 Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
 delimiters are untouched.
+
+**A vendor header that echoes a cookie value.** A CSRF double-submit device sends the cookie's value back in a header of
+its own (`X-CSRF-TOKEN`, or a vendor name the sensitive list does not carry). The eligibility floor above would leave a
+short, all-letter or percent-encoded echo raw while its cookie is redacted. `_propagate_cookie_echoes()` runs before the
+sweep and replaces a request or response header's whole value with the cookie's placeholder when all of these hold:
+
+| Criterion                                        | Excludes                                                          |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| The value equals a value redacted as cookie data | Anything the sanitizer did not already judge a secret             |
+| The header name is not a standard HTTP header    | `Content-Length: 1`, `Accept-Language: en` (`registered_headers`) |
+| Not a protocol keyword, not `is_safe_value()`    | `seeksalthash`, versions, timestamps                              |
+
+The match is exact on the whole value and independent of entry order. Names are untouched; the placeholder occupies the
+value, so the double-submit relationship (header equals cookie) survives sanitization at any token length.
+
+**ADR-12 accounting.** *Leak closed:* a live session token left raw in a vendor-named header while its cookie is
+redacted. *Fidelity cost:* none for registered headers (never touched); for a vendor header the value was already judged
+secret, so the placeholder replaces data the capture would otherwise contradict. *Evidence:* the committed fleet is
+sanitized, so it cannot show how often an ineligible echo occurs; the rule is justified by the leak, not by a count. A
+vendor header that legitimately repeats a low-entropy cookie value (an `X-Region: eu` beside a `region=eu` cookie) is
+rewritten too; that collision is the accepted cost, and `X-Forwarded-Proto` is kept because it is registered.
 
 **A value that is a whole response body.** A device that stores its login response as a cookie makes the cookie value
 the entire body of that response, and one token for one token would collapse the body to a placeholder. Before the

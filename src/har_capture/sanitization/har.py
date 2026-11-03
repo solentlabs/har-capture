@@ -58,6 +58,7 @@ from har_capture.patterns import (
     is_mac_placeholder,
     is_protocol_keyword,
     is_redacted,
+    is_registered_header,
     is_ssid_key,
     iter_json_strings,
     iter_url_credentials,
@@ -707,6 +708,8 @@ def _redact_value(
         # Feeds the Pass 1b propagation sweep in sanitize_har. Recorded for every
         # redaction; eligibility is decided at sweep time by _is_propagation_eligible.
         collector.record_redacted_value(value, placeholder)
+        if category == "COOKIE":
+            collector.cookie_values.add(value)
     return placeholder
 
 
@@ -2448,6 +2451,56 @@ def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
     return sorted(needles.items(), key=lambda item: -len(item[0]))
 
 
+def _propagate_cookie_echoes(har_data: dict[str, Any], collector: RedactionCollector) -> int:
+    """Give a vendor header that echoes a redacted cookie value that cookie's placeholder.
+
+    A CSRF double-submit device sends the cookie's value back in a header of its
+    own (``X-CSRF-TOKEN``). The header name is not on the sensitive list, and a
+    short, all-letter or percent-encoded value fails Pass 1b's eligibility
+    floor, so the raw token would survive. A header is rewritten only when its
+    whole value equals a value redacted as cookie data and its name is not a
+    standard HTTP header (``is_registered_header``): a registered header's
+    value is protocol structure (``Content-Length: 1``), a vendor header's is
+    not. A protocol keyword or safe value is kept as sent.
+
+    Args:
+        har_data: The sanitized HAR data (mutated in place)
+        collector: Holds the cookie values redacted and their placeholders
+
+    Returns:
+        Number of header values rewritten
+    """
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    if not collector.cookie_values:
+        return 0
+    entries = har_data.get("log", {}).get("entries")
+    if not isinstance(entries, list):
+        return 0
+    rewritten = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for side in ("request", "response"):
+            message = entry.get(side)
+            headers = message.get("headers") if isinstance(message, dict) else None
+            for header in headers if isinstance(headers, list) else []:
+                if not isinstance(header, dict):
+                    continue
+                value, name = header.get("value"), header.get("name")
+                if (
+                    not isinstance(value, str)
+                    or not isinstance(name, str)
+                    or value not in collector.cookie_values
+                ):
+                    continue
+                if is_registered_header(name) or is_protocol_keyword(value) or is_safe_value(value):
+                    continue
+                header["value"] = collector.redacted_values[value]
+                rewritten += 1
+    return rewritten
+
+
 def _propagate_redacted_values(
     har_data: dict[str, Any],
     registry: dict[str, str],
@@ -2747,6 +2800,12 @@ def sanitize_har(
         meta["_sanitized_credentials"] = [
             {"entry_index": i, "location": "url_query_param"} for i in sorted(prior | url_credentials.keys())
         ]
+
+    # Pass 1b (header echoes): a vendor header carrying a redacted cookie value, which
+    # the eligibility floor below would otherwise leave raw.
+    echoes = _propagate_cookie_echoes(result, collector)
+    if echoes:
+        collector.auto_redacted_counts["cookie_echo"] = echoes
 
     # Pass 1b: replace values already redacted elsewhere that survived verbatim on
     # surfaces with no field name to match (most commonly a URL path segment).

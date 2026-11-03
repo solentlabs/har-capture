@@ -158,6 +158,7 @@ Names match exactly (case-insensitive), in the sanitizer and `validate` alike: `
   },
   "hash_prefixes": {"values": ["SERIAL_", "PASS_", "WIFI_", "…"]},
   "protocol_keywords": {"values": ["seeksalthash"]},
+  "registered_headers": {"values": ["content-length", "accept-language", "…"]},
   "redaction_patterns": {"values": ["\\[REDACTED\\]", "\\*\\*\\*[A-Z]+\\*\\*\\*", "MAC_[a-f0-9]{8}", "…"]}
 }
 ```
@@ -172,6 +173,11 @@ client submits under a credential-named field to drive a login handshake, which 
 salt trigger of PBKDF2 firmware such as Technicolor CGA). `is_protocol_keyword(value)` tests membership; the sanitizer
 keeps such a value as sent and `validate` does not report it. The section is built in only; a custom allowlist does not
 extend it.
+
+`registered_headers` is the other section that does not recognize a redaction: it lists the standard HTTP header names
+(lowercase). `is_registered_header(name)` tests membership, case-insensitively. A header outside the list that carries a
+value equal to a redacted cookie value is a cookie echo and takes the cookie's placeholder (see
+[Pass 1b](SANITIZATION_SPEC.md#pass-1b-redacted-value-propagation)). The section is built in only.
 
 Used by `is_redacted()` in `redaction.py` to determine whether a value has already been sanitized.
 

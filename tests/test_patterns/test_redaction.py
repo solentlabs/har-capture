@@ -679,3 +679,19 @@ class TestIsFullyRedactedInvalidPatterns:
             "redaction_patterns": {"values": ["(bad"]},
         }
         assert is_fully_redacted("[REDACTED]", allowlist) is True
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Content-Length", True),
+        ("content-length", True),
+        ("X-CSRF-TOKEN", False),
+        ("X-Vendor-Anti-Forgery", False),
+    ],
+)
+def test_is_registered_header(name: str, expected: bool) -> None:
+    """Standard HTTP header names match case-insensitively; vendor names do not."""
+    from har_capture.patterns import is_registered_header
+
+    assert is_registered_header(name) is expected
