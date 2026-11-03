@@ -5386,3 +5386,31 @@ def test_response_header_echoing_cookie_value_shares_its_placeholder(case: dict)
     cookie = out["request"]["headers"][0]["value"].split("=", 1)[1]
     assert out["response"]["headers"][0]["value"] == cookie != token
     assert report.auto_redacted_counts["cookie_echo"] == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    _COOKIE_ECHO["malformed_shape_cases"],
+    ids=[c["id"] for c in _COOKIE_ECHO["malformed_shape_cases"]],
+)
+def test_cookie_echo_sweep_tolerates_malformed_shapes(case: dict) -> None:
+    """The sweep leaves a HAR whose entries, messages or headers are not the expected shapes untouched."""
+    from har_capture.sanitization.har import _propagate_cookie_echoes
+
+    collector = RedactionCollector(hasher=Hasher.create("shape"))
+    collector.cookie_values.add("abc123")
+    collector.redacted_values["abc123"] = "COOKIE_x"
+    har = copy.deepcopy(case["har"])
+
+    assert _propagate_cookie_echoes(har, collector) == 0
+    assert har == case["har"]
+
+
+def test_cookie_echo_sweep_without_cookie_values_is_a_noop() -> None:
+    """A capture that redacted no cookie data has nothing to echo."""
+    from har_capture.sanitization.har import _propagate_cookie_echoes
+
+    collector = RedactionCollector(hasher=Hasher.create("none"))
+    har = {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": "abc123"}]}}]}}
+
+    assert _propagate_cookie_echoes(har, collector) == 0

@@ -1128,6 +1128,18 @@
     ],
     "response_cases": [
       {"id": "response_vendor_header", "token": "abc123", "header": "X-Vendor-Token"}
+    ],
+    "malformed_shape_cases": [
+      {"id": "log_without_entries", "har": {"log": {}}},
+      {"id": "entries_not_a_list", "har": {"log": {"entries": "none"}}},
+      {"id": "no_log", "har": {}},
+      {"id": "entry_not_a_dict", "har": {"log": {"entries": ["x"]}}},
+      {"id": "message_not_a_dict", "har": {"log": {"entries": [{"request": "x", "response": null}]}}},
+      {"id": "headers_not_a_list", "har": {"log": {"entries": [{"request": {"headers": "x"}}]}}},
+      {"id": "header_not_a_dict", "har": {"log": {"entries": [{"request": {"headers": ["x"]}}]}}},
+      {"id": "value_not_a_string", "har": {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": 7}]}}]}}},
+      {"id": "name_not_a_string", "har": {"log": {"entries": [{"request": {"headers": [{"name": 7, "value": "abc123"}]}}]}}},
+      {"id": "value_not_a_cookie_value", "har": {"log": {"entries": [{"request": {"headers": [{"name": "X-A", "value": "other"}]}}]}}}
     ]
   }
 }
