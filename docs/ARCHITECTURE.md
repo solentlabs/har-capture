@@ -80,7 +80,7 @@ src/har_capture/
 ├── patterns/      # Pattern loading, merging, redaction checking, hashing
 │   └── domains/   # Built-in domain pattern files (network_device.json)
 ├── sanitization/  # HAR engine, HTML engine, heuristic engine
-├── capture/       # Playwright recording, wait-for-data (optional dep)
+├── capture/       # Playwright recording, wait-for-data (optional dep); login strategies (login.py)
 ├── validation/    # PII leak detection + capture-completeness for pre-commit and CLI
 └── cli/           # Typer commands (get, sanitize, validate, patterns)
 ```

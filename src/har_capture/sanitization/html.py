@@ -577,14 +577,64 @@ def redact_pattern_file_matches(
         The text with pattern matches replaced
     """
     for name, regex, prefix in patterns:
-        text = regex.sub(_pattern_file_replacer(name, prefix, hasher, collector), text)
+        text = regex.sub(_pattern_file_replacer(name, regex, prefix, hasher, collector), text)
     return text
 
 
+# Named groups that make a pattern replace part of its match with a
+# format-preserving placeholder instead of `PREFIX_<hash>` over the whole match.
+MAC_GROUP = "mac"
+IP_HEX_GROUP = "ip_hex"
+
+
+def hex_placeholder(kind: str, digits: str, hasher: Hasher) -> str:
+    """Placeholder for hex digits that spell a MAC or an IPv4 address, same length and case style.
+
+    ``mac``: 12 digits → ``hash_mac``'s digits (locally administered), or
+    ``X`` x 12 without a salt. ``ip_hex``: 8 digits spelling a private IPv4
+    address → the hex of the address ``hash_ip`` writes for it (``10.255.x.y``),
+    or ``00000000`` (``0.0.0.0``) without a salt. A group that does not spell
+    one comes back as ``X`` x len, so nothing real survives a malformed match.
+    """
+    upper = digits.upper() == digits and digits.lower() != digits
+    if kind == MAC_GROUP:
+        placeholder = (
+            "X" * len(digits) if hasher.salt is None or len(digits) != 12 else hasher.hash_mac(digits)
+        )
+    elif len(digits) != 8:
+        placeholder = "X" * len(digits)
+    elif hasher.salt is None:
+        placeholder = "0" * 8
+    else:
+        address = ".".join(str(int(digits[i : i + 2], 16)) for i in range(0, 8, 2))
+        placeholder = "".join(
+            f"{int(part):02x}" for part in hasher.hash_ip(address, is_private=True).split(".")
+        )
+    return placeholder.upper() if upper else placeholder
+
+
 def _pattern_file_replacer(
-    name: str, prefix: str, hasher: Hasher, collector: RedactionCollector
+    name: str, regex: re.Pattern[str], prefix: str, hasher: Hasher, collector: RedactionCollector
 ) -> Callable[[re.Match[str]], str]:
+    kind = (
+        MAC_GROUP
+        if MAC_GROUP in regex.groupindex
+        else IP_HEX_GROUP
+        if IP_HEX_GROUP in regex.groupindex
+        else None
+    )
+
     def replace(match: re.Match[str]) -> str:
+        if kind is not None and match.group(kind) is not None:
+            collector.record_auto_redaction(name)
+            start, end = match.span(kind)
+            offset = match.start()
+            whole = match.group(0)
+            return (
+                whole[: start - offset]
+                + hex_placeholder(kind, match.group(kind), hasher)
+                + whole[end - offset :]
+            )
         value = match.group(0)
         if name.startswith("credit_card_") and not luhn_valid(value):
             return value

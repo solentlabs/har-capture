@@ -60,6 +60,16 @@ def sanitize(
         Path | None,
         typer.Option("--report", "-r", help="Write JSON report to file"),
     ] = None,
+    keep_static_addresses: Annotated[
+        bool,
+        typer.Option(
+            "--keep-static-addresses",
+            help=(
+                "Leave MAC and IP addresses alone in JavaScript, CSS and plain-text response bodies "
+                "(example addresses in help text). Default: redact them. Use only for static assets."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Remove PII from a HAR file.
 
@@ -79,6 +89,7 @@ def sanitize(
         max_size: Maximum file size in MB (default: 100, 0=unlimited)
         compression_level: Gzip compression level 1-9 (default: 9)
         report: Write JSON report to file
+        keep_static_addresses: Leave MAC and IP addresses in static script, CSS and text bodies
 
     Example:
         har-capture sanitize device.har --patterns network-device
@@ -88,6 +99,7 @@ def sanitize(
         har-capture sanitize device.har --patterns network-device --max-size 500  # Allow up to 500MB
         har-capture sanitize device.har --patterns network-device --max-size 0  # No size limit
         har-capture sanitize device.har --patterns network-device --report sanitize-report.json
+        har-capture sanitize device.har --patterns network-device --keep-static-addresses
     """
     from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
 
@@ -178,6 +190,7 @@ def sanitize(
             custom_patterns=custom_patterns,
             max_size=max_size_bytes,
             heuristics=heuristics,
+            keep_static_addresses=keep_static_addresses,
         )
 
         # Interactive review mode (requires TTY). Every flagged run records

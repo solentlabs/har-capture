@@ -723,6 +723,46 @@ def mime_kind(mime: str) -> str | None:
     return None
 
 
+def is_static_asset_mime(mime: str) -> bool:
+    """Check if a mime type declares a static code or text asset: script, CSS, plain text.
+
+    These are the bodies a firmware serves identically to every unit, whose
+    free text (help messages, comments, examples) names no one. Used only
+    where the caller opted in to leaving their example addresses alone
+    (``keep_static_addresses``); HTML is never one, because a page is where a
+    device prints its own state.
+
+    Args:
+        mime: A Content-Type value
+
+    Returns:
+        True for JavaScript/ECMAScript, ``text/css`` and ``text/plain``
+    """
+    match = _MIME_RE.match(mime)
+    if match is None:
+        return False
+    main, subtype = match.group(1).lower(), match.group(2).lower()
+    suffix = subtype.rpartition("+")[2]
+    return suffix in _SCRIPT_SUBTYPES or (main == "text" and subtype in ("css", "plain"))
+
+
+def keeps_static_addresses(mime: str, route: str) -> bool:
+    """Whether a body's addresses are kept under ``keep_static_addresses``.
+
+    The one test for the sanitizer and the validator: a static asset mime
+    type whose text took the text route. Text that parses as JSON is JSON
+    (its values are structured places), and markup is a page.
+
+    Args:
+        mime: The body's declared Content-Type
+        route: ``route_body``'s choice for the body
+
+    Returns:
+        True when the MAC and IP address passes should skip this body
+    """
+    return route == "text" and is_static_asset_mime(mime)
+
+
 def is_text_mime(mime: str) -> bool:
     """Check if a mime type declares its body to be text (see :func:`mime_kind`).
 

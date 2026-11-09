@@ -632,7 +632,18 @@ class TestRunCapturePhase:
             target_url=None,
             page_load_strategy="networkidle",
             driver=None,
+            session_cookies=None,
         )
+
+    @patch("har_capture.capture.browser.capture_device_har")
+    def test_session_cookies_reach_the_capture(self, mock_capture: MagicMock) -> None:
+        """Cookies from a login strategy are handed to the browser session unchanged."""
+        mock_capture.return_value = MagicMock(success=True, error=None, stats={})
+        cookies = [{"name": "sid", "value": "tok", "domain": "192.0.2.1", "path": "/"}]
+
+        run_capture_phase(target="192.0.2.1", session_cookies=cookies)
+
+        assert mock_capture.call_args.kwargs["session_cookies"] == cookies
 
     @patch("har_capture.capture.browser.capture_device_har")
     def test_updates_existing_result(self, mock_capture: MagicMock) -> None:

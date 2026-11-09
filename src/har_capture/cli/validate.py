@@ -36,6 +36,16 @@ def validate(
             help="Required. Pattern domain (e.g. 'network-device'), 'base' for universal PII only, or JSON path. Repeatable.",
         ),
     ] = None,
+    keep_static_addresses: Annotated[
+        bool,
+        typer.Option(
+            "--keep-static-addresses",
+            help=(
+                "Do not report MAC and IP addresses in JavaScript, CSS and plain-text response bodies. "
+                "Pass it when the file was sanitized with the same option."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Validate HAR files for secrets and PII.
 
@@ -48,6 +58,7 @@ def validate(
         strict: Treat warnings as errors (exit code 1)
         recursive: Scan directory recursively for HAR files
         patterns: Pattern names or JSON paths (repeatable); 'base' for universal PII only
+        keep_static_addresses: Match a sanitize run made with --keep-static-addresses
 
     Example:
         har-capture validate device.har --patterns network-device
@@ -122,7 +133,9 @@ def validate(
         # A file that is not a readable HAR (bad JSON or gzip, a field of the
         # wrong type) is one error; the rest of the scan still runs.
         try:
-            findings = validate_har(file_path, custom_patterns=custom_patterns)
+            findings = validate_har(
+                file_path, custom_patterns=custom_patterns, keep_static_addresses=keep_static_addresses
+            )
             report = analyze_har_file(file_path)
         except HarValidationError as e:
             unreadable = str(e)

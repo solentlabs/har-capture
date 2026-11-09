@@ -230,7 +230,11 @@ flag-tier fields suppressed. The same model applies to every branch above (form 
 ### `check_content(content, location, findings, custom_patterns, **keywords)`
 
 Detects PII patterns in response content text. Keyword-only: `has_sanitized_url_credential`, `serial_detectors`,
-`field_tiers` (pre-compiled, as for `check_json_fields`).
+`field_tiers` (pre-compiled, as for `check_json_fields`), `mime_type` and `keep_static_addresses` (the sanitizer's
+[static-asset option](SANITIZATION_SPEC.md#static-assets-and-example-addresses): with it, no MAC, IPv4 or IPv6 address
+is reported in a script, CSS or plain-text body, by the same `keeps_static_addresses()` decision), and
+`mac_group_patterns` (pre-compiled). A pattern whose regex names a `mac` group (the network-device `$001122334455` form)
+is reported as a potential real MAC, unless the match is a placeholder the allowlist recognizes.
 
 **Whole-body redaction guard.** The early return uses `is_fully_redacted()`, not `is_redacted()`. `is_redacted()` is a
 single-*value* predicate that matches its allowlist families with `re.search`, so at body scale a run of six or more
@@ -623,6 +627,8 @@ har-capture validate capture.har --patterns <domain|custom.json>
   file
 - Exit code 0 if no findings, 1 if findings detected
 - Supports custom patterns via `--patterns`
+- `--keep-static-addresses` reports no MAC or IP address in a script, CSS or plain-text body; pass it for a file
+  sanitized with the same option
 
 ### Pre-Commit Hook (Consumer Configuration)
 

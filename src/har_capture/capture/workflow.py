@@ -423,6 +423,7 @@ def run_capture_phase(
     target_url: str | None = None,
     page_load_strategy: str = "networkidle",
     driver: DriverFn | None = None,
+    session_cookies: list[dict[str, Any]] | None = None,
 ) -> CaptureWorkflowResult:
     """Run the actual capture.
 
@@ -448,6 +449,8 @@ def run_capture_phase(
         page_load_strategy: Playwright wait_until for page.goto
         driver: Function that drives the page; the capture ends when it
             returns (see ``capture_device_har``)
+        session_cookies: Cookies from a login strategy
+            (``har_capture.capture.login``) the browser starts with
 
     Returns:
         CaptureWorkflowResult with capture status
@@ -480,6 +483,7 @@ def run_capture_phase(
         target_url=target_url,
         page_load_strategy=page_load_strategy,
         driver=driver,
+        session_cookies=session_cookies,
     )
 
     result.capture = CaptureResult(

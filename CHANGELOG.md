@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-08
+
+### Added
+
+- **`sanitize --keep-static-addresses` and `validate --keep-static-addresses`.** Leaves MAC and IP addresses alone in
+  JavaScript, CSS and plain-text response bodies, so an example address in a help message no longer changes a static
+  file the device serves identically to every unit. Off by default; everything else in those bodies is still redacted,
+  and JSON, markup, headers, cookies, URLs and POST data are unaffected.
+- **`get --login-strategy` and `--login-option`.** Signs in before the browser opens for a device that logs in through a
+  page: `form-cookie` (POST a form, keep its cookies) and `query-token-cookie` (GET with `base64(user:password)` in the
+  query, the body is the token). Credentials come from `HAR_CAPTURE_USERNAME` and `HAR_CAPTURE_PASSWORD`; the login runs
+  outside the browser, so neither they nor the login request enter the HAR. `register_login_strategy()` adds more.
+- **The network-device domain now redacts more of what identifies a unit.** A MAC printed as `$` and 12 hex digits and a
+  private address printed as `$` and 8 hex digits are replaced in their own layout; a MAC the run replaced is also
+  replaced inside a longer hex token and as the tail of a `<word>-<last four digits>` network name; the standard-MIB
+  serial objects `docsDevSerialNumber` and `entPhysicalSerialNum` are redacted by OID key.
+
+### Changed
+
+- **`sanitize` keeps a JSON body's layout.** A body with changed values used to be re-serialized unless it matched a
+  `json.dumps` layout; now only the changed strings are replaced and every other byte (line breaks, spacing, number
+  spellings) is kept.
+
 ## [0.16.2] - 2026-11-03
 
 ### Fixed
@@ -1561,6 +1584,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.16.0]: https://github.com/solentlabs/har-capture/compare/v0.15.1...v0.16.0
 [0.16.1]: https://github.com/solentlabs/har-capture/compare/v0.16.0...v0.16.1
 [0.16.2]: https://github.com/solentlabs/har-capture/compare/v0.16.1...v0.16.2
+[0.17.0]: https://github.com/solentlabs/har-capture/compare/v0.16.2...v0.17.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1588,4 +1612,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.16.2...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.17.0...HEAD

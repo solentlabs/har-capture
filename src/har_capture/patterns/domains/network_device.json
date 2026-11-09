@@ -14,15 +14,35 @@
     "password_input",
     "session_token",
     "csrf_token",
-    "config_path"
+    "config_path",
+    "dollar_mac",
+    "dollar_private_ip"
   ],
 
+  "patterns": {
+    "_comment": "Hex identifiers some firmware prints with a leading dollar sign inside JSON values. A named group makes the pass replace only that group with a format-preserving placeholder, so the dollar sign and the length survive: `mac` (12 hex digits, one byte repeated left alone) and `ip_hex` (8 hex digits spelling a private IPv4 address).",
+    "dollar_mac": {
+      "regex": "\\$(?!(?P<byte>[0-9A-F]{2})(?P=byte){5}(?![0-9A-F]))(?P<mac>[0-9A-F]{12})(?![0-9A-F])",
+      "flags": ["IGNORECASE"],
+      "replacement_prefix": "MAC",
+      "description": "MAC address printed as a dollar sign and 12 hex digits ($001122334455); a constant (one byte repeated) is kept"
+    },
+    "dollar_private_ip": {
+      "regex": "\\$(?P<ip_hex>0A[0-9A-F]{6}|AC1[0-9A-F][0-9A-F]{4}|C0A8[0-9A-F]{4})(?![0-9A-F])",
+      "flags": ["IGNORECASE"],
+      "replacement_prefix": "IP",
+      "description": "Private IPv4 address (10/8, 172.16/12, 192.168/16) printed as a dollar sign and 8 hex digits ($0A000001)"
+    }
+  },
+
   "fields": {
-    "_comment": "Field names that auto-redact their value. SNMP-over-JSON endpoints (ARRIS snmpGet/walk) key each value by a bare OID with no descriptive name: 1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index> is the Wi-Fi SSID column (index 10001 = 2.4 GHz, 10101 = 5 GHz); the same table's .26.1.2.<index> column is the Wi-Fi passphrase, and 1.3.6.1.4.1.4115.1.20.1.1.5.8.0 is the unit serial number.",
+    "_comment": "Field names that auto-redact their value. SNMP-over-JSON endpoints (ARRIS snmpGet/walk) key each value by a bare OID with no descriptive name: 1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index> is the Wi-Fi SSID column (index 10001 = 2.4 GHz, 10101 = 5 GHz); the same table's .26.1.2.<index> column is the Wi-Fi passphrase, and 1.3.6.1.4.1.4115.1.20.1.1.5.8.0 is the unit serial number. Two standard-MIB serial objects are keyed the same way: docsDevSerialNumber (1.3.6.1.2.1.69.1.1.4.0, DOCS-CABLE-DEVICE-MIB) and entPhysicalSerialNum (1.3.6.1.2.1.47.1.1.1.1.11.<index>, ENTITY-MIB).",
     "auto_redact_patterns": [
       "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.3\\.22\\.1\\.2\\.\\d+$",
       "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.3\\.26\\.1\\.2\\.\\d+$",
-      "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.5\\.8\\.0$"
+      "^1\\.3\\.6\\.1\\.4\\.1\\.4115\\.1\\.20\\.1\\.1\\.5\\.8\\.0$",
+      "^1\\.3\\.6\\.1\\.2\\.1\\.69\\.1\\.1\\.4\\.0$",
+      "^1\\.3\\.6\\.1\\.2\\.1\\.47\\.1\\.1\\.1\\.1\\.11\\.\\d+$"
     ]
   },
 

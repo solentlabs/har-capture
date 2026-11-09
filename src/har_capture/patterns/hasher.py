@@ -48,11 +48,16 @@ class Hasher:
         salt: The salt used for hashing. If None, uses static placeholders.
         hash_length: Number of hex characters in the hash (default 8).
         _cache: Internal cache mapping original values to their hashed replacements.
+        seen_macs: The 12 lowercase hex digits of every MAC this hasher was asked
+            to replace (static mode included). The sweeps that follow the
+            entries use it to find the same MAC where it is not standalone:
+            inside a longer hex run, or as the tail of a default network name.
     """
 
     salt: str | None = None
     hash_length: int = 8
     _cache: dict[str, str] = field(default_factory=dict, repr=False)
+    seen_macs: set[str] = field(default_factory=set, repr=False, compare=False)
 
     @staticmethod
     def generate_salt() -> str:
@@ -143,6 +148,8 @@ class Hasher:
             Format-preserving MAC like "02:a1:b2:c3:d4:e5" in the input's
             layout, or "XX:XX:XX:XX:XX:XX" if no salt
         """
+        if is_mac_value(mac):
+            self.seen_macs.add(_NON_HEX_RE.sub("", mac).lower())
         if self.salt is None:
             return "XX:XX:XX:XX:XX:XX"
 

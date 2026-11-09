@@ -587,3 +587,29 @@ dialog with its outcome.
 **Consequence.** The capture a script produces is the capture a person would have produced by hand, from the same code
 path. The driver owns its steps and its timeouts, and `settle()` is the one wait helper har-capture provides, because
 the in-flight request count it builds on cannot see a page that redirects at once.
+
+## ADR-23: A Login Strategy Runs Outside the Browser
+
+**Context.** A device that signs in through a page (a form POST that answers with a cookie, or a GET whose query holds
+`base64(user:password)` and whose body is the token the page script stores as a cookie) gives `get` nothing to hand
+Playwright the way `http_credentials` does for Basic Auth. Run in the browser, the login puts the password in the
+recorded request, where only the sanitizer stands between it and the file.
+
+**Decision.**
+
+1. **A strategy is an object with one method** (`LoginStrategy.login(transport, credentials)`) that returns session
+   cookies; `register_login_strategy` adds one. Two ship: `form-cookie` and `query-token-cookie`.
+1. **The login runs in Python, before the browser opens**, and the cookies seed the browser context (`session_cookies`).
+   The credentials and the login request are never in the HAR, and the session is already signed in at the first
+   navigation.
+1. **Credentials come from the environment only** (`HAR_CAPTURE_USERNAME`, `HAR_CAPTURE_PASSWORD`), are held in a value
+   whose `repr` and `str` show nothing, and appear in no message: a failure names the method, the path without its
+   query, and an HTTP status or exception type.
+
+**ADR-12 accounting.** No redaction rule changes. *Fidelity cost:* the HAR does not show the login exchange itself, only
+the session cookie on the requests after it. The cost buys a capture that cannot carry the password even if a sanitizer
+rule misses it.
+
+**Consequence.** A device whose login needs a browser (script-computed hashes, a challenge) is out of reach of the
+built-in strategies; a registered strategy has the same transport, not the page. `--login-strategy` and Basic Auth
+credentials are mutually exclusive.

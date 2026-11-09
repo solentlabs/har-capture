@@ -1,0 +1,23 @@
+{
+  "_comment": "Login strategies. Credentials are made up. 'options' are --login-option items; 'error' is a substring of the LoginError message (never a credential or query string).",
+  "strategy_option_cases": [
+    {"id": "form_minimal", "strategy": "form-cookie", "options": ["path=/login.cgi"], "error": null},
+    {"id": "form_all_options", "strategy": "form-cookie", "options": ["path=/login.cgi", "user_field=u", "pass_field=p", "field.action=login"], "error": null},
+    {"id": "form_missing_path", "strategy": "form-cookie", "options": [], "error": "Missing login option(s): path"},
+    {"id": "form_unknown_option", "strategy": "form-cookie", "options": ["path=/x", "pth=/y"], "error": "Unknown login option(s): pth"},
+    {"id": "query_minimal", "strategy": "query-token-cookie", "options": ["path=/t", "param=auth", "cookie=session"], "error": null},
+    {"id": "query_missing_cookie", "strategy": "query-token-cookie", "options": ["path=/t", "param=auth"], "error": "Missing login option(s): cookie"},
+    {"id": "query_missing_all", "strategy": "query-token-cookie", "options": [], "error": "Missing login option(s): path, param, cookie"},
+    {"id": "unknown_strategy", "strategy": "oauth", "options": [], "error": "Unknown login strategy 'oauth'; choose one of: form-cookie, query-token-cookie"},
+    {"id": "option_without_equals", "strategy": "form-cookie", "options": ["path"], "error": "A login option must be written KEY=VALUE"},
+    {"id": "option_empty_key", "strategy": "form-cookie", "options": ["=x"], "error": "A login option must be written KEY=VALUE"}
+  ],
+  "cli_error_cases": [
+    {"id": "option_without_strategy", "argv": ["--login-option", "path=/x"], "env": {}, "message": "--login-option needs --login-strategy"},
+    {"id": "strategy_with_basic_auth", "argv": ["--login-strategy", "form-cookie", "--login-option", "path=/x", "-u", "a", "-p", "b"], "env": {"HAR_CAPTURE_USERNAME": "u", "HAR_CAPTURE_PASSWORD": "p"}, "message": "cannot be combined with --username/--password"},
+    {"id": "missing_both_env", "argv": ["--login-strategy", "form-cookie", "--login-option", "path=/x"], "env": {}, "message": "Set HAR_CAPTURE_USERNAME and HAR_CAPTURE_PASSWORD"},
+    {"id": "missing_password_env", "argv": ["--login-strategy", "form-cookie", "--login-option", "path=/x"], "env": {"HAR_CAPTURE_USERNAME": "u"}, "message": "Set HAR_CAPTURE_PASSWORD in the environment"},
+    {"id": "bad_option", "argv": ["--login-strategy", "form-cookie"], "env": {"HAR_CAPTURE_USERNAME": "u", "HAR_CAPTURE_PASSWORD": "p"}, "message": "Missing login option(s): path"},
+    {"id": "unknown_strategy", "argv": ["--login-strategy", "nope"], "env": {"HAR_CAPTURE_USERNAME": "u", "HAR_CAPTURE_PASSWORD": "p"}, "message": "Unknown login strategy"}
+  ]
+}

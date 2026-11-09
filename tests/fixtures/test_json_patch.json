@@ -1,0 +1,15 @@
+{
+  "_comment": "In-place JSON string patching (_patch_json_strings): original text, the sanitized tree, and the expected result. null = cannot patch safely, caller re-serializes. Made-up data only (RFC 7042 MACs, RFC 5737 addresses).",
+  "cases": [
+    {"id": "changed_value_keeps_layout", "text": "{\n\"a\":\"x\",\n\"b\":\"00:00:5E:00:53:01\"\n}\n", "cleaned": {"a": "x", "b": "02:aa:bb:cc:dd:ee"}, "expect": "{\n\"a\":\"x\",\n\"b\":\"02:aa:bb:cc:dd:ee\"\n}\n"},
+    {"id": "changed_key_keeps_layout", "text": "{ \"00:00:5E:00:53:01\" : 1 }", "cleaned": {"02:aa:bb:cc:dd:ee": 1}, "expect": "{ \"02:aa:bb:cc:dd:ee\" : 1 }"},
+    {"id": "nested_array_in_order", "text": "[\"keep\",\n {\"k\":[\"x\",\"y\"]}]", "cleaned": ["keep", {"k": ["x", "Y"]}], "expect": "[\"keep\",\n {\"k\":[\"x\",\"Y\"]}]"},
+    {"id": "slash_escaping_followed", "text": "{\"u\":\"a\\/b\",\"v\":\"c\\/d\"}", "cleaned": {"u": "a/b", "v": "c/e"}, "expect": "{\"u\":\"a\\/b\",\"v\":\"c\\/e\"}"},
+    {"id": "ascii_escaping_followed", "text": "{\"u\":\"\\u00e9\",\"v\":\"q\"}", "cleaned": {"u": "\u00e9", "v": "\u00e8"}, "expect": "{\"u\":\"\\u00e9\",\"v\":\"\\u00e8\"}"},
+    {"id": "nothing_changed", "text": "{\"u\":\"q\"}", "cleaned": {"u": "q"}, "expect": null},
+    {"id": "repeated_key_not_patchable", "text": "{\"u\":\"q\",\"u\":\"r\"}", "cleaned": {"u": "R"}, "expect": null},
+    {"id": "structure_changed_not_patchable", "text": "{\"u\":\"q\",\"n\":1}", "cleaned": {"u": "Q", "n": 2}, "expect": null},
+    {"id": "text_and_parsed_data_disagree", "text": "{\"u\":\"q\"}", "cleaned": {"u": "Q"}, "expect": null},
+    {"id": "invalid_escape_not_patchable", "text": "{\"u\":\"\\q\"}", "cleaned": {"u": "Q"}, "expect": null}
+  ]
+}

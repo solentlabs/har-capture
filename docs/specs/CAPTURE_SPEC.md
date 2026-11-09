@@ -13,6 +13,7 @@ workflow gates each step.
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `src/har_capture/capture/browser.py`      | Core capture orchestration: Playwright session, wait-for-data, HAR recording, state capture, filtering/compression |
 | `src/har_capture/capture/driver.py`       | Driver mode: mode checks, `settle()`, driver dialog record, scrub of a driver's exception                          |
+| `src/har_capture/capture/login.py`        | Login strategies: the `LoginStrategy` seam, `LoginTransport`, `Credentials`, `form-cookie`, `query-token-cookie`   |
 | `src/har_capture/capture/workflow.py`     | Multi-phase workflow: browser check → connectivity → probes → auth → capture                                       |
 | `src/har_capture/capture/probes.py`       | Pre-capture diagnostics: auth challenge, HEAD support, ICMP ping                                                   |
 | `src/har_capture/capture/connectivity.py` | Reachability check, protocol auto-detection (TCP+TLS probe), Basic Auth detection                                  |
@@ -172,7 +173,31 @@ result = check_auth_phase(target_url, result)
 
 ### Phase 6: Capture (`run_capture_phase`)
 
-Calls `capture_device_har()` from `browser.py` with all accumulated state (credentials, probe data, patterns).
+Calls `capture_device_har()` from `browser.py` with all accumulated state (credentials, probe data, patterns, and the
+session cookies of a [login strategy](#login-strategies)).
+
+### Login Strategies
+
+HTTP Basic Auth is answered by the browser (`http_credentials`). A device that signs in through a page instead is
+handled by a **login strategy** (`--login-strategy`, `login.py`): a `LoginStrategy` object with one method,
+`login(transport, credentials)`, that returns session cookies. The CLI builds the strategy and reads the credentials
+before the browser check, so a typo or missing credential costs nothing; it runs the login after the connectivity phase
+(the detected base URL), and hands the cookies to `capture_device_har(session_cookies=...)`, which seeds the browser
+context's storage state with them. The first navigation is already signed in.
+
+| Piece                               | Role                                                                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `Credentials`                       | Username and password from `HAR_CAPTURE_USERNAME` / `HAR_CAPTURE_PASSWORD`; `repr` and `str` show nothing          |
+| `LoginTransport`                    | Cookie-keeping `urllib` client for the device (redirects followed, self-signed certificates accepted)              |
+| `form-cookie`                       | POSTs a login form (`path`, `user_field`, `pass_field`, `field.NAME`); the cookies the device sets are the session |
+| `query-token-cookie`                | GETs `path?param=base64(user:password)`; the body (one token, 4096 bytes at most) is stored as cookie `cookie`     |
+| `register_login_strategy(name, fn)` | Adds a strategy; `fn` takes the `--login-option` map                                                               |
+
+The login runs outside the browser, so neither the credentials nor the login request is in the recorded HAR; the session
+cookie appears on the requests that follow, and is not counted as context contamination or written to
+`_solentlabs.pre_capture_cookies`. Every failure is a `LoginError` naming the method, the path without its query, and an
+HTTP status or exception type — never a credential, query string or body; an exception from a third-party strategy is
+reported by type only. See [ADR-23](../ARCHITECTURE_DECISIONS.md#adr-23-a-login-strategy-runs-outside-the-browser).
 
 ## Minimal Mode (`--minimal`)
 
@@ -842,8 +867,8 @@ class CaptureOptions:
 1. **Service workers are always blocked** — This is hardcoded in context config, not configurable, to ensure fresh
    captures.
 1. **Self-signed certs are always accepted** — Both probes and Playwright context ignore certificate errors.
-1. **Browser context is always clean** — `storage_state={"cookies": [], "origins": []}` is hardcoded. No cookies,
-   localStorage, or credentials leak from previous sessions.
+1. **Browser context is always clean** — `storage_state` starts with no localStorage and no cookies, no credentials leak
+   from previous sessions. The one exception is the `session_cookies` a login strategy obtained in this run.
 1. **`_solentlabs` audit surfaces are always present** — `_solentlabs.pre_capture_cookies`, `_solentlabs.popups`,
    `_solentlabs.dialogs`, and `_solentlabs.downloads` are emitted in every capture, even when the lists are empty.
    Downstream tools can verify context cleanliness and see whether secondary browser events occurred without relying on
