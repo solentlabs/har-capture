@@ -549,6 +549,24 @@
     {"value": "value1&other=2xxxxxxx", "eligible": false, "id": "ampersand_not_permitted"},
     {"value": "", "eligible": false, "id": "empty_string"}
   ],
+  "serial_propagation_cases": [
+    {
+      "id": "unlabeled_query_param_and_header",
+      "serial": "46B5G7K2M9X4Q81",
+      "bodies": [
+        "<span>Serial Number</span><span class=\"value\">46B5G7K2M9X4Q81</span>",
+        "<script>a(\"http://x.com/r?zz=46B5G7K2M9X4Q81&mno=SBG8300\");</script>"
+      ]
+    },
+    {
+      "id": "short_eight_char_serial",
+      "serial": "A1B2C3D4",
+      "bodies": [
+        "SN: A1B2C3D4",
+        "<script>a(\"http://x.com/r?zz=A1B2C3D4&mno=X\");</script>"
+      ]
+    }
+  ],
   "propagation_search_key_cases": [
     {
       "id": "plain_value_yields_one_needle",

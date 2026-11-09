@@ -256,7 +256,7 @@ SSID_OPTION_RE = re.compile(
 # next row's value. A bare `Serial` or `Serial ID` label counts only with a
 # separator after it (`Serial:`), so prose naming a serial port or number is
 # not a label.
-_SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SN|S/N"
+_SERIAL_LABELS = r"Serial\s*Number|SerialNum|Serial\s*No|Serial(?:\s*ID)?(?=\s*(?:</\w+>\s*)*[.:=])|SNo?|S/N"
 _SERIAL_VALUE = r"(?=[a-zA-Z0-9\-_]*\d)(?!" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN + r")[a-zA-Z0-9\-_]{5,}"
 SERIAL_LABEL_RE = re.compile(
     r"\b("
@@ -854,7 +854,9 @@ def redact_labeled_serials(
         if is_redacted(match.group(3), custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("serial_number")
-        return f"{match.group(1)}{match.group(2)}{hasher.hash_generic(match.group(3), 'SERIAL')}"
+        placeholder = hasher.hash_generic(match.group(3), "SERIAL")
+        collector.record_redacted_value(match.group(3), placeholder, serial=True)
+        return f"{match.group(1)}{match.group(2)}{placeholder}"
 
     return SERIAL_LABEL_RE.sub(replace_serial, text)
 
@@ -901,7 +903,9 @@ def redact_vendor_serials(
         if match_vendor_serial(token, serial_detectors) is None:
             return token
         collector.record_auto_redaction("serial_number")
-        return hasher.hash_generic(token, "SERIAL")
+        placeholder = hasher.hash_generic(token, "SERIAL")
+        collector.record_redacted_value(token, placeholder, serial=True)
+        return placeholder
 
     return VENDOR_SERIAL_TOKEN_RE.sub(replace_serial_token, content)
 

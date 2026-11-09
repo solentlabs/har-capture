@@ -855,7 +855,7 @@ used by the `serial_number` / `wps_pin` patterns in `pii.json` (`check_for_pii`)
 **Serial label and value (pass 2).** One pattern, `SERIAL_LABEL_RE` in `sanitization/html.py`, serves pass 2, `validate`
 (which imports it) and `check_for_pii` (whose `pii.json` `serial_number` regex carries it verbatim; a test pins the two)
 — so a labeled serial `validate` reports is one a sanitize run removes. The labels are `Serial Number`, `SerialNum`,
-`Serial No`, `SN` and `S/N` at a word boundary, and a bare `Serial` or `Serial ID` when a separator follows it
+`Serial No`, `SN`, `SNo` and `S/N` at a word boundary, and a bare `Serial` or `Serial ID` when a separator follows it
 (`Serial:`, so prose about a serial port is not a label); the label's own closing tags may precede its separator
 (`<b>Serial Number</b>: VALUE`); the value must carry a digit, as every real serial does, and is not the local part of a
 whole email after the label (`Serial Number: admin123@example.com` is an email, for the email pass), while a serial
@@ -1398,10 +1398,15 @@ necessarily the *same* secret rather than a coincidence.
 
 | Criterion                                     | Excludes                                                        |
 | --------------------------------------------- | --------------------------------------------------------------- |
-| 16+ characters                                | `0`, `1`, `admin` — replacing these globally would wreck a HAR  |
+| 16+ characters (8+ for a serial, below)       | `0`, `1`, `admin` — replacing these globally would wreck a HAR  |
 | Character set `[A-Za-z0-9._~+/=:-]`, no space | Phrases and values carrying quoting or structural characters    |
 | Contains at least one digit                   | `GetDeviceInformation`, `configurationSettings` — identifiers   |
 | Not `is_safe_value()`                         | IPv6, CIDR, timestamps, versions, already-redacted placeholders |
+
+A device serial the HTML engine redacted (`redact_labeled_serials()`, `redact_vendor_serials()`) is registered with the
+sweep and held to 8+ characters instead of 16: it is already known to be a secret, carries a digit, and real serials run
+8–15 characters, so the 16-character floor left a serial raw in a query string, header or second body while its labeled
+cell was masked. The other criteria apply unchanged.
 
 The digit requirement is the operative form of "must not be word-shaped." Method names, config keys, and API identifiers
 are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls

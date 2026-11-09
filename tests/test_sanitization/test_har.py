@@ -4312,6 +4312,84 @@ class TestPropagationEligibility:
         )
 
 
+class TestSerialPropagation:
+    """A serial the HTML engine redacts is swept from the rest of the file (SANITIZATION_SPEC Pass 1b)."""
+
+    @pytest.mark.parametrize(
+        ("value", "serial", "eligible"),
+        [
+            ("46B5G7K2M9X4Q81", True, True),
+            ("A1B2C3D4", True, True),
+            ("A1B2C3D", True, False),
+            ("46B5G7K2M9X4Q81", False, False),
+            ("SerialNumber", True, False),
+        ],
+        ids=[
+            "serial_15_chars",
+            "serial_8_chars_floor",
+            "serial_7_chars_below_floor",
+            "non_serial_15_chars",
+            "serial_no_digit",
+        ],
+    )
+    def test_serial_floor(self, value: str, serial: bool, eligible: bool) -> None:
+        """A recognized serial is swept from 8 characters; any other value still needs 16."""
+        from har_capture.sanitization.har import _is_propagation_eligible
+
+        assert _is_propagation_eligible(value, serial=serial) is eligible
+
+    @pytest.mark.parametrize(
+        "case",
+        _HAR_FIXTURE["serial_propagation_cases"],
+        ids=[c["id"] for c in _HAR_FIXTURE["serial_propagation_cases"]],
+    )
+    def test_serial_replaced_everywhere(self, case: dict) -> None:
+        """The labeled serial's value is replaced in a query, a header and another body."""
+        har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "t", "version": "1"},
+                "entries": [
+                    {
+                        "startedDateTime": "2026-01-01T00:00:00Z",
+                        "time": 1,
+                        "request": {
+                            "method": "GET",
+                            "url": "http://192.168.100.1/page",
+                            "httpVersion": "HTTP/1.1",
+                            "headers": [{"name": "X-Ref", "value": case["serial"]}],
+                            "queryString": [],
+                            "cookies": [],
+                            "headersSize": -1,
+                            "bodySize": 0,
+                        },
+                        "response": {
+                            "status": 200,
+                            "statusText": "OK",
+                            "httpVersion": "HTTP/1.1",
+                            "headers": [],
+                            "cookies": [],
+                            "content": {"size": 10, "mimeType": "text/html", "text": body},
+                            "redirectURL": "",
+                            "headersSize": -1,
+                            "bodySize": -1,
+                        },
+                        "cache": {},
+                        "timings": {"send": 0, "wait": 1, "receive": 0},
+                    }
+                    for body in case["bodies"]
+                ],
+            }
+        }
+
+        from har_capture.sanitization.har import sanitize_har
+
+        sanitized, _report = sanitize_har(har, salt=None)
+        text = json.dumps(sanitized)
+
+        assert case["serial"] not in text, case["id"]
+
+
 def _token_flow_har(token: str, *, path_segment: str | None = None) -> dict:
     """Build a login -> use -> logout HAR where the token appears on three surfaces."""
     return {

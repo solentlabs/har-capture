@@ -7,6 +7,8 @@
     {"input_html": "Serial Number: ABC12345678",              "removed": "ABC12345678",           "placeholder": "***SERIAL***",       "id": "serial_number"},
     {"input_html": "SerialNum: XYZ98765432",                  "removed": "XYZ98765432",           "placeholder": "***SERIAL***",       "id": "serial_num_variant"},
     {"input_html": "SN: DEV123456789",                         "removed": "DEV123456789",          "placeholder": "***SERIAL***",       "id": "serial_sn_prefix"},
+    {"input_html": "a.attr(\"href\", \"http://x.com/r?sno=46B5G7K2M9X4Q81&mno=SBG8300\");", "removed": "46B5G7K2M9X4Q81", "placeholder": "sno=***SERIAL***&mno=SBG8300", "id": "serial_sno_query_key"},
+    {"input_html": "SNo: 46B5G7K2M9X4Q81",                   "removed": "46B5G7K2M9X4Q81",       "placeholder": "***SERIAL***",       "id": "serial_sno_label"},
     {"input_html": "Client: 192.168.100.50",                  "removed": "192.168.100.50",        "placeholder": "0.0.0.0",            "id": "private_ip_192"},
     {"input_html": "Device: 10.0.0.100",                      "removed": "10.0.0.100",            "placeholder": "0.0.0.0",            "id": "private_ip_10"},
     {"input_html": "Host: 172.16.0.50",                       "removed": "172.16.0.50",           "placeholder": "0.0.0.0",            "id": "private_ip_172"},

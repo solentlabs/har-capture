@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sanitize` redacts a serial printed after `sno=`.** A device page that builds a registration link such as
+  `...?sno=<serial>&madd=...` in a script kept the serial raw while masking the same serial in its labeled cell. `SNo`
+  joins `SN` and `S/N` as a serial label, so `sanitize`, `validate` and the PII check all read it.
+- **`sanitize` replaces a serial everywhere once it has masked it anywhere.** A serial recognized by label or vendor
+  layout is now swept from the rest of the file (query strings, headers, other bodies) from 8 characters up; the sweep
+  used to skip any value under 16 characters, which left 15-character serials raw outside their labeled cell.
+
 ## [0.17.0] - 2026-11-08
 
 ### Added
