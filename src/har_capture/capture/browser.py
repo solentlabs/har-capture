@@ -693,6 +693,7 @@ def _run_browser_session(
     page_load_strategy: str = "networkidle",
     downloads_dir: Path | None = None,
     driver: DriverFn | None = None,
+    session_cookies: list[dict[str, Any]] | None = None,
 ) -> BrowserSessionResult:
     """Launch Playwright browser and capture HAR.
 
@@ -715,6 +716,11 @@ def _run_browser_session(
         driver: Function that drives the page once capture is recording; the
             session ends when it returns. An exception it raises is kept on
             the result, and the HAR is still written.
+        session_cookies: Cookies a login strategy obtained before the browser
+            opened (``har_capture.capture.login``); the context starts with
+            them, so the first navigation is already signed in. They are not
+            counted as contamination and are left out of the recorded
+            pre-capture cookie state.
 
     Returns:
         BrowserSessionResult with captured browser state
@@ -743,7 +749,7 @@ def _run_browser_session(
             "ignore_https_errors": True,
             "service_workers": "block",
             "storage_state": {
-                "cookies": [],
+                "cookies": list(session_cookies or []),
                 "origins": [],
             },
         }
@@ -755,7 +761,10 @@ def _run_browser_session(
 
         # Record cookie jar state before any navigation
         try:
-            result.pre_capture_cookies = context.cookies()
+            injected = {(c.get("name"), c.get("domain")) for c in session_cookies or []}
+            result.pre_capture_cookies = [
+                c for c in context.cookies() if (c.get("name"), c.get("domain")) not in injected
+            ]
             if result.pre_capture_cookies:
                 _LOGGER.warning(
                     "Context inherited %d cookies despite clean storage_state; capture may be contaminated",
@@ -1467,6 +1476,7 @@ def capture_device_har(
     target_url: str | None = None,
     page_load_strategy: str = "networkidle",
     driver: DriverFn | None = None,
+    session_cookies: list[dict[str, Any]] | None = None,
 ) -> CaptureResult:
     """Capture HTTP traffic using Playwright browser.
 
@@ -1511,6 +1521,8 @@ def capture_device_har(
             ``error`` and the exception in ``driver_exception``. Requests the
             device fails, refuses or leaves hanging are recorded in the HAR,
             not raised. See ``har_capture.capture.settle``.
+        session_cookies: Cookies from a login strategy
+            (``har_capture.capture.login``) the browser context starts with
 
     Returns:
         CaptureResult with paths to generated files
@@ -1595,6 +1607,7 @@ def capture_device_har(
             page_load_strategy=page_load_strategy,
             downloads_dir=paths.output_path.parent / f"{paths.output_path.stem}_downloads",
             driver=driver,
+            session_cookies=session_cookies,
         )
 
     def _cleanup_temp() -> None:

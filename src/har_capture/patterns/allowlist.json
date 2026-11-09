@@ -18,6 +18,14 @@
       "pattern": "^02([:-])[0-9a-f]{2}(?:\\1[0-9a-f]{2}){4}$",
       "description": "Locally administered MAC, colon or hyphen layout (02:xx:xx:xx:xx:xx, 02-xx-xx-xx-xx-xx)"
     },
+    "dollar_mac": {
+      "pattern": "^\\$02[0-9a-f]{10}$",
+      "description": "Locally administered MAC printed with a leading dollar sign ($02xxxxxxxxxx)"
+    },
+    "dollar_private_ip": {
+      "pattern": "^\\$0[aA][fF][fF][0-9a-fA-F]{4}$",
+      "description": "Redacted private IP (10.255.x.y) printed with a leading dollar sign ($0Affxxyy)"
+    },
     "private_ip": {
       "pattern": "^10\\.255\\.\\d{1,3}\\.\\d{1,3}$",
       "description": "Redacted private IP (10.255.x.x)"

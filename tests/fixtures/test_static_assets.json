@@ -1,0 +1,30 @@
+{
+  "_comment": "keep_static_addresses: bodies served as JavaScript, CSS or plain text keep their MAC and IP addresses (examples in help text); every other body, header and value is redacted as before. Made-up data only: RFC 7042 MACs, RFC 5737 addresses, RFC 3849 IPv6. `kept` survives with the option on and is redacted with it off; `always_redacted` is redacted either way.",
+  "body_cases": [
+    {"id": "script_help_text_ipv4", "mime": "application/javascript", "text": "alert('Enter an address such as 198.51.100.77');", "kept": ["198.51.100.77"], "always_redacted": []},
+    {"id": "script_x_javascript_mac_example", "mime": "application/x-javascript; charset=utf-8", "text": "var hint = 'e.g. 00:00:5E:00:53:2A';", "kept": ["00:00:5E:00:53:2A"], "always_redacted": []},
+    {"id": "css_comment_address", "mime": "text/css", "text": "/* gateway 203.0.113.44 */ a{color:red}", "kept": ["203.0.113.44"], "always_redacted": []},
+    {"id": "plain_text_ipv6_prose", "mime": "text/plain", "text": "Use a form like 2001:db8:85a3::8a2e:370:7334 here.", "kept": ["2001:db8:85a3::8a2e:370:7334"], "always_redacted": []},
+    {"id": "script_email_still_redacted", "mime": "text/javascript", "text": "var a='198.51.100.9'; var m='someone@example.org';", "kept": ["198.51.100.9"], "always_redacted": ["someone@example.org"]},
+    {"id": "html_page_not_static", "mime": "text/html", "text": "<p>WAN 203.0.113.50</p>", "kept": [], "always_redacted": ["203.0.113.50"]},
+    {"id": "json_body_not_static", "mime": "text/javascript", "text": "{\"wan\":\"203.0.113.51\"}", "kept": [], "always_redacted": ["203.0.113.51"]},
+    {"id": "octet_stream_not_static", "mime": "application/octet-stream", "text": "wan 203.0.113.52", "kept": [], "always_redacted": ["203.0.113.52"]},
+    {"id": "no_mime_not_static", "mime": "", "text": "wan 203.0.113.53", "kept": [], "always_redacted": ["203.0.113.53"]}
+  ],
+  "mime_cases": [
+    {"mime": "application/javascript", "static": true},
+    {"mime": "text/javascript; charset=UTF-8", "static": true},
+    {"mime": "application/ecmascript", "static": true},
+    {"mime": "text/css", "static": true},
+    {"mime": "text/plain", "static": true},
+    {"mime": "TEXT/PLAIN; charset=utf-8", "static": true},
+    {"mime": "text/html", "static": false},
+    {"mime": "text/xml", "static": false},
+    {"mime": "application/json", "static": false},
+    {"mime": "application/x-www-form-urlencoded", "static": false},
+    {"mime": "application/octet-stream", "static": false},
+    {"mime": "image/png", "static": false},
+    {"mime": "", "static": false},
+    {"mime": "garbage", "static": false}
+  ]
+}

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
 if TYPE_CHECKING:
+    from har_capture.capture.login import Credentials, LoginStrategy
     from har_capture.capture.workflow import CaptureWorkflowResult
 
 
@@ -77,6 +78,24 @@ def capture(
             help="Wait for async data to load on each page before navigating",
         ),
     ] = True,
+    login_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--login-strategy",
+            help=(
+                "Sign in before the browser opens: form-cookie (POST a login form, keep its cookies) or "
+                "query-token-cookie (GET with base64 user:password in the query, body is the token). "
+                "Credentials come from HAR_CAPTURE_USERNAME and HAR_CAPTURE_PASSWORD."
+            ),
+        ),
+    ] = None,
+    login_option: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--login-option",
+            help="KEY=VALUE option for the login strategy (path=/login.cgi, user_field=..., cookie=...). Repeatable.",
+        ),
+    ] = None,
     minimal: Annotated[
         bool,
         typer.Option(
@@ -108,6 +127,8 @@ def capture(
         include_media: Include media files in capture
         patterns: Pattern names or JSON file paths (repeatable)
         wait_for_data: Wait for async data to load on each page
+        login_strategy: Login strategy to sign in with before the browser opens
+        login_option: KEY=VALUE options for the login strategy
         minimal: Minimal pre-flight for single-session devices
 
     Example:
@@ -115,6 +136,7 @@ def capture(
         har-capture get 192.168.100.1 --patterns network-device   # auto-detect HTTP vs HTTPS
         har-capture get http://192.168.100.1 --output capture.har --patterns network-device
         har-capture get http://router.local --include-images --patterns network-device
+        har-capture get 192.168.100.1 --patterns network-device --login-strategy form-cookie --login-option path=/login.cgi
     """
     # Validate --patterns up front so a user running `har-capture get URL`
     # without choosing a domain gets the listing error before we trigger
@@ -150,6 +172,10 @@ def capture(
             "always starts at the device root. Navigate to the page inside the "
             "browser once it opens."
         )
+
+    # A login strategy is checked up front too: a typo in its options or missing
+    # credentials should not cost a connectivity wait or a browser launch.
+    prepared_login = _prepare_login(login_strategy, login_option, username, password)
 
     # Phase 1: Check browser installation
     result = check_browser_phase(browser)
@@ -209,6 +235,8 @@ def capture(
                 auth_status = auth_probe.get("status_code", "?")
                 typer.echo(f"  Auth status: {auth_status}")
 
+    session_cookies = _run_login(prepared_login, target, result.target_url, login_strategy)
+
     # Display instructions
     _display_instructions()
 
@@ -231,6 +259,7 @@ def capture(
         wait_for_data=wait_for_data,
         target_url=result.target_url if result.connectivity else None,
         page_load_strategy=page_load_strategy,
+        session_cookies=session_cookies,
     )
 
     if not result.capture_success:
@@ -243,6 +272,71 @@ def capture(
     # Interactive review of flagged values (always enabled)
     if result.capture and result.capture.sanitization_report:
         _run_interactive_review(result)
+
+
+def _prepare_login(
+    strategy_name: str | None,
+    options: list[str] | None,
+    username: str | None,
+    password: str | None,
+) -> tuple[LoginStrategy, Credentials] | None:
+    """Build the login strategy and read its credentials from the environment, or exit with the reason."""
+    if strategy_name is None:
+        if options:
+            typer.echo("Error: --login-option needs --login-strategy", err=True)
+            raise typer.Exit(1)
+        return None
+    from har_capture.capture.login import (
+        Credentials,
+        LoginError,
+        create_login_strategy,
+        parse_login_options,
+    )
+
+    if username is not None or password is not None:
+        typer.echo(
+            "Error: --login-strategy cannot be combined with --username/--password (HTTP Basic Auth)",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        strategy = create_login_strategy(strategy_name, parse_login_options(options))
+        credentials = Credentials.from_env()
+    except LoginError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1) from None
+    return strategy, credentials
+
+
+def _run_login(
+    prepared: tuple[LoginStrategy, Credentials] | None,
+    target: str,
+    target_url: str | None,
+    strategy_name: str | None,
+) -> list[dict[str, Any]] | None:
+    """Sign in with the prepared strategy and return the session cookies, or exit with the reason."""
+    if prepared is None:
+        return None
+    from har_capture.capture.login import LoginError, perform_login
+
+    base_url = target_url or (target if target.lower().startswith(("http://", "https://")) else None)
+    if base_url is None:
+        typer.echo(
+            "Error: --login-strategy needs a known scheme: give the target as http://... or https://..., "
+            "or drop --minimal so the scheme is detected",
+            err=True,
+        )
+        raise typer.Exit(1)
+    typer.echo()
+    typer.echo(f"Signing in ({strategy_name})...")
+    strategy, credentials = prepared
+    try:
+        cookies = perform_login(strategy, base_url, credentials)
+    except LoginError as exc:
+        typer.echo(f"  ERROR: {exc}", err=True)
+        raise typer.Exit(1) from None
+    typer.echo(f"  Signed in: {len(cookies)} session cookie(s) installed")
+    return cookies
 
 
 def _display_header(target: str, browser: str, output: Path | None) -> None:

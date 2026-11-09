@@ -3059,3 +3059,67 @@ class TestPipelineStripsInternalEntries:
         assert urls == ["http://10.0.0.1/"], "chrome:// entry must not reach any output artifact"
         assert result.completeness is not None
         assert result.completeness.total_entries == 1, "completeness counts post-strip entries"
+
+
+class TestSessionCookiesFromLogin:
+    """Cookies a login strategy obtained start the context and are not counted as contamination."""
+
+    COOKIE = {
+        "name": "sid",
+        "value": "tok",
+        "domain": "127.0.0.1",
+        "path": "/",
+        "expires": -1,
+        "httpOnly": False,
+        "secure": False,
+        "sameSite": "Lax",
+    }
+
+    @patch("playwright.sync_api.sync_playwright")
+    def test_cookies_seed_storage_state_and_stay_out_of_pre_capture_state(
+        self, mock_sync_pw: MagicMock, tmp_path: Path
+    ) -> None:
+        from har_capture.capture.browser import _run_browser_session
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        launch = mock_pw.chromium.launch.return_value
+        launch.new_context.return_value.cookies.return_value = [dict(self.COOKIE)]
+
+        result = _run_browser_session(
+            target_url="http://127.0.0.1/",
+            temp_path=tmp_path / "raw.har",
+            headless=True,
+            timeout=1,
+            wait_for_data=False,
+            session_cookies=[dict(self.COOKIE)],
+        )
+
+        options = launch.new_context.call_args.kwargs
+        assert options["storage_state"] == {"cookies": [self.COOKIE], "origins": []}
+        assert result.pre_capture_cookies == []
+
+    @patch("playwright.sync_api.sync_playwright")
+    def test_inherited_cookie_beside_the_login_cookie_is_still_reported(
+        self, mock_sync_pw: MagicMock, tmp_path: Path
+    ) -> None:
+        from har_capture.capture.browser import _run_browser_session
+
+        mock_pw = MagicMock()
+        mock_sync_pw.return_value.__enter__.return_value = mock_pw
+        stray = {"name": "stray", "value": "x", "domain": "127.0.0.1"}
+        mock_pw.chromium.launch.return_value.new_context.return_value.cookies.return_value = [
+            dict(self.COOKIE),
+            stray,
+        ]
+
+        result = _run_browser_session(
+            target_url="http://127.0.0.1/",
+            temp_path=tmp_path / "raw.har",
+            headless=True,
+            timeout=1,
+            wait_for_data=False,
+            session_cookies=[dict(self.COOKIE)],
+        )
+
+        assert result.pre_capture_cookies == [stray]

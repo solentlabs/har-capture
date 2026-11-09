@@ -63,6 +63,7 @@ from har_capture.patterns import (
     iter_json_strings,
     iter_url_credentials,
     json_members,
+    keeps_static_addresses,
     load_allowlist,
     load_pii_patterns,
     load_sensitive_patterns,
@@ -78,6 +79,7 @@ from har_capture.patterns.loader import compile_safe_value_patterns
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
     SERIAL_LABEL_HINT_RE,
+    hex_placeholder,
     is_private_ip_in_range,
     is_valid_ip_address,
     pattern_file_patterns,
@@ -436,6 +438,13 @@ _CALL_PATTERNS_CTX: contextvars.ContextVar[_CallPatterns | None] = contextvars.C
 # shape. Empty outside sanitize_har.
 _SUBMITTED_CREDENTIALS_CTX: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar(
     "har_capture_submitted_credentials", default=frozenset()
+)
+
+
+# Whether the active call leaves the MAC and IP addresses in static code and
+# text assets alone (``keep_static_addresses``). Off outside a call.
+_KEEP_STATIC_ADDRESSES_CTX: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "har_capture_keep_static_addresses", default=False
 )
 
 
@@ -943,7 +952,164 @@ def _rewrite_json(
     cleaned = _sanitize_json_recursive(data, hasher, collector, served=served)
     if cleaned == data and not _shadowed_values_change(data, hasher, served=served):
         return text
+    patched = _patch_json_strings(text, data, cleaned)
+    if patched is not None:
+        return patched
     return _dump_json_like(cleaned, data, text)
+
+
+# One JSON string token, quotes included. Outside strings JSON has no quote
+# character, so a scan for these finds every key and string value in order.
+_JSON_STRING_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"', re.DOTALL)
+
+
+def _json_strings_in_order(data: Any) -> list[str]:
+    """Every string in parsed JSON — each object key, then its value — in document order."""
+    found: list[str] = []
+    stack: list[Any] = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            found.append(node)
+        elif isinstance(node, dict):
+            for key, value in reversed(list(node.items())):
+                stack.append(value)
+                stack.append(key)
+        elif isinstance(node, list):
+            stack.extend(reversed(node))
+    return found
+
+
+def _patch_json_strings(text: str, data: Any, cleaned: Any) -> str | None:
+    r"""Rewrite only the JSON strings that changed, leaving every other byte as it was.
+
+    The sanitizer changes string keys and values and nothing else, so the
+    sanitized text is the original with some string tokens replaced. Spacing,
+    line breaks, indentation, trailing whitespace, number spellings (``1.50``)
+    and the escapes of every untouched string survive, whatever layout the
+    device wrote — one ``json.dumps`` could not reproduce.
+
+    A changed string is written ASCII-escaped when the original escapes
+    non-ASCII (``é``) and holds none raw, and with ``/`` escaped (``\/``)
+    when the original does so throughout, as ``_dump_json_like`` does.
+
+    Returns None when the text cannot be patched safely, so the caller falls
+    back to re-serializing: a repeated key (the parsed object keeps the last
+    value only, so tokens and strings no longer pair up), or a result that
+    does not parse back to ``cleaned``.
+    """
+    tokens = list(_JSON_STRING_TOKEN_RE.finditer(text))
+    before = _json_strings_in_order(data)
+    after = _json_strings_in_order(cleaned)
+    if len(tokens) != len(before) or len(before) != len(after):
+        return None
+    try:
+        if [json.loads(token.group(0)) for token in tokens] != before:
+            return None
+    except ValueError:
+        return None
+    changed = [i for i, (old, new) in enumerate(zip(before, after, strict=True)) if old != new]
+    if not changed:
+        return None
+    raw_non_ascii = any(ord(char) > 127 for char in text)
+    ensure_ascii = not raw_non_ascii and "\\u" in text
+    slashes_escaped = "\\/" in text and "/" not in text.replace("\\/", "")
+    pieces: list[str] = []
+    cursor = 0
+    for i in changed:
+        token = tokens[i]
+        encoded = json.dumps(after[i], ensure_ascii=ensure_ascii)
+        pieces.append(text[cursor : token.start()])
+        pieces.append(encoded.replace("/", "\\/") if slashes_escaped else encoded)
+        cursor = token.end()
+    pieces.append(text[cursor:])
+    patched = "".join(pieces)
+    # Every piece is a verbatim slice of text that parsed, or json.dumps output, so the
+    # result parses; what is checked is that it means what the sanitizer decided.
+    return patched if json.loads(patched) == cleaned else None
+
+
+# A token of hex digits: bounded by anything but a letter or digit, so a run
+# inside a base64 blob or a longer identifier is left alone.
+_HEX_TOKEN_RE = re.compile(r"(?<![0-9A-Za-z])[0-9A-Fa-f]{12,}(?![0-9A-Za-z])")
+
+
+def _ssid_suffix_re(macs: set[str]) -> re.Pattern[str]:
+    """A default network name tail: a word, a ``-`` or ``_``, then the last four hex digits of a known MAC."""
+    suffixes = "|".join(sorted({mac[-4:] for mac in macs}))
+    return re.compile(
+        rf"(?:(?<![0-9A-Za-z])|(?<=\\[nrt]))[A-Za-z][0-9A-Za-z]{{1,15}}[-_](?:{suffixes})(?![0-9A-Za-z])",
+        re.IGNORECASE,
+    )
+
+
+def _sweep_known_macs(entries: Any, hasher: Hasher) -> int:
+    """Replace a known MAC where the MAC passes cannot see it, in every string of the entries.
+
+    A MAC the run replaced (``Hasher.seen_macs``) identifies the unit wherever
+    its 12 digits turn up, and two shapes escape the passes that matched it:
+
+    * **Hex tokens.** A whole token of hex digits that is the MAC (a bare MAC
+      in a script or text), or holds it on a byte boundary (a TLV-style value
+      such as ``0106<mac>0203...``): the 12 digits become the MAC placeholder,
+      the rest of the token and its length untouched.
+    * **Default network names.** ``<word>-<last 4 hex digits>``, the name some
+      firmware builds from the MAC: the whole name becomes the SSID placeholder.
+      A word-dash-four-hex-digits tail alone would be a name like any other;
+      only the correlation with a MAC this capture holds makes it one, which is
+      why a capture with no MAC is never swept.
+
+    Returns:
+        The number of replacements
+    """
+    macs = hasher.seen_macs
+    if not macs or not isinstance(entries, list):
+        return 0
+    ssid_re = _ssid_suffix_re(macs)
+    count = 0
+
+    def replace_token(match: re.Match[str]) -> str:
+        nonlocal count
+        token = match.group(0)
+        pieces: list[str] = []
+        cursor = 0
+        i = 0
+        while i + 12 <= len(token):
+            if token[i : i + 12].lower() in macs:
+                pieces.append(token[cursor:i])
+                pieces.append(hex_placeholder("mac", token[i : i + 12], hasher))
+                cursor = i + 12
+                i += 12
+                count += 1
+            else:
+                i += 2
+        if not pieces:
+            return token
+        pieces.append(token[cursor:])
+        return "".join(pieces)
+
+    def replace_name(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return hasher.hash_sensitive_value(match.group(0), "wifi_ssid")
+
+    def sweep(text: str) -> str:
+        if len(text) < 6:
+            return text
+        text = _HEX_TOKEN_RE.sub(replace_token, text)
+        return ssid_re.sub(replace_name, text)
+
+    stack: list[Any] = [entries]
+    while stack:
+        node = stack.pop()
+        for key, child in list(node.items() if isinstance(node, dict) else enumerate(node)):
+            if isinstance(child, str):
+                swept = sweep(child)
+                if swept != child:
+                    node[key] = swept
+            elif isinstance(child, dict | list):
+                stack.append(child)
+    return count
 
 
 def _shadowed_values_change(data: Any, hasher: Hasher | None, *, served: bool = False) -> bool:
@@ -1879,6 +2045,8 @@ def _sanitize_body_string(
     custom_patterns: str | dict[str, Any] | None = None,
     serial_detectors: Sequence[Any] = (),
     pattern_file: Sequence[tuple[str, re.Pattern[str], str]] | None = None,
+    *,
+    keep_addresses: bool = False,
 ) -> str:
     """Sanitize a text outside the HTML engine in that engine's pass order.
 
@@ -1903,6 +2071,8 @@ def _sanitize_body_string(
         serial_detectors: Compiled high-confidence vendor serial detectors
         pattern_file: ``pattern_file_patterns()`` resolved for the call (None:
             resolved here from ``custom_patterns``)
+        keep_addresses: Skip the MAC, IPv6 and IPv4 passes: the text is a
+            static asset whose addresses are examples (``keeps_static_addresses``)
 
     Returns:
         The sanitized text
@@ -1915,12 +2085,14 @@ def _sanitize_body_string(
     if pattern_file is None:
         pattern_file = pattern_file_patterns(custom_patterns)
     text = redact_pattern_file_matches(text, passes.hasher, passes, pattern_file)
-    text = _redact_macs(text, hasher, collector)
+    if not keep_addresses:
+        text = _redact_macs(text, hasher, collector)
     if SERIAL_LABEL_HINT_RE.search(text):
         text = redact_labeled_serials(text, passes.hasher, passes, custom_patterns)
     if serial_detectors:
         text = redact_vendor_serials(text, list(serial_detectors), passes.hasher, passes)
-    text = _redact_ip_addresses(text, hasher, collector)
+    if not keep_addresses:
+        text = _redact_ip_addresses(text, hasher, collector)
     if "<" in text:
         text = redact_structural_credentials(text, passes.hasher, passes, custom_patterns)
     return _redact_emails_and_flag_phones(text, hasher, collector)
@@ -2032,7 +2204,12 @@ def _sanitize_body_text(
         return _rewrite_json(text, data, hasher, collector, served=True)
 
     return _sanitize_body_string(
-        text, hasher, collector, custom_patterns, _resolve_serial_detectors(custom_patterns)
+        text,
+        hasher,
+        collector,
+        custom_patterns,
+        _resolve_serial_detectors(custom_patterns),
+        keep_addresses=_KEEP_STATIC_ADDRESSES_CTX.get() and keeps_static_addresses(mime_type, route),
     )
 
 
@@ -2082,6 +2259,7 @@ def sanitize_entry(
     custom_patterns: str | dict[str, Any] | None = None,
     collector: RedactionCollector | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    keep_static_addresses: bool = False,
     _skip_copy: bool = False,
     _url_credential: str | None = None,
 ) -> dict[str, Any]:
@@ -2103,6 +2281,8 @@ def sanitize_entry(
             mutated. See ``sanitize_post_data`` for the full contract.
         collector: Optional collector for tracking redactions
         heuristics: Heuristic mode for pipe-delimited value detection
+        keep_static_addresses: Leave the MAC and IP addresses in a static
+            script, stylesheet or plain-text body alone (see ``sanitize_har``)
         _skip_copy: If True, skip deep copy (caller already copied). Internal use only.
 
     Returns:
@@ -2121,18 +2301,24 @@ def sanitize_entry(
         # No salt and no collector - create collector with no hashing
         collector = RedactionCollector(hasher=Hasher.create(None))
 
-    with (
-        _field_patterns_scope(custom_patterns),
-        _header_sets_scope(custom_patterns),
-        _call_patterns_scope(custom_patterns),
-    ):
-        if "request" in result:
-            _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
+    keep_token = _KEEP_STATIC_ADDRESSES_CTX.set(keep_static_addresses)
+    try:
+        with (
+            _field_patterns_scope(custom_patterns),
+            _header_sets_scope(custom_patterns),
+            _call_patterns_scope(custom_patterns),
+        ):
+            if "request" in result:
+                _sanitize_request(result["request"], collector.hasher, collector, custom_patterns, heuristics)
 
-        if "response" in result:
-            _sanitize_response(result["response"], collector, custom_patterns, heuristics, _url_credential)
+            if "response" in result:
+                _sanitize_response(
+                    result["response"], collector, custom_patterns, heuristics, _url_credential
+                )
 
-        _sanitize_security_details(result, collector)
+            _sanitize_security_details(result, collector)
+    finally:
+        _KEEP_STATIC_ADDRESSES_CTX.reset(keep_token)
 
     return result
 
@@ -2653,7 +2839,9 @@ def _propagate_whole_bodies(
             continue
         with _flags_muted(collector):
             redacted = _redact_json_strings(payload, hasher, collector)
-        inner = _dump_json_like(redacted, payload, payload_text)
+        inner = _patch_json_strings(payload_text, payload, redacted) or _dump_json_like(
+            redacted, payload, payload_text
+        )
         lead = text[: len(text) - len(text.lstrip())]
         trail = text[len(text.rstrip()) :]
         content["text"] = lead + _rewrap_payload(stripped, inner, quoted=False) + trail
@@ -2667,6 +2855,7 @@ def sanitize_har(
     salt: str | None = "auto",
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    keep_static_addresses: bool = False,
 ) -> tuple[dict[str, Any], SanitizationReport]:
     """Sanitize an entire HAR file.
 
@@ -2686,6 +2875,15 @@ def sanitize_har(
             state is never mutated. See ``sanitize_post_data`` for the full
             contract.
         heuristics: Heuristic mode for pipe-delimited value detection
+        keep_static_addresses: Leave the MAC, IPv4 and IPv6 addresses in a
+            response body served as JavaScript, CSS or plain text alone
+            (``keeps_static_addresses``): such a file is the firmware's, the
+            same for every unit, and an example address in a help message
+            names no one. Off by default. Everything else in those bodies
+            (credentials, emails, serials) is still redacted, and JSON,
+            markup, headers, cookies, URLs and POST data are unaffected.
+            Opt in only when the assets are static; a script generated per
+            request can embed the unit's own address.
 
     Returns:
         Tuple of (sanitized HAR data, sanitization report)
@@ -2752,6 +2950,7 @@ def sanitize_har(
                             custom_patterns=custom_patterns,
                             collector=collector,
                             heuristics=heuristics,
+                            keep_static_addresses=keep_static_addresses,
                             _skip_copy=True,
                             _url_credential=url_credentials.get(i),
                         )
@@ -2828,6 +3027,12 @@ def sanitize_har(
             }
         )
 
+    # Pass 1c: the MACs this run replaced, found again where they are not
+    # standalone (inside a longer hex run, as the tail of a default network name).
+    mac_sweeps = _sweep_known_macs(result["log"].get("entries"), hasher)
+    if mac_sweeps:
+        collector.auto_redacted_counts["mac_derived"] = mac_sweeps
+
     # Pass 1b replaced result's contents, so `log` is no longer the sanitized one.
     final_entries = result["log"].get("entries")
     for url in find_collapsed_bodies(final_entries if isinstance(final_entries, list) else []):
@@ -2850,6 +3055,7 @@ def sanitize_har_file(
     max_size: int | None = DEFAULT_MAX_HAR_SIZE,
     validate: bool = True,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
+    keep_static_addresses: bool = False,
 ) -> tuple[str, SanitizationReport]:
     """Sanitize a HAR file and write to a new file.
 
@@ -2869,6 +3075,7 @@ def sanitize_har_file(
         max_size: Maximum file size in bytes (default: 100MB). Set to None to disable.
         validate: If True, validate HAR structure before processing (default: True)
         heuristics: Heuristic mode for pipe-delimited value detection
+        keep_static_addresses: See ``sanitize_har``
 
     Returns:
         Tuple of (output_path, sanitization report)
@@ -2923,6 +3130,7 @@ def sanitize_har_file(
         salt=salt,
         custom_patterns=custom_patterns,
         heuristics=heuristics,
+        keep_static_addresses=keep_static_addresses,
     )
 
     # Fill in file paths in report

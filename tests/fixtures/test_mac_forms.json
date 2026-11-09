@@ -1,0 +1,47 @@
+{
+  "_comment": "Identifier forms beyond the colon MAC (network-device domain). Made-up data only: RFC 7042 MACs (00:00:5E:00:53:xx), RFC 5737 addresses. A JSON body's values are given as a dict; 'leaked' must not survive sanitizing, 'kept' must.",
+  "dollar_cases": [
+    {"id": "mac_upper", "value": "$00005E005301", "leaked": ["00005E005301"], "shape": "^\\$[0-9A-Fa-fX]{12}$"},
+    {"id": "mac_lower", "value": "$00005e005302", "leaked": ["00005e005302"], "shape": "^\\$[0-9A-Fa-fX]{12}$"},
+    {"id": "mac_in_prose", "value": "uplink $00005E005303 up", "leaked": ["00005E005303"], "shape": "^uplink \\$[0-9A-Fa-fX]{12} up$"},
+    {"id": "mac_all_zero_kept", "value": "$000000000000", "leaked": [], "shape": "^\\$000000000000$"},
+    {"id": "mac_one_byte_repeated_kept", "value": "$FFFFFFFFFFFF", "leaked": [], "shape": "^\\$FFFFFFFFFFFF$"},
+    {"id": "mac_eleven_digits_kept", "value": "$00005E00530", "leaked": [], "shape": "^\\$00005E00530$"},
+    {"id": "mac_thirteen_digits_kept", "value": "$00005E0053011", "leaked": [], "shape": "^\\$00005E0053011$"},
+    {"id": "no_dollar_bare_in_text_kept", "value": "00005E005304", "leaked": [], "shape": "^00005E005304$"},
+    {"id": "ip_hex_ten", "value": "$0A0B0C0D", "leaked": ["0A0B0C0D"], "shape": "^\\$(?:0AFF[0-9a-f]{4}|00000000)$"},
+    {"id": "ip_hex_ten_lower", "value": "$0a0b0c0e", "leaked": ["0a0b0c0e"], "shape": "^\\$(?:0aff[0-9a-f]{4}|00000000)$"},
+    {"id": "ip_hex_172_16", "value": "$AC100001", "leaked": ["AC100001"], "shape": "^\\$(?:0AFF[0-9A-F]{4}|00000000)$"},
+    {"id": "ip_hex_172_31", "value": "$AC1FFE01", "leaked": ["AC1FFE01"], "shape": "^\\$(?:0AFF[0-9A-F]{4}|00000000)$"},
+    {"id": "ip_hex_192_168", "value": "$C0A80164", "leaked": ["C0A80164"], "shape": "^\\$(?:0AFF[0-9A-F]{4}|00000000)$"},
+    {"id": "ip_hex_172_32_kept", "value": "$AC200001", "leaked": [], "shape": "^\\$AC200001$"},
+    {"id": "ip_hex_public_kept", "value": "$CB007101", "leaked": [], "shape": "^\\$CB007101$"},
+    {"id": "ip_hex_nine_digits_kept", "value": "$0A0B0C0D1", "leaked": [], "shape": "^\\$0A0B0C0D1$"}
+  ],
+  "oid_serial_cases": [
+    {"id": "docs_dev_serial", "key": "1.3.6.1.2.1.69.1.1.4.0", "value": "123456789012345", "redacted": true},
+    {"id": "ent_physical_serial", "key": "1.3.6.1.2.1.47.1.1.1.1.11.1", "value": "123456789012345", "redacted": true},
+    {"id": "ent_physical_serial_other_index", "key": "1.3.6.1.2.1.47.1.1.1.1.11.1004", "value": "123456789012345", "redacted": true},
+    {"id": "ent_physical_name_kept", "key": "1.3.6.1.2.1.47.1.1.1.1.7.1", "value": "Cable Modem", "redacted": false},
+    {"id": "docs_dev_next_object_kept", "key": "1.3.6.1.2.1.69.1.1.5.0", "value": "123456789012345", "redacted": false},
+    {"id": "sys_descr_kept", "key": "1.3.6.1.2.1.1.1.0", "value": "Example Modem Rev 1", "redacted": false}
+  ],
+  "embedded_cases": [
+    {"id": "tlv_upper_in_run", "mac": "00:00:5E:00:53:01", "text": "0106{HEX}0203", "hex": "00005E005301", "leaked": "00005E005301"},
+    {"id": "tlv_lower_in_run", "mac": "00:00:5E:00:53:02", "text": "AA55{HEX}ff", "hex": "00005e005302", "leaked": "00005e005302"},
+    {"id": "whole_token_is_mac", "mac": "00:00:5E:00:53:03", "text": "id={HEX};", "hex": "00005E005303", "leaked": "00005E005303"},
+    {"id": "mac_twice_in_run", "mac": "00:00:5E:00:53:04", "text": "{HEX}FFFF{HEX}", "hex": "00005E005304", "leaked": "00005E005304"},
+    {"id": "other_mac_run_kept", "mac": "00:00:5E:00:53:05", "text": "0106{HEX}0203", "hex": "00005E005399", "leaked": null},
+    {"id": "odd_offset_kept", "mac": "00:00:5E:00:53:06", "text": "0{HEX}0203", "hex": "00005E005306", "leaked": null},
+    {"id": "inside_longer_word_kept", "mac": "00:00:5E:00:53:07", "text": "zz0106{HEX}0203zz", "hex": "00005E005307", "leaked": null}
+  ],
+  "ssid_cases": [
+    {"id": "word_dash_suffix", "mac": "00:00:5E:00:53:A1", "text": "Brand-53A1", "replaced": true},
+    {"id": "word_underscore_lower_suffix", "mac": "00:00:5E:00:53:A1", "text": "brand_53a1", "replaced": true},
+    {"id": "inside_sentence", "mac": "00:00:5E:00:53:A1", "text": "network Brand-53A1 is up", "replaced": true},
+    {"id": "different_suffix_kept", "mac": "00:00:5E:00:53:A1", "text": "Brand-53A2", "replaced": false},
+    {"id": "no_word_kept", "mac": "00:00:5E:00:53:A1", "text": "-53A1", "replaced": false},
+    {"id": "inside_longer_token_kept", "mac": "00:00:5E:00:53:A1", "text": "Brand-53A1x", "replaced": false},
+    {"id": "no_separator_kept", "mac": "00:00:5E:00:53:A1", "text": "Brand53A1", "replaced": false}
+  ]
+}

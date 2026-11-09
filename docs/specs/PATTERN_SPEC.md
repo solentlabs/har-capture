@@ -421,6 +421,18 @@ Patterns MUST achieve 100% confidence. If a pattern cannot meet this bar, use `h
 | Action         | Auto-redact (irreversible)  | Flag for user review        |
 | Pipeline stage | Pass 0 (scanner)            | Heuristic engine            |
 
+**Replacing part of a match.** A pattern whose regex has a **named group** replaces that group only, with a
+format-preserving placeholder, and keeps the rest of the match (the `replacement_prefix` is not used):
+
+| Group name | Group holds                   | Replaced by                                                                             |
+| ---------- | ----------------------------- | --------------------------------------------------------------------------------------- |
+| `mac`      | 12 hex digits spelling a MAC  | `hash_mac()` digits (`02…`, in the case style of the match); twelve `X`s without a salt |
+| `ip_hex`   | 8 hex digits spelling an IPv4 | the hex of the `hash_ip()` private address (`0aff….`); `00000000` without a salt        |
+
+`validate` reports an unredacted match of a `mac`-group pattern as a potential real MAC; the allowlist's
+`format_preserving_patterns` entries (`dollar_mac`, `dollar_private_ip`) recognize the placeholders, so a sanitized file
+is clean. Only the `mac` and `ip_hex` names have this meaning.
+
 ### Built-in Domain: `network_device.json`
 
 The built-in network device domain provides:
@@ -432,6 +444,10 @@ The built-in network device domain provides:
   7S-prefix) at **high**, making them deterministic (auto-redacted by the sanitizer, error-level in validate — see the
   deterministic rule above), plus a generic uppercase-alphanumeric backstop at **medium** (flag for review)
 - Domain-specific safe values for DOCSIS/cable modem vocabulary
+- `dollar_mac` and `dollar_private_ip` patterns for the `$` + 12-hex MAC and `$` + 8-hex private-address spellings (see
+  [Sanitization Spec — MAC Addresses](SANITIZATION_SPEC.md#mac-addresses)), both named in `include_patterns`
+- `fields.auto_redact_patterns` rules for two standard-MIB serial objects: `docsDevSerialNumber`
+  (`1.3.6.1.2.1.69.1.1.4.0`) and `entPhysicalSerialNum` (`1.3.6.1.2.1.47.1.1.1.1.11.<index>`)
 - `fields.auto_redact_patterns` rules for three ARRIS OIDs: the Wi-Fi SSID column
   (`1.3.6.1.4.1.4115.1.20.1.1.3.22.1.2.<index>`), the Wi-Fi passphrase column (`…3.26.1.2.<index>`) and the unit serial
   number (`1.3.6.1.4.1.4115.1.20.1.1.5.8.0`). SNMP-over-JSON endpoints (`snmpGet`, `walk`) key each value by a bare OID

@@ -494,8 +494,8 @@ placeholder — the same MAC in two cases, or any two MACs in static mode — ke
   (and so every consumer of the capture) reads it, with the earlier pairs kept as `shadowed`. `validate` checks those
   too. When any shadowed value has something to redact or to offer for review (probed with a throwaway collector, so it
   is neither counted nor flagged), the sanitizer re-serializes the body, so it never passes through: the duplicate
-  members collapse to the one every parser reads, and the body takes the default layout, since text that repeats a key
-  cannot be reproduced. A shadowed value that would be offered for review is dropped rather than kept, because the
+  members collapse to the one every parser reads, and the body takes the fallback layout above, since text that repeats
+  a key cannot be patched. A shadowed value that would be offered for review is dropped rather than kept, because the
   review never sees it while `validate` reports it. A body whose repeated keys hide nothing is written back
   byte-identical
 - Malformed JSON is caught and logged: a POST body is left as-is, a response body takes the text path (sanitization
@@ -563,12 +563,18 @@ decoded string of a JSON body (every value and key). Reading JSON one decoded st
 — on the raw JSON text a structural value could run through a closing quote, and its replacement would break the
 document. The JSON route then parses the text (`parse_json_container()`: nesting too deep for the parser counts as not
 JSON, never a crash) and runs `_sanitize_json_recursive()`. JSON with nothing to redact is written back byte-identical.
-Changed JSON is re-serialized in whichever layout `json.dumps` can write that reproduces the original exactly — compact,
-default spacing, or a 2- or 4-space indent; non-ASCII escaped or as-is; `/` escaped as PHP writes it (`\/`) — inside the
-original's surrounding whitespace. Anything else (another indent, a number spelled `1.50`) falls back to default spacing
-with non-ASCII as written. The text path is `_sanitize_body_string()`, over the whole body whatever its size, as
-`validate` scans it: across the cable_modem_monitor fleet, `text/javascript` bodies over 1 MB hold 48 MACs and 12 IP
-addresses.
+Changed JSON is **patched in place** (`_patch_json_strings()`): the sanitizer changes string keys and values and nothing
+else, so the result is the original text with only the changed string tokens replaced. Every other byte survives —
+spacing, line breaks (`{\n"key":"value",\n...}\n`), indentation, trailing whitespace, number spellings (`1.50`) and the
+escapes of untouched strings. A replaced string is written ASCII-escaped when the original escapes non-ASCII and holds
+none raw, and with `/` escaped (`\/`) when the original escapes every slash, as PHP does. Only the replaced values
+change length; a placeholder is not the width of the value it replaces (`***FIELD***`, `FIELD_<hash>`), except the MAC
+and hex-address placeholders, which keep their layout. The patch is verified by parsing it back to the sanitized value;
+when the strings of the text and of the parsed value do not pair up (a repeated key) or the check fails, the body is
+re-serialized in whichever layout `json.dumps` can write that reproduces the original exactly — compact, default
+spacing, or a 2- or 4-space indent — and otherwise in default spacing with non-ASCII as written. The text path is
+`_sanitize_body_string()`, over the whole body whatever its size, as `validate` scans it: across the cable_modem_monitor
+fleet, `text/javascript` bodies over 1 MB hold 48 MACs and 12 IP addresses.
 
 **Real shapes.** The Sercomm DM1000's `setup.cgi?todo=…` responses are `applation/json` stored with `encoding: base64`:
 transport base64 around plain JSON. Arris SB8200 fragments (`pageheaderA.htm`, `footer.htm`) are HTML served as
@@ -662,6 +668,34 @@ value of either is PII. The static-mode placeholder `::` is therefore stable.
 counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
 `1732584193` = 0x67452301, would otherwise be flagged 31× per review).
 
+### Static Assets and Example Addresses
+
+By default every text body is redacted the same way: a MAC, IPv4 or IPv6 address in a JavaScript, CSS or plain-text file
+is replaced like one in a header or a JSON value. A firmware serves those files identically to every unit, and their
+free text (a help message such as "enter an address like 198.51.100.77", a comment) can carry an example address, so the
+sanitized file comes out different from what the device serves and shorter or longer by the difference in width.
+
+`keep_static_addresses=True` on `sanitize_har()`, `sanitize_har_file()` and `sanitize_entry()` (CLI
+`sanitize --keep-static-addresses`, and `validate --keep-static-addresses` to match) restricts address masking to
+**structured places** — headers, cookies, URLs, POST data, JSON keys and values, and markup — and leaves the MAC, IPv6
+and IPv4 passes out of a response body that is **script, CSS or plain text**. `keeps_static_addresses(mime, route)`
+(`patterns/redaction.py`) is the one decision for both tools: the mime type is JavaScript or ECMAScript (any `+suffix`),
+`text/css` or `text/plain`, and the body took the text route of `route_body()`. Text that parses as JSON is JSON
+whatever it is served as, markup is a page, and a body whose type says nothing about its text is not a static asset, so
+each keeps its rules. Everything else in a static body is still redacted: credentials, emails, vendor and labeled
+serials, and the pattern file's patterns. The scope is the call's (a `ContextVar` set by `sanitize_entry()`), and the
+option is off unless asked for.
+
+**Why an option and not the default.** A script generated per request can embed the unit's own address
+(`var wanIp = '203.0.113.9'`), and no rule on the text can tell that from an example; the default stays the safe one and
+the choice is the caller's, who knows the assets are static. HTML is never in scope, because a page is where a device
+prints its own state.
+
+**ADR-12 accounting.** *Leak closed:* none, this option redacts less; it is opt-in, so the default contract is
+unchanged. *Fidelity gain:* a static asset reaches the capture byte-identical when it holds no other redaction.
+*Cannot-be-structure proof:* the option applies by body type and route, never by the value, so it cannot make a
+different value kind pass.
+
 ### MAC Addresses
 
 One definition, `MAC_RE` in `patterns/redaction.py`, serves `_sanitize_body_string`, the HTML engine's pass 1 and
@@ -691,6 +725,50 @@ the glued-identifier leak above, so a capture that holds such a shape is reporte
   MAC, and exactly what `validate` reports; what it is glued to does not change what it is. Across the
   cable_modem_monitor fleet, all 11,953 such runs sit between punctuation or whitespace, so dropping the boundary
   redacts nothing the fleet contains.
+
+**Other spellings of the same identity.** The network-device domain adds three more, so a unit's MAC and private address
+are redacted when the device prints them in its own notation. They are pattern-file patterns whose regex names a group,
+and the pass replaces only that group (the rest of the match, a leading `$`, is kept):
+
+| Spelling                    | Pattern (`network_device.json`) | Replacement                                                                                               |
+| --------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `$` + 12 hex digits         | `dollar_mac` (`mac` group)      | `hash_mac()` digits, `$02a1b2c3d4e5`; `$XXXXXXXXXXXX` without a salt; one byte repeated is kept           |
+| `$` + 8 hex digits, private | `dollar_private_ip` (`ip_hex`)  | the hex of the `hash_ip()` address, `$0Aff12ab` (`10.255.18.171`); `$00000000` (`0.0.0.0`) without a salt |
+| a MAC the run replaced      | Pass 1c sweep (below)           | the MAC placeholder inside the hex token, or the SSID placeholder for a name                              |
+
+*`$` + 12 hex digits.* The device prints MACs this way inside JSON values. The shape can in principle be a 12-digit
+amount (`$100000000000`), which no network device prints; a name that is all one byte repeated (`$FFFFFFFFFFFF`) is a
+protocol constant and stays, as for a colon MAC. The same MAC as a colon text and as `$` hex shares its digits under one
+salt.
+
+*`$` + 8 hex digits.* Eight hex digits after a `$` spell an IPv4 address; the pattern fires only for the private ranges
+(10/8, 172.16/12, 192.168/16), the addresses the dotted passes redact in the same capture and whose leak is named by the
+same ADR-12 accounting as `10.x` above. A public address in this notation is not matched: nothing names it as a leak,
+and `$` + 8 hex digits is too common a shape for constants to redact it unseen. `validate` does not report the private
+form, as it reports no dotted private address.
+
+**Pass 1c: a MAC the run replaced, found where the MAC passes cannot see it** (`_sweep_known_macs()`). After the entries
+(and Pass 1b), every string in the entries is swept for the MACs this run replaced (`Hasher.seen_macs`, filled by
+`hash_mac()` in every mode):
+
+- A **hex token** (a run of 12 or more hex digits not touching a letter or digit) that is the MAC, or holds it at an
+  even offset (a TLV-style value `0106<mac>0203`), has those 12 digits replaced by the MAC placeholder
+  (`hex_placeholder`), keeping the token's length and the case style of the digits it replaced. A token inside a longer
+  identifier or base64 blob is not a token. A bare MAC outside a MAC-named key is not found by the text passes; here it
+  is, because this capture already holds the MAC.
+- A **default network name** `<word>-<last four hex digits of the MAC>` (or `_`), as some firmware names a network, is
+  replaced whole by the SSID placeholder (`WIFI_<hash>`, `***WIFI***`). The shape alone is a name like any other; only
+  the match with a MAC this capture holds makes it one, so a capture with no MAC is never swept for names. A false match
+  needs a word ending in four hex-digit letters (`-Cafe`) that is also the tail of a MAC in the capture.
+
+Replacements are counted as `mac_derived`. The sweep reads the entries' own strings, so a name or token inside a
+base64-wrapped payload is not reached.
+
+**Not matched, by decision.** A 15-digit number is not a serial without a key: counters, timestamps and IMEI-like values
+share the shape, so a serial is found by what names it (`serial` keys, labels, vendor layouts, and the network-device
+OID keys: `docsDevSerialNumber` `1.3.6.1.2.1.69.1.1.4.0` and `entPhysicalSerialNum` `1.3.6.1.2.1.47.1.1.1.1.11.<index>`,
+besides the ARRIS enterprise one). A default SSID that is not derived from a MAC of the capture is a name like any other
+and is offered for review by the detectors, or redacted under an SSID key.
 
 **IP address heuristic** (`is_valid_ip_address()`):
 
@@ -1246,6 +1324,10 @@ across a direct-hash prefix (`PASS`, `TOKEN`, `WIFI`, `SERIAL`, …) and a `_red
 [Pass 1b](#pass-1b-redacted-value-propagation) reuses the registry placeholder too, so a propagated copy always matches
 its source.
 
+`Hasher.seen_macs` collects the 12 lowercase hex digits of every MAC `hash_mac()` is asked to replace (static mode
+included); the Pass 1c sweep reads it. `hex_placeholder(kind, digits, hasher)` (`sanitization/html.py`) writes a MAC or
+a private-address placeholder for a run of hex digits, in the case style of the digits it replaces.
+
 ### Static Fallbacks (salt=None)
 
 | Type    | Static Value        |
@@ -1255,6 +1337,10 @@ its source.
 | IPv6    | `::`                |
 | Email   | `x@x.invalid`       |
 | Generic | `***PREFIX***`      |
+
+The static placeholders are not the width of the value they replace. The two hex-address spellings and the hex-token
+sweep are the exception: `$XXXXXXXXXXXX`, `$00000000` and twelve `X`s inside a token keep the length of what they
+replaced.
 
 ## Two-Pass Model
 
@@ -1411,6 +1497,11 @@ happen (base64-wrapped payloads occur nowhere in the fleet). Only flagged values
 scan per flagged, redacted value, not per redacted value (which a session cookie rotating per request would make
 quadratic). Values that failed eligibility, and values that were only ever flagged (never auto-redacted), stay in the
 queue untouched.
+
+### Pass 1c: Known MACs Found Elsewhere
+
+After Pass 1b, `sanitize_har` sweeps the entries once more for the MACs it replaced, where a MAC appears inside a longer
+hex token or as the tail of a default network name; see [MAC Addresses](#mac-addresses). Counted as `mac_derived`.
 
 ### URL Credential Location Annotation
 

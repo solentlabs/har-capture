@@ -40,11 +40,30 @@ har-capture get <TARGET> --patterns <DOMAIN>
 #### Capture Options (get)
 
 - `--browser {chromium,firefox,webkit}` - Browser engine (default: chromium)
+
 - `--wait-for-data / --no-wait-for-data` - Wait for async data to load on each page (default: enabled)
+
 - `--minimal` - Minimal pre-flight for single-session devices (skips session check, probes, auth check, uses
   domcontentloaded, disables wait-for-data)
+
 - `--username TEXT` - Username for HTTP Basic Auth
+
 - `--password TEXT` - Password for HTTP Basic Auth
+
+- `--login-strategy {form-cookie,query-token-cookie}` - Sign in before the browser opens, for a device that logs in
+  through a page instead of HTTP Basic Auth. The credentials are read from the `HAR_CAPTURE_USERNAME` and
+  `HAR_CAPTURE_PASSWORD` environment variables and nowhere else. Cannot be combined with `--username`/`--password`.
+
+- `--login-option KEY=VALUE` - An option for the login strategy. Repeatable.
+
+  | Strategy             | Does                                                                                 | Options                                                                                              |
+  | -------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+  | `form-cookie`        | POSTs a login form; the cookies the device sets become the session                   | `path` (required), `user_field` (`username`), `pass_field` (`password`), `field.NAME=VALUE` (extras) |
+  | `query-token-cookie` | GETs a URL whose query holds `base64(user:password)`; the response body is the token | `path`, `param`, `cookie` (all required), `cookie_path` (`/`)                                        |
+
+  The login runs outside the browser, so the credentials and the login request are not in the recorded HAR; the session
+  cookie appears on the requests after it. See
+  [Capture Spec — Login Strategies](specs/CAPTURE_SPEC.md#login-strategies).
 
 #### Sanitization Options (get)
 
@@ -135,6 +154,9 @@ har-capture sanitize INPUT.har --patterns network-device
 - `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
   a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 - `--report PATH` - Save sanitization report to JSON file
+- `--keep-static-addresses` - Leave MAC and IP addresses alone in JavaScript, CSS and plain-text response bodies (the
+  example addresses in help text). Off by default; use it only for static assets, and pass it to `validate` too. See
+  [Sanitization Spec — Static assets](specs/SANITIZATION_SPEC.md#static-assets-and-example-addresses).
 
 Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report
 file instead, the sanitized file records `review: no_tty`, and a warning names the flagged count. Every run records how
@@ -205,6 +227,8 @@ har-capture validate INPUT.har --patterns network-device
 - `--dir PATH` - Validate all `.har` files in directory
 - `--recursive` - Recursively scan subdirectories
 - `--strict` - Fail on warnings (not just errors)
+- `--keep-static-addresses` - Do not report MAC and IP addresses in JavaScript, CSS and plain-text response bodies. Pass
+  it for a file sanitized with the same option.
 - `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
   a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 

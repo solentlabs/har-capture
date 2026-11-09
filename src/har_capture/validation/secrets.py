@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,12 @@ from har_capture.patterns.redaction import (
     is_protocol_keyword,
     iter_json_strings,
     json_members,
+    keeps_static_addresses,
     mime_kind,
     parse_json_container,
     parse_xml,
     query_param_segment,
+    route_body,
     split_url_password,
     unredacted_identity,
     url_query,
@@ -65,6 +68,7 @@ from har_capture.patterns.redaction import (
 )
 from har_capture.sanitization.har import check_har_types
 from har_capture.sanitization.html import (
+    MAC_GROUP,
     SERIAL_LABEL_HINT_RE,
     SERIAL_LABEL_RE,
     SIBLING_PASSWORD_RE,
@@ -73,6 +77,7 @@ from har_capture.sanitization.html import (
     is_structural_value_sensitive,
     is_valid_ip_address,
     iter_ssid_option_values,
+    pattern_file_patterns,
 )
 from har_capture.validation.completeness import load_har
 from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
@@ -151,6 +156,22 @@ def _compile_serial_detectors(custom_patterns: str | dict[str, Any] | None = Non
         Filtered CompiledDetector list (empty without domain patterns)
     """
     return high_confidence_serial_detectors(compile_detectors(load_sensitive_patterns(custom_patterns)))
+
+
+def _compile_mac_group_patterns(custom_patterns: str | dict[str, Any] | None = None) -> list[re.Pattern[str]]:
+    """The pattern file's patterns that spell a MAC in a layout of their own.
+
+    A pattern whose regex names a ``mac`` group (``$001122334455``, from the
+    network-device domain) is a MAC the sanitizer replaces in its own layout;
+    validate reports an unredacted one like any other MAC.
+
+    Args:
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        The compiled regexes (empty without domain patterns)
+    """
+    return [regex for _, regex, _ in pattern_file_patterns(custom_patterns) if MAC_GROUP in regex.groupindex]
 
 
 def _compile_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) -> list[re.Pattern[str]]:
@@ -947,6 +968,9 @@ def check_content(
     has_sanitized_url_credential: bool = False,
     serial_detectors: list[Any] | None = None,
     field_tiers: _FieldTiers | None = None,
+    mime_type: str = "",
+    keep_static_addresses: bool = False,
+    mac_group_patterns: list[re.Pattern[str]] | None = None,
 ) -> None:
     """Check response content for PII patterns.
 
@@ -966,6 +990,11 @@ def check_content(
             candidate tokens. ``None`` compiles them from ``custom_patterns``;
             ``validate_har`` pre-compiles once per file.
         field_tiers: Pre-compiled field tiers (compiled on demand if omitted)
+        mime_type: The body's declared Content-Type (read only with ``keep_static_addresses``)
+        keep_static_addresses: Do not report MAC or IP addresses in a static
+            script, stylesheet or plain-text body — the sanitizer's own
+            ``keep_static_addresses`` decision (``keeps_static_addresses``)
+        mac_group_patterns: Pre-compiled ``_compile_mac_group_patterns`` (compiled on demand if omitted)
     """
     # `content` is a whole response body, so the whole-string form is required.
     # `is_redacted` matches its allowlist families with `re.search` — right for
@@ -1023,8 +1052,23 @@ def check_content(
     # markup, and no match runs from one string into the next.
     texts = iter_json_strings(data) if data is not None else (content,)
     seen_serials: set[str] = set()
+    if mac_group_patterns is None:
+        mac_group_patterns = _compile_mac_group_patterns(custom_patterns)
+    skip_addresses = keep_static_addresses and keeps_static_addresses(
+        mime_type, route_body(mime_type, content)[0]
+    )
     for text in texts:
-        _scan_text(text, location, findings, custom_patterns, serial_detectors, field_macs, seen_serials)
+        _scan_text(
+            text,
+            location,
+            findings,
+            custom_patterns,
+            serial_detectors,
+            field_macs,
+            seen_serials,
+            skip_addresses=skip_addresses,
+            mac_group_patterns=mac_group_patterns,
+        )
 
 
 def _scan_text(
@@ -1035,6 +1079,9 @@ def _scan_text(
     serial_detectors: list[Any],
     field_macs: set[str],
     seen_serials: set[str],
+    *,
+    skip_addresses: bool = False,
+    mac_group_patterns: Sequence[re.Pattern[str]] = (),
 ) -> None:
     """Run the content text checks on one text: a whole body, or one decoded JSON string.
 
@@ -1046,6 +1093,9 @@ def _scan_text(
         serial_detectors: Compiled high-confidence vendor serial detectors
         field_macs: MACs already reported as identity fields of this body
         seen_serials: Vendor serials already reported for this body
+        skip_addresses: Skip the MAC, IPv4 and IPv6 checks (a static asset
+            under ``keep_static_addresses``)
+        mac_group_patterns: The pattern file's MAC-in-its-own-layout patterns
     """
     # Each check first tests a character or word its pattern cannot match
     # without — most decoded JSON strings need none of the regexes.
@@ -1053,7 +1103,7 @@ def _scan_text(
     has_tag = "<" in text
 
     # Check for MAC addresses
-    for match in MAC_PATTERN.finditer(text) if has_colon or "-" in text else ():
+    for match in MAC_PATTERN.finditer(text) if not skip_addresses and (has_colon or "-" in text) else ():
         mac = match.group(0)
         if mac in field_macs:
             continue
@@ -1074,6 +1124,21 @@ def _scan_text(
                 reason="Potential real MAC address",
             )
         )
+
+    # MACs the pattern file spells in a layout of its own (`$001122334455`).
+    for mac_regex in mac_group_patterns if not skip_addresses and "$" in text else ():
+        for match in mac_regex.finditer(text):
+            if match.group(MAC_GROUP) is None or is_redacted(match.group(0), custom_patterns):
+                continue
+            findings.append(
+                Finding(
+                    severity="warning",
+                    location=location,
+                    field="content",
+                    value=match.group(0),
+                    reason="Potential real MAC address",
+                )
+            )
 
     # Check for serial numbers
     for pattern in SERIAL_PATTERNS if SERIAL_LABEL_HINT_RE.search(text) else ():
@@ -1168,8 +1233,8 @@ def _scan_text(
     # the dotted-quad pattern but are not host addresses — the sanitizer
     # preserves all of them, so flagging them here puts cosmetic noise on
     # every healthy capture.
-    ipv6_spans = ipv6_host_spans(text)
-    for match in IP_PATTERN.finditer(text) if "." in text else ():
+    ipv6_spans = [] if skip_addresses else ipv6_host_spans(text)
+    for match in IP_PATTERN.finditer(text) if not skip_addresses and "." in text else ():
         ip = match.group(1)
         if any(start <= match.start() < end for start, end in ipv6_spans):
             continue  # the IPv4 tail of an IPv4-mapped IPv6 address, reported as IPv6
@@ -1211,12 +1276,17 @@ def _scan_text(
 def validate_har(
     har_path: Path | str,
     custom_patterns: str | dict[str, Any] | None = None,
+    *,
+    keep_static_addresses: bool = False,
 ) -> list[Finding]:
     """Validate a HAR file for secrets/PII.
 
     Args:
         har_path: Path to HAR file (.har or .har.gz)
         custom_patterns: Optional path to custom patterns JSON file
+        keep_static_addresses: Match a sanitize run made with the same option:
+            MAC and IP addresses in script, CSS and plain-text bodies are not
+            reported
 
     Returns:
         List of findings (empty if clean)
@@ -1232,6 +1302,7 @@ def validate_har(
     # Compiled once per file and applied per entry.
     serial_detectors = _compile_serial_detectors(custom_patterns)
     field_tiers = _compile_field_tiers(custom_patterns)
+    mac_group_patterns = _compile_mac_group_patterns(custom_patterns)
 
     har_data = load_har(har_path)
     check_har_types(har_data)
@@ -1336,6 +1407,9 @@ def validate_har(
             has_sanitized_url_credential=(i in url_cred_entry_indices),
             serial_detectors=serial_detectors,
             field_tiers=field_tiers,
+            mime_type=str(content_data.get("mimeType") or ""),
+            keep_static_addresses=keep_static_addresses,
+            mac_group_patterns=mac_group_patterns,
         )
 
     return findings
