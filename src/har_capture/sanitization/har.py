@@ -2579,11 +2579,15 @@ def _detect_client_side_cookies(entries: list[dict[str, Any]]) -> list[str]:
 # did. They decide whether a textual match elsewhere in the file is necessarily
 # the same secret rather than a coincidence.
 _PROPAGATION_MIN_LENGTH = 16
+# A value the run recognized as a device serial (labeled, or a vendor layout) is
+# already known to be a secret and carries a digit; real serials run 8-15
+# characters, so the 16-character floor left them out of the sweep.
+_SERIAL_PROPAGATION_MIN_LENGTH = 8
 _PROPAGATION_CHARSET_RE = re.compile(r"^[A-Za-z0-9._~+/=:-]+$")
 _PROPAGATION_DIGIT_RE = re.compile(r"\d")
 
 
-def _is_propagation_eligible(value: str) -> bool:
+def _is_propagation_eligible(value: str, *, serial: bool = False) -> bool:
     """Check whether a redacted value is safe to replace globally across the HAR.
 
     Failing this is not a leak — the value keeps the pre-existing behavior and
@@ -2591,13 +2595,14 @@ def _is_propagation_eligible(value: str) -> bool:
 
     Args:
         value: The pre-redaction value
+        serial: The run recognized the value as a device serial (shorter floor)
 
     Returns:
         True if every textual match of this value must be the same secret
     """
     from har_capture.sanitization.heuristics import is_safe_value
 
-    if len(value) < _PROPAGATION_MIN_LENGTH:
+    if len(value) < (_SERIAL_PROPAGATION_MIN_LENGTH if serial else _PROPAGATION_MIN_LENGTH):
         return False
     if not _PROPAGATION_CHARSET_RE.match(value):
         return False
@@ -2608,7 +2613,9 @@ def _is_propagation_eligible(value: str) -> bool:
     return not is_safe_value(value)
 
 
-def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
+def _propagation_search_keys(
+    registry: dict[str, str], serials: frozenset[str] | set[str] = frozenset()
+) -> list[tuple[str, str]]:
     """Expand eligible redacted values into the needles to search for.
 
     Each value contributes its literal form plus its percent-encoded form, so a
@@ -2622,13 +2629,14 @@ def _propagation_search_keys(registry: dict[str, str]) -> list[tuple[str, str]]:
 
     Args:
         registry: Original value -> placeholder, from RedactionCollector
+        serials: Registry values the run recognized as device serials
 
     Returns:
         (needle, placeholder) pairs, longest needle first
     """
     needles: dict[str, str] = {}
     for original, placeholder in registry.items():
-        if not _is_propagation_eligible(original):
+        if not _is_propagation_eligible(original, serial=original in serials):
             continue
         needles.setdefault(original, placeholder)
         encoded = urllib.parse.quote(original, safe="")
@@ -2710,7 +2718,7 @@ def _propagate_redacted_values(
     Returns:
         Number of occurrences replaced
     """
-    search_keys = _propagation_search_keys(registry)
+    search_keys = _propagation_search_keys(registry, collector.serial_values if collector else frozenset())
     if not search_keys:
         return 0
 
@@ -3023,7 +3031,9 @@ def sanitize_har(
             {
                 v
                 for v in (flagged.original_value for flagged in collector.flagged)
-                if v in collector.redacted_values and _is_propagation_eligible(v) and v not in readable
+                if v in collector.redacted_values
+                and _is_propagation_eligible(v, serial=v in collector.serial_values)
+                and v not in readable
             }
         )
 

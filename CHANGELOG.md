@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-09
+
+### Fixed
+
+- **`sanitize` redacts a serial printed after `sno=`.** A device page that builds a registration link such as
+  `...?sno=<serial>&madd=...` in a script kept the serial raw while masking the same serial in its labeled cell. `SNo`
+  joins `SN` and `S/N` as a serial label, so `sanitize`, `validate` and the PII check all read it.
+- **`sanitize` replaces a serial everywhere once it has masked it anywhere.** A serial recognized by label or vendor
+  layout is now swept from the rest of the file (query strings, headers, other bodies) from 8 characters up; the sweep
+  used to skip any value under 16 characters, which left 15-character serials raw outside their labeled cell.
+
 ## [0.17.0] - 2026-11-08
 
 ### Added
@@ -1585,6 +1596,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.16.1]: https://github.com/solentlabs/har-capture/compare/v0.16.0...v0.16.1
 [0.16.2]: https://github.com/solentlabs/har-capture/compare/v0.16.1...v0.16.2
 [0.17.0]: https://github.com/solentlabs/har-capture/compare/v0.16.2...v0.17.0
+[0.17.1]: https://github.com/solentlabs/har-capture/compare/v0.17.0...v0.17.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1612,4 +1624,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.17.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.17.1...HEAD

@@ -59,6 +59,7 @@ class RedactionCollector:
     flagged: list[FlaggedValue] = field(default_factory=list)
     redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
     cookie_values: set[str] = field(default_factory=set, repr=False)
+    serial_values: set[str] = field(default_factory=set, repr=False)
     _flag_index: dict[str, FlaggedValue] = field(default_factory=dict, repr=False)
     _flag_created: dict[str, int] = field(default_factory=dict, repr=False)
     _flag_touched: dict[str, int] = field(default_factory=dict, repr=False)
@@ -89,7 +90,7 @@ class RedactionCollector:
         """A mark for ``flag_value``'s ``supersede_since``: flags raised after it carry a later call number."""
         return self._flag_calls
 
-    def record_redacted_value(self, original: str, placeholder: str) -> None:
+    def record_redacted_value(self, original: str, placeholder: str, *, serial: bool = False) -> None:
         """Remember which placeholder an auto-redacted value was given.
 
         Feeds the Pass 1b propagation sweep. The first surface to redact a
@@ -98,7 +99,11 @@ class RedactionCollector:
         Args:
             original: The pre-redaction value
             placeholder: The placeholder that replaced it
+            serial: The value was recognized as a device serial, so the sweep
+                accepts it at a shorter length than other values
         """
+        if original and serial:
+            self.serial_values.add(original)
         if original and original not in self.redacted_values:
             self.redacted_values[original] = placeholder
 
