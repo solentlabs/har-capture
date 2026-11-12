@@ -408,6 +408,92 @@ class TestSanitizeInteractiveReview:
         assert "NOT reviewed" in result.output
 
 
+class TestSanitizeApplyReview:
+    """``--apply-review``: a decided review report stands in for the prompt."""
+
+    @pytest.fixture
+    def har_with_flagged_fields(self, tmp_path: Path) -> Path:
+        return _write_fixture_har(tmp_path, "har_with_flagged_fields", "flagged.har")
+
+    @staticmethod
+    def _first_run(har: Path) -> tuple[Path, Path, dict]:
+        """Sanitize without a terminal; return the output, the report path and the report."""
+        assert runner.invoke(app, ["sanitize", str(har), "--patterns", "base"]).exit_code == 0
+        report = Path(str(har) + ".review.json")
+        return Path(str(har).replace(".har", ".sanitized.har")), report, json.loads(report.read_text())
+
+    @pytest.mark.parametrize(
+        ("status", "kept"),
+        [("user", False), ("skipped", True)],
+        ids=["every-value-redacted", "every-value-kept"],
+    )
+    def test_decided_report_completes_the_review(
+        self, har_with_flagged_fields: Path, status: str, kept: bool
+    ) -> None:
+        output, report_path, report = self._first_run(har_with_flagged_fields)
+        for item in report["flagged"]:
+            item["status"] = status
+        report_path.write_text(json.dumps(report))
+
+        result = runner.invoke(
+            app,
+            [
+                "sanitize",
+                str(har_with_flagged_fields),
+                "--patterns",
+                "base",
+                "--apply-review",
+                str(report_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        text = output.read_text()
+        meta = json.loads(text)["log"]["_har_capture"]["sanitization"]
+        assert meta["review"] == "completed"
+        assert meta["user_redacted" if status == "user" else "user_skipped"] == len(report["flagged"])
+        assert all((json.dumps(item["value"])[1:-1] in text) is kept for item in report["flagged"])
+        assert "No terminal detected" not in result.output
+
+    def test_undecided_value_fails_and_writes_the_rest_back(self, har_with_flagged_fields: Path) -> None:
+        output, report_path, report = self._first_run(har_with_flagged_fields)
+        decided = har_with_flagged_fields.parent / "decided.json"
+        decided.write_text(json.dumps(report))  # every item still "flagged"
+        report_path.unlink()
+
+        result = runner.invoke(
+            app,
+            ["sanitize", str(har_with_flagged_fields), "--patterns", "base", "--apply-review", str(decided)],
+        )
+
+        assert result.exit_code == 1
+        assert "have no decision" in result.output
+        assert json.loads(output.read_text())["log"]["_har_capture"]["sanitization"]["review"] == "cancelled"
+        assert report_path.exists()
+
+    def test_unusable_report_stops_before_any_output(self, har_with_flagged_fields: Path) -> None:
+        bad = har_with_flagged_fields.parent / "bad.json"
+        bad.write_text('{"flagged": [{"value": "x", "status": "redact"}]}')
+
+        result = runner.invoke(
+            app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base", "--apply-review", str(bad)]
+        )
+
+        assert result.exit_code == 1
+        assert "Cannot read review report" in result.output
+        assert not Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).exists()
+
+    def test_nothing_flagged_needs_no_decisions(self, valid_har: Path, tmp_path: Path) -> None:
+        empty = tmp_path / "empty.json"
+        empty.write_text('{"flagged": []}')
+
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--patterns", "base", "--apply-review", str(empty)]
+        )
+
+        assert result.exit_code == 0, result.output
+
+
 class TestSanitizeReportOption:
     """Branch: ``--report`` writes JSON report (lines 213-217)."""
 

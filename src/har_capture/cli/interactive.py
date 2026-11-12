@@ -115,7 +115,8 @@ def warn_unreviewed(count: int, path: str | Path) -> None:
     typer.echo(
         f"WARNING: {count} flagged value(s) were NOT reviewed: there is no terminal to prompt in. "
         f"They remain in {path} as captured, and the file records review: no_tty. "
-        "Review the file before sharing it, or run the command again from a terminal.",
+        "Run the command again from a terminal, or decide each value in the report "
+        "(status 'user' to redact, 'skipped' to keep) and run `har-capture sanitize` with --apply-review.",
         err=True,
     )
 

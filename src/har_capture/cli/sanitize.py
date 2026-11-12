@@ -60,6 +60,16 @@ def sanitize(
         Path | None,
         typer.Option("--report", "-r", help="Write JSON report to file"),
     ] = None,
+    apply_review: Annotated[
+        Path | None,
+        typer.Option(
+            "--apply-review",
+            help=(
+                "Decide the flagged values from a review report instead of prompting: in the report a run "
+                "without a terminal wrote, set each item's status to 'user' (redact) or 'skipped' (keep)."
+            ),
+        ),
+    ] = None,
     keep_static_addresses: Annotated[
         bool,
         typer.Option(
@@ -89,6 +99,7 @@ def sanitize(
         max_size: Maximum file size in MB (default: 100, 0=unlimited)
         compression_level: Gzip compression level 1-9 (default: 9)
         report: Write JSON report to file
+        apply_review: Review report whose decisions replace the interactive review
         keep_static_addresses: Leave MAC and IP addresses in static script, CSS and text bodies
 
     Example:
@@ -100,8 +111,15 @@ def sanitize(
         har-capture sanitize device.har --patterns network-device --max-size 0  # No size limit
         har-capture sanitize device.har --patterns network-device --report sanitize-report.json
         har-capture sanitize device.har --patterns network-device --keep-static-addresses
+        har-capture sanitize device.har --patterns network-device --apply-review device.har.review.json
     """
-    from har_capture.sanitization import HarSizeError, HarValidationError, sanitize_har_file
+    from har_capture.sanitization import (
+        HarSizeError,
+        HarValidationError,
+        apply_review_decisions,
+        load_review_decisions,
+        sanitize_har_file,
+    )
 
     # Validate --patterns up front so a user running `har-capture sanitize FILE`
     # without choosing a domain gets the listing error before any disk I/O.
@@ -121,13 +139,23 @@ def sanitize(
         typer.echo(f"Error: max-size must be >= 0, got {max_size}", err=True)
         raise typer.Exit(1)
 
+    # A decided review report stands in for the prompt. Read it before any
+    # work, so a report that cannot be used stops the run with nothing written.
+    decisions = None
+    if apply_review is not None:
+        try:
+            decisions = load_review_decisions(apply_review)
+        except (OSError, ValueError) as e:
+            typer.echo(f"Error: Cannot read review report {apply_review}: {e}", err=True)
+            raise typer.Exit(1) from None
+
     # Interactive review is always enabled — fall back to report if no TTY.
     # One answer for all three uses: the report fallback, the
     # already-sanitized confirmation, and the review itself.
     run_heuristics = True
-    interactive_terminal = interactive.stdin_is_tty()
+    interactive_terminal = interactive.stdin_is_tty() and decisions is None
 
-    if not interactive_terminal:
+    if decisions is None and not interactive_terminal:
         typer.echo(
             "Note: No terminal detected. Writing flagged values to report instead.",
             err=True,
@@ -196,7 +224,21 @@ def sanitize(
         # Interactive review mode (requires TTY). Every flagged run records
         # how its review ended; save_review regenerates an existing .gz.
         review_refreshed_sibling = bool(sanitization_report.flagged)
-        if interactive_terminal and sanitization_report.flagged:
+        undecided = 0
+        if decisions is not None and sanitization_report.flagged:
+            # The report's decisions are the review. Any value it leaves
+            # undecided makes the review unfinished: what was decided is
+            # applied, the rest is written back to a report, and the run fails.
+            interactive.display_sanitization_summary(
+                sanitization_report, str(input_file), result_path, salt_mode
+            )
+            undecided = apply_review_decisions(sanitization_report, decisions)
+            outcome = ReviewOutcome.CANCELLED if undecided else ReviewOutcome.COMPLETED
+            interactive.save_review(sanitization_report, result_path, outcome)
+            if undecided and report is None:
+                report = Path(str(input_file) + ".review.json")
+
+        elif interactive_terminal and sanitization_report.flagged:
             outcome = interactive.run_interactive_review(
                 sanitization_report,
                 input_path=str(input_file),
@@ -224,6 +266,15 @@ def sanitize(
             with open(report, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(sanitization_report.to_dict(), f, indent=2)
             typer.echo(f"  Report: {report}")
+
+        if undecided:
+            typer.echo(
+                f"Error: {undecided} flagged value(s) have no decision in {apply_review}. They remain in "
+                f"{result_path} as captured, and the file records review: cancelled. Decide them in "
+                f"{report} and run the command again with --apply-review {report}.",
+                err=True,
+            )
+            raise typer.Exit(1)
 
         # The sanitize pass rewrites result_path even with zero redactions
         # (fresh salt each run), so a compressed sibling from an earlier

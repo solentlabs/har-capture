@@ -124,6 +124,10 @@ how its review ended (`log._har_capture.sanitization.review`: `completed`, `skip
 indistinguishable from one nobody looked at; the recorded outcome lets a recipient tell a reviewed capture from an
 ignored one.
 
+`validate` reads the outcome: a file that records `no_tty` or `cancelled` with flagged values nobody decided is an
+error, not clean. Where there is no terminal, the decisions can be made in the review report and handed back
+(`sanitize --apply-review`): every value still gets a decision, and no flag redacts or keeps them all at once.
+
 Without a terminal, neither command prompts; each records `no_tty` and warns loudly with the flagged count. `sanitize`
 also writes the flagged values to a JSON report beside its input (`<input>.review.json`, or `--report`): the raw input
 is already on disk, so the report adds no new copy of it. `get` writes no report: the raw capture never persists on disk

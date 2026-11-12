@@ -465,6 +465,10 @@ ______________________________________________________________________
 - Use `--no-salt` for static placeholders (simpler, no correlation)
 - Pipe to validation:
   `har-capture sanitize f.har --patterns network-device && har-capture validate f.sanitized.har --patterns network-device`
+  — `validate` exits 1 when the run flagged values, because nobody decided them: the pipeline's file is not ready to
+  share until they are
+- Decide the flagged values without a terminal: set each item's `status` in the `.review.json` report to `user` (redact)
+  or `skipped` (keep), then `har-capture sanitize f.har --patterns network-device --apply-review f.har.review.json`
 
 **CLI Example**:
 

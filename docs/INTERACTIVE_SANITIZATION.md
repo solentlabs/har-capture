@@ -173,11 +173,33 @@ har-capture sanitize device.har --patterns network-device 2>&1
 
 `har-capture get` without a terminal does the same but writes no report file: the raw capture never persists on disk.
 
+To finish the review without a terminal, decide each item in the report and hand it back. Set `status` to `user` to
+redact the value or `skipped` to keep it:
+
+```json
+{"value": "MyNetwork-5G", "category": "wifi_ssid", "status": "user"},
+{"value": "Link Down", "category": "credential", "status": "skipped"}
+```
+
+```bash
+har-capture sanitize device.har --patterns network-device --apply-review device.har.review.json
+#   Applied 1 user redaction(s)
+#   Recorded review: completed
+```
+
+Decisions are matched on the value, so the report from one run decides the same values in the next. A value left
+`flagged`, or one the report does not list, fails the run with exit 1: the decisions made are applied, the file records
+`review: cancelled`, and the report is written again for the rest. For a file `get` produced, run `sanitize` on the
+sanitized file to get its report, then again with `--apply-review`.
+
 ### Recorded Outcome
 
 Every sanitized file says how its review ended, in `log._har_capture.sanitization.review`: `completed`, `skipped`,
 `cancelled`, `no_tty` or `none_flagged` (absent when no review was recorded). Check it before relying on a file someone
-else sanitized — `skipped`, `cancelled` and `no_tty` mean its flagged values were never redacted.
+else sanitized — `skipped`, `cancelled` and `no_tty` mean its flagged values were never redacted. `har-capture validate`
+reports `cancelled` and `no_tty` as an error while the file has flagged values nobody decided. Run
+`har-capture sanitize` on the file from a terminal to review them, or decide them in its report and pass
+`--apply-review`.
 
 ## Edge Cases Handled
 

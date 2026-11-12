@@ -1685,17 +1685,27 @@ scrubbed, in exactly the artifact contributors upload. A regeneration failure ra
 stale file, and the CLI exits non-zero with that name; `har-capture validate` backstops the pair with a
 [freshness check](VALIDATION_SPEC.md#compressed-artifact-freshness-check).
 
+**Deciding from a report:** where there is no terminal, a review report someone decided stands in for the prompt
+(`sanitize --apply-review REPORT`). `load_review_decisions(path)` reads the report `sanitize` writes
+(`SanitizationReport.to_dict()`) and returns each decided value with its status — `user` (redact) or `skipped` (keep);
+an item left `flagged` is undecided, and any other status, or a file that is not a report, is a `ValueError` raised
+before the run writes anything. `apply_review_decisions(report, decisions)` sets each flagged item's status by matching
+its value, so a report from one run decides the same values in another, and returns the number left undecided; a
+decision for a value the run did not flag is ignored. With none undecided the review is recorded as `completed`. With
+any undecided, the decisions made are applied, the review is recorded as `cancelled`, the report is written back
+(`--report`, or `<input>.review.json`) and the command exits 1.
+
 Every ending is recorded, a review that redacted nothing included — a skipped or cancelled review, or one nobody could
 be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`sanitization/report.py`):
 
-| `review`       | Written by                          | Meaning                                                                            |
-| -------------- | ----------------------------------- | ---------------------------------------------------------------------------------- |
-| `none_flagged` | Pass 1 (`sanitize_har_file`)        | Nothing was offered for review                                                     |
-| `completed`    | The CLI, after the review           | The user decided every item (redacting any, all or none of them)                   |
-| `skipped`      | The CLI, after the review           | The user chose to keep every flagged value; each item is `USER_SKIPPED`            |
-| `cancelled`    | The CLI, after the review           | The user left the review without deciding; items stay `FLAGGED`                    |
-| `no_tty`       | The CLI, with no terminal to prompt | Nobody was asked; the flagged values remain as captured                            |
-| (absent)       | —                                   | No review recorded: a library caller that ran none, or a version that records none |
+| `review`       | Written by                          | Meaning                                                                                     |
+| -------------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
+| `none_flagged` | Pass 1 (`sanitize_har_file`)        | Nothing was offered for review                                                              |
+| `completed`    | The CLI, after the review           | Every item was decided, at the prompt or in a report (redacting any, all or none)           |
+| `skipped`      | The CLI, after the review           | The user chose to keep every flagged value; each item is `USER_SKIPPED`                     |
+| `cancelled`    | The CLI, after the review           | The review ended with items undecided (left, or missing from a report); they stay `FLAGGED` |
+| `no_tty`       | The CLI, with no terminal to prompt | Nobody was asked; the flagged values remain as captured                                     |
+| (absent)       | —                                   | No review recorded: a library caller that ran none, or a version that records none          |
 
 Without a terminal `get` and `sanitize` never prompt (InquirerPy would fail and read as a cancel): each records `no_tty`
 and prints a warning with the flagged count. `sanitize` also writes the report file; `get` writes none — see ADR-6.

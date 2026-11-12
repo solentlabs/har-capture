@@ -31,6 +31,8 @@ from har_capture.sanitization import (
     ReviewOutcome,
     SanitizationReport,
     StaleCompressedError,
+    apply_review_decisions,
+    load_review_decisions,
     record_review,
     sanitize_har_file,
 )
@@ -189,3 +191,39 @@ class TestPass1Review:
 
         meta = json.loads(Path(out).read_text())["log"]["_har_capture"]["sanitization"]
         assert meta.get("review") == case["review"]
+
+
+DECISION_CASES = FIXTURES["review_decision_cases"]["cases"]
+
+
+class TestReviewDecisions:
+    """A decided review report sets each flagged value's status; what it leaves is counted."""
+
+    @pytest.mark.parametrize("case", DECISION_CASES, ids=[c["id"] for c in DECISION_CASES])
+    def test_decisions(self, tmp_path: Path, case: dict[str, Any]) -> None:
+        decided = tmp_path / "decided.review.json"
+        decided.write_text(json.dumps(case["report"]))
+        if "error" in case:
+            with pytest.raises(ValueError, match=case["error"]):
+                load_review_decisions(decided)
+            return
+        report = SanitizationReport(input_file="in.har", output_file="out.har", salt="review")
+        report.flagged.extend(
+            FlaggedValue(value, "field", ConfidenceLevel.MEDIUM, "context", "reason")
+            for value in case["flagged"]
+        )
+
+        undecided = apply_review_decisions(report, load_review_decisions(decided))
+
+        assert undecided == case["undecided"]
+        assert [f.status.value for f in report.flagged] == case["statuses"]
+
+    def test_report_that_is_not_json(self, tmp_path: Path) -> None:
+        decided = tmp_path / "decided.review.json"
+        decided.write_text("{not json")
+        with pytest.raises(ValueError):
+            load_review_decisions(decided)
+
+    def test_missing_report(self, tmp_path: Path) -> None:
+        with pytest.raises(OSError):
+            load_review_decisions(tmp_path / "absent.review.json")

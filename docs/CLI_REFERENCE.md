@@ -154,13 +154,17 @@ har-capture sanitize INPUT.har --patterns network-device
 - `--patterns NAME|PATH` - **Required.** Pattern domain name (e.g. `network-device`), `base` for universal PII only, or
   a custom JSON path. Repeatable. Run `har-capture patterns` to list available domains.
 - `--report PATH` - Save sanitization report to JSON file
+- `--apply-review PATH` - Decide the flagged values from a review report instead of prompting. In the report a run
+  without a terminal wrote, set each item's `status` to `user` (redact it) or `skipped` (keep it), then pass the report
+  here. A value left `flagged`, or missing from the report, fails the run (exit 1) and is written back to a report.
 - `--keep-static-addresses` - Leave MAC and IP addresses alone in JavaScript, CSS and plain-text response bodies (the
   example addresses in help text). Off by default; use it only for static assets, and pass it to `validate` too. See
   [Sanitization Spec — Static assets](specs/SANITIZATION_SPEC.md#static-assets-and-example-addresses).
 
 Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report
-file instead, the sanitized file records `review: no_tty`, and a warning names the flagged count. Every run records how
-its review ended in `log._har_capture.sanitization.review`.
+file instead, the sanitized file records `review: no_tty`, and a warning names the flagged count; `validate` then fails
+that file until its flagged values are decided, from a terminal or with `--apply-review`. Every run records how its
+review ended in `log._har_capture.sanitization.review`.
 
 #### Size Limits
 
@@ -254,7 +258,8 @@ har-capture validate capture.har --patterns custom.json
 ### Exit Codes (validate)
 
 - `0` - No PII found (or warnings only in non-strict mode)
-- `1` - PII found or validation error
+- `1` - PII found, flagged values nobody reviewed (the file records `review: no_tty` or `cancelled`), or validation
+  error
 - `2` - File not found or invalid arguments
 
 ______________________________________________________________________

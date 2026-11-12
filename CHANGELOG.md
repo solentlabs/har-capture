@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`sanitize --apply-review REPORT`.** Finishes the review without a terminal. In the `.review.json` report a
+  no-terminal run writes, set each flagged item's `status` to `user` (redact it) or `skipped` (keep it) and pass the
+  report back; the file then records the review as completed. A value left undecided fails the run and is written back
+  to the report.
+
 ### Fixed
 
 - **`sanitize` redacts a Netgear gateway's Wi-Fi passphrase and network names without a review.** These pages carry
@@ -14,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   review and stayed in the file when nobody reviewed it. With `--patterns network-device`, a value the page's own script
   writes into a password or SSID field (`$('#wirelessPassword1').html(tagValues[6])`) is now replaced, and `validate`
   reports one left in a file: a passphrase as an error, a network name as a warning.
+- **`validate` fails a file whose flagged values nobody decided.** A sanitize run with no terminal, or a review left
+  part-way, records that in the file and leaves every flagged value in it; `validate` used to print `Clean`. It now
+  reports an error naming the count, until the values are decided: run `sanitize` on the file from a terminal, or use
+  `--apply-review`.
 - **`sanitize` no longer rewrites page script after an `ssid` variable.** `var ssid = rows[firstCellIdx + 0];` was read
   as an SSID label and came out as `var ssid=***WIFI*** + 0];`. In script code only a quoted or numeric value after
   `ssid` is replaced now, as for `password`.

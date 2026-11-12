@@ -81,7 +81,11 @@ from har_capture.sanitization.html import (
     pattern_file_patterns,
 )
 from har_capture.validation.completeness import load_har
-from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
+from har_capture.validation.provenance import (
+    MIN_SANITIZER_VERSION,
+    stale_sanitizer_version,
+    unreviewed_flagged,
+)
 
 # Cookie attribute-only values (not actual session data)
 MAC_PATTERN = MAC_RE
@@ -1345,6 +1349,23 @@ def validate_har(
                 reason=(
                     f"Sanitized by har-capture {stale_version}, before {MIN_SANITIZER_VERSION} corrected "
                     "sanitizer output; re-sanitize from the raw capture"
+                ),
+            )
+        )
+
+    unreviewed = unreviewed_flagged(log)
+    if unreviewed is not None:
+        outcome, flagged = unreviewed
+        findings.append(
+            Finding(
+                severity="error",
+                location="Sanitization metadata",
+                field="review",
+                value=outcome,
+                reason=(
+                    f"{flagged} flagged value(s) were never decided (review: {outcome}) and remain in the file "
+                    "as captured; run `har-capture sanitize` on it from a terminal and review them, "
+                    "or decide them in its review report and pass --apply-review"
                 ),
             )
         )
