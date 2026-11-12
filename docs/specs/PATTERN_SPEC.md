@@ -356,10 +356,10 @@ Names of JavaScript variables (`var NAME = '…'`) whose string value the HTML e
 knowledge ([ADR-5](../ARCHITECTURE_DECISIONS.md#adr-5-domain-agnostic-core-domain-knowledge-via-data)), so the core
 names none: without a pattern file that lists them, no script variable is read by name.
 
-| Field            | Type       | Description                                                                                                                     |
-| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup |
-| `pipe_delimited` | object\[\] | Names whose value is split on `\|` and judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics)             |
+| Field            | Type       | Description                                                                                                                                                                                                        |
+| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup                                                                                    |
+| `pipe_delimited` | object\[\] | Names whose value is split on `\|`: a position the page's script writes into a password or SSID sink is redacted (pass 13b), the rest judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics) |
 
 Each entry is `{"regex": "NAME", "flags": [...]}`. The regex matches the variable name and becomes
 `var\s+(?:NAME)\s*=\s*['"]VALUE['"]`, whose head, value and closing quote are named groups, so a group inside NAME

@@ -24,7 +24,7 @@ import bisect
 import ipaddress
 import json
 import re
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from typing import TYPE_CHECKING, cast
 
 from har_capture.patterns import (
@@ -482,6 +482,9 @@ def script_code_spans(html: str) -> list[tuple[int, int]]:
     return spans
 
 
+_BRACE_RE = re.compile(r"[{}]")
+
+
 class ScriptCode:
     """Answers whether an offset of one text is script code, scanning the text on first use."""
 
@@ -490,14 +493,33 @@ class ScriptCode:
         self._starts: list[int] | None = None
         self._ends: list[int] = []
 
-    def contains(self, offset: int) -> bool:
-        """Whether ``offset`` lies in script code."""
+    def _scan(self) -> list[int]:
         if self._starts is None:
             spans = script_code_spans(self._text)
             self._starts = [start for start, _ in spans]
             self._ends = [end for _, end in spans]
-        index = bisect.bisect_right(self._starts, offset) - 1
+        return self._starts
+
+    def contains(self, offset: int) -> bool:
+        """Whether ``offset`` lies in script code."""
+        starts = self._scan()
+        index = bisect.bisect_right(starts, offset) - 1
         return index >= 0 and offset < self._ends[index]
+
+    def block_end(self, open_brace: int) -> int:
+        """The offset after the ``}`` closing the block ``open_brace`` opens, or the text's end.
+
+        Only braces in script code count: one in a string, comment or regex
+        literal opens and closes nothing.
+        """
+        starts = self._scan()
+        depth = 0
+        for index in range(max(bisect.bisect_right(starts, open_brace) - 1, 0), len(starts)):
+            for brace in _BRACE_RE.finditer(self._text, max(starts[index], open_brace), self._ends[index]):
+                depth += 1 if brace.group() == "{" else -1
+                if depth == 0:
+                    return brace.end()
+        return len(self._text)
 
 
 def labeled_literal(match: re.Match[str], code: ScriptCode, min_length: int = 1) -> str | None:
@@ -732,6 +754,15 @@ def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
     return "|".join(f">>>{values[i]}<<<" if i == index else values[i] for i in range(start, end))
 
 
+def _is_redacted_pipe_value(value: str) -> bool:
+    """Whether a pipe-delimited value is a placeholder: ``***…``, ``PREFIX_<hash>`` or the static MAC."""
+    return (
+        value.startswith("***")
+        or _ALREADY_REDACTED_HASH_RE.match(value) is not None
+        or value == "XX:XX:XX:XX:XX:XX"
+    )
+
+
 def _sanitize_pipe_value(
     value: str,
     *,
@@ -777,7 +808,7 @@ def _sanitize_pipe_value(
         return value
 
     # Skip already-redacted values (e.g., MAC_xxxxx, MODEM_SN_xxxxx)
-    if value.startswith("***") or _ALREADY_REDACTED_HASH_RE.match(value) or value == "XX:XX:XX:XX:XX:XX":
+    if _is_redacted_pipe_value(value):
         return value
 
     # Check if value is in safe list
@@ -1302,14 +1333,18 @@ def _sanitize_html_impl(
                 "Value after a bare 'key' label: a key or a script variable",
             )
 
-    # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>)
+    # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>). In script code
+    # only a literal is replaced (labeled_literal): `var ssid = rows[i + 0];`
+    # is the page's code, not a network name.
     def replace_ssid_text(match: re.Match[str]) -> str:
-        if is_redacted(match.group(3), custom_patterns):
+        literal = labeled_literal(match, code)
+        if literal is None or is_redacted(literal, custom_patterns):
             return match.group(0)
         collector.record_auto_redaction("wifi")
         label = match.group(1)
         sep = match.group(2)
-        return f"{label}{sep}{hasher.hash_generic(match.group(3), 'WIFI')}"
+        rest = match.group(3)[len(literal) :]
+        return f"{label}{sep}{hasher.hash_generic(literal, 'WIFI')}{rest}"
 
     html = re.sub(
         r'\b(SSID|Network\s*Name)\s*([=:])\s*([^\s<>"\']+)',
@@ -1438,6 +1473,10 @@ def _sanitize_html_impl(
     for variable_re in compile_script_variables(sensitive, "password"):
         html = variable_re.sub(replace_script_password, html)
 
+    # 13b. Pipe-delimited values the page's own script writes into a password-
+    # or SSID-named sink (redact_pipe_sink_values).
+    html = redact_pipe_sink_values(html, hasher, collector, custom_patterns)
+
     # 14. Pipe-delimited script variables a pattern file names
     # (script_variables.pipe_delimited): Wi-Fi credentials and device names
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
@@ -1552,6 +1591,228 @@ def redact_structural_credentials(
         return SSID_OPTION_RE.sub(make_replacer("WIFI", "wifi"), match.group(0))
 
     return SSID_SELECT_RE.sub(replace_select, content)
+
+
+# A pipe-delimited blob carries no labels, but the page's own script says what
+# a position holds when it writes that position into a named control:
+#
+#     function InitTagValue() {
+#         var tagValueList = '0|Good|| |MyNet|MyNet-5G|hunter2hunter2|…';
+#         return tagValueList.split("|");
+#     }
+#     function InitUpdateView(tagValues) {
+#         $('#wiressSSID1').html(tagValues[4]);
+#         $('#wirelessPassword1').html(tagValues[6]);
+#         document.getElementsByName("passphrase")[0].value = piplineDecode(tagValues[6]);
+#     }
+#     InitUpdateView(InitTagValue());
+#
+# The blob is bound to the function that indexes it by the call that passes
+# one to the other, so two blobs on one page never share an index, and the
+# index is read from the page, so a firmware that moves a field moves the
+# redaction with it. Anything the binding cannot follow yields no sink, and
+# the value stays with pass 14's heuristics.
+_FUNCTION_RE = re.compile(r"\bfunction\s+([\w$]+)\s*\(\s*([\w$]*)[^)]*\)\s*\{")
+# The name a sink carries: a credential label (PASSWORD_FIELD_RE's) or an SSID
+# name (SSID_ATTRIBUTE_RE's), followed by nothing but a number, `Hidden` and a
+# radio band. `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`
+# and `group_key_update_interval` name something else; `bssid` is a MAC.
+_PIPE_SINK_BAND = r"\d*(?:[-_]?(?:an|2g|5g|6g|24g))*"
+_PIPE_SINK_NAME_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "password",
+        re.compile(
+            r"[\w$-]*?(?:password|passphrase|psk|wpa[0-9]*key|(?<=[A-Za-z0-9_])key)\d*(?:hidden)?"
+            + _PIPE_SINK_BAND,
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "ssid",
+        re.compile(
+            r"[\w$-]*?(?:(?<!b)ssid|wifi_ntwrk|wifi[-_]?network|priwifinet|wireless[-_]?name)"
+            + _PIPE_SINK_BAND,
+            re.IGNORECASE,
+        ),
+    ),
+)
+# A sink is a write of one constant index, alone or inside calls
+# (`piplineDecode(tagValues[6])`), into a control or variable the script names:
+# `getElementsByName("N")[0].value =`, `getElementById("N").innerHTML =`,
+# `$('#N').html(`, `cf.N.value =`, `var N =`.
+_PIPE_SINK_TARGET = (
+    r"(?:getElementsByName\(\s*[\"'](?P<by_name>[\w$-]+)[\"']\s*\)\s*\[\s*\d+\s*\]\s*\.\s*(?:value|innerHTML)\s*=\s*"
+    r"|getElementById\(\s*[\"'](?P<by_id>[\w$-]+)[\"']\s*\)\s*\.\s*(?:value|innerHTML)\s*=\s*"
+    r"|\$\(\s*[\"']#(?P<by_selector>[\w$-]+)[\"']\s*\)\s*\.\s*(?:html|val|text)\(\s*"
+    r"|(?<![\w$.\])])(?:var\s+)?(?:[\w$]+\.)*?(?P<by_variable>[A-Za-z_$][\w$]*)(?:\.value)?\s*=\s*)"
+    r"(?:[\w$.]+\(\s*)*"
+)
+_PIPE_SINK_READ = r"\[\s*(?P<index>\d+)\s*\](?=[\s)]*(?:;|$))"
+# A numeric passphrase is at least this long (WPA's minimum); a shorter number
+# in a credential-named sink is an index or an interval.
+_PIPE_SINK_MIN_NUMERIC_PASSWORD = 8
+PIPE_SINK_PREFIXES = {"password": "PASS", "ssid": "WIFI"}  # pragma: allowlist secret
+PIPE_SINK_CATEGORIES = {"password": "password", "ssid": "wifi"}  # pragma: allowlist secret
+
+
+def pipe_sink_kind(name: str) -> str | None:
+    """Return ``"password"`` or ``"ssid"`` when a sink's name says it holds one, else ``None``."""
+    for kind, name_re in _PIPE_SINK_NAME_RES:
+        if name_re.fullmatch(name):
+            return kind
+    return None
+
+
+class PipeSinks:
+    """The positions of a page's pipe-delimited blobs that its own script writes into a named sink."""
+
+    def __init__(self, text: str, code: ScriptCode | None = None) -> None:
+        self._text = text
+        self._code = code if code is not None else ScriptCode(text)
+        self._functions: list[tuple[int, int, str, str]] | None = None
+
+    def _scan(self) -> list[tuple[int, int, str, str]]:
+        """Every function declared in script code, as ``(body_start, body_end, name, first_parameter)``."""
+        if self._functions is None:
+            self._functions = [
+                (match.end(), self._code.block_end(match.end() - 1), match.group(1), match.group(2))
+                for match in _FUNCTION_RE.finditer(self._text)
+                if self._code.contains(match.start())
+            ]
+        return self._functions
+
+    def kinds_at(self, offset: int) -> dict[int, str]:
+        """Map each sink-named position of the blob assigned at ``offset`` to ``"password"`` or ``"ssid"``.
+
+        Empty when the assignment is not script code (a commented-out firmware
+        example), sits in no function, or its function is passed to no other.
+        """
+        if not self._code.contains(offset):
+            return {}
+        functions = self._scan()
+        enclosing = [name for start, end, name, _ in functions if start <= offset < end]
+        if not enclosing:
+            return {}
+        source = enclosing[-1]
+        kinds: dict[int, str] = {}
+        for call in re.finditer(
+            r"(?<![\w$.])([\w$]+)\(\s*" + re.escape(source) + r"\(\s*\)\s*\)", self._text
+        ):
+            if not self._code.contains(call.start()):
+                continue
+            for start, end, name, parameter in functions:
+                if name == call.group(1) and parameter:
+                    self._read_sinks(start, end, parameter, kinds)
+        return kinds
+
+    def _read_sinks(self, start: int, end: int, parameter: str, kinds: dict[int, str]) -> None:
+        sink_re = re.compile(_PIPE_SINK_TARGET + re.escape(parameter) + _PIPE_SINK_READ, re.MULTILINE)
+        for sink in sink_re.finditer(self._text, start, end):
+            if not (self._code.contains(sink.start()) and self._code.contains(sink.start("index"))):
+                continue
+            name = (
+                sink.group("by_name")
+                or sink.group("by_id")
+                or sink.group("by_selector")
+                or sink.group("by_variable")
+            )
+            kind = pipe_sink_kind(name)
+            # A position two sinks disagree on is a password: the stricter reading.
+            if kind is not None and kinds.get(int(sink.group("index"))) != "password":
+                kinds[int(sink.group("index"))] = kind
+
+
+def is_pipe_sink_value_sensitive(
+    value: str,
+    kind: str,
+    safe_values: Collection[str],
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> bool:
+    """Check whether the value at a sink-named position is a credential or a network name.
+
+    Keeps an empty value, one already redacted (pass 14's own test included, so
+    a ``***…***`` marker another tool wrote is not replaced), a
+    ``tagValueList.safe_values`` word or status word (``None``, ``Disabled``),
+    and a bare integer — an index, a flag or an interval — unless it is long
+    enough to be a numeric passphrase.
+    """
+    from har_capture.sanitization.heuristics import is_safe_value
+
+    if not value or value.lower() in safe_values:
+        return False
+    if is_redacted(value, custom_patterns) or _is_redacted_pipe_value(value):
+        return False
+    if value.isdigit():
+        return kind == "password" and len(value) >= _PIPE_SINK_MIN_NUMERIC_PASSWORD
+    return not is_safe_value(value)
+
+
+def iter_pipe_sink_values(
+    text: str,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> Iterator[tuple[str, str, int]]:
+    """Yield ``(kind, value, offset)`` for each sensitive value at a sink-named blob position.
+
+    The blobs are the ``script_variables.pipe_delimited`` variables a pattern
+    file names, so without one nothing is yielded. The sanitizer replaces what
+    this yields (pass 13b) and ``validate`` reports it, so the two agree.
+    """
+    if "|" not in text or "function" not in text:
+        return
+    sensitive = load_sensitive_patterns(custom_patterns)
+    variables = compile_script_variables(sensitive, "pipe_delimited")
+    if not variables:
+        return
+    safe_values = {v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", [])}
+    sinks = PipeSinks(text)
+    read: set[int] = set()
+    for variable_re in variables:
+        for blob in variable_re.finditer(text):
+            if blob.start("script_value") in read:
+                continue  # a blob two variable names both match is read once
+            read.add(blob.start("script_value"))
+            kinds = sinks.kinds_at(blob.start())
+            offset = blob.start("script_value")
+            for index, raw in enumerate(blob.group("script_value").split("|") if kinds else ()):
+                value = raw.strip()
+                kind = kinds.get(index)
+                if kind is not None and is_pipe_sink_value_sensitive(
+                    value, kind, safe_values, custom_patterns
+                ):
+                    yield kind, value, offset + raw.index(value)
+                offset += len(raw) + 1
+
+
+def redact_pipe_sink_values(
+    content: str,
+    hasher: Hasher,
+    collector: RedactionCollector,
+    custom_patterns: str | dict[str, Any] | None = None,
+) -> str:
+    """Redact the pipe-delimited values the page's own script names a password or an SSID (pass 13b).
+
+    Exposed separately from :func:`sanitize_html` for the reason
+    :func:`redact_structural_credentials` is: ``validate`` checks every
+    response body, and what it reports a sanitize run must be able to clear.
+
+    Args:
+        content: Text to scan (HTML, or a script body)
+        hasher: Hasher for placeholder generation
+        collector: Redaction collector for counts
+        custom_patterns: Optional path to custom patterns file
+
+    Returns:
+        The text with each sink-named value replaced by its placeholder
+    """
+    pieces: list[str] = []
+    written = 0
+    for kind, value, offset in sorted(
+        iter_pipe_sink_values(content, custom_patterns), key=lambda found: found[2]
+    ):
+        collector.record_auto_redaction(PIPE_SINK_CATEGORIES[kind])
+        pieces.append(content[written:offset] + hasher.hash_generic(value, PIPE_SINK_PREFIXES[kind]))
+        written = offset + len(value)
+    return "".join(pieces) + content[written:] if pieces else content
 
 
 def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[str]) -> bool:

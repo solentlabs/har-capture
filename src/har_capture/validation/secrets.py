@@ -76,6 +76,7 @@ from har_capture.sanitization.html import (
     SSID_ATTRIBUTE_RE,
     is_structural_value_sensitive,
     is_valid_ip_address,
+    iter_pipe_sink_values,
     iter_ssid_option_values,
     pattern_file_patterns,
 )
@@ -140,6 +141,13 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
     # Combine both tiers for validation — pre-commit should catch all sensitive fields
     patterns: list[str] = fields.get("auto_redact_patterns", []) + fields.get("flag_patterns", [])
     return patterns
+
+
+_PIPE_SINK_REASONS = {
+    # pragma: allowlist nextline secret
+    "password": "Plaintext password in a pipe-delimited value the page writes into a password field",
+    "ssid": "Wi-Fi network name (SSID) in a pipe-delimited value the page writes into an SSID field",
+}
 
 
 def _compile_serial_detectors(custom_patterns: str | dict[str, Any] | None = None) -> list[Any]:
@@ -1199,6 +1207,22 @@ def _scan_text(
                 field="content",
                 value=truncate(option_value),
                 reason="Wi-Fi network name (SSID) in an SSID-named dropdown",
+            )
+        )
+
+    # A pipe-delimited value the page's own script writes into a password- or
+    # SSID-named sink (`$('#wirelessPassword1').html(tagValues[6])`). The
+    # sanitizer's redact_pipe_sink_values replaces what this iterator yields,
+    # in every body, so a finding here is one a sanitize run clears. Severity
+    # follows the labeled pairs above: the script names the password outright.
+    for sink_kind, sink_value, _offset in iter_pipe_sink_values(text, custom_patterns):
+        findings.append(
+            Finding(
+                severity="error" if sink_kind == "password" else "warning",
+                location=location,
+                field="content",
+                value=truncate(sink_value),
+                reason=_PIPE_SINK_REASONS[sink_kind],
             )
         )
 

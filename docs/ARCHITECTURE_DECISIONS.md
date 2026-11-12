@@ -509,13 +509,14 @@ harness rows.
 
 ## ADR-19: In Script Code, Only a Literal Follows a Credential Label
 
-**Context.** The labeled passes (`password_field`, `session_token`, the bare-`key` offer) read the text after a label as
-the secret. In JavaScript that text is usually code: `sjclEncryptObj.password = password;`,
-`{username: username.value, password: password.value}`, `password: {` in a validate rules block,
-`if (currentpassword == 0)`. Replacing it destroys the code a reader needs — on an Arris TG3442S login page the value
-after `key` is the key-derivation call (`sjclEncryptObj.key = sjcl.misc.pbkdf2(password, …)`), the fact the capture
-exists to show. A regex cannot tell `password = pw;` in code from `"a=b; password=hunter2;"` in a string: the difference
-is where the text sits, not what it looks like.
+**Context.** The labeled passes (`password_field`, `session_token`, the SSID text label, the bare-`key` offer) read the
+text after a label as the secret. In JavaScript that text is usually code: `sjclEncryptObj.password = password;`,
+`var ssid = tagValueListArray[firstCellIdx + 0];`, `{username: username.value, password: password.value}`, `password: {`
+in a validate rules block, `if (currentpassword == 0)`. Replacing it destroys the code a reader needs — on an Arris
+TG3442S login page the value after `key` is the key-derivation call
+(`sjclEncryptObj.key = sjcl.misc.pbkdf2(password, …)`), the fact the capture exists to show. A regex cannot tell
+`password = pw;` in code from `"a=b; password=hunter2;"` in a string: the difference is where the text sits, not what it
+looks like.
 
 **Decision.** A labeled value's position decides whether it is a literal (`labeled_literal`, on `script_code_spans`):
 
@@ -537,7 +538,7 @@ that holds a quote is read as division, which can expose one line's string conte
 *Fidelity restored:* identifiers, members, objects and comparisons after a credential label survive, as does the
 punctuation after a replaced number.
 
-**Consequence.** Code after `password`, `key` and `token` labels in inline and served-as-HTML scripts survives
+**Consequence.** Code after `password`, `key`, `token` and `ssid` labels in inline and served-as-HTML scripts survives
 sanitization; quoted secrets, secrets in strings and secrets in markup are replaced as before. Captures already
 sanitized keep their damage — the original text is not recoverable.
 
@@ -613,3 +614,67 @@ rule misses it.
 **Consequence.** A device whose login needs a browser (script-computed hashes, a challenge) is out of reach of the
 built-in strategies; a registered strategy has the same transport, not the page. `--login-strategy` and Basic Auth
 credentials are mutually exclusive.
+
+## ADR-24: The Page's Own Script Names a Pipe-Delimited Credential
+
+**Context.** Netgear gateways serve a page's data as one `|`-joined string with no labels
+(`var tagValueList = '0|Good|| |<ssid>|<ssid>|<passphrase>|<passphrase>|…'`). Value shape cannot say which position is
+the Wi-Fi passphrase, so the heuristic engine offers the candidates for review, and a review nobody runs ships the
+passphrase. A fixed position table cannot say either: the index moves between firmware builds (most `DashBoard.htm`
+pages write `tagValues[6]` into the password element, some write `tagValues[5]`).
+
+The page does say. Its script hands the split blob to one function, and that function writes each position into a
+control it names:
+
+```javascript
+function InitTagValue() { var tagValueList = '…'; return tagValueList.split("|"); }
+function InitUpdateView(tagValues) {
+    $('#wiressSSID1').html(tagValues[4]);
+    $('#wirelessPassword1').html(tagValues[6]);
+    document.getElementsByName("passphrase")[0].value = piplineDecode(tagValues[6]);
+}
+InitUpdateView(InitTagValue());
+```
+
+**Decision.** A position of a pipe-delimited blob that the page's own script writes into a password- or SSID-named sink
+is that credential or network name, and is deterministic for both tools (`iter_pipe_sink_values`, `PipeSinks`).
+
+1. **The blob is bound to the function that indexes it by the call that passes one to the other** (`View(Source())`).
+   Two blobs on one page never share an index, and a firmware that moves a field moves the redaction with it. A blob
+   outside a function, a function passed to no other, and a commented-out assignment or call bind nothing.
+1. **A sink is a write of one constant index**, alone or inside calls, into `getElementsByName("N")[0].value`,
+   `getElementById("N").innerHTML`, `$('#N').html(…)`, `form.N.value` or `var N`. An expression
+   (`tagValues[5] + " dBm"`, `tags[firstCellIdx + 0]`) is not one.
+1. **The sink's name is a credential label or an SSID name followed only by a number, `Hidden` and a radio band**
+   (`wirelessPassword1_5g`, `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an`). The labels are
+   the ones the labeled passes already use (ADR-14, ADR-19).
+1. **The value is kept when it is empty, a placeholder, a safe or status word, or a bare integer** — except an integer
+   of eight or more digits in a password sink, which is a numeric passphrase.
+1. **Both tools apply it to every body.** The sanitizer replaces the value (`PASS` / `WIFI` placeholders, HTML engine
+   pass 13b and the non-HTML text route); `validate` reports an unredacted one, a password as an **error** and a network
+   name as a **warning**, as ADR-14 does for a labeled pair.
+1. **The blob's names are domain data** (`script_variables.pipe_delimited`, ADR-5): without a pattern file no blob is
+   read.
+
+Everything the rule does not bind stays where it was: pass 14 offers it for review.
+
+**ADR-12 accounting.**
+
+- *Concrete leak closed:* a plaintext Wi-Fi passphrase and the SSIDs that make it usable, on `DashBoard.htm`, the
+  wireless-settings pages and `RouterStatus.htm`, in a file `validate` called clean.
+- *Fidelity cost:* the sink-named values, each replaced by one placeholder in its position. Field count, delimiters,
+  spacing and every other value survive; the script is not touched.
+- *Cannot-be-structure proof:* the page's script declares the position's meaning, as a label does in ADR-14. Of the
+  fleet's 2,065 `tagValueList` blobs, 2,035 bind to their view function; the rule changes 24 of 38,038 response bodies,
+  every change inside a blob literal. The guards are each held by a fleet counterexample: `ssid_sel`, `ssid_bc_enable`,
+  `bssid_enable` and `multiple_ssid` hold flags; `initDefaultKey` holds a key index and `group_key_update_interval` a
+  number of seconds; `passwordId` on `SetPassword_h.htm` holds the factory word `password` in all 34 captures that carry
+  the page.
+
+**Not covered.** A neighbouring network's name on the Wi-Fi scan pages is read by a row offset
+(`tagValueListArray[firstCellIdx + 0]`), not a constant index. A bare `KEY1`…`KEY4` (WEP) sink is not a credential label
+(ADR-19's bare `key`). A guest network name written into a sink that does not say SSID (`GuestNetworkName1`) is not
+named. All three stay with the review.
+
+**Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs without a review, and
+`validate` fails (exit 1) on a capture that still carries the passphrase.

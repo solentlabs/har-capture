@@ -47,6 +47,7 @@ from har_capture.sanitization.html import (
     sanitize_html,
 )
 from har_capture.sanitization.report import HeuristicMode
+from har_capture.validation.secrets import Finding, check_content
 
 # =============================================================================
 # Load Test Data From Fixture
@@ -1353,3 +1354,26 @@ def test_labeled_value_in_script_code_is_kept_unless_literal(case: dict) -> None
     assert sanitize_html(case["input_html"], salt=None) == case["output"]
     reported = any(f["pattern"] == "password_field" for f in check_for_pii(case["input_html"]))
     assert reported is case["reported"]
+
+
+PIPE_SINK_CASES = _FIXTURE["pipe_sink_cases"]["cases"]
+
+
+def _pipe_sink_patterns(case: dict) -> str | dict | None:
+    patterns = case.get("patterns", "network-device")
+    return str(resolve_patterns_arg(patterns)) if isinstance(patterns, str) else patterns
+
+
+@pytest.mark.parametrize("case", PIPE_SINK_CASES, ids=[c["id"] for c in PIPE_SINK_CASES])
+def test_pipe_value_the_page_writes_into_a_named_sink(case: dict) -> None:
+    """A blob position the page's script writes into a password or SSID sink is redacted; the rest is kept."""
+    patterns = _pipe_sink_patterns(case)
+
+    assert sanitize_html(case["input_html"], salt=None, custom_patterns=patterns) == case["output"]
+
+    findings: list[Finding] = []
+    check_content(case["input_html"], "entry", findings, patterns)
+    assert [f.severity for f in findings if "pipe-delimited" in f.reason] == case["findings"]
+    cleared: list[Finding] = []
+    check_content(case["output"], "entry", cleared, patterns)
+    assert [f for f in cleared if "pipe-delimited" in f.reason] == []

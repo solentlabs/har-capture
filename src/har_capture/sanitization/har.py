@@ -85,6 +85,7 @@ from har_capture.sanitization.html import (
     pattern_file_patterns,
     redact_labeled_serials,
     redact_pattern_file_matches,
+    redact_pipe_sink_values,
     redact_structural_credentials,
     redact_vendor_serials,
     sanitize_html,
@@ -2095,6 +2096,7 @@ def _sanitize_body_string(
         text = _redact_ip_addresses(text, hasher, collector)
     if "<" in text:
         text = redact_structural_credentials(text, passes.hasher, passes, custom_patterns)
+    text = redact_pipe_sink_values(text, passes.hasher, passes, custom_patterns)
     return _redact_emails_and_flag_phones(text, hasher, collector)
 
 

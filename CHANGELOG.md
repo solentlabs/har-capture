@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sanitize` redacts a Netgear gateway's Wi-Fi passphrase and network names without a review.** These pages carry
+  their data as one unlabeled `|`-joined string (`tagValueList`), so the passphrase and SSIDs were only offered for
+  review and stayed in the file when nobody reviewed it. With `--patterns network-device`, a value the page's own script
+  writes into a password or SSID field (`$('#wirelessPassword1').html(tagValues[6])`) is now replaced, and `validate`
+  reports one left in a file: a passphrase as an error, a network name as a warning.
+- **`sanitize` no longer rewrites page script after an `ssid` variable.** `var ssid = rows[firstCellIdx + 0];` was read
+  as an SSID label and came out as `var ssid=***WIFI*** + 0];`. In script code only a quoted or numeric value after
+  `ssid` is replaced now, as for `password`.
+
 ## [0.17.1] - 2026-11-09
 
 ### Fixed

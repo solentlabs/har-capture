@@ -785,7 +785,7 @@ numbers.
 ### Scanner Pipeline
 
 The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2c,
-7a/7b, 8b). Each pass uses regex substitution with callback functions that invoke the hasher.
+7a/7b, 8b, 13b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
 | Pass | Scanner                        | Pattern                                                  | Redaction                               |
 | ---- | ------------------------------ | -------------------------------------------------------- | --------------------------------------- |
@@ -801,7 +801,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
 | 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
 | 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`        |
-| 7a   | SSID text labels               | SSID labels in HTML text nodes                           | `hasher.hash_value(val, "WIFI")`        |
+| 7a   | SSID text labels               | SSID labels in HTML text nodes, literals only            | `hasher.hash_value(val, "WIFI")`        |
 | 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
 | 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")` |
 | 8    | Password inputs                | `<input type="password" value="...">`                    | `hasher.hash_value(val, "PASS")`        |
@@ -811,6 +811,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                  | `hasher.hash_email()`                   |
 | 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
 | 13   | Password script variables      | `script_variables.password` names (domain file)          | `hasher.hash_value(val, "PASS")`        |
+| 13b  | Pipe-delimited sinks           | Blob position the page's script writes into a named sink | `hasher.hash_value(val, "PASS"/"WIFI")` |
 | 14   | Pipe-delimited variables       | `script_variables.pipe_delimited` names (domain file)    | Per-value heuristic analysis            |
 | 15   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
 
@@ -964,6 +965,48 @@ Detects `localStorage.setItem()` and `sessionStorage.setItem()` in inline script
 - **Tier B**: Value contains IPs/MACs → handled by subsequent passes
 - **Tier C**: Heuristic analysis if enabled (`FLAG` or `REDACT` mode)
 
+### Pipe-Delimited Sinks (Pass 13b)
+
+A pipe-delimited blob has no labels, but the page's own script names a position when it writes it into a control
+(`redact_pipe_sink_values`,
+[ADR-24](../ARCHITECTURE_DECISIONS.md#adr-24-the-pages-own-script-names-a-pipe-delimited-credential)):
+
+```javascript
+function InitTagValue() { var tagValueList = '0|Good|MyNet|hunter2hunter2'; return tagValueList.split("|"); }
+function InitUpdateView(tagValues) {
+    $('#wiressSSID1').html(tagValues[2]);
+    document.getElementsByName("passphrase")[0].value = piplineDecode(tagValues[3]);
+}
+InitUpdateView(InitTagValue());
+```
+
+1. **Bind** (`PipeSinks.kinds_at`): the blob is an assignment in script code to a variable a pattern file lists in
+   `script_variables.pipe_delimited`. The function it sits in is the source; every function a `View(Source())` call in
+   script code passes it to is a view, read through its first parameter. A blob in no function, a source passed to no
+   function, a view with no parameter and a commented-out blob or call bind nothing. A function's body ends at its
+   closing brace, counted in script code only (`ScriptCode.block_end`), or at the end of the text when it has none.
+1. **Read the sinks**: in a view, a write of `parameter[N]` — `N` a constant, alone or inside calls, ending the
+   statement — into `getElementsByName("NAME")[0].value` / `.innerHTML`, `getElementById("NAME").value` / `.innerHTML`,
+   `$('#NAME').html(` / `.val(` / `.text(`, `form.NAME.value` or `var NAME`. A sink in a comment or a string is not
+   read, and neither is an expression (`tagValues[1] + " dBm"`, `tags[base + 0]`).
+1. **Name** (`pipe_sink_kind`): `NAME` is a password sink when it is a credential label (`password`, `passphrase`,
+   `psk`, `wpa…key`, a glued `key`) and an SSID sink when it is an SSID name (`ssid` not after `b`, `wifi_ntwrk`,
+   `wifi_network`, `priwifinet`, `wireless_name`), in both cases followed only by digits, `Hidden` (passwords) and a
+   band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix. `wirelessPassword1_5g`, `passphraseHidden_an`,
+   `radius_key_2G`, `wiressSSID1` and `WirelessName_an` are sinks; `passwordId`, `passphraseStr`, `ssid_sel`,
+   `ssid_bc_enable`, `bssid_enable` and `group_key_update_interval_2G` are not. A position two sinks disagree on is a
+   password.
+1. **Judge the value** (`is_pipe_sink_value_sensitive`), without its surrounding whitespace: kept when empty, already a
+   placeholder (`is_redacted()`, a `***…` marker, `PREFIX_<hash>`), a `tagValueList.safe_values` word, a safe or status
+   word (`is_safe_value()`), or a bare integer — except eight or more digits in a password sink (a numeric passphrase).
+   Anything else is replaced in place by `PASS_<hash>` or `WIFI_<hash>`, spaces inside it included.
+
+The pass runs in every heuristic mode, ahead of pass 14, which then skips the placeholders. It is exposed as a function
+and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob served from a `.js` file is covered and
+`validate`, which reports what `iter_pipe_sink_values` yields, never reports a value a sanitize run cannot clear. Not
+covered, and left to pass 14's review: a value read by a computed index (the Wi-Fi scan pages' rows), a bare `KEY1` WEP
+sink, and a name the sink does not call an SSID (`GuestNetworkName1`).
+
 ### Pipe-Delimited Scanner (Pass 14)
 
 Handles vendor-specific data structures like Netgear's tagValueList (`"val1|val2|val3"`):
@@ -973,7 +1016,7 @@ Handles vendor-specific data structures like Netgear's tagValueList (`"val1|val2
 1. Split value by `|` delimiter
 1. For each value, judged without its surrounding whitespace:
    - Skip if empty or matches safe values (`sensitive.tagValueList.safe_values`)
-   - Skip if already redacted (contains hash prefix or format-preserving pattern)
+   - Skip if already redacted (contains hash prefix or format-preserving pattern), pass 13b's placeholders included
    - Auto-redact if MAC pattern, serial number pattern (`SN-`, `S/N-`, `SN_`, `S-N-`)
    - If heuristics enabled: run through `analyze_value()` from heuristics.py
 1. Reassemble the pipe-delimited string with each value's whitespace written back around the value or its placeholder —
@@ -1068,16 +1111,17 @@ is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`)
 often as a label — all 44 of its unredacted fleet matches are JavaScript assignments — so its value is offered for
 review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it.
 
-**In script code only a literal is a value** (`labeled_literal`, ADR-19; passes 7 and 9, the bare-`key` offer, and
+**In script code only a literal is a value** (`labeled_literal`, ADR-19; passes 7, 7a and 9, the bare-`key` offer, and
 `check_for_pii`'s `password_field` and `session_token`). Script code is a JavaScript `<script>` element's body less its
 strings, comments and regex literals (`script_code_spans`), or the whole of a body that opens as JavaScript (`//`, `/*`,
 `var`, `let`, `const`, `function`, `(function`, `!function`) — a firmware serving its `.js` files as `text/html` routes
 them to this engine (45 fleet bodies). There, an unquoted value is JavaScript — an identifier
 (`sjclEncryptObj.password = password;`), a member (`password: password.value`), an object (`password: {`), an operator
-(`currentpassword == 0`) — and is kept; only a number is a literal, replaced up to its end so the `;` after it stays
-(`password = ***PASS***;`). A quoted value sits inside the string its quote opens, so it is data and is replaced
-everywhere (`password = "…"`, `'&sessionKey=…'`, a `document.write` string). Outside script code a bare token is a
-literal, as before (`<p>Password: hunter2</p>`, `?password=hunter2`).
+(`currentpassword == 0`), an index expression (`var ssid = tagValueListArray[firstCellIdx + 0];`) — and is kept; only a
+number is a literal, replaced up to its end so the `;` after it stays (`password = ***PASS***;`). A quoted value sits
+inside the string its quote opens, so it is data and is replaced everywhere (`password = "…"`, `'&sessionKey=…'`, a
+`document.write` string). Outside script code a bare token is a literal, as before (`<p>Password: hunter2</p>`,
+`?password=hunter2`).
 
 The scanner errs toward data, so a misread redacts rather than keeps: a `<script>` with no `</script>` after it, one
 whose `type` is not JavaScript (the fleet's 164 `text/x-tmpl` and `text/template` bodies are markup templates), one
