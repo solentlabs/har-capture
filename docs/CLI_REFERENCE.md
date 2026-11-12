@@ -164,10 +164,10 @@ har-capture sanitize INPUT.har --patterns network-device
   example addresses in help text). Off by default; use it only for static assets, and pass it to `validate` too. See
   [Sanitization Spec — Static assets](specs/SANITIZATION_SPEC.md#static-assets-and-example-addresses).
 
-Interactive review of flagged values is always enabled. If no TTY is available, flagged values are written to a report
-file instead, the sanitized file records `review: no_tty`, and a warning names the flagged count; `validate` then fails
-that file until its flagged values are decided, from a terminal or with `--apply-review`. Every run records how its
-review ended in `log._har_capture.sanitization.review`.
+Interactive review of flagged values is always enabled. If no TTY is available, nobody is asked: the sanitized file
+records `review: no_tty`, a warning names the flagged count, and no report is written unless `--report` asks for one
+(`--report -` puts it on standard output); `validate` then fails that file until its flagged values are decided, from a
+terminal or with `--apply-review`. Every run records how its review ended in `log._har_capture.sanitization.review`.
 
 #### Size Limits
 

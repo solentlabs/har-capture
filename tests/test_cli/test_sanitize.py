@@ -394,19 +394,20 @@ class TestSanitizeInteractiveReview:
         assert meta["review"] == "completed"
         assert (meta["user_redacted"] > 0) == redact
 
-    def test_no_tty_records_no_tty_and_writes_report(self, har_with_flagged_fields: Path) -> None:
-        """Without a terminal the file records no_tty; sanitize still writes .review.json.
+    def test_no_tty_records_no_tty_and_writes_no_report(self, har_with_flagged_fields: Path) -> None:
+        """Without a terminal the file records no_tty, and no report reaches disk unasked.
 
-        The input is already on disk, so the report beside it adds no raw
-        copy — unlike ``get``, which writes none.
+        A report holds the flagged values as captured, so it is written only
+        where ``--report`` names a file or a stream.
         """
         result = runner.invoke(app, ["sanitize", str(har_with_flagged_fields), "--patterns", "base"])
 
         assert result.exit_code == 0
         written = json.loads(Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).read_text())
         assert written["log"]["_har_capture"]["sanitization"]["review"] == "no_tty"
-        assert Path(str(har_with_flagged_fields) + ".review.json").exists()
+        assert not list(har_with_flagged_fields.parent.glob("*.review.json"))
         assert "NOT reviewed" in result.output
+        assert "--report -" in result.output
 
 
 class TestSanitizeApplyReview:
@@ -418,9 +419,14 @@ class TestSanitizeApplyReview:
 
     @staticmethod
     def _first_run(har: Path) -> tuple[Path, Path, dict]:
-        """Sanitize without a terminal; return the output, the report path and the report."""
-        assert runner.invoke(app, ["sanitize", str(har), "--patterns", "base"]).exit_code == 0
+        """Sanitize without a terminal into a named report; return the output, the report path and the report."""
         report = Path(str(har) + ".review.json")
+        assert (
+            runner.invoke(
+                app, ["sanitize", str(har), "--patterns", "base", "--report", str(report)]
+            ).exit_code
+            == 0
+        )
         return Path(str(har).replace(".har", ".sanitized.har")), report, json.loads(report.read_text())
 
     @pytest.mark.parametrize(
@@ -456,7 +462,9 @@ class TestSanitizeApplyReview:
         assert all((json.dumps(item["value"])[1:-1] in text) is kept for item in report["flagged"])
         assert "No terminal detected" not in result.output
 
-    def test_undecided_value_fails_and_writes_the_rest_back(self, har_with_flagged_fields: Path) -> None:
+    def test_undecided_value_fails_and_no_report_is_written_unasked(
+        self, har_with_flagged_fields: Path
+    ) -> None:
         output, report_path, report = self._first_run(har_with_flagged_fields)
         decided = har_with_flagged_fields.parent / "decided.json"
         decided.write_text(json.dumps(report))  # every item still "flagged"
@@ -469,8 +477,9 @@ class TestSanitizeApplyReview:
 
         assert result.exit_code == 1
         assert "have no decision" in result.output
+        assert "Add --report -" in result.output
         assert json.loads(output.read_text())["log"]["_har_capture"]["sanitization"]["review"] == "cancelled"
-        assert report_path.exists()
+        assert not report_path.exists()  # a report file is written only where --report names one
 
     def test_unusable_report_stops_before_any_output(self, har_with_flagged_fields: Path) -> None:
         bad = har_with_flagged_fields.parent / "bad.json"
@@ -504,12 +513,21 @@ class TestSanitizeReviewStreams:
 
     @staticmethod
     def _run(har: Path, *options: str, stdin: str | None = None):
-        return runner.invoke(app, ["sanitize", str(har), "--patterns", "base", *options], input=stdin)
+        """Run sanitize with standard output and standard error captured apart.
+
+        click before 8.2 mixes the two unless asked not to; 8.2 always keeps
+        them apart and no longer takes the argument.
+        """
+        try:
+            streams = CliRunner(mix_stderr=False)
+        except TypeError:
+            streams = CliRunner()
+        return streams.invoke(app, ["sanitize", str(har), "--patterns", "base", *options], input=stdin)
 
     def _report(self, har: Path) -> dict:
         """The report of a no-terminal run, read from standard output."""
         result = self._run(har, "--report", "-")
-        assert result.exit_code == 0, result.output
+        assert result.exit_code == 0, result.stderr
         return json.loads(result.stdout)
 
     def test_report_on_stdout_is_the_report_alone_and_no_file_is_written(
@@ -537,7 +555,7 @@ class TestSanitizeReviewStreams:
 
         result = self._run(har_with_flagged_fields, "--apply-review", "-", stdin=json.dumps(report))
 
-        assert result.exit_code == 0, result.output
+        assert result.exit_code == 0, result.stderr
         assert result.stdout == ""  # every value decided: nothing to hand back
         text = Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).read_text()
         assert json.loads(text)["log"]["_har_capture"]["sanitization"]["review"] == "completed"
@@ -571,7 +589,7 @@ class TestSanitizeReviewStreams:
 
         assert result.exit_code == 1
         assert json.loads(remainder.read_text())["flagged"]
-        assert str(remainder) in result.output
+        assert str(remainder) in result.stderr
 
     @pytest.mark.parametrize(
         "stdin",
@@ -582,7 +600,7 @@ class TestSanitizeReviewStreams:
         result = self._run(har_with_flagged_fields, "--apply-review", "-", stdin=stdin)
 
         assert result.exit_code == 1
-        assert "Cannot read review report from standard input" in result.output
+        assert "Cannot read review report from standard input" in result.stderr
         assert not Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).exists()
 
 
@@ -613,18 +631,6 @@ class TestSanitizeReportOption:
 
         assert result.exit_code == 0
         assert b"\r" not in report_path.read_bytes()
-
-    def test_report_auto_path_in_non_interactive_mode(self, valid_har: Path) -> None:
-        """Non-TTY without --report -> auto-named .review.json beside input."""
-        result = runner.invoke(app, ["sanitize", str(valid_har), "--patterns", "base"])
-        # The auto-path is created next to the input file.
-        auto_path = Path(str(valid_har) + ".review.json")
-        # Whether it actually exists depends on whether anything was
-        # flagged — we assert only the no-crash path.
-        assert result.exit_code == 0
-        # If it does exist, it should be valid JSON.
-        if auto_path.exists():
-            json.loads(auto_path.read_text())
 
 
 class TestSanitizeErrorHandlers:

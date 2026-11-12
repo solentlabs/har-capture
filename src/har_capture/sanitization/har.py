@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any
 
 from har_capture.patterns import (
     CERTIFICATE_NAME_FIELDS,
-    EMAIL_RE,
     IPV6_RE,
     JSON_MAX_DEPTH,
     KNOWN_AUTH_SCHEMES,
@@ -74,6 +73,7 @@ from har_capture.patterns import (
     route_body,
     split_url_password,
     split_url_query,
+    sub_emails,
 )
 from har_capture.patterns.loader import compile_safe_value_patterns
 from har_capture.sanitization.collector import RedactionCollector
@@ -1621,8 +1621,7 @@ def _redact_emails_and_flag_phones(
             collector.record_auto_redaction("email")
         return hasher.hash_email(match.group(0)) if hasher else "***EMAIL***"
 
-    if "@" in value:
-        value = EMAIL_RE.sub(replace_email, value)
+    value = sub_emails(replace_email, value)
 
     # A phone number holds a run of three digits.
     if not _DIGIT_RUN_RE.search(value):

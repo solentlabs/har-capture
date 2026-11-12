@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-12
+
 ### Added
 
 - **`sanitize --apply-review REPORT`.** Finishes the review without a terminal. In the report a no-terminal run hands
@@ -15,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`-` for `--report` and `--apply-review`.** `--report -` writes the review report to standard output (messages go to
   standard error) and `--apply-review -` reads the decided report from standard input, so the flagged values it holds
   pass from one run to the next without being written to disk.
+
+### Changed (BREAKING)
+
+- **`sanitize` without a terminal no longer writes `<input>.review.json`.** That report holds every flagged value as
+  captured, plus the hashing salt, and it was written beside the capture whether or not anyone asked. A report is now
+  written only where `--report` names a file or `-`. A pipeline that read the automatic file passes
+  `--report <input>.review.json` to keep it, or `--report -` to read it from standard output.
 
 ### Fixed
 
@@ -30,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   part-way, records that in the file and leaves every flagged value in it; `validate` used to print `Clean`. It now
   reports an error naming the count, until the values are decided: run `sanitize` on the file from a terminal, or use
   `--apply-review`.
+- **`sanitize` and `validate` no longer stall on a long unbroken token.** A run of letters, digits, dots and hyphens
+  with no `@` in it (a base64url blob, a dotted number list) made the email check rescan the run from every word
+  boundary: 78 KB took thirteen seconds. The check now starts from each `@` and reads back from it; which addresses it
+  finds is unchanged.
 - **`sanitize` no longer rewrites page script after an `ssid` variable.** `var ssid = rows[firstCellIdx + 0];` was read
   as an SSID label and came out as `var ssid=***WIFI*** + 0];`. In script code only a quoted or numeric value after
   `ssid` is replaced now, as for `password`.
@@ -1624,6 +1637,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.16.2]: https://github.com/solentlabs/har-capture/compare/v0.16.1...v0.16.2
 [0.17.0]: https://github.com/solentlabs/har-capture/compare/v0.16.2...v0.17.0
 [0.17.1]: https://github.com/solentlabs/har-capture/compare/v0.17.0...v0.17.1
+[0.18.0]: https://github.com/solentlabs/har-capture/compare/v0.17.1...v0.18.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1651,4 +1665,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.17.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.18.0...HEAD

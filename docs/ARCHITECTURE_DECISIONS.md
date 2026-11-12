@@ -130,11 +130,11 @@ error, not clean. Where there is no terminal, the decisions can be made in the r
 report holds the flagged values as captured, so both options take `-` for a standard stream and the report can pass from
 one run to the next without reaching disk (design constraint 5).
 
-Without a terminal, neither command prompts; each records `no_tty` and warns loudly with the flagged count. `sanitize`
-also writes the flagged values to a JSON report beside its input (`<input>.review.json`, or `--report`): the raw input
-is already on disk, so the report adds no new copy of it. `get` writes no report: the raw capture never persists on disk
-(design constraint 5), and a report would hold its flagged values. Recording is a library function (`record_review`), so
-the CLI stays a thin wrapper (Code Organization rule 3).
+Without a terminal, neither command prompts; each records `no_tty` and warns loudly with the flagged count. Neither
+writes a report unasked: a report holds the flagged values as captured, and those never reach disk without the user
+naming a place for them (design constraint 5). `sanitize --report` names one — a file, or `-` for standard output — and
+`get`, whose raw capture never persists, has no report at all. Recording is a library function (`record_review`), so the
+CLI stays a thin wrapper (Code Organization rule 3).
 
 ## ADR-7: XML POST Bodies Are Sanitized via Two Layers
 

@@ -1297,6 +1297,56 @@ def test_word_runs_do_not_backtrack_through_a_label() -> None:
     assert not re.search(r"\((?:\?:)?\\w[*+][A-Za-z\[]", source)
 
 
+def test_email_scan_never_runs_the_pattern_over_a_whole_body() -> None:
+    r"""No pass scans a body with `EMAIL_RE` itself.
+
+    `\b[A-Za-z0-9._%+-]+@` is retried from every word boundary of a long run
+    that holds no `@` — a base64url blob, a dotted number list — and each try
+    rescans the rest of the run: 78 KB took thirteen seconds in sanitize_html.
+    The passes scan with `iter_emails` / `sub_emails`, which start from each
+    `@` and apply the same pattern once.
+    """
+    import har_capture.sanitization.har as har_module
+    import har_capture.sanitization.html as html_module
+
+    for module in (html_module, har_module):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "EMAIL_RE.sub(" not in source
+        assert "EMAIL_RE.finditer(" not in source
+        assert "EMAIL_RE.search(" not in source
+
+
+def test_email_scan_finds_exactly_what_the_pattern_finds() -> None:
+    """`iter_emails` yields the spans `EMAIL_RE.finditer` yields: the rule is the pattern's, only the scan differs.
+
+    A differential test over 20,000 seeded random strings built from the
+    characters that decide a match: local-part letters, digits and
+    punctuation, `@`, a space, a non-ASCII letter and a quote.
+    """
+    import random
+
+    from har_capture.patterns.redaction import EMAIL_RE, iter_emails, sub_emails
+
+    rng = random.Random(20261112)  # noqa: S311 - a seeded test generator, not cryptography
+    alphabet = 'ab1.@-_%+ é"com'
+    for _ in range(20000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        expected = [match.span() for match in EMAIL_RE.finditer(text)]
+        assert [match.span() for match in iter_emails(text)] == expected, text
+        assert sub_emails(lambda _match: "<E>", text) == EMAIL_RE.sub("<E>", text), text
+
+
+@pytest.mark.parametrize(
+    "local_part",
+    ["john.doe+tag", "a" * 64, "a" * 200, "first." + "a" * 200],
+    ids=["ordinary", "64-characters", "200-characters", "200-characters-after-a-dot"],
+)
+def test_email_with_a_long_local_part_is_still_replaced(local_part: str) -> None:
+    """The scan changes no rule: an address is replaced whole, however long its local part."""
+    out = sanitize_html(f"<p>{local_part}@example.com</p>", salt=None)
+    assert out == "<p>x@x.invalid</p>"
+
+
 @pytest.mark.parametrize(
     ("html", "offered"),
     [

@@ -635,7 +635,7 @@ routes (a per-call scope, like the field patterns'):
 | Private IPs   | `PRIVATE_IP_RE` with octets ≤ 255 (`is_private_ip_in_range`); preserved gateways kept | `hasher.hash_ip(ip, is_private=True)`  |
 | Public IPs    | `PUBLIC_IP_RE`, less version strings (`is_valid_ip_address()`)                        | `hasher.hash_ip(ip, is_private=False)` |
 | IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (`::`, `::1` kept)              | `hasher.hash_ipv6()`                   |
-| Emails        | `EMAIL_RE` (RFC 5321 simplified)                                                      | `hasher.hash_email()`                  |
+| Emails        | `EMAIL_RE` (RFC 5321 simplified), scanned from each `@` (`sub_emails`)                | `hasher.hash_email()`                  |
 | Phone numbers | US/CA formats **with a separator, parens, or leading +**                              | Flagged, not auto-redacted             |
 
 Card- and SSN-shaped numbers are the pattern file's (`credit_card_*`, `ssn`), handled by the pattern-file pass with the
@@ -808,7 +808,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 8b   | SSID inputs                    | SSID-related input fields                                | `hasher.hash_value(val, "WIFI")`        |
 | 9    | Session tokens                 | `SESSION_TOKEN_RE`: 20+ char literal after a label       | `hasher.hash_value(val, "TOKEN")`       |
 | 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`        |
-| 11   | Email addresses                | `EMAIL_RE`: `user+tag@sub.domain.co.uk`                  | `hasher.hash_email()`                   |
+| 11   | Email addresses                | `EMAIL_RE` from each `@`: `user+tag@sub.domain.co.uk`    | `hasher.hash_email()`                   |
 | 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
 | 13   | Password script variables      | `script_variables.password` names (domain file)          | `hasher.hash_value(val, "PASS")`        |
 | 13b  | Pipe-delimited sinks           | Blob position the page's script writes into a named sink | `hasher.hash_value(val, "PASS"/"WIFI")` |
@@ -1715,8 +1715,9 @@ applied, the review is recorded as `cancelled`, the report is handed back and th
 **The report need not touch disk.** It holds every flagged value as captured, and the salt. `-` names a standard stream
 for both options: `--report -` writes the report to standard output and sends every message to standard error, so the
 pipe carries the report alone; `--apply-review -` reads the decided report from standard input, and hands an undecided
-remainder back on standard output unless `--report` names a file. A file is the fallback: a no-terminal run with no
-`--report` writes `<input>.review.json` beside its input, and an undecided remainder of a report file goes there too.
+remainder back on standard output unless `--report` names a file. A report reaches disk only where `--report` names a
+file: a no-terminal run with no `--report` writes none, and neither does an undecided remainder of decisions read from a
+file — the error says to add `--report -`.
 
 Every ending is recorded, a review that redacted nothing included — a skipped or cancelled review, or one nobody could
 be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`sanitization/report.py`):
@@ -1731,7 +1732,8 @@ be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`saniti
 | (absent)       | —                                   | No review recorded: a library caller that ran none, or a version that records none          |
 
 Without a terminal `get` and `sanitize` never prompt (InquirerPy would fail and read as a cancel): each records `no_tty`
-and prints a warning with the flagged count. `sanitize` also writes the report file; `get` writes none — see ADR-6.
+and prints a warning with the flagged count. Neither writes a report unasked; `sanitize --report` hands one over, and
+`get` has none — see ADR-6.
 
 ### Pre-Sanitization Detection
 

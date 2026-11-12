@@ -172,19 +172,18 @@ def sanitize(
     # through one, so standard output is kept for it.
     stdout_reserved = report_to_stdout or (report is None and decisions_from_stdin)
 
-    # Interactive review is always enabled — fall back to report if no TTY.
-    # One answer for all three uses: the report fallback, the
-    # already-sanitized confirmation, and the review itself.
+    # Interactive review is always enabled. One answer for both uses: the
+    # already-sanitized confirmation and the review itself. Without a terminal
+    # nobody is asked, and the flagged values reach a report only where
+    # --report asks for one: a report holds them as captured, so none is
+    # written to disk unasked.
     run_heuristics = True
     interactive_terminal = interactive.stdin_is_tty() and decisions is None
 
     if decisions is None and not interactive_terminal:
-        if report is None:
-            report = Path(str(input_file) + ".review.json")
         typer.echo(
-            "Note: No terminal detected. Writing flagged values to "
-            + ("standard output" if report_to_stdout else f"{report} (use --report - to keep them off disk)")
-            + " instead.",
+            "Note: No terminal detected, so nobody is asked about the flagged values."
+            + ("" if report else " Add --report - to get them on standard output."),
             err=True,
         )
 
@@ -264,11 +263,10 @@ def sanitize(
                 undecided = apply_review_decisions(sanitization_report, decisions)
                 outcome = ReviewOutcome.CANCELLED if undecided else ReviewOutcome.COMPLETED
                 interactive.save_review(sanitization_report, result_path, outcome)
-                if undecided and report is None:
-                    if decisions_from_stdin:
-                        report_to_stdout = True
-                    else:
-                        report = Path(str(input_file) + ".review.json")
+                # Decisions that came through a stream get the remainder back
+                # through one; a report file is written only where --report names it.
+                if undecided and report is None and decisions_from_stdin:
+                    report_to_stdout = True
 
             elif interactive_terminal and sanitization_report.flagged:
                 outcome = interactive.run_interactive_review(
@@ -305,8 +303,14 @@ def sanitize(
             if undecided:
                 typer.echo(
                     f"Error: {undecided} flagged value(s) have no decision. They remain in {result_path} as "
-                    "captured, and the file records review: cancelled. Decide them in "
-                    + ("the report on standard output" if report_to_stdout else str(report))
+                    "captured, and the file records review: cancelled. "
+                    + (
+                        "Decide them in the report on standard output"
+                        if report_to_stdout
+                        else f"Decide them in {report}"
+                        if report
+                        else "Add --report - to see them, decide them"
+                    )
                     + " and run the command again with --apply-review.",
                     err=True,
                 )

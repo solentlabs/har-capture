@@ -40,7 +40,6 @@ from har_capture.patterns.loader import DEDICATED_PASS_PATTERNS, compile_script_
 from har_capture.patterns.redaction import (
     EMAIL_DOMAIN,
     EMAIL_LOCAL_PART,
-    EMAIL_RE,
     IPV6_RE,
     JSON_MAX_DEPTH,
     MAC_RE,
@@ -51,8 +50,10 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_ipv6_host_address,
     is_redacted,
+    iter_emails,
     luhn_valid,
     route_body,
+    sub_emails,
     unredacted_identity,
 )
 
@@ -1446,7 +1447,7 @@ def _sanitize_html_impl(
         return hasher.hash_email(match.group(0))
 
     # Pattern supports: user@domain.tld, user.name+tag@sub.domain.co.uk
-    html = EMAIL_RE.sub(replace_email, html)
+    html = sub_emails(replace_email, html)
 
     # 12. Config file paths (may contain ISP/customer identifiers)
     def replace_config(match: re.Match[str]) -> str:
@@ -2246,7 +2247,8 @@ def _fixture_text_findings(
     labeled_min_length = {"password_field": 1, "session_token": SESSION_TOKEN_MIN_LENGTH}
 
     for pattern_name, regex, pattern_def in patterns:
-        for match in regex.finditer(text):
+        # The email pattern is the sanitizer's own (pass 11), scanned the same way.
+        for match in iter_emails(text) if pattern_name == "email" else regex.finditer(text):
             matched_text = match.group(0)
             value = _match_value(match, pattern_def.get("value_group", 0))
             if pattern_name in labeled_min_length:

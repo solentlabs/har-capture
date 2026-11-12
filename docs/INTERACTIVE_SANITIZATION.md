@@ -160,9 +160,9 @@ The report contains:
 
 ### Non-TTY Environment (CI/CD)
 
-When no terminal is available nobody can be prompted, so the flagged values are handed over as a JSON report and the
-sanitized file records that nobody reviewed them (`review: no_tty`). `har-capture validate` fails that file until the
-values are decided.
+When no terminal is available nobody can be prompted, so the sanitized file records that nobody reviewed its flagged
+values (`review: no_tty`), and `--report` hands them over as a JSON report. `har-capture validate` fails that file until
+the values are decided.
 
 The report holds each flagged value as captured, and the hashing salt. Pass it through the standard streams and it is
 never written to disk:
@@ -187,9 +187,9 @@ run decides the same values in the next. A value left `flagged`, or one the repo
 exit 1: the decisions made are applied, the file records `review: cancelled`, and the report comes back for the rest —
 on standard output when the decisions came from standard input.
 
-Without `--report`, a no-terminal run writes the report beside its input as `<input>.review.json`, and `--apply-review`
-takes a file as well as `-`. That file is as sensitive as the raw capture: delete it once the review is recorded and
-keep it out of version control (`*.review.json` in `.gitignore`).
+Without `--report`, a no-terminal run writes no report: the flagged values stay in the sanitized file and nowhere else.
+`--report FILE` and `--apply-review FILE` take a file where one is wanted. That file is as sensitive as the raw capture:
+delete it once the review is recorded and keep it out of version control (`*.review.json` in `.gitignore`).
 
 `har-capture get` without a terminal writes no report at all: the raw capture never persists on disk. Run `sanitize` on
 the sanitized file it produced, with `--report -`, to review its flagged values.
