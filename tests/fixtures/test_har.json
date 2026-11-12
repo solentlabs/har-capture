@@ -530,6 +530,120 @@
       "expected_values": {"vendorpw": "[REDACTED]", "twofactor": "[REDACTED]", "user": "admin"}
     }
   ],
+  "surviving_copy_cases": [
+    {
+      "id": "sink_named_ssid_repeated_in_an_unlabeled_blob",
+      "value": "Maplewood",
+      "category": "wifi_ssid",
+      "occurrences": 1,
+      "prefix": "WIFI_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<script>function InitTagValue() { var tagValueList = '0|Good|Maplewood|hunter2hunter2'; return tagValueList.split(\"|\"); }\nfunction InitUpdateView(tagValues) {\n    $('#wiressSSID1').html(tagValues[2]);\n    document.getElementsByName(\"passphrase\")[0].value = piplineDecode(tagValues[3]);\n}\nInitUpdateView(InitTagValue());</script>"
+        },
+        {
+          "mime": "text/html",
+          "text": "<script>function InitTagValue() { var tagValueList = 'Maplewood|300Mbps|1|'; return tagValueList.split(\"|\"); }</script>"
+        }
+      ]
+    },
+    {
+      "id": "sink_named_passphrase_repeated_twice_in_plain_text",
+      "value": "hunter2hunter2",
+      "category": "password",
+      "occurrences": 2,
+      "prefix": "PASS_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<script>function InitTagValue() { var tagValueList = '0|Good|Maplewood|hunter2hunter2'; return tagValueList.split(\"|\"); }\nfunction InitUpdateView(tagValues) {\n    $('#wiressSSID1').html(tagValues[2]);\n    document.getElementsByName(\"passphrase\")[0].value = piplineDecode(tagValues[3]);\n}\nInitUpdateView(InitTagValue());</script>"
+        },
+        {
+          "mime": "text/plain",
+          "text": "wpa: hunter2hunter2 / hunter2hunter2"
+        }
+      ]
+    },
+    {
+      "id": "json_ssid_key_repeated_in_a_header",
+      "value": "Maple wood",
+      "category": "wifi_ssid",
+      "occurrences": 1,
+      "prefix": "WIFI_",
+      "header": "Maple wood",
+      "bodies": [
+        {
+          "mime": "application/json",
+          "text": "{\"ssid\": \"Maple wood\"}"
+        }
+      ]
+    },
+    {
+      "id": "labeled_ssid_text_repeated_in_script",
+      "value": "Maplewood",
+      "category": "wifi_ssid",
+      "occurrences": 1,
+      "prefix": "WIFI_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<p>SSID: Maplewood</p>"
+        },
+        {
+          "mime": "text/html",
+          "text": "<script>var rows = 'Maplewood|6|';</script>"
+        }
+      ]
+    },
+    {
+      "id": "js_ssid_field_repeated_in_text",
+      "value": "Maplewood",
+      "category": "wifi_ssid",
+      "occurrences": 1,
+      "prefix": "WIFI_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<script>var cfg = {ssid_24g: 'Maplewood'};</script>"
+        },
+        {
+          "mime": "text/plain",
+          "text": "net Maplewood up"
+        }
+      ]
+    },
+    {
+      "id": "no_copy_left_is_not_flagged",
+      "value": "Maplewood",
+      "category": null,
+      "occurrences": 0,
+      "prefix": "WIFI_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<script>function InitTagValue() { var tagValueList = '0|Good|Maplewood|hunter2hunter2'; return tagValueList.split(\"|\"); }\nfunction InitUpdateView(tagValues) {\n    $('#wiressSSID1').html(tagValues[2]);\n    document.getElementsByName(\"passphrase\")[0].value = piplineDecode(tagValues[3]);\n}\nInitUpdateView(InitTagValue());</script>"
+        }
+      ]
+    },
+    {
+      "id": "sweep_eligible_name_is_replaced_not_flagged",
+      "value": "Maplewood-House-5G",
+      "category": null,
+      "occurrences": 0,
+      "prefix": "WIFI_",
+      "bodies": [
+        {
+          "mime": "text/html",
+          "text": "<script>function InitTagValue() { var tagValueList = '0|Good|Maplewood-House-5G|hunter2hunter2'; return tagValueList.split(\"|\"); }\nfunction InitUpdateView(tagValues) {\n    $('#wiressSSID1').html(tagValues[2]);\n    document.getElementsByName(\"passphrase\")[0].value = piplineDecode(tagValues[3]);\n}\nInitUpdateView(InitTagValue());</script>"
+        },
+        {
+          "mime": "text/plain",
+          "text": "net=Maplewood-House-5G"
+        }
+      ]
+    }
+  ],
   "propagation_eligibility_cases": [
     {"value": "eba954f1f10817e8f36607c4db106999", "eligible": true, "id": "hex_session_token"},
     {"value": "5f4dcc3b5aa765d61d8327deb882cf99", "eligible": true, "id": "hex_md5"},

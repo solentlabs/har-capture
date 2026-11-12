@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sanitize` flags a Wi-Fi network name or passphrase it redacted on one page and left readable on another.** A
+  Netgear C6250 names its network on `/WirelessSettings.htm`, where the name was replaced, and repeats it in an
+  unlabeled list on `/WirelessSettings_h.htm`, where it stayed as captured with nothing offered for review, and
+  `validate` called the file clean. Each such value is now offered for review with the number of copies left. It is not
+  replaced unasked, since a short name can equal an unrelated word; confirming it writes the placeholder the value
+  already has. A run nobody reviews records the undecided value, which `validate` reports.
+
 ## [0.18.0] - 2026-11-12
 
 ### Added

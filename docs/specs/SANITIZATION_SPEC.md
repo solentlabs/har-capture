@@ -71,6 +71,7 @@ The file is organized into 9 groups:
    MACs, IPv6 and IPv4, emails, phone numbers, and the positional passes between them
 1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`,
    `_propagate_whole_bodies()`, `_propagate_cookie_echoes()`, `find_collapsed_bodies()`
+1. **Pass 1d Surviving Copies** — `_flag_surviving_copies()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
 
@@ -1350,6 +1351,7 @@ placeholders are not in the global allowlist: `02deadbeef12` is as likely a pass
 CATEGORY_PREFIX_MAP = {
     "wifi_ssid": "WIFI",
     "credential": "CRED",
+    "password": "PASS",  # pragma: allowlist secret
     "device_name": "DEVICE",
     "suspicious": "SENSITIVE",
     "serial_number": "SERIAL",
@@ -1473,9 +1475,11 @@ The digit requirement is the operative form of "must not be word-shaped." Method
 are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls
 back to review.
 
-**Failing eligibility is not a leak** — the value stays flagged for interactive review, and Pass 2 resolves it if the
-user confirms. That is what allows the bar to be strict: a false negative costs one review item, while a false positive
-would rewrite unrelated bytes across the file.
+**Failing eligibility is not a leak** — a value that was flagged stays flagged for interactive review, and a network
+name or passphrase that is still readable is flagged by
+[Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase); Pass 2 resolves either if the user confirms. That
+is what allows the bar to be strict: a false negative costs one review item, while a false positive would rewrite
+unrelated bytes across the file.
 
 Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
 delimiters are untouched.
@@ -1568,6 +1572,42 @@ queue untouched.
 
 After Pass 1b, `sanitize_har` sweeps the entries once more for the MACs it replaced, where a MAC appears inside a longer
 hex token or as the tail of a default network name; see [MAC Addresses](#mac-addresses). Counted as `mac_derived`.
+
+### Pass 1d: Surviving Copies of a Network Name or Passphrase
+
+A network name or Wi-Fi passphrase is redacted where something names it: a label, an SSID key, a position the page's
+script writes into a control. Another page can carry the same value in a blob nothing names
+(`var tagValueList = 'MyNet|300Mbps|1|'`), and a network name is usually too short or too word-shaped for the
+[Pass 1b](#pass-1b-redacted-value-propagation) sweep. Left alone, the value is replaced on one page and readable on the
+next, with nothing in the review queue to say so.
+
+**Registered values.** Each of these rules records the value it redacts with its review category
+(`RedactionCollector.record_redacted_value(..., review_as=)`, kept in `review_categories`):
+
+| Rule                                                                  | Review category | Placeholder |
+| --------------------------------------------------------------------- | --------------- | ----------- |
+| SSID label in text (pass 7a), SSID input (pass 8b), JS SSID (15)      | `wifi_ssid`     | `WIFI_`     |
+| Structural network names (pass 7c: `SIBLING_SSID_RE`, SSID attribute) | `wifi_ssid`     | `WIFI_`     |
+| SSID-named JSON key (`_is_redactable_ssid`)                           | `wifi_ssid`     | `WIFI_`     |
+| Pipe-delimited sink (pass 13b), SSID sink                             | `wifi_ssid`     | `WIFI_`     |
+| Pipe-delimited sink (pass 13b), password sink                         | `password`      | `PASS_`     |
+
+A registered value also enters the Pass 1b registry, so one that meets the eligibility bar is replaced by that sweep.
+
+**The check** (`_flag_surviving_copies`). After Pass 1b and Pass 1c, each registered value is looked for in the text the
+review can reach (`_readable_text`: every string in the HAR and each JSON body's decoded strings). A value found there
+becomes one review item (`RedactionCollector.flag_surviving_copy`): its category from the table, medium confidence, the
+number of copies left as its occurrence count, and the text around the first copy as its context. An item a heuristic
+already raised for the same text is relabeled, its confidence never lowered, not duplicated. The check runs in every
+heuristic mode.
+
+**Nothing is replaced.** The match is plain text, and a short name can equal an unrelated word, so the copies stay as
+captured until the user decides
+([ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract)).
+A confirmed item takes the placeholder the value already has, because its category maps to the same prefix
+([Category-to-Prefix Mapping](#category-to-prefix-mapping)). A run nobody reviewed records the undecided item, and
+`validate` fails that file ([VALIDATION_SPEC](VALIDATION_SPEC.md)); the sanitized file holds only placeholders, so
+`validate` has no way to find the copy by itself.
 
 ### URL Credential Location Annotation
 
@@ -1779,7 +1819,8 @@ Detects common redaction markers to warn users before double-sanitizing.
    belong in the heuristic engine (flagged for user review), not the scanner pipeline.
 1. **Propagation never widens what counts as a secret** — [Pass 1b](#pass-1b-redacted-value-propagation) only replaces
    values the strict Pass 1 rules already redacted. It introduces no detection of its own, and a value that fails
-   eligibility stays flagged for review. Widening eligibility is a scope change and is governed by
+   eligibility is left for review ([Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase) flags a network
+   name or passphrase that is still readable). Widening eligibility is a scope change and is governed by
    [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract).
 1. **Output is LF-only on every platform** — Every writer that emits a HAR or report pins `newline="\n"` rather than
    letting Python's text mode substitute `os.linesep`. Captures are committed downstream as immutable evidence in repos

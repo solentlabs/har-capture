@@ -243,7 +243,8 @@ graph TD
 
     raw[Raw HAR] --> pass1
     pass1 --> pass1b[Pass 1b: Propagate<br>Replace already-redacted values on unlabeled surfaces]
-    pass1b --> sanitized[Sanitized HAR]
+    pass1b --> pass1d[Pass 1d: Flag<br>A redacted network name or passphrase still readable elsewhere]
+    pass1d --> sanitized[Sanitized HAR]
     sanitized --> pass2[Pass 2: Interactive Review<br>Show flagged → user selects → apply redactions]
 ```
 
@@ -256,6 +257,11 @@ by mime type, or sniffed when the type says nothing, to the HTML engine or strin
 already-redacted value with the placeholder that value was assigned. This catches secrets on surfaces that carry no
 field name to match — most commonly a URL path segment. It adds no detection of its own; eligibility is a
 collision-safety test on values Pass 1 already redacted.
+
+**Pass 1d** looks once more for each network name and Wi-Fi passphrase the run redacted. A copy that is still readable —
+no rule named it, and the value is too short or word-shaped for the Pass 1b sweep — is flagged for review, never
+replaced unasked
+([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#pass-1d-surviving-copies-of-a-network-name-or-passphrase)).
 
 **Pass 2** presents flagged values for interactive review (TTY); without a terminal nobody is prompted. User-selected
 redactions replace every copy of a value inside string values — escaped and percent-encoded forms too — using the same

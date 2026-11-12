@@ -1505,6 +1505,8 @@ def _sanitize_json_recursive(
                 if collector:
                     collector.record_auto_redaction("wifi_ssid")
                 result[out_key] = hasher.hash_generic(str(value), "WIFI") if hasher else "***WIFI***"
+                if collector:
+                    collector.record_redacted_value(value, result[out_key], review_as="wifi_ssid")
             else:
                 result[out_key] = _sanitize_json_recursive(
                     value, hasher, collector, _depth + 1, served=served
@@ -2755,6 +2757,45 @@ def _propagate_redacted_values(
     return whole_bodies + replacements
 
 
+_SURVIVOR_CONTEXT_CHARS = 40
+
+
+def _flag_surviving_copies(har_data: dict[str, Any], collector: RedactionCollector) -> int:
+    """Flag each redacted network name or passphrase that is still readable in the HAR (Pass 1d).
+
+    A strict rule redacted the value where a label, a key or the page's script
+    named it. A copy with no such name (another page's unlabeled blob) matched
+    nothing, and a short or word-shaped value is not eligible for the Pass 1b
+    sweep, so the copy is offered for review rather than replaced: the same
+    text elsewhere may be a coincidence only the user can judge.
+
+    Args:
+        har_data: The sanitized HAR data, after the Pass 1b and 1c sweeps
+        collector: The run's collector, holding the values to look for
+
+    Returns:
+        Number of values flagged
+    """
+    if not collector.review_categories:
+        return 0
+    readable = _readable_text(har_data)
+    flagged = 0
+    for value in collector.review_categories:
+        occurrences = readable.count(value)
+        if not occurrences:
+            continue
+        at = readable.index(value)
+        context = readable[max(0, at - _SURVIVOR_CONTEXT_CHARS) : at + len(value) + _SURVIVOR_CONTEXT_CHARS]
+        collector.flag_surviving_copy(
+            value,
+            " ".join(context.split()),
+            "Redacted elsewhere in this capture as a network name or passphrase; no rule matched this copy",
+            occurrences,
+        )
+        flagged += 1
+    return flagged
+
+
 # A body counts as collapsed when its recorded size dwarfs its text: at least
 # this ratio larger and this many bytes larger. The rule cable_modem_monitor's
 # validate_har applies, so a HAR it would reject is reported here first.
@@ -3043,6 +3084,10 @@ def sanitize_har(
     mac_sweeps = _sweep_known_macs(result["log"].get("entries"), hasher)
     if mac_sweeps:
         collector.auto_redacted_counts["mac_derived"] = mac_sweeps
+
+    # Pass 1d: a network name or passphrase redacted on one surface and still
+    # readable on another is offered for review.
+    _flag_surviving_copies(result, collector)
 
     # Pass 1b replaced result's contents, so `log` is no longer the sanitized one.
     final_entries = result["log"].get("entries")

@@ -299,6 +299,7 @@ class Hasher:
         prefix_map = {
             "wifi_ssid": "WIFI",
             "credential": "CRED",
+            "password": "PASS",  # pragma: allowlist secret
             "device_name": "DEVICE",
             "suspicious": "SENSITIVE",
             "serial_number": "SERIAL",

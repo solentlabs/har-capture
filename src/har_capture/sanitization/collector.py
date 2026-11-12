@@ -49,6 +49,9 @@ class RedactionCollector:
         flagged: List of values flagged for user review
         redacted_values: Original value -> placeholder, for Pass 1b propagation
         cookie_values: Raw values redacted as cookie data, for the header-echo sweep
+        serial_values: Redacted values recognized as device serials (shorter sweep floor)
+        review_categories: Redacted network name or passphrase -> the review
+            category a copy of it that survives Pass 1b is flagged under
         _flag_index: Flagged value -> its entry (for deduplication)
         _flag_created, _flag_touched: Flagged value -> the flag call that
             created it, and the latest that counted it (see ``flag_mark``)
@@ -60,6 +63,7 @@ class RedactionCollector:
     redacted_values: dict[str, str] = field(default_factory=dict, repr=False)
     cookie_values: set[str] = field(default_factory=set, repr=False)
     serial_values: set[str] = field(default_factory=set, repr=False)
+    review_categories: dict[str, str] = field(default_factory=dict, repr=False)
     _flag_index: dict[str, FlaggedValue] = field(default_factory=dict, repr=False)
     _flag_created: dict[str, int] = field(default_factory=dict, repr=False)
     _flag_touched: dict[str, int] = field(default_factory=dict, repr=False)
@@ -90,7 +94,9 @@ class RedactionCollector:
         """A mark for ``flag_value``'s ``supersede_since``: flags raised after it carry a later call number."""
         return self._flag_calls
 
-    def record_redacted_value(self, original: str, placeholder: str, *, serial: bool = False) -> None:
+    def record_redacted_value(
+        self, original: str, placeholder: str, *, serial: bool = False, review_as: str | None = None
+    ) -> None:
         """Remember which placeholder an auto-redacted value was given.
 
         Feeds the Pass 1b propagation sweep. The first surface to redact a
@@ -101,9 +107,14 @@ class RedactionCollector:
             placeholder: The placeholder that replaced it
             serial: The value was recognized as a device serial, so the sweep
                 accepts it at a shorter length than other values
+            review_as: The review category (``wifi_ssid``, ``password``) for a
+                network name or passphrase: a copy the sweep leaves in the
+                file is flagged under it (``flag_surviving_copy``)
         """
         if original and serial:
             self.serial_values.add(original)
+        if original and review_as:
+            self.review_categories.setdefault(original, review_as)
         if original and original not in self.redacted_values:
             self.redacted_values[original] = placeholder
 
@@ -175,6 +186,35 @@ class RedactionCollector:
                 existing.category, existing.confidence = category, confidence
                 existing.context, existing.reason = context, reason
         self._flag_touched[value] = call
+
+    def flag_surviving_copy(self, value: str, context: str, reason: str, occurrences: int) -> None:
+        """Offer for review a value redacted elsewhere whose remaining copies no rule matched.
+
+        The value is known to be personal data, but whether the same text
+        elsewhere is that value or a coincidence is the user's call, so the
+        item is offered at medium confidence. Its category is the value's
+        ``review_categories`` entry, which gives a confirmed redaction the
+        placeholder the value already has. An item a heuristic raised for the
+        same text is relabeled, its confidence never lowered, not duplicated.
+
+        Args:
+            value: The pre-redaction value still present in the file
+            context: Text around one remaining copy
+            reason: Why it is offered
+            occurrences: How many copies remain
+        """
+        category = self.review_categories[value]
+        existing = self._flag_index.get(value)
+        if existing is None:
+            self.flag_value(value, category, ConfidenceLevel.MEDIUM, context, reason)
+            existing = self._flag_index.get(value)
+            if existing is None:
+                return
+        else:
+            existing.category, existing.reason = category, reason
+            if _CONFIDENCE_RANK[existing.confidence] < _CONFIDENCE_RANK[ConfidenceLevel.MEDIUM]:
+                existing.confidence = ConfidenceLevel.MEDIUM
+        existing.occurrences = occurrences
 
     def drop_flagged(self, values: set[str]) -> int:
         """Remove flagged entries for values that no longer occur in the HAR.

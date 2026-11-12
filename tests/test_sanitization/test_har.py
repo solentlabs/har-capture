@@ -60,6 +60,7 @@ from har_capture.sanitization.har import (
     validate_har_structure,
 )
 from har_capture.sanitization.report import (
+    ConfidenceLevel,
     FlaggedValue,
     HeuristicMode,
     RedactionStatus,
@@ -4639,6 +4640,96 @@ class TestRedactedValuePropagation:
         assert uuid in sanitized["log"]["entries"][1]["request"]["url"], (
             "a flagged-only value must not be auto-redacted"
         )
+
+
+def _surviving_copy_har(case: dict) -> dict:
+    """One GET per body; the case's optional header rides on the first request."""
+    header = [{"name": "X-Net", "value": case["header"]}] if case.get("header") else []
+    return {
+        "log": {
+            "version": "1.2",
+            "entries": [
+                {
+                    "request": {
+                        "method": "GET",
+                        "url": f"http://192.168.100.1/page{i}.htm",
+                        "headers": header if i == 0 else [],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [],
+                        "content": {"mimeType": body["mime"], "text": body["text"]},
+                    },
+                }
+                for i, body in enumerate(case["bodies"])
+            ],
+        }
+    }
+
+
+def _sanitize_surviving_copy(case: dict, heuristics: HeuristicMode) -> tuple[dict, SanitizationReport]:
+    """Sanitize a case's HAR with the network-device patterns, which name ``tagValueList``."""
+    from har_capture.patterns.loader import resolve_patterns_arg
+
+    return sanitize_har(
+        _surviving_copy_har(case),
+        salt="test",
+        heuristics=heuristics,
+        custom_patterns=str(resolve_patterns_arg("network-device")),
+    )
+
+
+_SURVIVING_COPY = _HAR_FIXTURE["surviving_copy_cases"]
+
+
+class TestSurvivingCopiesAreFlagged:
+    """A redacted network name or passphrase still readable elsewhere is offered for review (Pass 1d)."""
+
+    @pytest.mark.parametrize("case", _SURVIVING_COPY, ids=[c["id"] for c in _SURVIVING_COPY])
+    @pytest.mark.parametrize("heuristics", list(HeuristicMode), ids=lambda mode: mode.name)
+    def test_flagged_once_with_its_count(self, case: dict, heuristics: HeuristicMode) -> None:
+        """The surviving value is one review item, counted as it remains, and is not replaced unasked."""
+        sanitized, report = _sanitize_surviving_copy(case, heuristics)
+
+        items = [f for f in report.flagged if f.original_value == case["value"]]
+        text = json.dumps(sanitized)
+        assert case["prefix"] in text, "the named copy was not redacted"
+        if case["category"] is None:
+            assert items == []
+            assert case["value"] not in text
+            return
+        assert [(f.category, f.occurrences) for f in items] == [(case["category"], case["occurrences"])]
+        assert items[0].confidence is not ConfidenceLevel.LOW
+        assert text.count(case["value"]) == case["occurrences"], "a flagged-only copy must stay as captured"
+
+    @pytest.mark.parametrize(
+        "case",
+        [c for c in _SURVIVING_COPY if c["category"]],
+        ids=[c["id"] for c in _SURVIVING_COPY if c["category"]],
+    )
+    def test_confirmed_copy_takes_the_placeholder_already_written(self, case: dict) -> None:
+        """Confirming the item writes the same placeholder the named copy has, so the two still correlate."""
+        sanitized, report = _sanitize_surviving_copy(case, HeuristicMode.FLAG)
+        placeholders = set(re.findall(case["prefix"] + "[0-9a-f]{8}", json.dumps(sanitized)))
+        for item in report.flagged:
+            item.status = (
+                RedactionStatus.USER_REDACTED
+                if item.original_value == case["value"]
+                else RedactionStatus.SKIPPED
+            )
+
+        redacted = json.dumps(apply_user_redactions(sanitized, report))
+
+        assert case["value"] not in redacted
+        assert set(re.findall(case["prefix"] + "[0-9a-f]{8}", redacted)) == placeholders
+
+    def test_heuristic_flag_for_the_same_text_is_relabeled_not_duplicated(self) -> None:
+        """A brand-shaped name the heuristics already offered becomes the one network-name item."""
+        case = json.loads(json.dumps(_SURVIVING_COPY[0]).replace("Maplewood", "NETGEAR00"))
+        _, report = _sanitize_surviving_copy(case, HeuristicMode.FLAG)
+
+        items = [f for f in report.flagged if f.original_value == "NETGEAR00"]
+        assert [(f.category, f.occurrences) for f in items] == [("wifi_ssid", 1)]
 
 
 class TestPropagationFailureModes:
