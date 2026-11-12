@@ -988,13 +988,26 @@ InitUpdateView(InitTagValue());
 1. **Read the sinks**: in a view, a write of `parameter[N]` — `N` a constant, alone or inside calls, ending the
    statement — into `getElementsByName("NAME")[0].value` / `.innerHTML`, `getElementById("NAME").value` / `.innerHTML`,
    `$('#NAME').html(` / `.val(` / `.text(`, `form.NAME.value` or `var NAME`. A sink in a comment or a string is not
-   read, and neither is an expression (`tagValues[1] + " dBm"`, `tags[base + 0]`).
+   read, and neither is a value joined to other text (`tagValues[1] + " dBm"`).
+1. **Read the rows**: a named variable assigned `array[EXPRESSION]`, alone or inside calls, where the array is the
+   view's parameter or, in the blob's own function, a variable assigned `….split("|")`. `linear_index()` reads the
+   expression as a start plus a stride times one loop variable — integers, names, `+`, `*` and parentheses, a name
+   standing for the expression the function last assigned it (`firstCellIdx` for `1 + (j * 7)`), a loop header's own
+   assignment excepted. With a stride of two or more, the field at start, start + stride, … to the end of the blob is
+   the variable's kind. Anything else is not a row: another operator, two loop variables, an expression over 100
+   characters.
+1. **Read the tables**: a call in the view of the shape `draw('TABLE', parameter, callback)`. The callback is the
+   function of that name; a cell it fills from its own parameters (`cells[K] = decode(tags[first + A])`) is column `K`
+   read from field `A` of a row. Column `K` names a network when the first row of `<table id="TABLE">` heads it `SSID`
+   or `Network Name` (not `BSSID`). Rows are laid out as that drawing function lays them: field 0 is the row count, the
+   rest divide into that many equal rows of two or more fields, an empty field after a trailing delimiter aside; a blob
+   that does not divide is not read.
 1. **Name** (`pipe_sink_kind`): `NAME` is a password sink when it is a credential label (`password`, `passphrase`,
    `psk`, `wpa…key`, a glued `key`) and an SSID sink when it is an SSID name (`ssid` not after `b`, `wifi_ntwrk`,
    `wifi_network`, `priwifinet`, `wireless_name`), in both cases followed only by digits, `Hidden` (passwords) and a
    band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix. `wirelessPassword1_5g`, `passphraseHidden_an`,
    `radius_key_2G`, `wiressSSID1` and `WirelessName_an` are sinks; `passwordId`, `passphraseStr`, `ssid_sel`,
-   `ssid_bc_enable`, `bssid_enable` and `group_key_update_interval_2G` are not. A position two sinks disagree on is a
+   `ssid_bc_enable`, `bssid_enable` and `group_key_update_interval_2G` are not. A position two readings disagree on is a
    password.
 1. **Judge the value** (`is_pipe_sink_value_sensitive`), without its surrounding whitespace: kept when empty, already a
    placeholder (`is_redacted()`, a `***…` marker, `PREFIX_<hash>`), a `tagValueList.safe_values` word, a safe or status
@@ -1004,8 +1017,12 @@ InitUpdateView(InitTagValue());
 The pass runs in every heuristic mode, ahead of pass 14, which then skips the placeholders. It is exposed as a function
 and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob served from a `.js` file is covered and
 `validate`, which reports what `iter_pipe_sink_values` yields, never reports a value a sanitize run cannot clear. Not
-covered, and left to pass 14's review: a value read by a computed index (the Wi-Fi scan pages' rows), a bare `KEY1` WEP
-sink, and a name the sink does not call an SSID (`GuestNetworkName1`).
+covered, and left to pass 14's review: a bare `KEY1` WEP sink, a name the sink does not call an SSID
+(`GuestNetworkName1`), and rows the script reads with no name and no headed table.
+
+Every scan is one pass over the text or one function's body and is kept for the page's other blobs (`PipeSinks`). At
+most 16 row layouts, views and tables are read for one function, and the function a blob sits in is looked for among the
+16 declared nearest before it.
 
 ### Pipe-Delimited Scanner (Pass 14)
 
@@ -1686,14 +1703,20 @@ stale file, and the CLI exits non-zero with that name; `har-capture validate` ba
 [freshness check](VALIDATION_SPEC.md#compressed-artifact-freshness-check).
 
 **Deciding from a report:** where there is no terminal, a review report someone decided stands in for the prompt
-(`sanitize --apply-review REPORT`). `load_review_decisions(path)` reads the report `sanitize` writes
-(`SanitizationReport.to_dict()`) and returns each decided value with its status — `user` (redact) or `skipped` (keep);
-an item left `flagged` is undecided, and any other status, or a file that is not a report, is a `ValueError` raised
-before the run writes anything. `apply_review_decisions(report, decisions)` sets each flagged item's status by matching
-its value, so a report from one run decides the same values in another, and returns the number left undecided; a
-decision for a value the run did not flag is ignored. With none undecided the review is recorded as `completed`. With
-any undecided, the decisions made are applied, the review is recorded as `cancelled`, the report is written back
-(`--report`, or `<input>.review.json`) and the command exits 1.
+(`sanitize --apply-review REPORT`). `read_review_decisions(data)` reads the parsed report `sanitize` writes
+(`SanitizationReport.to_dict()`; `load_review_decisions(path)` reads it from a file) and returns each decided value with
+its status — `user` (redact) or `skipped` (keep); an item left `flagged` is undecided, and any other status, or a file
+that is not a report, is a `ValueError` raised before the run writes anything.
+`apply_review_decisions(report, decisions)` sets each flagged item's status by matching its value, so a report from one
+run decides the same values in another, and returns the number left undecided; a decision for a value the run did not
+flag is ignored. With none undecided the review is recorded as `completed`. With any undecided, the decisions made are
+applied, the review is recorded as `cancelled`, the report is handed back and the command exits 1.
+
+**The report need not touch disk.** It holds every flagged value as captured, and the salt. `-` names a standard stream
+for both options: `--report -` writes the report to standard output and sends every message to standard error, so the
+pipe carries the report alone; `--apply-review -` reads the decided report from standard input, and hands an undecided
+remainder back on standard output unless `--report` names a file. A file is the fallback: a no-terminal run with no
+`--report` writes `<input>.review.json` beside its input, and an undecided remainder of a report file goes there too.
 
 Every ending is recorded, a review that redacted nothing included — a skipped or cancelled review, or one nobody could
 be asked for, is exactly what a recipient needs to see. `ReviewOutcome` (`sanitization/report.py`):

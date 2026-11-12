@@ -101,6 +101,7 @@ Thumbs.db
 # Project specific
 *.har
 *.har.gz
+*.review.json
 captures/
 RAW_DATA/
 

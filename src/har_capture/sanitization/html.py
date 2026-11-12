@@ -25,6 +25,7 @@ import ipaddress
 import json
 import re
 from collections.abc import Callable, Collection, Iterator, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
 from har_capture.patterns import (
@@ -1612,7 +1613,7 @@ def redact_structural_credentials(
 # index is read from the page, so a firmware that moves a field moves the
 # redaction with it. Anything the binding cannot follow yields no sink, and
 # the value stays with pass 14's heuristics.
-_FUNCTION_RE = re.compile(r"\bfunction\s+([\w$]+)\s*\(\s*([\w$]*)[^)]*\)\s*\{")
+_FUNCTION_RE = re.compile(r"\bfunction\s+([\w$]+)\s*\(([^)]*)\)\s*\{")
 # The name a sink carries: a credential label (PASSWORD_FIELD_RE's) or an SSID
 # name (SSID_ATTRIBUTE_RE's), followed by nothing but a number, `Hidden` and a
 # radio band. `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`
@@ -1648,6 +1649,63 @@ _PIPE_SINK_TARGET = (
     r"(?:[\w$.]+\(\s*)*"
 )
 _PIPE_SINK_READ = r"\[\s*(?P<index>\d+)\s*\](?=[\s)]*(?:;|$))"
+# A row read is a variable the script names, assigned one field of every row:
+# `var ssid = rows[firstCellIdx + 0];` with `var firstCellIdx = 1 + (j * 7);`,
+# or `var ssid = decode(tagValues[1 + i * 7 + 0]);`. The index is a start plus
+# a stride times the loop variable (`linear_index`), so the field sits at
+# start, start + stride, start + 2 * stride, … to the end of the blob.
+_PIPE_ROW_RE = re.compile(
+    r"(?<![\w$.\])])(?:var\s+)?(?P<name>[A-Za-z_$][\w$]*)\s*=\s*(?:[\w$.]+\(\s*)*(?P<array>[\w$]+)"
+    r"\[(?P<expression>[^\[\];\n]*)\](?=[\s)]*(?:;|$))",
+    re.MULTILINE,
+)
+_PIPE_ASSIGNMENT_RE = re.compile(
+    r"(\bfor\s*\(\s*)?(?<![\w$.])(?:var\s+)?([A-Za-z_$][\w$]*)\s*=(?!=)\s*([^;\n]+)"
+)
+_PIPE_SPLIT_RE = re.compile(
+    r"(?<![\w$.])(?:var\s+)?([A-Za-z_$][\w$]*)\s*=\s*[\w$]+\.split\(\s*[\"']\|[\"']\s*\)"
+)
+_INDEX_TOKEN_RE = re.compile(r"\s*(?:(\d+)|([A-Za-z_$][\w$]*)|([+*()]))")
+# A table read is a row callback handed, with the blob, to a function that
+# draws a table: `drawTable('apTable', tagValues, onAddRowCB)`. The callback
+# takes the blob and a row's first index among its parameters and fills one
+# cell per column (`cells[0] = decode(tags[firstCellIdx + 0]);`); the header
+# row of the table with that id says what a column is ("Network Name"). Rows
+# are laid out as that function lays them: a count first, then equal rows.
+_PIPE_TABLE_CALL = (
+    r"(?<![\w$.])[\w$]+\(\s*[\"'](?P<table>[\w-]+)[\"']\s*,\s*{parameter}\s*,\s*(?P<callback>[\w$]+)\s*\)"
+)
+_PIPE_TABLE_CELL_RE = re.compile(
+    r"(?<![\w$.])[\w$]+\s*\[\s*(?P<column>\d+)\s*\]\s*=\s*(?:[\w$.]+\(\s*)*"
+    r"(?P<array>[\w$]+)\[\s*(?P<base>[A-Za-z_$][\w$]*)\s*(?:\+\s*(?P<offset>\d+)\s*)?\]"
+)
+_TABLE_CELL_RE = re.compile(r"<t[dh]\b" + _TAG_RUN + r">(.*?)</t[dh]\s*>", re.IGNORECASE | re.DOTALL)
+_TABLE_ROW_END_RE = re.compile(r"</tr\s*>", re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^<>]*>")
+
+
+def _table_open(table: str) -> re.Pattern[str]:
+    """The opening tag of the table with this id, its attribute run stopping at the id (``_tag_run_to``)."""
+    identifier = r"\bid\s*=\s*[\"']?" + re.escape(table) + r"(?![\w-])[\"']?"
+    return re.compile(r"<table\b" + _tag_run_to(identifier) + identifier + _TAG_RUN + r">", re.IGNORECASE)
+
+
+# A column heading that names a network: pass 7a's SSID labels. `BSSID` is a MAC.
+_SSID_HEADING_RE = re.compile(r"(?<![A-Za-z])(?:SSID|Network\s*Name)(?![A-Za-z])", re.IGNORECASE)
+# How many names deep an index is followed (`a` = `b + 1`, `b` = `i * 7`).
+_INDEX_NAME_DEPTH = 3
+# The longest index expression read. A real one is a few terms; a longer one is
+# not read, so nesting cannot run the reader out of stack.
+_INDEX_MAX_LENGTH = 100
+# A row is at least this many fields: a stride of one is every field of the blob.
+_PIPE_ROW_MIN_STRIDE = 2
+# Bounds no real page nears, so a hostile one cannot multiply the work: the
+# row layouts, views and tables read for one function, and the functions tried
+# as the one a blob sits in.
+_PIPE_ROW_LIMIT = 16
+_PIPE_VIEW_LIMIT = 16
+_PIPE_TABLE_LIMIT = 16
+_PIPE_ENCLOSING_LIMIT = 16
 # A numeric passphrase is at least this long (WPA's minimum); a shorter number
 # in a credential-named sink is an index or an interval.
 _PIPE_SINK_MIN_NUMERIC_PASSWORD = 8
@@ -1663,49 +1721,221 @@ def pipe_sink_kind(name: str) -> str | None:
     return None
 
 
+def linear_index(
+    expression: str, definitions: Callable[[str], str | None], depth: int = 0
+) -> tuple[int, int] | None:
+    """Read an index expression as ``(start, stride)``: ``start + stride * i`` for one loop variable ``i``.
+
+    The expression holds integers, names, ``+``, ``*`` and parentheses. A name
+    ``definitions`` resolves is replaced by its own expression
+    (``firstCellIdx`` by ``1 + (j * 7)``); one it does not is the loop
+    variable. ``None`` for anything else: another operator, two loop
+    variables, a variable times a variable, or names defined in a circle.
+
+    Args:
+        expression: The text between an index's brackets
+        definitions: Returns the expression a name was assigned, or None
+        depth: Names resolved so far on the way to this expression
+    """
+    if len(expression) > _INDEX_MAX_LENGTH:
+        return None
+    tokens: list[tuple[str, str, str]] = []
+    position = 0
+    while position < len(expression.rstrip()):
+        token = _INDEX_TOKEN_RE.match(expression, position)
+        if token is None:
+            return None
+        tokens.append((token.group(1), token.group(2), token.group(3)))
+        position = token.end()
+    cursor = 0
+    variable: list[str] = []
+
+    def atom() -> tuple[int, int] | None:
+        nonlocal cursor
+        if cursor >= len(tokens):
+            return None
+        number, name, operator = tokens[cursor]
+        cursor += 1
+        if number:
+            return int(number), 0
+        if name:
+            defined = definitions(name)
+            if defined is not None:
+                return linear_index(defined, definitions, depth + 1) if depth < _INDEX_NAME_DEPTH else None
+            variable.append(name)
+            return 0, 1
+        if operator != "(":
+            return None
+        inner = total()
+        if inner is None or cursor >= len(tokens) or tokens[cursor][2] != ")":
+            return None
+        cursor += 1
+        return inner
+
+    def product() -> tuple[int, int] | None:
+        nonlocal cursor
+        left = atom()
+        while left is not None and cursor < len(tokens) and tokens[cursor][2] == "*":
+            cursor += 1
+            right = atom()
+            if right is None or (left[1] and right[1]):
+                return None
+            factor, other = (left, right) if left[1] == 0 else (right, left)
+            left = (factor[0] * other[0], factor[0] * other[1])
+        return left
+
+    def total() -> tuple[int, int] | None:
+        nonlocal cursor
+        left = product()
+        while left is not None and cursor < len(tokens) and tokens[cursor][2] == "+":
+            cursor += 1
+            right = product()
+            if right is None:
+                return None
+            left = (left[0] + right[0], left[1] + right[1])
+        return left
+
+    result = total()
+    if result is None or cursor != len(tokens) or len(set(variable)) > 1:
+        return None
+    return result
+
+
+@dataclass
+class _PipeLayout:
+    """What a page's script says about the blobs of one function: where the named values sit."""
+
+    constants: dict[int, str] = field(default_factory=dict)  # position -> kind (a sink)
+    rows: dict[tuple[int, int], str] = field(default_factory=dict)  # (start, stride) -> kind (a row read)
+    columns: set[int] = field(default_factory=set)  # offset in a table row of a network-name column
+
+    def add(self, position: int, kind: str) -> None:
+        """Record a sink. A position two sinks disagree on is a password: the stricter reading."""
+        if self.constants.get(position) != "password":
+            self.constants[position] = kind
+
+
 class PipeSinks:
-    """The positions of a page's pipe-delimited blobs that its own script writes into a named sink."""
+    """The positions of a page's pipe-delimited blobs that its own script writes into a named sink.
+
+    Every scan is one pass over the text or over one function's body, and its
+    result is kept, so a page with many blobs, calls or reads costs no more
+    than its length.
+    """
 
     def __init__(self, text: str, code: ScriptCode | None = None) -> None:
         self._text = text
         self._code = code if code is not None else ScriptCode(text)
-        self._functions: list[tuple[int, int, str, str]] | None = None
+        self._functions: list[tuple[int, str, list[str]]] | None = None
+        self._ends: dict[int, int] = {}
+        self._layouts: dict[int, _PipeLayout] = {}
+        self._headings: dict[str, set[int]] = {}
 
-    def _scan(self) -> list[tuple[int, int, str, str]]:
-        """Every function declared in script code, as ``(body_start, body_end, name, first_parameter)``."""
+    def _scan(self) -> list[tuple[int, str, list[str]]]:
+        """Every function declared in script code, as ``(body_start, name, parameters)``, in order."""
         if self._functions is None:
             self._functions = [
-                (match.end(), self._code.block_end(match.end() - 1), match.group(1), match.group(2))
+                (
+                    match.end(),
+                    match.group(1),
+                    [parameter.strip() for parameter in match.group(2).split(",") if parameter.strip()],
+                )
                 for match in _FUNCTION_RE.finditer(self._text)
                 if self._code.contains(match.start())
             ]
         return self._functions
 
-    def kinds_at(self, offset: int) -> dict[int, str]:
-        """Map each sink-named position of the blob assigned at ``offset`` to ``"password"`` or ``"ssid"``.
+    def _end(self, body_start: int) -> int:
+        if body_start not in self._ends:
+            self._ends[body_start] = self._code.block_end(body_start - 1)
+        return self._ends[body_start]
 
-        Empty when the assignment is not script code (a commented-out firmware
-        example), sits in no function, or its function is passed to no other.
+    def _named(self, name: str) -> tuple[int, list[str]] | None:
+        """The function declared with this name: the last one, as a script runs it."""
+        for body_start, declared, parameters in reversed(self._scan()):
+            if declared == name:
+                return body_start, parameters
+        return None
+
+    def _enclosing(self, offset: int) -> tuple[int, str] | None:
+        """The innermost function whose body holds ``offset``, among the nearest declared before it."""
+        functions = self._scan()
+        last = bisect.bisect_right([body_start for body_start, _, _ in functions], offset)
+        for body_start, name, _ in reversed(functions[max(last - _PIPE_ENCLOSING_LIMIT, 0) : last]):
+            if offset < self._end(body_start):
+                return body_start, name
+        return None
+
+    def kinds_at(self, offset: int, fields: Sequence[str]) -> dict[int, str]:
+        """Map each sink-named position of the blob assigned at ``offset`` to its kind.
+
+        The kind is ``"password"`` or ``"ssid"``; ``fields`` is the blob,
+        split. Empty when the assignment is not script code (a commented-out
+        firmware example) or sits in no function. Positions come from the
+        function the blob's own is passed to (its sinks, row reads and table
+        reads) and from row reads of the split blob in the blob's own function.
         """
         if not self._code.contains(offset):
             return {}
-        functions = self._scan()
-        enclosing = [name for start, end, name, _ in functions if start <= offset < end]
-        if not enclosing:
+        source = self._enclosing(offset)
+        if source is None:
             return {}
-        source = enclosing[-1]
+        if source[0] not in self._layouts:
+            self._layouts[source[0]] = self._read_layout(*source)
+        layout = self._layouts[source[0]]
+
         kinds: dict[int, str] = {}
-        for call in re.finditer(
-            r"(?<![\w$.])([\w$]+)\(\s*" + re.escape(source) + r"\(\s*\)\s*\)", self._text
-        ):
-            if not self._code.contains(call.start()):
-                continue
-            for start, end, name, parameter in functions:
-                if name == call.group(1) and parameter:
-                    self._read_sinks(start, end, parameter, kinds)
+        # A table is laid out as the function that draws it lays it out: a row
+        # count, then that many equal rows, less an empty field after a
+        # trailing delimiter.
+        total = len(fields) - 1 - (not fields[-1].strip())
+        rows = int(fields[0]) if fields[0].strip().isdigit() else 0
+        if layout.columns and rows >= 1 and total % rows == 0 and total // rows >= _PIPE_ROW_MIN_STRIDE:
+            stride = total // rows
+            for column in layout.columns:
+                if column < stride:
+                    kinds.update(dict.fromkeys(range(1 + column, len(fields), stride), "ssid"))
+        # A position two readings disagree on is a password: the stricter one.
+        for (start, stride), kind in sorted(layout.rows.items(), key=lambda row: row[1] == "password"):
+            kinds.update(dict.fromkeys(range(start, len(fields), stride), kind))
+        kinds.update(
+            {
+                position: kind
+                for position, kind in layout.constants.items()
+                if kinds.get(position) != "password"
+            }
+        )
         return kinds
 
-    def _read_sinks(self, start: int, end: int, parameter: str, kinds: dict[int, str]) -> None:
+    def _read_layout(self, source_start: int, source: str) -> _PipeLayout:
+        """Read what the script says about the blobs of the function ``source``."""
+        layout = _PipeLayout()
+        source_end = self._end(source_start)
+        arrays = {
+            split.group(1)
+            for split in _PIPE_SPLIT_RE.finditer(self._text, source_start, source_end)
+            if self._code.contains(split.start())
+        }
+        self._read_rows(source_start, source_end, arrays, layout)
+        views = {
+            call.group(1)
+            for call in re.finditer(
+                r"(?<![\w$.])([\w$]+)\(\s*" + re.escape(source) + r"\(\s*\)\s*\)", self._text
+            )
+            if self._code.contains(call.start())
+        }
+        for view in sorted(views)[:_PIPE_VIEW_LIMIT]:
+            declared = self._named(view)
+            if declared is None or not declared[1]:
+                continue
+            start, parameter = declared[0], declared[1][0]
+            end = self._end(start)
+            self._read_sinks(start, end, parameter, layout)
+            self._read_rows(start, end, {parameter}, layout)
+            self._read_tables(start, end, parameter, layout)
+        return layout
+
+    def _read_sinks(self, start: int, end: int, parameter: str, layout: _PipeLayout) -> None:
         sink_re = re.compile(_PIPE_SINK_TARGET + re.escape(parameter) + _PIPE_SINK_READ, re.MULTILINE)
         for sink in sink_re.finditer(self._text, start, end):
             if not (self._code.contains(sink.start()) and self._code.contains(sink.start("index"))):
@@ -1717,18 +1947,84 @@ class PipeSinks:
                 or sink.group("by_variable")
             )
             kind = pipe_sink_kind(name)
-            # A position two sinks disagree on is a password: the stricter reading.
-            if kind is not None and kinds.get(int(sink.group("index"))) != "password":
-                kinds[int(sink.group("index"))] = kind
+            if kind is not None:
+                layout.add(int(sink.group("index")), kind)
+
+    def _read_rows(self, start: int, end: int, arrays: set[str], layout: _PipeLayout) -> None:
+        """Add the row a named variable reads from one of ``arrays`` (``linear_index``)."""
+        if not arrays:
+            return
+        # A name is the expression the function last assigned it. A loop
+        # header's own assignment (`for (j = 0; …`) starts the loop variable;
+        # it does not define it.
+        definitions = {
+            assigned.group(2): assigned.group(3)
+            for assigned in _PIPE_ASSIGNMENT_RE.finditer(self._text, start, end)
+            if assigned.group(1) is None and self._code.contains(assigned.start(2))
+        }
+        indexes: dict[str, tuple[int, int] | None] = {}
+        for read in _PIPE_ROW_RE.finditer(self._text, start, end):
+            kind = pipe_sink_kind(read.group("name"))
+            if kind is None or read.group("array") not in arrays or not self._code.contains(read.start()):
+                continue
+            expression = read.group("expression")
+            if expression not in indexes:
+                indexes[expression] = linear_index(expression, definitions.get)
+            index = indexes[expression]
+            if index is None or index[1] < _PIPE_ROW_MIN_STRIDE or len(layout.rows) >= _PIPE_ROW_LIMIT:
+                continue
+            if layout.rows.get(index) != "password":
+                layout.rows[index] = kind
+
+    def _read_tables(self, start: int, end: int, parameter: str, layout: _PipeLayout) -> None:
+        """Add the row offsets a row callback writes into a column whose heading names a network."""
+        call_re = re.compile(_PIPE_TABLE_CALL.format(parameter=re.escape(parameter)))
+        tables = {
+            (call.group("table"), call.group("callback"))
+            for call in call_re.finditer(self._text, start, end)
+            if self._code.contains(call.start())
+        }
+        for table, callback in sorted(tables)[:_PIPE_TABLE_LIMIT]:
+            columns = self._ssid_columns(table)
+            declared = self._named(callback) if columns else None
+            if declared is None:
+                continue
+            body_start, parameters = declared
+            for cell in _PIPE_TABLE_CELL_RE.finditer(self._text, body_start, self._end(body_start)):
+                if (
+                    int(cell.group("column")) in columns
+                    and cell.group("array") in parameters
+                    and cell.group("base") in parameters
+                    and self._code.contains(cell.start())
+                ):
+                    layout.columns.add(int(cell.group("offset") or 0))
+
+    def _ssid_columns(self, table: str) -> set[int]:
+        """The columns of the table with this id whose heading, in its first row, names a network."""
+        if table not in self._headings:
+            opening = _table_open(table).search(self._text)
+            header = ""
+            if opening is not None:
+                row_end = _TABLE_ROW_END_RE.search(self._text, opening.end())
+                header = self._text[opening.end() : row_end.start() if row_end else len(self._text)]
+            self._headings[table] = {
+                column
+                for column, cell in enumerate(_TABLE_CELL_RE.findall(header))
+                if _SSID_HEADING_RE.search(_TAG_RE.sub(" ", cell))
+            }
+        return self._headings[table]
 
 
 def is_pipe_sink_value_sensitive(
     value: str,
     kind: str,
     safe_values: Collection[str],
-    custom_patterns: str | dict[str, Any] | None = None,
+    allowlist: dict[str, Any],
 ) -> bool:
     """Check whether the value at a sink-named position is a credential or a network name.
+
+    ``allowlist`` is ``load_allowlist()`` for the run, loaded once by the
+    caller: a blob holds thousands of values on some pages.
 
     Keeps an empty value, one already redacted (pass 14's own test included, so
     a ``***…***`` marker another tool wrote is not replaced), a
@@ -1740,7 +2036,7 @@ def is_pipe_sink_value_sensitive(
 
     if not value or value.lower() in safe_values:
         return False
-    if is_redacted(value, custom_patterns) or _is_redacted_pipe_value(value):
+    if is_allowlisted(value, allowlist) or _is_redacted_pipe_value(value):
         return False
     if value.isdigit():
         return kind == "password" and len(value) >= _PIPE_SINK_MIN_NUMERIC_PASSWORD
@@ -1764,6 +2060,7 @@ def iter_pipe_sink_values(
     if not variables:
         return
     safe_values = {v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", [])}
+    allowlist = load_allowlist(custom_patterns)
     sinks = PipeSinks(text)
     read: set[int] = set()
     for variable_re in variables:
@@ -1771,14 +2068,13 @@ def iter_pipe_sink_values(
             if blob.start("script_value") in read:
                 continue  # a blob two variable names both match is read once
             read.add(blob.start("script_value"))
-            kinds = sinks.kinds_at(blob.start())
+            fields = blob.group("script_value").split("|")
+            kinds = sinks.kinds_at(blob.start(), fields)
             offset = blob.start("script_value")
-            for index, raw in enumerate(blob.group("script_value").split("|") if kinds else ()):
+            for index, raw in enumerate(fields if kinds else ()):
                 value = raw.strip()
                 kind = kinds.get(index)
-                if kind is not None and is_pipe_sink_value_sensitive(
-                    value, kind, safe_values, custom_patterns
-                ):
+                if kind is not None and is_pipe_sink_value_sensitive(value, kind, safe_values, allowlist):
                     yield kind, value, offset + raw.index(value)
                 offset += len(raw) + 1
 

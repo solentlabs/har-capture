@@ -44,6 +44,7 @@ from har_capture.sanitization.html import (
     capture_pipe_context,
     check_for_pii,
     is_structural_value_sensitive,
+    linear_index,
     sanitize_html,
 )
 from har_capture.sanitization.report import HeuristicMode
@@ -1377,3 +1378,13 @@ def test_pipe_value_the_page_writes_into_a_named_sink(case: dict) -> None:
     cleared: list[Finding] = []
     check_content(case["output"], "entry", cleared, patterns)
     assert [f for f in cleared if "pipe-delimited" in f.reason] == []
+
+
+LINEAR_INDEX_CASES = _FIXTURE["linear_index_cases"]["cases"]
+
+
+@pytest.mark.parametrize("case", LINEAR_INDEX_CASES, ids=[c["id"] for c in LINEAR_INDEX_CASES])
+def test_linear_index_reads_a_start_and_a_stride(case: dict) -> None:
+    """A row index is a start plus a stride times one loop variable, or it is not a row index."""
+    expected = tuple(case["expected"]) if case["expected"] is not None else None
+    assert linear_index(case["expression"], case["definitions"].get) == expected

@@ -41,7 +41,7 @@ FLOORS: dict[str, float] = {
     "src/har_capture/cli/interactive.py":  97.0,
     "src/har_capture/cli/main.py":         84.0,
     "src/har_capture/cli/patterns.py":    100.0,
-    "src/har_capture/cli/sanitize.py":     92.0,
+    "src/har_capture/cli/sanitize.py":    100.0,
     "src/har_capture/cli/validate.py":     94.0,
 }
 # fmt: on

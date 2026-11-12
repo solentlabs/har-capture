@@ -7,7 +7,9 @@ contributors upload — identical to the reviewed one.
 
 The decisions come from the interactive prompt or, where there is no terminal
 to prompt in, from a review report whose items someone decided
-(``load_review_decisions``, ``apply_review_decisions``).
+(``read_review_decisions``, ``apply_review_decisions``). The report need not
+be a file: the CLI passes it through its standard streams, so the flagged
+values it holds are never written to disk.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import gzip
 import json
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from har_capture.sanitization.har import HarValidationError, apply_user_redactions
 from har_capture.sanitization.report import RedactionStatus
@@ -129,26 +131,23 @@ def record_review(
     return compressed_path
 
 
-def load_review_decisions(path: Path | str) -> dict[str, RedactionStatus]:
-    """Read the decisions in a review report: each decided value mapped to its status.
+def read_review_decisions(data: Any) -> dict[str, RedactionStatus]:
+    """Read the decisions in a parsed review report: each decided value mapped to its status.
 
     The report is the JSON ``sanitize`` writes (``SanitizationReport.to_dict``)
     with an item's ``status`` set to ``"user"`` (redact it) or ``"skipped"``
     (keep it). An item left ``"flagged"`` is undecided and is not returned.
 
     Args:
-        path: The review report
+        data: The parsed report
 
     Returns:
         ``{value: status}`` for every decided item
 
     Raises:
-        OSError: If the file cannot be read
-        ValueError: If it is not JSON, is not a review report, or holds a
-            status that is none of ``user``, ``skipped`` and ``flagged``
+        ValueError: If it is not a review report, or holds a status that is
+            none of ``user``, ``skipped`` and ``flagged``
     """
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
     items = data.get("flagged") if isinstance(data, dict) else None
     if not isinstance(items, list):
         raise ValueError("not a review report: no 'flagged' list")
@@ -166,6 +165,23 @@ def load_review_decisions(path: Path | str) -> dict[str, RedactionStatus]:
                 "'skipped' to keep it, or leave 'flagged' if it is undecided"
             )
     return decisions
+
+
+def load_review_decisions(path: Path | str) -> dict[str, RedactionStatus]:
+    """Read the decisions in a review report file (``read_review_decisions``).
+
+    Args:
+        path: The review report
+
+    Returns:
+        ``{value: status}`` for every decided item
+
+    Raises:
+        OSError: If the file cannot be read
+        ValueError: If it is not JSON, or not a review report
+    """
+    with open(path, encoding="utf-8") as f:
+        return read_review_decisions(json.load(f))
 
 
 def apply_review_decisions(report: SanitizationReport, decisions: dict[str, RedactionStatus]) -> int:

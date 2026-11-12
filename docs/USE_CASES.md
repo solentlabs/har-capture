@@ -454,8 +454,9 @@ ______________________________________________________________________
 
 1. Pipeline runs sanitize command
 1. Heuristic analysis runs, flagging suspicious values
-1. No TTY detected — flagged values written to `.review.json` report instead of interactive prompt; the sanitized file
-   records `review: no_tty` and a warning names the flagged count
+1. No TTY detected — flagged values handed over as a report instead of an interactive prompt (`--report -`: on standard
+   output, off disk; otherwise `<input>.review.json`); the sanitized file records `review: no_tty` and a warning names
+   the flagged count
 1. Sanitized output written
 1. Exit code 0 on success
 
@@ -467,8 +468,10 @@ ______________________________________________________________________
   `har-capture sanitize f.har --patterns network-device && har-capture validate f.sanitized.har --patterns network-device`
   — `validate` exits 1 when the run flagged values, because nobody decided them: the pipeline's file is not ready to
   share until they are
-- Decide the flagged values without a terminal: set each item's `status` in the `.review.json` report to `user` (redact)
-  or `skipped` (keep), then `har-capture sanitize f.har --patterns network-device --apply-review f.har.review.json`
+- Decide the flagged values without a terminal: read the report from
+  `har-capture sanitize f.har --patterns network-device --report -`, set each item's `status` to `user` (redact) or
+  `skipped` (keep), and pipe it to `har-capture sanitize f.har --patterns network-device --apply-review -`. The report
+  never reaches disk.
 
 **CLI Example**:
 

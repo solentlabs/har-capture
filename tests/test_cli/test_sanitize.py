@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -494,6 +495,97 @@ class TestSanitizeApplyReview:
         assert result.exit_code == 0, result.output
 
 
+class TestSanitizeReviewStreams:
+    """``--report -`` and ``--apply-review -``: the review report never touches disk."""
+
+    @pytest.fixture
+    def har_with_flagged_fields(self, tmp_path: Path) -> Path:
+        return _write_fixture_har(tmp_path, "har_with_flagged_fields", "flagged.har")
+
+    @staticmethod
+    def _run(har: Path, *options: str, stdin: str | None = None):
+        return runner.invoke(app, ["sanitize", str(har), "--patterns", "base", *options], input=stdin)
+
+    def _report(self, har: Path) -> dict:
+        """The report of a no-terminal run, read from standard output."""
+        result = self._run(har, "--report", "-")
+        assert result.exit_code == 0, result.output
+        return json.loads(result.stdout)
+
+    def test_report_on_stdout_is_the_report_alone_and_no_file_is_written(
+        self, har_with_flagged_fields: Path
+    ) -> None:
+        result = self._run(har_with_flagged_fields, "--report", "-")
+
+        report = json.loads(result.stdout)  # nothing but the report on standard output
+        assert report["flagged"]
+        assert "NOT reviewed" in result.stderr
+        assert "standard output" in result.stderr
+        assert not list(har_with_flagged_fields.parent.glob("*.review.json"))
+
+    @pytest.mark.parametrize(
+        ("status", "kept"),
+        [("user", False), ("skipped", True)],
+        ids=["every-value-redacted", "every-value-kept"],
+    )
+    def test_decisions_on_stdin_complete_the_review(
+        self, har_with_flagged_fields: Path, status: str, kept: bool
+    ) -> None:
+        report = self._report(har_with_flagged_fields)
+        for item in report["flagged"]:
+            item["status"] = status
+
+        result = self._run(har_with_flagged_fields, "--apply-review", "-", stdin=json.dumps(report))
+
+        assert result.exit_code == 0, result.output
+        assert result.stdout == ""  # every value decided: nothing to hand back
+        text = Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).read_text()
+        assert json.loads(text)["log"]["_har_capture"]["sanitization"]["review"] == "completed"
+        assert all((json.dumps(item["value"])[1:-1] in text) is kept for item in report["flagged"])
+        assert not list(har_with_flagged_fields.parent.glob("*.review.json"))
+
+    def test_undecided_remainder_comes_back_on_stdout(self, har_with_flagged_fields: Path) -> None:
+        report = self._report(har_with_flagged_fields)  # every item still "flagged"
+
+        result = self._run(har_with_flagged_fields, "--apply-review", "-", stdin=json.dumps(report))
+
+        assert result.exit_code == 1
+        assert [item["status"] for item in json.loads(result.stdout)["flagged"]] == ["flagged"] * len(
+            report["flagged"]
+        )
+        assert "the report on standard output" in result.stderr
+        assert not list(har_with_flagged_fields.parent.glob("*.review.json"))
+
+    def test_undecided_remainder_goes_to_a_named_report_file(self, har_with_flagged_fields: Path) -> None:
+        report = self._report(har_with_flagged_fields)
+        remainder = har_with_flagged_fields.parent / "remainder.json"
+
+        result = self._run(
+            har_with_flagged_fields,
+            "--apply-review",
+            "-",
+            "--report",
+            str(remainder),
+            stdin=json.dumps(report),
+        )
+
+        assert result.exit_code == 1
+        assert json.loads(remainder.read_text())["flagged"]
+        assert str(remainder) in result.output
+
+    @pytest.mark.parametrize(
+        "stdin",
+        ["{not json", '{"flagged": [{"value": "x", "status": "redact"}]}'],
+        ids=["not-json", "unknown-status"],
+    )
+    def test_unusable_stdin_stops_before_any_output(self, har_with_flagged_fields: Path, stdin: str) -> None:
+        result = self._run(har_with_flagged_fields, "--apply-review", "-", stdin=stdin)
+
+        assert result.exit_code == 1
+        assert "Cannot read review report from standard input" in result.output
+        assert not Path(str(har_with_flagged_fields).replace(".har", ".sanitized.har")).exists()
+
+
 class TestSanitizeReportOption:
     """Branch: ``--report`` writes JSON report (lines 213-217)."""
 
@@ -535,27 +627,55 @@ class TestSanitizeReportOption:
             json.loads(auto_path.read_text())
 
 
-# Note on remaining uncovered lines in cli/sanitize.py
-# -----------------------------------------------------
-# Lines 239-243 (FileNotFoundError, PermissionError) and 247-252
-# (PatternLoadError, OSError) are defensive exception handlers that
-# are not naturally reachable from the CLI surface:
-#
-#   * typer's ``Path`` argument conversion rejects unreadable / missing
-#     files at parse time (exit code 2), so the input-file branches
-#     of these handlers never fire.
-#   * ``resolve_patterns_arg`` is called outside the try block, so
-#     bad ``--patterns`` paths propagate directly without hitting
-#     line 247 — and the pattern loader inside ``sanitize_har_file``
-#     is lenient with malformed-shape patterns rather than raising.
-#
-# These handlers exist as a safety net for downstream library callers
-# that bypass typer's parameter validation, which is a reasonable
-# defensive shape. Adding tests that mock low-level I/O to drag
-# coverage over them would be theatrical (docs/CODE_REVIEW.md § Test
-# overrides are a code smell). The per-module
-# floor for cli/sanitize.py is set at the post-test coverage so any
-# new uncovered code lowers the floor.
+class TestSanitizeErrorHandlers:
+    """Each failure the command catches is reported as one line and exits 1, with no traceback."""
+
+    # ┌─────────────────────────────────┬──────────────────────────────┬─────────────────────────┐
+    # │ what goes wrong                 │ how the run is set up        │ message                 │
+    # ├─────────────────────────────────┼──────────────────────────────┼─────────────────────────┤
+    # │ output folder does not exist    │ -o missing/out.har           │ File not found          │
+    # │ output folder is read-only      │ -o readonly/out.har          │ Permission denied       │
+    # │ output path is a folder         │ -o folder                    │ I/O error               │
+    # │ pattern file is not JSON        │ --patterns broken.json       │ Failed to load patterns │
+    # └─────────────────────────────────┴──────────────────────────────┴─────────────────────────┘
+    @pytest.mark.parametrize(
+        ("problem", "message"),
+        [
+            ("missing_output_folder", "Error: File not found"),
+            ("read_only_output_folder", "Error: Permission denied"),
+            ("output_is_a_folder", "Error: I/O error"),
+            ("pattern_file_not_json", "Error: Failed to load patterns"),
+        ],
+    )
+    def test_failure_is_reported_and_exits_1(
+        self, valid_har: Path, tmp_path: Path, problem: str, message: str
+    ) -> None:
+        patterns = "base"
+        output = tmp_path / "out.har"
+        if problem == "missing_output_folder":
+            output = tmp_path / "missing" / "out.har"
+        elif problem == "read_only_output_folder":
+            if os.geteuid() == 0:
+                pytest.skip("root writes to a read-only folder")
+            folder = tmp_path / "readonly"
+            folder.mkdir()
+            folder.chmod(0o555)
+            output = folder / "out.har"
+        elif problem == "output_is_a_folder":
+            output = tmp_path / "folder"
+            output.mkdir()
+        else:
+            broken = tmp_path / "broken.json"
+            broken.write_text("{not json")
+            patterns = str(broken)
+
+        result = runner.invoke(
+            app, ["sanitize", str(valid_har), "--patterns", patterns, "--output", str(output)]
+        )
+
+        assert result.exit_code == 1
+        assert message in result.output
+        assert "Traceback" not in result.output
 
 
 class TestCompletenessReporting:

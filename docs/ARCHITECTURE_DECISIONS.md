@@ -126,7 +126,9 @@ ignored one.
 
 `validate` reads the outcome: a file that records `no_tty` or `cancelled` with flagged values nobody decided is an
 error, not clean. Where there is no terminal, the decisions can be made in the review report and handed back
-(`sanitize --apply-review`): every value still gets a decision, and no flag redacts or keeps them all at once.
+(`sanitize --apply-review`): every value still gets a decision, and no flag redacts or keeps them all at once. The
+report holds the flagged values as captured, so both options take `-` for a standard stream and the report can pass from
+one run to the next without reaching disk (design constraint 5).
 
 Without a terminal, neither command prompts; each records `no_tty` and warns loudly with the flagged count. `sanitize`
 also writes the flagged values to a JSON report beside its input (`<input>.review.json`, or `--report`): the raw input
@@ -647,8 +649,15 @@ is that credential or network name, and is deterministic for both tools (`iter_p
    Two blobs on one page never share an index, and a firmware that moves a field moves the redaction with it. A blob
    outside a function, a function passed to no other, and a commented-out assignment or call bind nothing.
 1. **A sink is a write of one constant index**, alone or inside calls, into `getElementsByName("N")[0].value`,
-   `getElementById("N").innerHTML`, `$('#N').html(…)`, `form.N.value` or `var N`. An expression
-   (`tagValues[5] + " dBm"`, `tags[firstCellIdx + 0]`) is not one.
+   `getElementById("N").innerHTML`, `$('#N').html(…)`, `form.N.value` or `var N`. A value joined to other text
+   (`tagValues[5] + " dBm"`) is not one.
+1. **A row read is a named variable assigned one field of every row**: the index is a start plus a stride times the loop
+   variable (`var ssid = rows[firstCellIdx + 0]` with `firstCellIdx = 1 + (j * 7)`, or `tagValues[1 + i * 7 + 0]`), read
+   in the view or, on the split blob, in the blob's own function. Every row's field is that kind.
+1. **A table read is a row callback handed, with the blob, to the function that draws a table**
+   (`drawTable('apTable', tagValues, onAddRowCB)`). Where the callback fills column *k* from the row's field *a*
+   (`cells[0] = decode(tags[firstCellIdx + 0])`) and the first row of the table with that id heads column *k* "Network
+   Name" or "SSID", field *a* of every row is a network name. Rows are a count, then that many equal rows.
 1. **The sink's name is a credential label or an SSID name followed only by a number, `Hidden` and a radio band**
    (`wirelessPassword1_5g`, `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an`). The labels are
    the ones the labeled passes already use (ADR-14, ADR-19).
@@ -665,20 +674,24 @@ Everything the rule does not bind stays where it was: pass 14 offers it for revi
 **ADR-12 accounting.**
 
 - *Concrete leak closed:* a plaintext Wi-Fi passphrase and the SSIDs that make it usable, on `DashBoard.htm`, the
-  wireless-settings pages and `RouterStatus.htm`, in a file `validate` called clean.
+  wireless-settings pages and `RouterStatus.htm`, and the names of the neighbouring networks the unit hears, on its five
+  Wi-Fi scan pages, in a file `validate` called clean.
 - *Fidelity cost:* the sink-named values, each replaced by one placeholder in its position. Field count, delimiters,
   spacing and every other value survive; the script is not touched.
 - *Cannot-be-structure proof:* the page's script declares the position's meaning, as a label does in ADR-14. Of the
-  fleet's 2,065 `tagValueList` blobs, 2,035 bind to their view function; the rule changes 24 of 38,038 response bodies,
+  fleet's 2,065 `tagValueList` blobs, 2,035 bind to their view function; the rule changes 25 of 38,038 response bodies,
   every change inside a blob literal. The guards are each held by a fleet counterexample: `ssid_sel`, `ssid_bc_enable`,
   `bssid_enable` and `multiple_ssid` hold flags; `initDefaultKey` holds a key index and `group_key_update_interval` a
   number of seconds; `passwordId` on `SetPassword_h.htm` holds the factory word `password` in all 34 captures that carry
   the page.
 
-**Not covered.** A neighbouring network's name on the Wi-Fi scan pages is read by a row offset
-(`tagValueListArray[firstCellIdx + 0]`), not a constant index. A bare `KEY1`…`KEY4` (WEP) sink is not a credential label
-(ADR-19's bare `key`). A guest network name written into a sink that does not say SSID (`GuestNetworkName1`) is not
-named. All three stay with the review.
+**Not covered.** A bare `KEY1`…`KEY4` (WEP) sink is not a credential label (ADR-19's bare `key`). A guest network name
+written into a sink that does not say SSID (`GuestNetworkName1`) is not named. A table whose heading row names no
+network, or whose rows the script reads with no name and no table, is not read. All stay with the review.
 
-**Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs without a review, and
-`validate` fails (exit 1) on a capture that still carries the passphrase.
+**Bounded work.** Every scan is one pass over the page or over one function's body, kept for the page's other blobs. An
+index expression over 100 characters is not read, and at most 16 row layouts, views and tables are read for one
+function, so a hostile page cannot multiply the work or run the reader out of stack.
+
+**Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs, and of its neighbours'
+network names, without a review, and `validate` fails (exit 1) on a capture that still carries the passphrase.
