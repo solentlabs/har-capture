@@ -1,9 +1,15 @@
-"""Recording the interactive review's outcome in a sanitized HAR file.
+"""Recording the review's outcome in a sanitized HAR file.
 
 Pass 2 (``apply_user_redactions``) works on parsed HAR data; this module is
 the file side of it: apply the review's decisions to the sanitized HAR on
 disk, record how the review ended, and keep the compressed copy — the file
 contributors upload — identical to the reviewed one.
+
+The decisions come from the interactive prompt or, where there is no terminal
+to prompt in, from a review report whose items someone decided
+(``read_review_decisions``, ``apply_review_decisions``). The report need not
+be a file: the CLI passes it through its standard streams, so the flagged
+values it holds are never written to disk.
 """
 
 from __future__ import annotations
@@ -12,12 +18,17 @@ import gzip
 import json
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from har_capture.sanitization.har import HarValidationError, apply_user_redactions
+from har_capture.sanitization.report import RedactionStatus
 
 if TYPE_CHECKING:
     from har_capture.sanitization.report import ReviewOutcome, SanitizationReport
+
+# The statuses that decide a flagged value in a review report: redact it, or
+# keep it. ``flagged`` is an item nobody has decided.
+_DECIDED = {status.value: status for status in (RedactionStatus.USER_REDACTED, RedactionStatus.USER_SKIPPED)}
 
 
 class StaleCompressedError(OSError):
@@ -118,3 +129,80 @@ def record_review(
     except OSError as e:
         raise StaleCompressedError(compressed_path, e) from e
     return compressed_path
+
+
+def read_review_decisions(data: Any) -> dict[str, RedactionStatus]:
+    """Read the decisions in a parsed review report: each decided value mapped to its status.
+
+    The report is the JSON ``sanitize`` writes (``SanitizationReport.to_dict``)
+    with an item's ``status`` set to ``"user"`` (redact it) or ``"skipped"``
+    (keep it). An item left ``"flagged"`` is undecided and is not returned.
+
+    Args:
+        data: The parsed report
+
+    Returns:
+        ``{value: status}`` for every decided item
+
+    Raises:
+        ValueError: If it is not a review report, or holds a status that is
+            none of ``user``, ``skipped`` and ``flagged``
+    """
+    items = data.get("flagged") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("not a review report: no 'flagged' list")
+    decisions: dict[str, RedactionStatus] = {}
+    for index, item in enumerate(items):
+        value = item.get("value") if isinstance(item, dict) else None
+        status = item.get("status") if isinstance(item, dict) else None
+        if not isinstance(value, str) or not isinstance(status, str):
+            raise ValueError(f"flagged item {index} needs a string 'value' and 'status'")
+        if status in _DECIDED:
+            decisions[value] = _DECIDED[status]
+        elif status != RedactionStatus.FLAGGED.value:
+            raise ValueError(
+                f"flagged item {index} has status {status!r}: use 'user' to redact the value, "
+                "'skipped' to keep it, or leave 'flagged' if it is undecided"
+            )
+    return decisions
+
+
+def load_review_decisions(path: Path | str) -> dict[str, RedactionStatus]:
+    """Read the decisions in a review report file (``read_review_decisions``).
+
+    Args:
+        path: The review report
+
+    Returns:
+        ``{value: status}`` for every decided item
+
+    Raises:
+        OSError: If the file cannot be read
+        ValueError: If it is not JSON, or not a review report
+    """
+    with open(path, encoding="utf-8") as f:
+        return read_review_decisions(json.load(f))
+
+
+def apply_review_decisions(report: SanitizationReport, decisions: dict[str, RedactionStatus]) -> int:
+    """Set each flagged value's status from ``decisions`` and return how many are left undecided.
+
+    Decisions are matched on the flagged value itself, so a report made by one
+    run decides the same values in another run of the same capture. A decision
+    for a value this run did not flag is ignored.
+
+    Args:
+        report: The Pass 1 report of the run being reviewed
+        decisions: ``load_review_decisions()`` of the decided report
+
+    Returns:
+        The number of flagged values with no decision
+    """
+    undecided = 0
+    for flagged in report.flagged:
+        status = decisions.get(flagged.original_value)
+        if status is None:
+            undecided += 1
+        else:
+            flagged.status = status
+    return undecided

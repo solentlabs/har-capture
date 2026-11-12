@@ -622,6 +622,55 @@ EMAIL_DOMAIN = (
     r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}\b"
 )
 EMAIL_RE = re.compile(r"\b" + EMAIL_LOCAL_PART + "@" + EMAIL_DOMAIN)
+_EMAIL_LOCAL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+-")
+
+
+def _is_word(char: str) -> bool:
+    r"""Whether the regex engine counts ``char`` as a word character (``\w``)."""
+    return char == "_" or char.isalnum()
+
+
+def iter_emails(text: str) -> Iterator[re.Match[str]]:
+    """Yield the matches ``EMAIL_RE.finditer(text)`` yields, in time linear in the text.
+
+    ``EMAIL_RE`` scanned over a whole body retries from every word boundary of
+    a long run that holds no ``@`` — a base64url blob, a dotted number list —
+    and each try rescans the rest of the run: 78 KB took thirteen seconds.
+    Every address holds an ``@``, so this starts from each ``@`` instead: the
+    local part is the run of local-part characters before it, the address
+    begins at that run's first word boundary, and the pattern is tried there
+    once. The rule itself is unchanged.
+
+    Args:
+        text: The text to scan
+
+    Yields:
+        Each address, as a match of ``EMAIL_RE``, in order
+    """
+    floor = 0
+    position = 0
+    while (at := text.find("@", position)) != -1:
+        position = at + 1
+        start = at
+        while start > floor and text[start - 1] in _EMAIL_LOCAL_CHARS:
+            start -= 1
+        for begin in range(start, at):
+            if _is_word(text[begin]) != (begin > 0 and _is_word(text[begin - 1])):
+                match = EMAIL_RE.match(text, begin)
+                if match is not None:
+                    yield match
+                    floor = position = match.end()
+                break
+
+
+def sub_emails(replace: Callable[[re.Match[str]], str], text: str) -> str:
+    """Replace each address in ``text`` — ``EMAIL_RE.sub(replace, text)``, found by ``iter_emails``."""
+    pieces: list[str] = []
+    written = 0
+    for match in iter_emails(text):
+        pieces.append(text[written : match.start()] + replace(match))
+        written = match.end()
+    return "".join(pieces) + text[written:] if pieces else text
 
 
 def luhn_valid(number: str) -> bool:

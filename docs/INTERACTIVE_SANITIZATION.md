@@ -160,24 +160,48 @@ The report contains:
 
 ### Non-TTY Environment (CI/CD)
 
-When no terminal is available, flagged values are written to a report file instead of prompting, and the sanitized file
-records that nobody reviewed them:
+When no terminal is available nobody can be prompted, so the sanitized file records that nobody reviewed its flagged
+values (`review: no_tty`), and `--report` hands them over as a JSON report. `har-capture validate` fails that file until
+the values are decided.
+
+The report holds each flagged value as captured, and the hashing salt. Pass it through the standard streams and it is
+never written to disk:
 
 ```bash
-har-capture sanitize device.har --patterns network-device 2>&1
-# Note: No terminal detected. Writing flagged values to report instead.
-#   Recorded review: no_tty
-# WARNING: 3 flagged value(s) were NOT reviewed: there is no terminal to prompt in. ...
-# Report: device.har.review.json
+# 1. The report on standard output; every message goes to standard error
+har-capture sanitize device.har --patterns network-device --report - > review.tmp   # or read the pipe directly
+
+# 2. Decide each item: "user" redacts the value, "skipped" keeps it
+#      {"value": "MyNetwork-5G", "category": "wifi_ssid", "status": "user"},
+#      {"value": "Link Down", "category": "credential", "status": "skipped"}
+
+# 3. The decisions on standard input
+har-capture sanitize device.har --patterns network-device --apply-review - < review.tmp
+#   Applied 1 user redaction(s)
+#   Recorded review: completed
 ```
 
-`har-capture get` without a terminal does the same but writes no report file: the raw capture never persists on disk.
+A script or an AI session reads the report from the first command's output and writes the decided report to the second
+command's input; the redirections above only show the shape. Decisions are matched on the value, so the report from one
+run decides the same values in the next. A value left `flagged`, or one the report does not list, fails the run with
+exit 1: the decisions made are applied, the file records `review: cancelled`, and the report comes back for the rest —
+on standard output when the decisions came from standard input.
+
+Without `--report`, a no-terminal run writes no report: the flagged values stay in the sanitized file and nowhere else.
+`--report FILE` and `--apply-review FILE` take a file where one is wanted. That file is as sensitive as the raw capture:
+delete it once the review is recorded and keep it out of version control (`*.review.json` in `.gitignore`).
+
+`har-capture get` without a terminal writes no report at all: the raw capture never persists on disk. Run `sanitize` on
+the sanitized file it produced, with `--report -`, to review its flagged values.
 
 ### Recorded Outcome
 
 Every sanitized file says how its review ended, in `log._har_capture.sanitization.review`: `completed`, `skipped`,
 `cancelled`, `no_tty` or `none_flagged` (absent when no review was recorded). Check it before relying on a file someone
-else sanitized — `skipped`, `cancelled` and `no_tty` mean its flagged values were never redacted.
+else sanitized — `skipped`, `cancelled` and `no_tty` mean its flagged values were never redacted. `har-capture validate`
+reports `cancelled` and `no_tty` as an error while the file has flagged values nobody decided. Run
+`har-capture sanitize` on the file from a terminal to review them, or decide them in its report and pass
+`--apply-review`.
 
 ## Edge Cases Handled
 

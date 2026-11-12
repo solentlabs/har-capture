@@ -26,7 +26,11 @@ from har_capture.validation.completeness import (
     analyze_har_file,
     load_har,
 )
-from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
+from har_capture.validation.provenance import (
+    MIN_SANITIZER_VERSION,
+    stale_sanitizer_version,
+    unreviewed_flagged,
+)
 from har_capture.validation.secrets import (
     MAC_PATTERN,
     SENSITIVE_FIELDS,
@@ -51,6 +55,8 @@ __all__ = [
     # Sanitizer-version provenance
     "MIN_SANITIZER_VERSION",
     "stale_sanitizer_version",
+    # Unfinished-review check
+    "unreviewed_flagged",
     # Capture-completeness validation
     "analyze_capture_completeness",
     "analyze_har_file",

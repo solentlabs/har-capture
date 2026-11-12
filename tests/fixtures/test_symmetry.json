@@ -3191,6 +3191,78 @@
       "leaked": [
         "cHJveHk6cGFzcw=="
       ]
+    },
+    {
+      "id": "pipe_sink_password_and_ssid_in_html",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/DashBoard.htm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<script>function InitTagValue(){var tagValueList = '0|Good|My Home Net|hunter2hunter2|2';return tagValueList.split(\"|\");}function InitUpdateView(tagValues){$('#wiressSSID1').html(tagValues[2]);$('#wirelessPassword1').html(tagValues[3]);}function BodyInit(){InitUpdateView(InitTagValue());}</script>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password in a pipe-delimited value"
+        },
+        {
+          "severity": "warning",
+          "reason": "Wi-Fi network name (SSID) in a pipe-delimited value"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "My Home Net"
+      ]
+    },
+    {
+      "id": "pipe_sink_password_and_ssid_in_script_body",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/dash.js",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "application/javascript",
+              "text": "function InitTagValue(){var tagValueList = '0|Good|My Home Net|hunter2hunter2|2';return tagValueList.split(\"|\");}function InitUpdateView(tagValues){$('#wiressSSID1').html(tagValues[2]);$('#wirelessPassword1').html(tagValues[3]);}function BodyInit(){InitUpdateView(InitTagValue());}"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "error",
+          "reason": "Plaintext password in a pipe-delimited value"
+        },
+        {
+          "severity": "warning",
+          "reason": "Wi-Fi network name (SSID) in a pipe-delimited value"
+        }
+      ],
+      "leaked": [
+        "hunter2hunter2",
+        "My Home Net"
+      ]
     }
   ]
 }

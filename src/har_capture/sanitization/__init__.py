@@ -47,6 +47,9 @@ from har_capture.sanitization.report import (
 )
 from har_capture.sanitization.review import (
     StaleCompressedError,
+    apply_review_decisions,
+    load_review_decisions,
+    read_review_decisions,
     record_review,
     write_compressed_copy,
 )
@@ -69,6 +72,9 @@ __all__ = [
     "appears_sanitized",
     # Recording the review in a sanitized file
     "record_review",
+    "load_review_decisions",
+    "read_review_decisions",
+    "apply_review_decisions",
     "write_compressed_copy",
     "StaleCompressedError",
     "SENSITIVE_HEADERS",

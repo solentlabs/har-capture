@@ -28,6 +28,22 @@
     {"id": "cancelled",          "outcome": "cancelled", "status": "flagged", "user_redacted": 0, "user_skipped": 0, "value_kept": true},
     {"id": "no_tty",             "outcome": "no_tty",    "status": "flagged", "user_redacted": 0, "user_skipped": 0, "value_kept": true}
   ],
+  "review_decision_cases": {
+    "_comment": "A review report whose items someone decided stands in for the prompt. `report` is the decided report's JSON; `flagged` the values the run being reviewed flagged; `statuses` what each ends with and `undecided` how many have no decision. `error` (a substring) replaces both when the report cannot be read as one.",
+    "cases": [
+      {"id": "redact_and_keep",              "report": {"flagged": [{"value": "alice-home", "status": "user"}, {"value": "Link Down", "status": "skipped"}]}, "flagged": ["alice-home", "Link Down"], "statuses": ["user", "skipped"], "undecided": 0},
+      {"id": "item_left_flagged_is_undecided","report": {"flagged": [{"value": "alice-home", "status": "user"}, {"value": "Link Down", "status": "flagged"}]}, "flagged": ["alice-home", "Link Down"], "statuses": ["user", "flagged"], "undecided": 1},
+      {"id": "value_missing_from_the_report", "report": {"flagged": [{"value": "alice-home", "status": "skipped"}]}, "flagged": ["alice-home", "new-value"], "statuses": ["skipped", "flagged"], "undecided": 1},
+      {"id": "decision_for_an_unflagged_value_is_ignored", "report": {"flagged": [{"value": "gone", "status": "user"}, {"value": "alice-home", "status": "user"}]}, "flagged": ["alice-home"], "statuses": ["user"], "undecided": 0},
+      {"id": "empty_report_decides_nothing",  "report": {"flagged": []}, "flagged": ["alice-home"], "statuses": ["flagged"], "undecided": 1},
+      {"id": "unknown_status",                "report": {"flagged": [{"value": "alice-home", "status": "redact"}]}, "error": "use 'user' to redact"},
+      {"id": "status_not_a_string",           "report": {"flagged": [{"value": "alice-home", "status": 1}]}, "error": "needs a string"},
+      {"id": "value_not_a_string",            "report": {"flagged": [{"value": 7, "status": "user"}]}, "error": "needs a string"},
+      {"id": "item_not_an_object",            "report": {"flagged": ["alice-home"]}, "error": "needs a string"},
+      {"id": "no_flagged_list",               "report": {"summary": {}}, "error": "not a review report"},
+      {"id": "not_an_object",                 "report": ["alice-home"], "error": "not a review report"}
+    ]
+  },
   "pass1_review_cases": [
     {"id": "nothing_flagged", "text": "status=1",           "review": "none_flagged"},
     {"id": "flagged_pending", "text": "username=alice-home", "review": null}

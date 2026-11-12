@@ -7,6 +7,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-12
+
+### Added
+
+- **`sanitize --apply-review REPORT`.** Finishes the review without a terminal. In the report a no-terminal run hands
+  over, set each flagged item's `status` to `user` (redact it) or `skipped` (keep it) and pass the report back; the file
+  then records the review as completed. A value left undecided fails the run and comes back in the report.
+- **`-` for `--report` and `--apply-review`.** `--report -` writes the review report to standard output (messages go to
+  standard error) and `--apply-review -` reads the decided report from standard input, so the flagged values it holds
+  pass from one run to the next without being written to disk.
+
+### Changed (BREAKING)
+
+- **`sanitize` without a terminal no longer writes `<input>.review.json`.** That report holds every flagged value as
+  captured, plus the hashing salt, and it was written beside the capture whether or not anyone asked. A report is now
+  written only where `--report` names a file or `-`. A pipeline that read the automatic file passes
+  `--report <input>.review.json` to keep it, or `--report -` to read it from standard output.
+
+### Fixed
+
+- **`sanitize` redacts a Netgear gateway's Wi-Fi passphrase and network names without a review.** These pages carry
+  their data as one unlabeled `|`-joined string (`tagValueList`), so the passphrase and SSIDs were only offered for
+  review and stayed in the file when nobody reviewed it. With `--patterns network-device`, a value the page's own script
+  writes into a password or SSID field (`$('#wirelessPassword1').html(tagValues[6])`) is now replaced, and `validate`
+  reports one left in a file: a passphrase as an error, a network name as a warning.
+- **`sanitize` redacts the neighbouring networks a gateway's Wi-Fi scan pages list.** The hardware addresses were masked
+  and the network names beside them were not. A name is now replaced where the page's script reads it from each row into
+  an `ssid` variable, or draws it into a table column headed "Network Name" or "SSID".
+- **`validate` fails a file whose flagged values nobody decided.** A sanitize run with no terminal, or a review left
+  part-way, records that in the file and leaves every flagged value in it; `validate` used to print `Clean`. It now
+  reports an error naming the count, until the values are decided: run `sanitize` on the file from a terminal, or use
+  `--apply-review`.
+- **`sanitize` and `validate` no longer stall on a long unbroken token.** A run of letters, digits, dots and hyphens
+  with no `@` in it (a base64url blob, a dotted number list) made the email check rescan the run from every word
+  boundary: 78 KB took thirteen seconds. The check now starts from each `@` and reads back from it; which addresses it
+  finds is unchanged.
+- **`sanitize` no longer rewrites page script after an `ssid` variable.** `var ssid = rows[firstCellIdx + 0];` was read
+  as an SSID label and came out as `var ssid=***WIFI*** + 0];`. In script code only a quoted or numeric value after
+  `ssid` is replaced now, as for `password`.
+
 ## [0.17.1] - 2026-11-09
 
 ### Fixed
@@ -1597,6 +1637,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.16.2]: https://github.com/solentlabs/har-capture/compare/v0.16.1...v0.16.2
 [0.17.0]: https://github.com/solentlabs/har-capture/compare/v0.16.2...v0.17.0
 [0.17.1]: https://github.com/solentlabs/har-capture/compare/v0.17.0...v0.17.1
+[0.18.0]: https://github.com/solentlabs/har-capture/compare/v0.17.1...v0.18.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1624,4 +1665,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.17.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.18.0...HEAD

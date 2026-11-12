@@ -305,6 +305,17 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 - See the structural label/value rule in
   [`SANITIZATION_SPEC.md`](SANITIZATION_SPEC.md#sibling-element-and-structural-labelvalue-rules)
 
+**Pipe-delimited values the page writes into a named sink (error / warning):**
+
+- Reports what `iter_pipe_sink_values` (`sanitization/html.py`) yields: a position of a
+  `script_variables.pipe_delimited` blob that the page's own script writes into a password- or SSID-named sink
+  (`$('#wirelessPassword1').html(tagValues[6])`), whose value is not empty, a placeholder, a safe word or an index
+- A **password** is an **error** and a **Wi-Fi network name** a **warning**, as for the labeled pairs above
+- The sanitizer replaces the same values from the same iterator in every body (pass 13b and the non-HTML text route), so
+  a finding here is one a sanitize run clears; without a pattern file that names a blob, nothing is reported
+- See [Pipe-Delimited Sinks](SANITIZATION_SPEC.md#pipe-delimited-sinks-pass-13b) and
+  [ADR-24](../ARCHITECTURE_DECISIONS.md#adr-24-the-pages-own-script-names-a-pipe-delimited-credential)
+
 **Vendor-format serials (delimiter-aware, error):**
 
 - Applies the **high-confidence** `serial_number` detectors from the loaded patterns (`--patterns`; domain knowledge,
@@ -609,6 +620,30 @@ capture repairs it. A file that records no readable version is not reported — 
 `MIN_SANITIZER_VERSION` is the oldest release whose sanitized output is current. A release that changes what the
 sanitizer writes sets it to its own version in the release commit ([RELEASE](../RELEASE.md#pr-checklist-before-merge)).
 It is a warning, not an error: the capture is not a leak, and `--strict` makes it fail a gate that wants it fixed.
+
+## Unfinished-Review Check
+
+A sanitized HAR records how the review of its flagged values ended (`log._har_capture.sanitization.review`, see
+[SANITIZATION_SPEC](SANITIZATION_SPEC.md#pass-2-interactive-review)), how many values were flagged (`flagged_total`) and
+how many were decided (`user_redacted`, `user_skipped`). `validate_har()` reports one **error** finding (location
+`Sanitization metadata`, field `review`) when the outcome is `no_tty` or `cancelled` and at least one flagged value is
+undecided — `flagged_total` less the two decided counts (`unreviewed_flagged()`, `validation/provenance.py`): nobody
+decided those values, and every one is still in the file as captured.
+
+| `review`               | Undecided values | Reported | Why                                                |
+| ---------------------- | ---------------- | -------- | -------------------------------------------------- |
+| `no_tty`, `cancelled`  | 1 or more        | error    | Nobody decided them                                |
+| `no_tty`, `cancelled`  | 0                | no       | Nothing was left undecided                         |
+| `completed`, `skipped` | any              | no       | Every value was decided, or kept by choice         |
+| `none_flagged`         | any              | no       | Nothing was offered                                |
+| (absent)               | any              | no       | No review recorded: a library caller that ran none |
+
+It is an error, not a warning: the heuristic engine flags a credential it cannot be certain of rather than redact it
+([ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract)),
+so an unreviewed file is where such a credential is, and a gate that reads it as clean passes the leak on. The
+remediation is the review: run `har-capture sanitize` on the file from a terminal, where the same values are offered
+again, or decide them in its review report and pass `--apply-review`
+([SANITIZATION_SPEC](SANITIZATION_SPEC.md#pass-2-interactive-review)).
 
 ## CLI Command vs Pre-Commit Hook
 

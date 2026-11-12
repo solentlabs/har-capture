@@ -44,9 +44,11 @@ from har_capture.sanitization.html import (
     capture_pipe_context,
     check_for_pii,
     is_structural_value_sensitive,
+    linear_index,
     sanitize_html,
 )
 from har_capture.sanitization.report import HeuristicMode
+from har_capture.validation.secrets import Finding, check_content
 
 # =============================================================================
 # Load Test Data From Fixture
@@ -1295,6 +1297,56 @@ def test_word_runs_do_not_backtrack_through_a_label() -> None:
     assert not re.search(r"\((?:\?:)?\\w[*+][A-Za-z\[]", source)
 
 
+def test_email_scan_never_runs_the_pattern_over_a_whole_body() -> None:
+    r"""No pass scans a body with `EMAIL_RE` itself.
+
+    `\b[A-Za-z0-9._%+-]+@` is retried from every word boundary of a long run
+    that holds no `@` — a base64url blob, a dotted number list — and each try
+    rescans the rest of the run: 78 KB took thirteen seconds in sanitize_html.
+    The passes scan with `iter_emails` / `sub_emails`, which start from each
+    `@` and apply the same pattern once.
+    """
+    import har_capture.sanitization.har as har_module
+    import har_capture.sanitization.html as html_module
+
+    for module in (html_module, har_module):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "EMAIL_RE.sub(" not in source
+        assert "EMAIL_RE.finditer(" not in source
+        assert "EMAIL_RE.search(" not in source
+
+
+def test_email_scan_finds_exactly_what_the_pattern_finds() -> None:
+    """`iter_emails` yields the spans `EMAIL_RE.finditer` yields: the rule is the pattern's, only the scan differs.
+
+    A differential test over 20,000 seeded random strings built from the
+    characters that decide a match: local-part letters, digits and
+    punctuation, `@`, a space, a non-ASCII letter and a quote.
+    """
+    import random
+
+    from har_capture.patterns.redaction import EMAIL_RE, iter_emails, sub_emails
+
+    rng = random.Random(20261112)  # noqa: S311 - a seeded test generator, not cryptography
+    alphabet = 'ab1.@-_%+ é"com'
+    for _ in range(20000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 40)))
+        expected = [match.span() for match in EMAIL_RE.finditer(text)]
+        assert [match.span() for match in iter_emails(text)] == expected, text
+        assert sub_emails(lambda _match: "<E>", text) == EMAIL_RE.sub("<E>", text), text
+
+
+@pytest.mark.parametrize(
+    "local_part",
+    ["john.doe+tag", "a" * 64, "a" * 200, "first." + "a" * 200],
+    ids=["ordinary", "64-characters", "200-characters", "200-characters-after-a-dot"],
+)
+def test_email_with_a_long_local_part_is_still_replaced(local_part: str) -> None:
+    """The scan changes no rule: an address is replaced whole, however long its local part."""
+    out = sanitize_html(f"<p>{local_part}@example.com</p>", salt=None)
+    assert out == "<p>x@x.invalid</p>"
+
+
 @pytest.mark.parametrize(
     ("html", "offered"),
     [
@@ -1353,3 +1405,36 @@ def test_labeled_value_in_script_code_is_kept_unless_literal(case: dict) -> None
     assert sanitize_html(case["input_html"], salt=None) == case["output"]
     reported = any(f["pattern"] == "password_field" for f in check_for_pii(case["input_html"]))
     assert reported is case["reported"]
+
+
+PIPE_SINK_CASES = _FIXTURE["pipe_sink_cases"]["cases"]
+
+
+def _pipe_sink_patterns(case: dict) -> str | dict | None:
+    patterns = case.get("patterns", "network-device")
+    return str(resolve_patterns_arg(patterns)) if isinstance(patterns, str) else patterns
+
+
+@pytest.mark.parametrize("case", PIPE_SINK_CASES, ids=[c["id"] for c in PIPE_SINK_CASES])
+def test_pipe_value_the_page_writes_into_a_named_sink(case: dict) -> None:
+    """A blob position the page's script writes into a password or SSID sink is redacted; the rest is kept."""
+    patterns = _pipe_sink_patterns(case)
+
+    assert sanitize_html(case["input_html"], salt=None, custom_patterns=patterns) == case["output"]
+
+    findings: list[Finding] = []
+    check_content(case["input_html"], "entry", findings, patterns)
+    assert [f.severity for f in findings if "pipe-delimited" in f.reason] == case["findings"]
+    cleared: list[Finding] = []
+    check_content(case["output"], "entry", cleared, patterns)
+    assert [f for f in cleared if "pipe-delimited" in f.reason] == []
+
+
+LINEAR_INDEX_CASES = _FIXTURE["linear_index_cases"]["cases"]
+
+
+@pytest.mark.parametrize("case", LINEAR_INDEX_CASES, ids=[c["id"] for c in LINEAR_INDEX_CASES])
+def test_linear_index_reads_a_start_and_a_stride(case: dict) -> None:
+    """A row index is a start plus a stride times one loop variable, or it is not a row index."""
+    expected = tuple(case["expected"]) if case["expected"] is not None else None
+    assert linear_index(case["expression"], case["definitions"].get) == expected

@@ -76,11 +76,16 @@ from har_capture.sanitization.html import (
     SSID_ATTRIBUTE_RE,
     is_structural_value_sensitive,
     is_valid_ip_address,
+    iter_pipe_sink_values,
     iter_ssid_option_values,
     pattern_file_patterns,
 )
 from har_capture.validation.completeness import load_har
-from har_capture.validation.provenance import MIN_SANITIZER_VERSION, stale_sanitizer_version
+from har_capture.validation.provenance import (
+    MIN_SANITIZER_VERSION,
+    stale_sanitizer_version,
+    unreviewed_flagged,
+)
 
 # Cookie attribute-only values (not actual session data)
 MAC_PATTERN = MAC_RE
@@ -140,6 +145,13 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
     # Combine both tiers for validation — pre-commit should catch all sensitive fields
     patterns: list[str] = fields.get("auto_redact_patterns", []) + fields.get("flag_patterns", [])
     return patterns
+
+
+_PIPE_SINK_REASONS = {
+    # pragma: allowlist nextline secret
+    "password": "Plaintext password in a pipe-delimited value the page writes into a password field",
+    "ssid": "Wi-Fi network name (SSID) in a pipe-delimited value the page writes into an SSID field",
+}
 
 
 def _compile_serial_detectors(custom_patterns: str | dict[str, Any] | None = None) -> list[Any]:
@@ -1202,6 +1214,22 @@ def _scan_text(
             )
         )
 
+    # A pipe-delimited value the page's own script writes into a password- or
+    # SSID-named sink (`$('#wirelessPassword1').html(tagValues[6])`). The
+    # sanitizer's redact_pipe_sink_values replaces what this iterator yields,
+    # in every body, so a finding here is one a sanitize run clears. Severity
+    # follows the labeled pairs above: the script names the password outright.
+    for sink_kind, sink_value, _offset in iter_pipe_sink_values(text, custom_patterns):
+        findings.append(
+            Finding(
+                severity="error" if sink_kind == "password" else "warning",
+                location=location,
+                field="content",
+                value=truncate(sink_value),
+                reason=_PIPE_SINK_REASONS[sink_kind],
+            )
+        )
+
     # Vendor-format serials as standalone tokens — delimiter-aware. Mirrors
     # the sanitizer's redact_vendor_serials pass: the same high-confidence
     # serial_number detectors applied to the same token extraction, so what
@@ -1321,6 +1349,23 @@ def validate_har(
                 reason=(
                     f"Sanitized by har-capture {stale_version}, before {MIN_SANITIZER_VERSION} corrected "
                     "sanitizer output; re-sanitize from the raw capture"
+                ),
+            )
+        )
+
+    unreviewed = unreviewed_flagged(log)
+    if unreviewed is not None:
+        outcome, flagged = unreviewed
+        findings.append(
+            Finding(
+                severity="error",
+                location="Sanitization metadata",
+                field="review",
+                value=outcome,
+                reason=(
+                    f"{flagged} flagged value(s) were never decided (review: {outcome}) and remain in the file "
+                    "as captured; run `har-capture sanitize` on it from a terminal and review them, "
+                    "or decide them in its review report and pass --apply-review"
                 ),
             )
         )
