@@ -1142,6 +1142,15 @@ is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`)
 often as a label — all 44 of its unredacted fleet matches are JavaScript assignments — so its value is offered for
 review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it.
 
+**An SSID label's value is one token** (pass 7a: `SSID` or `Network Name`, then `:` or `=`, keeping the spaces around
+it). The value runs to the first space, so `SSID: Smith Family` would leave `Family`. Reading on to the end of the line
+would also take whatever text follows a label, such as help prose. No captured page writes a value there: across the CMM
+fleet's 28,159 response bodies (35 models) and 5,676 raw C6250 bodies the rule meets a value in text or in a script
+comment or string 0 times. Its matches (27 in the fleet, 22 in the raw captures) are all script code, and the 695 labels
+in page text have their value in the next element, which the sibling-cell pass (7c) reads whole. Network names with a
+space do occur (2 of 5 neighbouring names on one C6250), in `|`-joined lists, which are read field by field so a space
+does not split a value.
+
 **In script code only a literal is a value** (`labeled_literal`, ADR-19; passes 7, 7a and 9, the bare-`key` offer, and
 `check_for_pii`'s `password_field` and `session_token`). Script code is a JavaScript `<script>` element's body less its
 strings, comments and regex literals (`script_code_spans`), or the whole of a body that opens as JavaScript (`//`, `/*`,
