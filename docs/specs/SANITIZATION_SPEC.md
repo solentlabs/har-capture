@@ -71,6 +71,7 @@ The file is organized into 9 groups:
    MACs, IPv6 and IPv4, emails, phone numbers, and the positional passes between them
 1. **Pass 1b Propagation** — `_is_propagation_eligible()`, `_propagation_search_keys()`, `_propagate_redacted_values()`,
    `_propagate_whole_bodies()`, `_propagate_cookie_echoes()`, `find_collapsed_bodies()`
+1. **Pass 1d Surviving Copies** — `_flag_surviving_copies()`
 1. **Main Entry Points** — `sanitize_entry()`, `sanitize_har()`, `sanitize_har_file()`
 1. **Pass 2** — `apply_user_redactions()`, `appears_sanitized()`
 
@@ -634,7 +635,7 @@ routes (a per-call scope, like the field patterns'):
 | MAC addresses | `MAC_RE` (see [MAC addresses](#mac-addresses)); constants kept                        | `hasher.hash_mac()`                    |
 | Private IPs   | `PRIVATE_IP_RE` with octets ≤ 255 (`is_private_ip_in_range`); preserved gateways kept | `hasher.hash_ip(ip, is_private=True)`  |
 | Public IPs    | `PUBLIC_IP_RE`, less version strings (`is_valid_ip_address()`)                        | `hasher.hash_ip(ip, is_private=False)` |
-| IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (`::`, `::1` kept)              | `hasher.hash_ipv6()`                   |
+| IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (constants kept)                | `hasher.hash_ipv6()`                   |
 | Emails        | `EMAIL_RE` (RFC 5321 simplified), scanned from each `@` (`sub_emails`)                | `hasher.hash_email()`                  |
 | Phone numbers | US/CA formats **with a separator, parens, or leading +**                              | Flagged, not auto-redacted             |
 
@@ -663,6 +664,11 @@ loopback `::1` identify no device — they are IPv6's `0.0.0.0` and `127.0.0.1`,
 `2001:db8::` placeholder in their place reads as a real address. Keeping them redacts less, which ADR-12 makes the
 default: across the fleet they occur 281 times in HTML bodies and 2,929 times in JSON and text bodies, and no fleet
 value of either is PII. The static-mode placeholder `::` is therefore stable.
+
+The first address of an address block is kept on the same ground: `2000::` (global unicast), `fe80::` (link-local),
+`fc00::` and `fd00::` (unique local) and `ff00::` (multicast). Written out, it names the block — a Netgear script
+carries the comment `//global pool 2000::/3` — and no device holds it. The fleet's one shape is that comment, in 12
+captures. Any other address before a prefix length, a household's delegated `2601:…::/56` among them, is replaced.
 
 **Phone numbers require formatting**: a bare 10–11 digit run never matches — separator-free runs are constants,
 counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
@@ -799,7 +805,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`     |
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
-| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
+| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; constants kept     | `hasher.hash_ipv6()`                    |
 | 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`        |
 | 7a   | SSID text labels               | SSID labels in HTML text nodes, literals only            | `hasher.hash_value(val, "WIFI")`        |
 | 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
@@ -1020,6 +1026,14 @@ and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob se
 covered, and left to pass 14's review: a bare `KEY1` WEP sink, a name the sink does not call an SSID
 (`GuestNetworkName1`), and rows the script reads with no name and no headed table.
 
+The limits above are kept where a device's own network name sits behind them. A Netgear C6250 carries its name in a
+position no script reads, labeled only by a comment (`/* … | Name (SSID) | … */` above `'1|6|<name>|13|1|'` on its scan
+pages), and in a headed `SSID` table whose variable is `TagValueList`, whose cell pads the value with `&nbsp;`, and
+whose rows are one field each (`'2|<name>|<guest name>|'`). Reading either would mean reading comments, padded values or
+one-field rows on every device, for a name that is redacted on the device's settings page and so already offered for
+review wherever it survives ([Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase)). No other capture in
+the CMM fleet holds these pages, so nothing yet shows the shapes elsewhere.
+
 Every scan is one pass over the text or one function's body and is kept for the page's other blobs (`PipeSinks`). At
 most 16 row layouts, views and tables are read for one function, and the function a blob sits in is looked for among the
 16 declared nearest before it.
@@ -1064,11 +1078,11 @@ time, any other content whole — and judges each match's value, not the label a
 `pii.json` pattern's `value_group`), so a sanitized `Serial Number: SERIAL_<hash>` is clean. It reports only what a
 sanitize run clears: a match the sanitizer's own pass keeps — a Luhn-failing card-shaped number, an SSN-shaped one
 (offered for review), a constant MAC, a preserved gateway address, a dotted-quad version string, an IPv6 candidate that
-is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a MAC is not reported a second time as
-an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with `validate`'s predicate
-(`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own placeholders), and its
-credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included): a
-value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
+is not a host address (a MAC, a clock time, `::`, `::1`, a block name) — is not reported, and a MAC is not reported a
+second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with `validate`'s
+predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own placeholders), and
+its credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included):
+a value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
 value (`credential_value_action()`: a button word or prose is not reported) — is reported as `credential_field`. Both
 stop at `JSON_MAX_DEPTH`. A consumer names a credential field in `fields`, not with a `pii` regex pairing a key and its
 value (`"field": "value"`): a regex cannot pair across the decoded strings a JSON fixture is read as.
@@ -1127,6 +1141,15 @@ trade: an unquoted password that begins with `!` or `&`, or reads as a call (`ab
 is a credential label glued to a word (`wifikey`, `wifi0_wpapsk_key`, `passkey`); a bare `key` is a script variable as
 often as a label — all 44 of its unredacted fleet matches are JavaScript assignments — so its value is offered for
 review (`credential`, LOW) instead (`KEY_FIELD_RE`), and `check_for_pii` does not report it.
+
+**An SSID label's value is one token** (pass 7a: `SSID` or `Network Name`, then `:` or `=`, keeping the spaces around
+it). The value runs to the first space, so `SSID: Smith Family` would leave `Family`. Reading on to the end of the line
+would also take whatever text follows a label, such as help prose. No captured page writes a value there: across the CMM
+fleet's 28,159 response bodies (35 models) and 5,676 raw C6250 bodies the rule meets a value in text or in a script
+comment or string 0 times. Its matches (27 in the fleet, 22 in the raw captures) are all script code, and the 695 labels
+in page text have their value in the next element, which the sibling-cell pass (7c) reads whole. Network names with a
+space do occur (2 of 5 neighbouring names on one C6250), in `|`-joined lists, which are read field by field so a space
+does not split a value.
 
 **In script code only a literal is a value** (`labeled_literal`, ADR-19; passes 7, 7a and 9, the bare-`key` offer, and
 `check_for_pii`'s `password_field` and `session_token`). Script code is a JavaScript `<script>` element's body less its
@@ -1350,6 +1373,7 @@ placeholders are not in the global allowlist: `02deadbeef12` is as likely a pass
 CATEGORY_PREFIX_MAP = {
     "wifi_ssid": "WIFI",
     "credential": "CRED",
+    "password": "PASS",  # pragma: allowlist secret
     "device_name": "DEVICE",
     "suspicious": "SENSITIVE",
     "serial_number": "SERIAL",
@@ -1402,6 +1426,61 @@ a private-address placeholder for a run of hex digits, in the case style of the 
 The static placeholders are not the width of the value they replace. The two hex-address spellings and the hex-token
 sweep are the exception: `$XXXXXXXXXXXX`, `$00000000` and twelve `X`s inside a token keep the length of what they
 replaced.
+
+### Length-Preserving Stand-ins (`--preserve-length`)
+
+With `sanitize --preserve-length` (`preserve_length=True` on `sanitize_har`, `sanitize_har_file`;
+`Hasher.preserve_length`) every hasher method writes a **stand-in** instead of a placeholder: the same UTF-8 byte length
+as the value it replaces, the same character classes, derived from the salt, so equal values of one kind keep one
+stand-in
+([ADR-25](../ARCHITECTURE_DECISIONS.md#adr-25-a-length-preserving-stand-in-is-known-by-the-files-record-not-by-its-shape)).
+The kind is the method and its prefix (`MAC`, `PRIV_IP`, `PUB_IP`, `IPV6`, `EMAIL`, `WIFI`, `PASS`, …), so a value
+redacted as a Wi-Fi name and confirmed in review as `wifi_ssid` gets one stand-in, as it gets one placeholder today.
+
+| Kind                 | Stand-in (salted)                                                                                                        | Without a salt                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| MAC, in a MAC layout | `02` then hashed hex digits, in the input's layout and the case of its hex letters                                       | `X` for each hex digit         |
+| Private IPv4         | its RFC 1918 prefix kept (`10.`, `172.16.`–`172.31.`, `192.168.`); each other octet hashed with its digit count          | the prefix kept, `1` per digit |
+| Public IPv4          | each octet hashed with its digit count                                                                                   | `1` per digit                  |
+| IPv6                 | each hex digit hashed in its case; `:` kept; a link-local or unique-local first group kept; a dotted tail as public IPv4 | `0` per hex digit              |
+| E-mail               | local part and each domain label by the class rule; `@`, `.` and the top-level domain kept                               | the class fill, TLD kept       |
+| Everything else      | the class rule                                                                                                           | the class fill                 |
+
+An octet keeps its digit count and stays an octet: one digit is `0`–`9`, two are `10`–`99`, three are `100`–`255`, and a
+zero-padded octet (`001`) stays zero-padded.
+
+**Class rule.** Each character keeps its class: a digit becomes a digit, an ASCII letter a letter of the same case, and
+every other ASCII character (space, punctuation, separator) is kept. When the value's letters and digits are all hex
+digits and it has at least one of each, letters stay within `a`–`f`, so a hex token stays hex. A non-ASCII character
+becomes lowercase ASCII letters, one per UTF-8 byte. The **class fill** applies the same rule with fixed characters: `0`
+for a digit, `X` or `x` for a letter.
+
+**Drawing a stand-in.** Characters come from SHA-256 of the salt, the kind, the value and an attempt number. A candidate
+is taken when it differs from the value, does not occur in the input's text (`_readable_text` of the capture as loaded),
+and is not another value's stand-in; otherwise the next attempt is drawn, up to 64. A value that exhausts them (a short
+value whose every candidate already occurs in the capture) is replaced by the last candidate and is **not recorded**. A
+fill is always recorded: it carries no character of the value.
+
+**Record.** The run records each stand-in it takes (`Hasher.stand_ins`). `_embed_sanitization_metadata` writes
+`sanitization.preserve_length: true` and `sanitization.stand_ins`: the sorted recorded stand-ins that occur in the
+output. A run on a file that already carries a record starts from it.
+
+**Recognition.** `stand_ins_scope(stand_ins)` (`patterns/redaction.py`) makes `is_redacted()` and `is_safe_value()`
+treat each recorded stand-in as redacted. `sanitize_har` holds the scope for its run, over the hasher's growing record,
+so no guarded pass re-replaces and no heuristic offers a stand-in written earlier in the run; the vendor-serial pass
+skips one too, since a stand-in serial keeps the serial's shape. `validate` and the review step
+(`apply_user_redactions`) hold the scope over the file's record. The format-preserving passes do not take the guard (see
+[Idempotency Boundary](#idempotency-boundary)), but the hasher returns a recorded stand-in as its own stand-in, so a
+second run on a length-preserving file keeps every recorded stand-in as it is.
+
+**Review.** `apply_user_redactions` writes stand-ins when the file records `preserve_length`, drawn against the file's
+own text, and adds them to the record.
+
+**What keeps its length.** Every replacement keeps the byte length of the value as decoded. A body therefore keeps its
+byte length unless it carries a replaced non-ASCII value escaped — a JSON `\u00e9`, a percent-encoded `%C3%A9` — where
+the ASCII stand-in is written as itself.
+
+`check_for_pii` and any consumer that does not read `log._har_capture` cannot tell a stand-in from a value.
 
 ## Two-Pass Model
 
@@ -1473,9 +1552,11 @@ The digit requirement is the operative form of "must not be word-shaped." Method
 are alphabetic; opaque tokens carry digits. It deliberately excludes all-letter hex (`deadbeefcafebabe`), which falls
 back to review.
 
-**Failing eligibility is not a leak** — the value stays flagged for interactive review, and Pass 2 resolves it if the
-user confirms. That is what allows the bar to be strict: a false negative costs one review item, while a false positive
-would rewrite unrelated bytes across the file.
+**Failing eligibility is not a leak** — a value that was flagged stays flagged for interactive review, and a network
+name or passphrase that is still readable is flagged by
+[Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase); Pass 2 resolves either if the user confirms. That
+is what allows the bar to be strict: a false negative costs one review item, while a false positive would rewrite
+unrelated bytes across the file.
 
 Structure is preserved because the substitution is one token for one token: path segment count, query shape, and
 delimiters are untouched.
@@ -1568,6 +1649,42 @@ queue untouched.
 
 After Pass 1b, `sanitize_har` sweeps the entries once more for the MACs it replaced, where a MAC appears inside a longer
 hex token or as the tail of a default network name; see [MAC Addresses](#mac-addresses). Counted as `mac_derived`.
+
+### Pass 1d: Surviving Copies of a Network Name or Passphrase
+
+A network name or Wi-Fi passphrase is redacted where something names it: a label, an SSID key, a position the page's
+script writes into a control. Another page can carry the same value in a blob nothing names
+(`var tagValueList = 'MyNet|300Mbps|1|'`), and a network name is usually too short or too word-shaped for the
+[Pass 1b](#pass-1b-redacted-value-propagation) sweep. Left alone, the value is replaced on one page and readable on the
+next, with nothing in the review queue to say so.
+
+**Registered values.** Each of these rules records the value it redacts with its review category
+(`RedactionCollector.record_redacted_value(..., review_as=)`, kept in `review_categories`):
+
+| Rule                                                                  | Review category | Placeholder |
+| --------------------------------------------------------------------- | --------------- | ----------- |
+| SSID label in text (pass 7a), SSID input (pass 8b), JS SSID (15)      | `wifi_ssid`     | `WIFI_`     |
+| Structural network names (pass 7c: `SIBLING_SSID_RE`, SSID attribute) | `wifi_ssid`     | `WIFI_`     |
+| SSID-named JSON key (`_is_redactable_ssid`)                           | `wifi_ssid`     | `WIFI_`     |
+| Pipe-delimited sink (pass 13b), SSID sink                             | `wifi_ssid`     | `WIFI_`     |
+| Pipe-delimited sink (pass 13b), password sink                         | `password`      | `PASS_`     |
+
+A registered value also enters the Pass 1b registry, so one that meets the eligibility bar is replaced by that sweep.
+
+**The check** (`_flag_surviving_copies`). After Pass 1b and Pass 1c, each registered value is looked for in the text the
+review can reach (`_readable_text`: every string in the HAR and each JSON body's decoded strings). A value found there
+becomes one review item (`RedactionCollector.flag_surviving_copy`): its category from the table, medium confidence, the
+number of copies left as its occurrence count, and the text around the first copy as its context. An item a heuristic
+already raised for the same text is relabeled, its confidence never lowered, not duplicated. The check runs in every
+heuristic mode.
+
+**Nothing is replaced.** The match is plain text, and a short name can equal an unrelated word, so the copies stay as
+captured until the user decides
+([ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract)).
+A confirmed item takes the placeholder the value already has, because its category maps to the same prefix
+([Category-to-Prefix Mapping](#category-to-prefix-mapping)). A run nobody reviewed records the undecided item, and
+`validate` fails that file ([VALIDATION_SPEC](VALIDATION_SPEC.md)); the sanitized file holds only placeholders, so
+`validate` has no way to find the copy by itself.
 
 ### URL Credential Location Annotation
 
@@ -1779,7 +1896,8 @@ Detects common redaction markers to warn users before double-sanitizing.
    belong in the heuristic engine (flagged for user review), not the scanner pipeline.
 1. **Propagation never widens what counts as a secret** — [Pass 1b](#pass-1b-redacted-value-propagation) only replaces
    values the strict Pass 1 rules already redacted. It introduces no detection of its own, and a value that fails
-   eligibility stays flagged for review. Widening eligibility is a scope change and is governed by
+   eligibility is left for review ([Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase) flags a network
+   name or passphrase that is still readable). Widening eligibility is a scope change and is governed by
    [ADR-12](../ARCHITECTURE_DECISIONS.md#adr-12-redaction-scope-is-anti-drift--redact-more-is-a-change-against-the-founding-contract).
 1. **Output is LF-only on every platform** — Every writer that emits a HAR or report pins `newline="\n"` rather than
    letting Python's text mode substitute `os.linesep`. Captures are committed downstream as immutable evidence in repos

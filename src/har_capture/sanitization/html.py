@@ -50,6 +50,7 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_ipv6_host_address,
     is_redacted,
+    is_stand_in,
     iter_emails,
     luhn_valid,
     route_body,
@@ -740,6 +741,19 @@ def iter_ssid_option_values(
                 yield value, base + option_match.start(2)
 
 
+# The review category a redacted network name or passphrase is registered
+# under: a copy of it that no rule matched elsewhere in the capture is flagged
+# with that category, whose placeholder prefix is the one written here.
+REVIEW_CATEGORY_BY_PREFIX = {"WIFI": "wifi_ssid", "PASS": "password"}  # pragma: allowlist secret
+
+
+def _network_name_placeholder(value: str, hasher: Hasher, collector: RedactionCollector) -> str:
+    """The ``WIFI_`` placeholder for a network name, registered so a surviving copy is flagged."""
+    placeholder = hasher.hash_generic(value, "WIFI")
+    collector.record_redacted_value(value, placeholder, review_as=REVIEW_CATEGORY_BY_PREFIX["WIFI"])
+    return placeholder
+
+
 def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
     """The review context for one pipe-delimited value: its neighbours, the value marked ``>>>value<<<``.
 
@@ -933,7 +947,7 @@ def redact_vendor_serials(
 
     def replace_serial_token(match: re.Match[str]) -> str:
         token = match.group(0)
-        if match_vendor_serial(token, serial_detectors) is None:
+        if is_stand_in(token) or match_vendor_serial(token, serial_detectors) is None:
             return token
         collector.record_auto_redaction("serial_number")
         placeholder = hasher.hash_generic(token, "SERIAL")
@@ -1338,6 +1352,7 @@ def _sanitize_html_impl(
     # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>). In script code
     # only a literal is replaced (labeled_literal): `var ssid = rows[i + 0];`
     # is the page's code, not a network name.
+    # The separator group holds the spaces around `:` or `=`, so they survive.
     def replace_ssid_text(match: re.Match[str]) -> str:
         literal = labeled_literal(match, code)
         if literal is None or is_redacted(literal, custom_patterns):
@@ -1346,10 +1361,10 @@ def _sanitize_html_impl(
         label = match.group(1)
         sep = match.group(2)
         rest = match.group(3)[len(literal) :]
-        return f"{label}{sep}{hasher.hash_generic(literal, 'WIFI')}{rest}"
+        return f"{label}{sep}{_network_name_placeholder(literal, hasher, collector)}{rest}"
 
     html = re.sub(
-        r'\b(SSID|Network\s*Name)\s*([=:])\s*([^\s<>"\']+)',
+        r'\b(SSID|Network\s*Name)(\s*[=:]\s*)([^\s<>"\']+)',
         replace_ssid_text,
         html,
         flags=re.IGNORECASE,
@@ -1409,7 +1424,9 @@ def _sanitize_html_impl(
         prefix = match.group(1)
         value_start = match.group(2)
         value_end = match.group(4)
-        return f"{prefix}{value_start}{hasher.hash_generic(match.group(3), 'WIFI')}{value_end}"
+        return (
+            f"{prefix}{value_start}{_network_name_placeholder(match.group(3), hasher, collector)}{value_end}"
+        )
 
     html = re.sub(
         rf"""(<label>[^<]*SSID[^<]*</label>\s*<input{_TAG_RUN})(value={_QUOTE})([^"'\\>]+)({_QUOTE})""",
@@ -1534,7 +1551,7 @@ def _sanitize_html_impl(
         sep = match.group(2)
         quote1 = match.group(3)
         quote2 = match.group(5)
-        return f"{label}{sep}{quote1}{hasher.hash_generic(match.group(4), 'WIFI')}{quote2}"
+        return f"{label}{sep}{quote1}{_network_name_placeholder(match.group(4), hasher, collector)}{quote2}"
 
     html = re.sub(
         r'\b(?=\w*ssid)(\w+)\s*([=:])\s*(["\'])([^"\']+)(["\'])',
@@ -1581,6 +1598,8 @@ def redact_structural_credentials(
             if not is_structural_value_sensitive(value, custom_patterns):
                 return match.group(0)
             collector.record_auto_redaction(category)
+            if prefix == "WIFI":
+                return f"{match.group(1)}{_network_name_placeholder(value, hasher, collector)}"
             return f"{match.group(1)}{hasher.hash_generic(value, prefix)}"
 
         return replace
@@ -2107,7 +2126,12 @@ def redact_pipe_sink_values(
         iter_pipe_sink_values(content, custom_patterns), key=lambda found: found[2]
     ):
         collector.record_auto_redaction(PIPE_SINK_CATEGORIES[kind])
-        pieces.append(content[written:offset] + hasher.hash_generic(value, PIPE_SINK_PREFIXES[kind]))
+        placeholder = hasher.hash_generic(value, PIPE_SINK_PREFIXES[kind])
+        # A blob on another page can repeat the value with no sink naming it.
+        collector.record_redacted_value(
+            value, placeholder, review_as=REVIEW_CATEGORY_BY_PREFIX[PIPE_SINK_PREFIXES[kind]]
+        )
+        pieces.append(content[written:offset] + placeholder)
         written = offset + len(value)
     return "".join(pieces) + content[written:] if pieces else content
 
@@ -2267,7 +2291,7 @@ def _fixture_text_findings(
             # no remediation. A constant MAC (broadcast, zero), a preserved
             # gateway address, a version string in dotted-quad shape, and an
             # IPv6 candidate that is not a host address (a MAC, a clock time,
-            # `::`, `::1`) all stay in sanitized output.
+            # `::`, `::1`, a block name such as `2000::`) all stay in sanitized output.
             if not _sanitizer_rewrites(pattern_name, matched_text, preserved_ips):
                 continue
             if pattern_name in ("private_ip", "public_ip") and any(

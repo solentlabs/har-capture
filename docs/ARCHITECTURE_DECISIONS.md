@@ -695,3 +695,30 @@ function, so a hostile page cannot multiply the work or run the reader out of st
 
 **Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs, and of its neighbours'
 network names, without a review, and `validate` fails (exit 1) on a capture that still carries the passphrase.
+
+## ADR-25: A Length-Preserving Stand-in Is Known by the File's Record, Not by Its Shape
+
+**Context.** A capture can be served back as the device it came from (a device simulator), where a page must keep the
+unit's byte length: `Content-Length`, offsets a client computes, and a comparison of each served page with the unit's.
+Every placeholder the sanitizer writes is recognized by its shape — a `PREFIX_` hash, a `***…***` marker, a reserved
+address range (`10.255.`, `192.0.2.`, `2001:db8::`, `.invalid`). A shape that says "redacted" is a different length from
+the value it replaces, and a value of the same length and character classes says nothing.
+
+**Decision.** `sanitize --preserve-length` replaces every value with a **stand-in**: the same UTF-8 byte length, the
+same character classes, still derived from the salt so equal values keep one stand-in. The file records every stand-in
+it carries (`log._har_capture.sanitization.stand_ins`), and that record — not a shape — is how the tools recognize one.
+
+1. **A stand-in never occurs in the capture as sent.** The run checks each candidate against the input's text and draws
+   another while it occurs there, so a recorded stand-in can never be a real value of the capture. This is what makes
+   trusting the record sound: skipping a recorded value cannot skip a real one.
+1. **Every tool that judges "already redacted" reads the record**: the sanitizer's guarded passes and heuristics within
+   the run (the stand-ins it has written), a second run on the file, the review step, and `validate`.
+1. **A value too short to have a stand-in absent from the input** is still replaced at its length but not recorded, so
+   nothing vouches for it; tools treat it as any other value.
+1. **The default stays shape-recognized placeholders.** The mode is opt-in, for a consumer that needs byte fidelity.
+
+**Consequence.** A stand-in is indistinguishable from a real value without the record. A consumer that does not read
+`_har_capture` (a fixture gate that scans for credential-shaped fields) sees stand-ins as values, and a stand-in public
+address, IPv6 address or e-mail can name a real third party's address. The record names what is a stand-in, never what
+it replaced. The mode keeps a value's length and character classes, so a stand-in shows them; it never shows a character
+of the value.

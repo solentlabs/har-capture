@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from har_capture.patterns.hasher import Hasher
+from har_capture.patterns.hasher import Hasher, class_stand_in
 from har_capture.patterns.redaction import is_redacted, mac_layout
 
 _FIXTURES = json.loads((Path(__file__).parent.parent / "fixtures" / "test_hasher.json").read_text())
@@ -235,3 +235,107 @@ class TestHasherCaching:
         result2 = hasher2.hash_mac("AA:BB:CC:DD:EE:FF")
 
         assert result1 != result2
+
+
+# =============================================================================
+# Length-preserving stand-ins (SANITIZATION_SPEC "Length-Preserving Stand-ins")
+# =============================================================================
+
+
+def _stand_in(hasher: Hasher, case: dict) -> str:
+    """Call the hasher method a stand-in case names."""
+    value = case["input"]
+    method = case["method"]
+    if method == "mac":
+        return hasher.hash_mac(value)
+    if method in ("private_ip", "public_ip"):
+        return hasher.hash_ip(value, is_private=method == "private_ip")
+    if method == "ipv6":
+        return hasher.hash_ipv6(value)
+    if method == "email":
+        return hasher.hash_email(value)
+    return hasher.hash_value(value, case["prefix"])
+
+
+class TestStandIns:
+    """Every hasher method writes a recorded stand-in of the value's byte length and classes."""
+
+    @pytest.mark.parametrize("case", _cases("stand_in_cases"), ids=_ids("stand_in_cases"))
+    def test_salted_stand_in_keeps_length_and_classes(self, case: dict) -> None:
+        """A salted stand-in differs from the value, matches its class pattern, and is recorded."""
+        hasher = Hasher(salt="fixed", preserve_length=True)
+
+        result = _stand_in(hasher, case)
+
+        assert len(result.encode()) == len(case["input"].encode())
+        assert result != case["input"]
+        assert re.fullmatch(case["salted_re"], result), result
+        assert result in hasher.stand_ins
+        assert _stand_in(hasher, case) == result, "equal values keep one stand-in"
+
+    @pytest.mark.parametrize("case", _cases("stand_in_cases"), ids=_ids("stand_in_cases"))
+    def test_static_fill(self, case: dict) -> None:
+        """Without a salt the fixed fill is written and recorded."""
+        hasher = Hasher(salt=None, preserve_length=True)
+
+        result = _stand_in(hasher, case)
+
+        assert result == case["static"]
+        assert result in hasher.stand_ins
+
+    def test_candidate_in_the_capture_is_redrawn(self) -> None:
+        """A candidate the capture already holds is never taken, so a recorded stand-in is never a real value."""
+        first = Hasher(salt="fixed", preserve_length=True).hash_value("Maplewood", "WIFI")
+        hasher = Hasher(salt="fixed", preserve_length=True, avoid_text=f"other network {first} nearby")
+
+        result = hasher.hash_value("Maplewood", "WIFI")
+
+        assert result not in (first, "Maplewood")
+        assert len(result) == len("Maplewood")
+        assert result in hasher.stand_ins
+
+    def test_value_whose_candidates_all_occur_is_replaced_unrecorded(self) -> None:
+        """A one-digit value in a capture that holds every digit is replaced, and nothing vouches for it."""
+        hasher = Hasher(salt="fixed", preserve_length=True, avoid_text="0123456789")
+
+        result = hasher.hash_value("7", "PIN")
+
+        assert result != "7"
+        assert len(result) == 1
+        assert result not in hasher.stand_ins
+
+    def test_value_without_letters_or_digits_is_kept(self) -> None:
+        """Nothing in a value of punctuation alone can change, so it stands for itself, unrecorded."""
+        hasher = Hasher(salt="fixed", preserve_length=True)
+
+        assert hasher.hash_value("-.-", "WIFI") == "-.-"
+        assert hasher.stand_ins == set()
+
+    def test_another_values_stand_in_is_not_reused(self) -> None:
+        """Two values never share a stand-in: the second draws again."""
+        hasher = Hasher(salt="fixed", preserve_length=True)
+
+        def first_attempt_collides(draw: object) -> str:
+            return "SAME" if getattr(draw, "_seed", b"").endswith(b":0") else class_stand_in("Abcd", draw)  # type: ignore[arg-type]
+
+        one = hasher.stand_in("WIFI", "Abcd", first_attempt_collides)
+        two = hasher.stand_in("WIFI", "Efgh", first_attempt_collides)
+
+        assert one == "SAME"
+        assert two != "SAME"
+        assert {one, two} <= hasher.stand_ins
+
+    def test_recorded_stand_in_is_its_own_stand_in(self) -> None:
+        """A pass that matches a stand-in written earlier gets it back unchanged."""
+        hasher = Hasher(salt="fixed", preserve_length=True)
+        serial = hasher.hash_value("7ZZ0000FAKE00", "SERIAL")
+
+        assert hasher.hash_value(serial, "SERIAL") == serial
+        assert hasher.hash_mac(serial) == serial
+
+    def test_default_mode_is_unchanged(self) -> None:
+        """Without the mode the shape-recognized placeholders are written and nothing is recorded."""
+        hasher = Hasher(salt="fixed")
+
+        assert hasher.hash_value("Maplewood", "WIFI").startswith("WIFI_")
+        assert hasher.stand_ins == set()

@@ -11,6 +11,8 @@ validation modules.
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
 import functools
 import ipaddress
 import json
@@ -23,9 +25,49 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from .loader import load_allowlist
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping, Set
 
 _LOGGER = logging.getLogger(__name__)
+
+# The length-preserving stand-ins in force (SANITIZATION_SPEC "Length-Preserving
+# Stand-ins"): a stand-in has no shape that says "redacted", so the tools know
+# one by the record of the file or run that wrote it.
+_STAND_INS_CTX: contextvars.ContextVar[Set[str]] = contextvars.ContextVar(
+    "har_capture_stand_ins", default=frozenset()
+)
+
+
+@contextlib.contextmanager
+def stand_ins_scope(stand_ins: Set[str]) -> Iterator[None]:
+    """Treat each of ``stand_ins`` as redacted (``is_redacted``, ``is_safe_value``) inside the block.
+
+    The set is read, not copied, so a run's record that grows as the run
+    writes stand-ins is honored as it grows.
+    """
+    token = _STAND_INS_CTX.set(stand_ins)
+    try:
+        yield
+    finally:
+        _STAND_INS_CTX.reset(token)
+
+
+def is_stand_in(value: str) -> bool:
+    """Whether ``value`` is a length-preserving stand-in recorded for the current scope."""
+    return value in _STAND_INS_CTX.get()
+
+
+def recorded_stand_ins(har_data: Any) -> frozenset[str]:
+    """The stand-ins a HAR records it carries (``log._har_capture.sanitization.stand_ins``).
+
+    Anything that is not a list of strings records nothing.
+    """
+    try:
+        recorded = har_data["log"]["_har_capture"]["sanitization"]["stand_ins"]
+    except (KeyError, TypeError):
+        return frozenset()
+    if not isinstance(recorded, list):
+        return frozenset()
+    return frozenset(value for value in recorded if isinstance(value, str) and value)
 
 
 def _check_patterns(value: str, allowlist: dict[str, Any]) -> bool:
@@ -94,6 +136,8 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
         >>> is_redacted("my_password")
         False
     """
+    if is_stand_in(value) or is_stand_in(value.strip()):
+        return True
     allowlist = load_allowlist(custom_patterns)
     return _check_patterns(value, allowlist)
 
@@ -156,6 +200,8 @@ def is_fully_redacted(value: str, custom_patterns: str | dict[str, Any] | None =
         False
     """
     stripped = value.strip()
+    if stripped and is_stand_in(stripped):
+        return True
     if not stripped or "<" in stripped or not _PLACEHOLDER_TOKEN_RE.fullmatch(stripped):
         return False
 
@@ -709,19 +755,30 @@ def ipv6_host_spans(text: str) -> list[tuple[int, int]]:
     return [match.span() for match in IPV6_RE.finditer(text) if is_ipv6_host_address(match.group(0))]
 
 
+# The first address of each IPv6 address block: global unicast (2000::/3),
+# link-local (fe80::/10), unique local (fc00::/7 and its fd00::/8 half) and
+# multicast (ff00::/8). Written out, one of these names the block, as in a
+# firmware comment `//global pool 2000::/3`; no device holds it.
+_IPV6_BLOCK_NAMES = frozenset(
+    ipaddress.IPv6Address(block) for block in ("2000::", "fe80::", "fc00::", "fd00::", "ff00::")
+)
+
+
 def is_ipv6_host_address(candidate: str) -> bool:
     """Check if an ``IPV6_RE`` candidate is an IPv6 address that names a host.
 
     The unspecified ``::`` ("none configured") and loopback ``::1`` are
     protocol constants, like IPv4's ``0.x`` and ``127.x`` that the IPv4
     regexes exclude: they identify no device, and a placeholder in their
-    place would read as a real address.
+    place would read as a real address. The same holds for the first address
+    of an address block (``_IPV6_BLOCK_NAMES``), which names the block.
 
     Args:
         candidate: Text ``IPV6_RE`` matched
 
     Returns:
-        True if ``ipaddress`` parses it as an IPv6 address other than ``::`` or ``::1``
+        True if ``ipaddress`` parses it as an IPv6 address other than ``::``,
+        ``::1`` and the block names
     """
     # An IPv4-mapped tail with zero-padded octets (`::ffff:192.168.001.100`),
     # as some devices print IPv4, is still one address: ipaddress rejects the
@@ -734,7 +791,7 @@ def is_ipv6_host_address(candidate: str) -> bool:
         address = ipaddress.IPv6Address(candidate)
     except ValueError:
         return False
-    return not (address.is_unspecified or address.is_loopback)
+    return not (address.is_unspecified or address.is_loopback or address in _IPV6_BLOCK_NAMES)
 
 
 # `type/subtype` at the start of a Content-Type. The type is not checked

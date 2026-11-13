@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from har_capture.patterns import load_sensitive_patterns
+from har_capture.patterns import load_sensitive_patterns, recorded_stand_ins, stand_ins_scope
 from har_capture.patterns.loader import (
     VENDOR_SERIAL_TOKEN_RE,
     compile_detectors,
@@ -1335,6 +1335,31 @@ def validate_har(
     har_data = load_har(har_path)
     check_har_types(har_data)
 
+    # A length-preserving run's stand-ins look like values; the file's record
+    # says which they are (ADR-25).
+    with stand_ins_scope(recorded_stand_ins(har_data)):
+        return _validate_loaded(
+            har_data,
+            findings,
+            custom_patterns,
+            keep_static_addresses=keep_static_addresses,
+            serial_detectors=serial_detectors,
+            field_tiers=field_tiers,
+            mac_group_patterns=mac_group_patterns,
+        )
+
+
+def _validate_loaded(
+    har_data: dict[str, Any],
+    findings: list[Finding],
+    custom_patterns: str | dict[str, Any] | None,
+    *,
+    keep_static_addresses: bool,
+    serial_detectors: list[Any],
+    field_tiers: _FieldTiers,
+    mac_group_patterns: list[re.Pattern[str]],
+) -> list[Finding]:
+    """``validate_har`` on a loaded, type-checked HAR, inside its stand-in scope."""
     log = har_data.get("log", {})
     entries = log.get("entries", [])
 

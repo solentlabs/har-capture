@@ -55,6 +55,15 @@ FLAG_VALUE_DEDUP_CASES = [
     (["val1", "val2", "val2", "val1", "val3"], 3, 2),
 ]
 
+SURVIVING_COPY_CASES = [
+    # (id, value, flag_first_as, muted, expected (category, confidence, occurrences) or None)
+    ("new_item", "Maplewood", None, False, ("wifi_ssid", "medium", 4)),
+    ("low_heuristic_item_relabeled_and_raised", "Maplewood", ConfidenceLevel.LOW, False, ("wifi_ssid", "medium", 4)),
+    ("high_heuristic_item_keeps_its_confidence", "Maplewood", ConfidenceLevel.HIGH, False, ("wifi_ssid", "high", 4)),
+    ("too_short_to_offer", "ab", None, False, None),
+    ("review_cannot_reach_it", "Maplewood", None, True, None),
+]
+
 FLAG_VALUE_CONFIDENCE_CASES = [
     # (confidence, expected_confidence_value)
     (ConfidenceLevel.HIGH, "high"),
@@ -224,6 +233,33 @@ class TestRedactionCollectorFlagging:
         collector = RedactionCollector(hasher=Hasher.create("test-salt"))
         collector.flag_value(value, "field", ConfidenceLevel.MEDIUM, "ctx", "reason")
         assert bool(collector.flagged) is offered
+
+    @pytest.mark.parametrize(
+        ("value", "flag_first_as", "muted", "expected"),
+        [case[1:] for case in SURVIVING_COPY_CASES],
+        ids=[case[0] for case in SURVIVING_COPY_CASES],
+    )
+    def test_flag_surviving_copy(
+        self,
+        value: str,
+        flag_first_as: ConfidenceLevel | None,
+        muted: bool,
+        expected: tuple[str, str, int] | None,
+    ) -> None:
+        """A surviving copy is one item under the value's review category, counted as it remains."""
+        collector = RedactionCollector(hasher=Hasher.create("test"))
+        collector.record_redacted_value(value, "WIFI_00000000", review_as="wifi_ssid")
+        if flag_first_as is not None:
+            collector.flag_value(value, "device_name", flag_first_as, "ctx", "heuristic")
+
+        if muted:
+            with collector.flags_muted():
+                collector.flag_surviving_copy(value, "ctx", "survived", 4)
+        else:
+            collector.flag_surviving_copy(value, "ctx", "survived", 4)
+
+        found = [(f.category, f.confidence.value, f.occurrences) for f in collector.flagged]
+        assert found == ([expected] if expected else [])
 
     def test_flag_value_default_status(self) -> None:
         """Test flagged values have FLAGGED status by default."""

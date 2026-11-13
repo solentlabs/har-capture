@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-13
+
+### Added
+
+- **`sanitize --preserve-length`.** Each replaced value becomes a stand-in with the same byte length and character
+  classes (digits stay digits, letters keep their case, hex stays hex, separators stay), still derived from the salt so
+  equal values keep one stand-in. Every response body keeps its byte length, so a capture served back as the device
+  matches the unit's `Content-Length`. A private address stays private and a MAC stays locally administered. The file
+  records its stand-ins in `log._har_capture.sanitization.stand_ins`, and `validate`, a second `sanitize` run and the
+  review read that record, since a stand-in looks like a real value. A stand-in is never a value the capture already
+  holds. A body that writes a replaced non-ASCII value JSON-escaped (`\u00e9`) is the one case that still changes
+  length.
+
+### Fixed
+
+- **`sanitize` flags a Wi-Fi network name or passphrase it redacted on one page and left readable on another.** A
+  Netgear C6250 names its network on `/WirelessSettings.htm`, where the name was replaced, and repeats it in an
+  unlabeled list on `/WirelessSettings_h.htm`, where it stayed as captured with nothing offered for review, and
+  `validate` called the file clean. Each such value is now offered for review with the number of copies left. It is not
+  replaced unasked, since a short name can equal an unrelated word; confirming it writes the placeholder the value
+  already has. A run nobody reviews records the undecided value, which `validate` reports.
+- **`sanitize` keeps the name of an IPv6 address block.** A Netgear script's comment `//global pool 2000::/3` came out
+  as `//global pool 2001:db8::<hash>/3`: the block's first address was replaced as if a device held it. `2000::`,
+  `fe80::`, `fc00::`, `fd00::` and `ff00::` are now kept, as `::` and `::1` are. Any other address is replaced as
+  before.
+- **`sanitize` keeps the spaces around the separator of an `SSID` or `Network Name` label.** `SSID: MyNet` came out as
+  `SSID:WIFI_<hash>`; it now comes out as `SSID: WIFI_<hash>`.
+
 ## [0.18.0] - 2026-11-12
 
 ### Added
@@ -1638,6 +1666,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.17.0]: https://github.com/solentlabs/har-capture/compare/v0.16.2...v0.17.0
 [0.17.1]: https://github.com/solentlabs/har-capture/compare/v0.17.0...v0.17.1
 [0.18.0]: https://github.com/solentlabs/har-capture/compare/v0.17.1...v0.18.0
+[0.19.0]: https://github.com/solentlabs/har-capture/compare/v0.18.0...v0.19.0
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1665,4 +1694,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.18.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.19.0...HEAD
