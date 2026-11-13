@@ -704,9 +704,10 @@ values, JSON keys and text bodies take — so whether a value is redacted never 
 host addresses. An `IPV6_RE` candidate (colon-terminated hex groups ending in a hex group or, for an IPv4-mapped
 address, a dotted quad; not glued to a word or colon on either side) is an address only when `is_ipv6_host_address()`
 accepts it: `ipaddress` parses it — after unpadding a dotted-quad tail's zero-padded octets (`::ffff:192.168.001.100`),
-as the IPv4 passes read a padded quad — and it is not the unspecified `::` or loopback `::1` — protocol constants like
-IPv4's `0.x` and `127.x`. `validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of
-the IPv4 passes, so an IPv4-mapped address is hashed as one.
+as the IPv4 passes read a padded quad — and it is not the unspecified `::`, the loopback `::1` or the first address of
+an address block (`2000::`, `fe80::`, `fc00::`, `fd00::`, `ff00::`) — protocol constants like IPv4's `0.x` and `127.x`.
+`validate`'s IPv6 scan and `check_for_pii` apply the same test. Both engines run IPv6 ahead of the IPv4 passes, so an
+IPv4-mapped address is hashed as one.
 
 ### `route_body(mime_type, text)`
 

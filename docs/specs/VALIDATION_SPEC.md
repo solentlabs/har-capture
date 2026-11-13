@@ -346,8 +346,8 @@ Severity: **warning**
 **IPv6 addresses:**
 
 - `IPV6_RE` candidates that `is_ipv6_host_address()` accepts — the sanitizer's own IPv6 pass (`patterns/redaction.py`),
-  so a clock time, a MAC, the unspecified `::` and the loopback `::1` are not reported, and every address that is gets
-  rewritten by any sanitize run, in every body route
+  so a clock time, a MAC, the unspecified `::`, the loopback `::1` and a block name such as `2000::` are not reported,
+  and every address that is gets rewritten by any sanitize run, in every body route
 - Reported because a global address locates the subscriber and an EUI-64 link-local address embeds the device's MAC;
   JSON bodies across the cable_modem_monitor fleet hold 960 IPv6 addresses
 - Placeholders (the `2001:db8::` documentation prefix) are skipped via `is_redacted()`

@@ -2289,7 +2289,7 @@ def _fixture_text_findings(
             # no remediation. A constant MAC (broadcast, zero), a preserved
             # gateway address, a version string in dotted-quad shape, and an
             # IPv6 candidate that is not a host address (a MAC, a clock time,
-            # `::`, `::1`) all stay in sanitized output.
+            # `::`, `::1`, a block name such as `2000::`) all stay in sanitized output.
             if not _sanitizer_rewrites(pattern_name, matched_text, preserved_ips):
                 continue
             if pattern_name in ("private_ip", "public_ip") and any(

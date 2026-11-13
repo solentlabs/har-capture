@@ -635,7 +635,7 @@ routes (a per-call scope, like the field patterns'):
 | MAC addresses | `MAC_RE` (see [MAC addresses](#mac-addresses)); constants kept                        | `hasher.hash_mac()`                    |
 | Private IPs   | `PRIVATE_IP_RE` with octets ≤ 255 (`is_private_ip_in_range`); preserved gateways kept | `hasher.hash_ip(ip, is_private=True)`  |
 | Public IPs    | `PUBLIC_IP_RE`, less version strings (`is_valid_ip_address()`)                        | `hasher.hash_ip(ip, is_private=False)` |
-| IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (`::`, `::1` kept)              | `hasher.hash_ipv6()`                   |
+| IPv6          | `IPV6_RE` candidates `is_ipv6_host_address()` accepts (constants kept)                | `hasher.hash_ipv6()`                   |
 | Emails        | `EMAIL_RE` (RFC 5321 simplified), scanned from each `@` (`sub_emails`)                | `hasher.hash_email()`                  |
 | Phone numbers | US/CA formats **with a separator, parens, or leading +**                              | Flagged, not auto-redacted             |
 
@@ -664,6 +664,11 @@ loopback `::1` identify no device — they are IPv6's `0.0.0.0` and `127.0.0.1`,
 `2001:db8::` placeholder in their place reads as a real address. Keeping them redacts less, which ADR-12 makes the
 default: across the fleet they occur 281 times in HTML bodies and 2,929 times in JSON and text bodies, and no fleet
 value of either is PII. The static-mode placeholder `::` is therefore stable.
+
+The first address of an address block is kept on the same ground: `2000::` (global unicast), `fe80::` (link-local),
+`fc00::` and `fd00::` (unique local) and `ff00::` (multicast). Written out, it names the block — a Netgear script
+carries the comment `//global pool 2000::/3` — and no device holds it. The fleet's one shape is that comment, in 12
+captures. Any other address before a prefix length, a household's delegated `2601:…::/56` among them, is replaced.
 
 **Phone numbers require formatting**: a bare 10–11 digit run never matches — separator-free runs are constants,
 counters, or frequencies far more often than phone numbers (the CM2500 firmware's md5.js init constants, e.g.
@@ -800,7 +805,7 @@ The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 
 | 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`     |
 | 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
 | 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
-| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; `::`, `::1` kept   | `hasher.hash_ipv6()`                    |
+| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; constants kept     | `hasher.hash_ipv6()`                    |
 | 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`        |
 | 7a   | SSID text labels               | SSID labels in HTML text nodes, literals only            | `hasher.hash_value(val, "WIFI")`        |
 | 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
@@ -1065,11 +1070,11 @@ time, any other content whole — and judges each match's value, not the label a
 `pii.json` pattern's `value_group`), so a sanitized `Serial Number: SERIAL_<hash>` is clean. It reports only what a
 sanitize run clears: a match the sanitizer's own pass keeps — a Luhn-failing card-shaped number, an SSN-shaped one
 (offered for review), a constant MAC, a preserved gateway address, a dotted-quad version string, an IPv6 candidate that
-is not a host address (a MAC, a clock time, `::`, `::1`) — is not reported, and a MAC is not reported a second time as
-an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with `validate`'s predicate
-(`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own placeholders), and its
-credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included): a
-value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
+is not a host address (a MAC, a clock time, `::`, `::1`, a block name) — is not reported, and a MAC is not reported a
+second time as an IPv6 candidate. A fixture that parses as JSON also has its identity fields checked with `validate`'s
+predicate (`unredacted_identity()`: a serial or MAC under a key naming it, less the sanitizer's own placeholders), and
+its credential fields with the sanitizer's own field names (`is_sensitive_field()`, custom `fields` patterns included):
+a value that is neither empty nor allowlisted — one the sanitizer replaces and `validate` reports, judged as a served
 value (`credential_value_action()`: a button word or prose is not reported) — is reported as `credential_field`. Both
 stop at `JSON_MAX_DEPTH`. A consumer names a credential field in `fields`, not with a `pii` regex pairing a key and its
 value (`"field": "value"`): a regex cannot pair across the decoded strings a JSON fixture is read as.

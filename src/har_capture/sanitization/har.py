@@ -1570,7 +1570,7 @@ def _redact_ip_addresses(value: str, hasher: Hasher | None, collector: Redaction
 
     # IPv6 addresses, before IPv4 so an IPv4-mapped address (`::ffff:1.2.3.4`)
     # is one address. A candidate that is not a host address (a clock time,
-    # `::`, `::1`) stays.
+    # `::`, `::1`, a block name such as `2000::`) stays.
     def replace_ipv6(match: re.Match[str]) -> str:
         candidate = match.group(0)
         if not is_ipv6_host_address(candidate):

@@ -82,6 +82,7 @@
     {"input_html": "Duration: 01:23:45",                      "preserved": "01:23:45",              "id": "time_format_short"},
     {"input_html": "Time: 00:00:00",                          "preserved": "00:00:00",              "id": "time_format_midnight"},
     {"input_html": "Localhost: ::1",                          "preserved": "Localhost: ::1",        "id": "ipv6_loopback_constant"},
+    {"input_html": "//global pool 2000::/3",                  "preserved": "//global pool 2000::/3", "id": "ipv6_block_name_constant"},
     {"input_html": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "preserved": "<td>Serial Number</td><td>SERIAL_2c9c9cf9</td>", "id": "table_serial_placeholder_kept"},
     {"input_html": "IPv6 Gateway: ::",                        "preserved": "IPv6 Gateway: ::",      "id": "ipv6_unspecified_constant"},
     {"input_html": "Power: 7.5 dBmV SNR: 38.2 dB",            "preserved": "7.5 dBmV",              "id": "signal_dbmv"},

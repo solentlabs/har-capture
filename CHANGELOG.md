@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `validate` called the file clean. Each such value is now offered for review with the number of copies left. It is not
   replaced unasked, since a short name can equal an unrelated word; confirming it writes the placeholder the value
   already has. A run nobody reviews records the undecided value, which `validate` reports.
+- **`sanitize` keeps the name of an IPv6 address block.** A Netgear script's comment `//global pool 2000::/3` came out
+  as `//global pool 2001:db8::<hash>/3`: the block's first address was replaced as if a device held it. `2000::`,
+  `fe80::`, `fc00::`, `fd00::` and `ff00::` are now kept, as `::` and `::1` are. Any other address is replaced as
+  before.
 
 ## [0.18.0] - 2026-11-12
 

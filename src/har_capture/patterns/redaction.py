@@ -709,19 +709,30 @@ def ipv6_host_spans(text: str) -> list[tuple[int, int]]:
     return [match.span() for match in IPV6_RE.finditer(text) if is_ipv6_host_address(match.group(0))]
 
 
+# The first address of each IPv6 address block: global unicast (2000::/3),
+# link-local (fe80::/10), unique local (fc00::/7 and its fd00::/8 half) and
+# multicast (ff00::/8). Written out, one of these names the block, as in a
+# firmware comment `//global pool 2000::/3`; no device holds it.
+_IPV6_BLOCK_NAMES = frozenset(
+    ipaddress.IPv6Address(block) for block in ("2000::", "fe80::", "fc00::", "fd00::", "ff00::")
+)
+
+
 def is_ipv6_host_address(candidate: str) -> bool:
     """Check if an ``IPV6_RE`` candidate is an IPv6 address that names a host.
 
     The unspecified ``::`` ("none configured") and loopback ``::1`` are
     protocol constants, like IPv4's ``0.x`` and ``127.x`` that the IPv4
     regexes exclude: they identify no device, and a placeholder in their
-    place would read as a real address.
+    place would read as a real address. The same holds for the first address
+    of an address block (``_IPV6_BLOCK_NAMES``), which names the block.
 
     Args:
         candidate: Text ``IPV6_RE`` matched
 
     Returns:
-        True if ``ipaddress`` parses it as an IPv6 address other than ``::`` or ``::1``
+        True if ``ipaddress`` parses it as an IPv6 address other than ``::``,
+        ``::1`` and the block names
     """
     # An IPv4-mapped tail with zero-padded octets (`::ffff:192.168.001.100`),
     # as some devices print IPv4, is still one address: ipaddress rejects the
@@ -734,7 +745,7 @@ def is_ipv6_host_address(candidate: str) -> bool:
         address = ipaddress.IPv6Address(candidate)
     except ValueError:
         return False
-    return not (address.is_unspecified or address.is_loopback)
+    return not (address.is_unspecified or address.is_loopback or address in _IPV6_BLOCK_NAMES)
 
 
 # `type/subtype` at the start of a Content-Type. The type is not checked
