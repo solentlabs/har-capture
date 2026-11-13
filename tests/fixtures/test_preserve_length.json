@@ -1,0 +1,261 @@
+{
+  "_comment": "sanitize --preserve-length (SANITIZATION_SPEC 'Length-Preserving Stand-ins', ADR-25). capture: one HAR with every kind of value the sanitizer replaces, in HTML, JSON, plain text, headers, cookies, a URL path and a form POST. raw_values: what must not survive. escaped_body_urls: bodies that carry a replaced non-ASCII value JSON-escaped (\\u00e9), the one stated case where a body's length changes.",
+  "raw_values": [
+    "Maplewood",
+    "hunter2hunter2",
+    "192.168.0.12",
+    "A4:2B:B0",
+    "a4:2b:b0",
+    "7ZZ0000FAKE00",
+    "pat.owner",
+    "73.92.144.18",
+    "2601:1f:a0b",
+    "fe80::a62b",
+    "eba954f1f10817e8f36607c4db106999",
+    "4fd8a2b1c0e94a77"
+  ],
+  "escaped_body_urls": [
+    "http://192.168.0.1/api/ascii.json",
+    "http://192.168.0.1/api/status.json"
+  ],
+  "capture": {
+    "log": {
+      "version": "1.2",
+      "creator": {
+        "name": "t",
+        "version": "1"
+      },
+      "entries": [
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.0.1/WirelessSettings.htm",
+            "httpVersion": "HTTP/1.1",
+            "headers": [
+              {
+                "name": "Cookie",
+                "value": "XSRF_TOKEN=4fd8a2b1c0e94a77; SID=eba954f1f10817e8f36607c4db106999"
+              }
+            ],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [
+              {
+                "name": "Set-Cookie",
+                "value": "SID=eba954f1f10817e8f36607c4db106999; Path=/; HttpOnly"
+              }
+            ],
+            "cookies": [],
+            "content": {
+              "size": 692,
+              "mimeType": "text/html",
+              "text": "<html><body><span id=\"wiressSSID1\"></span><input name=\"passphrase\">\n<p>SSID: Maplewood Home</p><p>MAC Address: A4:2B:B0:C1:D2:E3</p><p>Serial Number: 7ZZ0000FAKE00</p>\n<script>function InitTagValue() { var tagValueList = '0|Good|Maplewood Home|hunter2hunter2|192.168.0.12|a4:2b:b0:c1:d2:e3'; return tagValueList.split(\"|\"); }\nfunction InitUpdateView(tagValues) {\n    $('#wiressSSID1').html(tagValues[2]);\n    document.getElementsByName(\"passphrase\")[0].value = piplineDecode(tagValues[3]);\n}\nInitUpdateView(InitTagValue());</script>\n<p>Contact: pat.owner@example-mail.com WAN 73.92.144.18 v6 2601:1f:a0b:3c00::4d2 ll fe80::a62b:b0ff:fec1:d2e3</p>\n<p>Café ☕ net: Café ☕</p></body></html>"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.0.1/api/status.json",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "cookies": [],
+            "content": {
+              "size": 267,
+              "mimeType": "application/json",
+              "text": "{\n  \"wifi\": {\n    \"ssid\": \"Maplewood Home\",\n    \"password\": \"hunter2hunter2\"\n  },\n  \"lan\": {\n    \"ip\": \"192.168.0.12\",\n    \"mac\": \"A4:2B:B0:C1:D2:E3\"\n  },\n  \"serialNumber\": \"7ZZ0000FAKE00\",\n  \"note\": \"Caf\\u00e9 \\u2615\",\n  \"token\": \"eba954f1f10817e8f36607c4db106999\"\n}"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.0.1/api/ascii.json",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "cookies": [],
+            "content": {
+              "size": 50,
+              "mimeType": "application/json",
+              "text": "{\"ssid\": \"Caf\\u00e9 \\u2615\", \"ip\": \"192.168.0.12\"}"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.0.1/Logs.txt",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "cookies": [],
+            "content": {
+              "size": 96,
+              "mimeType": "text/plain",
+              "text": "logs: dhcp lease 192.168.0.12 to a4:2b:b0:c1:d2:e3 at 10:22:01\nadmin pat.owner@example-mail.com\n"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "POST",
+            "url": "http://192.168.0.1/goform/login",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0,
+            "postData": {
+              "mimeType": "application/x-www-form-urlencoded",
+              "text": "loginUsername=admin&loginPassword=hunter2hunter2"
+            }
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "cookies": [],
+            "content": {
+              "size": 15,
+              "mimeType": "text/html",
+              "text": "<html>ok</html>"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        },
+        {
+          "startedDateTime": "2026-01-01T00:00:00Z",
+          "time": 1,
+          "request": {
+            "method": "GET",
+            "url": "http://192.168.0.1/rest/v1/user/3/token/eba954f1f10817e8f36607c4db106999",
+            "httpVersion": "HTTP/1.1",
+            "headers": [
+              {
+                "name": "Authorization",
+                "value": "Bearer eba954f1f10817e8f36607c4db106999"
+              }
+            ],
+            "queryString": [],
+            "cookies": [],
+            "headersSize": -1,
+            "bodySize": 0
+          },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "httpVersion": "HTTP/1.1",
+            "headers": [],
+            "cookies": [],
+            "content": {
+              "size": 2,
+              "mimeType": "application/json",
+              "text": "{}"
+            },
+            "redirectURL": "",
+            "headersSize": -1,
+            "bodySize": -1
+          },
+          "cache": {},
+          "timings": {
+            "send": 0,
+            "wait": 1,
+            "receive": 0
+          }
+        }
+      ]
+    }
+  }
+}

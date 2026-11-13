@@ -630,6 +630,9 @@ the sanitization engine.
 
 Check order:
 
+1. **Recorded stand-ins** — the value, or the value stripped, is in the `stand_ins_scope` in force (a length-preserving
+   run's record; see [Length-Preserving Stand-ins](SANITIZATION_SPEC.md#length-preserving-stand-ins---preserve-length)).
+   `is_fully_redacted()` and `is_safe_value()` honor the same scope
 1. **Static placeholders** — exact match against `allowlist.static_placeholders.values`
 1. **Hash prefixes** — `value.startswith(prefix)` for each in `allowlist.hash_prefixes.values`
 1. **Format-preserving patterns** — regex match against `allowlist.format_preserving_patterns`

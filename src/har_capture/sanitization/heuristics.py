@@ -10,6 +10,8 @@ import math
 import re
 from typing import TYPE_CHECKING
 
+from har_capture.patterns.redaction import is_stand_in
+
 if TYPE_CHECKING:
     from har_capture.patterns.loader import CompiledDetector
     from har_capture.sanitization.report import ConfidenceLevel
@@ -153,7 +155,7 @@ def is_safe_value(
         True if the value is safe (should not be flagged)
     """
     value = value.strip()
-    if not value:
+    if not value or is_stand_in(value):
         return True
 
     if any(pattern.match(value) for pattern in SAFE_PATTERNS):

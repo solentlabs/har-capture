@@ -70,9 +70,11 @@ from har_capture.patterns import (
     parse_json_container,
     parse_xml,
     query_param_segment,
+    recorded_stand_ins,
     route_body,
     split_url_password,
     split_url_query,
+    stand_ins_scope,
     sub_emails,
 )
 from har_capture.patterns.loader import compile_safe_value_patterns
@@ -2412,6 +2414,23 @@ def _embed_sanitization_metadata(
         metadata["sanitization"]["review"] = ReviewOutcome.NONE_FLAGGED.value
 
 
+def record_stand_ins(har_data: dict[str, Any], hasher: Hasher) -> None:
+    """Record in ``log._har_capture.sanitization`` the stand-ins a length-preserving run left in the HAR.
+
+    Only recorded stand-ins that still occur are written, so the record names
+    exactly what the file carries. Does nothing for a run without the mode.
+    """
+    if not hasher.preserve_length:
+        return
+    sanitization = (
+        har_data.setdefault("log", {}).setdefault("_har_capture", {}).setdefault("sanitization", {})
+    )
+    sanitization.pop("stand_ins", None)
+    readable = _readable_text(har_data)
+    sanitization["preserve_length"] = True
+    sanitization["stand_ins"] = sorted(value for value in hasher.stand_ins if value in readable)
+
+
 def _parse_cookie_names(cookie_header_value: str) -> list[str]:
     """Parse cookie names from a Cookie request header value."""
     names = []
@@ -2906,6 +2925,7 @@ def sanitize_har(
     custom_patterns: str | dict[str, Any] | None = None,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
     keep_static_addresses: bool = False,
+    preserve_length: bool = False,
 ) -> tuple[dict[str, Any], SanitizationReport]:
     """Sanitize an entire HAR file.
 
@@ -2934,6 +2954,10 @@ def sanitize_har(
             markup, headers, cookies, URLs and POST data are unaffected.
             Opt in only when the assets are static; a script generated per
             request can embed the unit's own address.
+        preserve_length: Replace every value with a stand-in of its byte length
+            and character classes instead of a placeholder, and record the
+            stand-ins in ``log._har_capture.sanitization`` so the tools still
+            know them (SANITIZATION_SPEC "Length-Preserving Stand-ins").
 
     Returns:
         Tuple of (sanitized HAR data, sanitization report)
@@ -2967,6 +2991,37 @@ def sanitize_har(
     # Create collector with the salt
     hasher = Hasher.create(actual_salt or None)
     collector = RedactionCollector(hasher=hasher)
+    if preserve_length:
+        hasher.preserve_length = True
+        # No stand-in may be a value the capture carries, so a recorded one can
+        # never hide a real value (ADR-25).
+        hasher.avoid_text = _readable_text(har_data)
+        hasher.stand_ins.update(recorded_stand_ins(har_data))
+
+    with stand_ins_scope(hasher.stand_ins):
+        return _sanitize_har_run(
+            har_data,
+            collector,
+            actual_salt,
+            salt=salt,
+            custom_patterns=custom_patterns,
+            heuristics=heuristics,
+            keep_static_addresses=keep_static_addresses,
+        )
+
+
+def _sanitize_har_run(
+    har_data: dict[str, Any],
+    collector: RedactionCollector,
+    actual_salt: str,
+    *,
+    salt: str | None,
+    custom_patterns: str | dict[str, Any] | None,
+    heuristics: HeuristicMode,
+    keep_static_addresses: bool,
+) -> tuple[dict[str, Any], SanitizationReport]:
+    """``sanitize_har`` after its hasher is set up: every pass, then the report and metadata."""
+    hasher = collector.hasher
 
     result = copy.deepcopy(har_data)
 
@@ -3098,6 +3153,7 @@ def sanitize_har(
     report = collector.to_report("", "", actual_salt)
 
     _embed_sanitization_metadata(result, report, heuristics, salt)
+    record_stand_ins(result, hasher)
 
     return result, report
 
@@ -3112,6 +3168,7 @@ def sanitize_har_file(
     validate: bool = True,
     heuristics: HeuristicMode = HeuristicMode.DISABLED,
     keep_static_addresses: bool = False,
+    preserve_length: bool = False,
 ) -> tuple[str, SanitizationReport]:
     """Sanitize a HAR file and write to a new file.
 
@@ -3132,6 +3189,7 @@ def sanitize_har_file(
         validate: If True, validate HAR structure before processing (default: True)
         heuristics: Heuristic mode for pipe-delimited value detection
         keep_static_addresses: See ``sanitize_har``
+        preserve_length: See ``sanitize_har``
 
     Returns:
         Tuple of (output_path, sanitization report)
@@ -3187,6 +3245,7 @@ def sanitize_har_file(
         custom_patterns=custom_patterns,
         heuristics=heuristics,
         keep_static_addresses=keep_static_addresses,
+        preserve_length=preserve_length,
     )
 
     # Fill in file paths in report
@@ -3299,6 +3358,13 @@ def apply_user_redactions(
 
     # Recreate hasher with same salt used in Pass 1
     hasher = Hasher.create(report.salt or None)
+    sanitization_record = har_data.get("log", {}).get("_har_capture", {}).get("sanitization")
+    if isinstance(sanitization_record, dict) and sanitization_record.get("preserve_length") is True:
+        # A length-preserving file gets stand-ins from the review too, drawn
+        # against the file's own text and added to its record.
+        hasher.preserve_length = True
+        hasher.avoid_text = _readable_text(har_data)
+        hasher.stand_ins.update(recorded_stand_ins(har_data))
 
     # Work on a deep copy to avoid modifying original
     result = copy.deepcopy(har_data)
@@ -3342,6 +3408,7 @@ def apply_user_redactions(
     if isinstance(sanitization_meta, dict):
         sanitization_meta["user_redacted"] = report.total_user_redacted
         sanitization_meta["user_skipped"] = report.total_user_skipped
+    record_stand_ins(parsed, hasher)
 
     return parsed
 
@@ -3378,6 +3445,8 @@ def appears_sanitized(har_data: dict[str, Any], threshold: int = 10) -> tuple[bo
 
     # Hashed MACs: the MACs in the document that the allowlist calls placeholders
     total_matches = sum(1 for match in MAC_RE.finditer(content) if is_redacted(match.group(0)))
+    # A length-preserving run's stand-ins have no telltale shape; its record names them.
+    total_matches += sum(content.count(stand_in) for stand_in in recorded_stand_ins(har_data))
     for pattern in redaction_patterns:
         matches = re.findall(pattern, content, re.IGNORECASE)
         total_matches += len(matches)

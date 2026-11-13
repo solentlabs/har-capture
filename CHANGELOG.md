@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`sanitize --preserve-length`.** Each replaced value becomes a stand-in with the same byte length and character
+  classes (digits stay digits, letters keep their case, hex stays hex, separators stay), still derived from the salt so
+  equal values keep one stand-in. Every response body keeps its byte length, so a capture served back as the device
+  matches the unit's `Content-Length`. A private address stays private and a MAC stays locally administered. The file
+  records its stand-ins in `log._har_capture.sanitization.stand_ins`, and `validate`, a second `sanitize` run and the
+  review read that record, since a stand-in looks like a real value. A stand-in is never a value the capture already
+  holds. A body that writes a replaced non-ASCII value JSON-escaped (`\u00e9`) is the one case that still changes
+  length.
+
 ### Fixed
 
 - **`sanitize` flags a Wi-Fi network name or passphrase it redacted on one page and left readable on another.** A
@@ -19,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   as `//global pool 2001:db8::<hash>/3`: the block's first address was replaced as if a device held it. `2000::`,
   `fe80::`, `fc00::`, `fd00::` and `ff00::` are now kept, as `::` and `::1` are. Any other address is replaced as
   before.
+- **`sanitize` keeps the spaces around the separator of an `SSID` or `Network Name` label.** `SSID: MyNet` came out as
+  `SSID:WIFI_<hash>`; it now comes out as `SSID: WIFI_<hash>`.
 
 ## [0.18.0] - 2026-11-12
 

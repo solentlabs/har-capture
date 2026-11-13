@@ -89,6 +89,16 @@ def sanitize(
             ),
         ),
     ] = False,
+    preserve_length: Annotated[
+        bool,
+        typer.Option(
+            "--preserve-length",
+            help=(
+                "Replace each value with a stand-in of the same byte length and character classes instead of a "
+                "placeholder, so every body keeps its length. The file records its stand-ins for validate."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Remove PII from a HAR file.
 
@@ -110,6 +120,7 @@ def sanitize(
         report: Write JSON report to file
         apply_review: Review report whose decisions replace the interactive review
         keep_static_addresses: Leave MAC and IP addresses in static script, CSS and text bodies
+        preserve_length: Write same-length stand-ins instead of placeholders
 
     Example:
         har-capture sanitize device.har --patterns network-device
@@ -247,6 +258,7 @@ def sanitize(
                 max_size=max_size_bytes,
                 heuristics=heuristics,
                 keep_static_addresses=keep_static_addresses,
+                preserve_length=preserve_length,
             )
 
             # Interactive review mode (requires TTY). Every flagged run records

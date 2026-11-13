@@ -50,6 +50,7 @@ from har_capture.patterns.redaction import (
     is_constant_mac,
     is_ipv6_host_address,
     is_redacted,
+    is_stand_in,
     iter_emails,
     luhn_valid,
     route_body,
@@ -946,7 +947,7 @@ def redact_vendor_serials(
 
     def replace_serial_token(match: re.Match[str]) -> str:
         token = match.group(0)
-        if match_vendor_serial(token, serial_detectors) is None:
+        if is_stand_in(token) or match_vendor_serial(token, serial_detectors) is None:
             return token
         collector.record_auto_redaction("serial_number")
         placeholder = hasher.hash_generic(token, "SERIAL")
@@ -1351,6 +1352,7 @@ def _sanitize_html_impl(
     # 7a. SSID labels in HTML text (<p>SSID: MyNetwork</p>). In script code
     # only a literal is replaced (labeled_literal): `var ssid = rows[i + 0];`
     # is the page's code, not a network name.
+    # The separator group holds the spaces around `:` or `=`, so they survive.
     def replace_ssid_text(match: re.Match[str]) -> str:
         literal = labeled_literal(match, code)
         if literal is None or is_redacted(literal, custom_patterns):
@@ -1362,7 +1364,7 @@ def _sanitize_html_impl(
         return f"{label}{sep}{_network_name_placeholder(literal, hasher, collector)}{rest}"
 
     html = re.sub(
-        r'\b(SSID|Network\s*Name)\s*([=:])\s*([^\s<>"\']+)',
+        r'\b(SSID|Network\s*Name)(\s*[=:]\s*)([^\s<>"\']+)',
         replace_ssid_text,
         html,
         flags=re.IGNORECASE,

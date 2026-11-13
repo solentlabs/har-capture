@@ -99,6 +99,8 @@ def validate_har(
 1. `check_har_types()` — the sanitizer's type boundary
    ([Sanitization Spec — Type Boundary](SANITIZATION_SPEC.md#type-boundary)); a field of the wrong type raises
    `HarValidationError` naming it
+1. Every check below runs inside `stand_ins_scope(recorded_stand_ins(har))`: the stand-ins a length-preserving run
+   recorded count as redacted ([Redaction Integration](#redaction-integration))
 1. For each entry in `log.entries`:
    - `check_url(entry.request.url)` and `check_query_string(entry.request.queryString)` → URL credentials and sensitive
      query parameters, reported once across the two
@@ -697,6 +699,13 @@ format-preserving patterns, or redaction indicators), the finding is suppressed.
 
 See [Pattern Spec — Redaction Checking](PATTERN_SPEC.md#redaction-checking-redactionpy) for the full `is_redacted()`
 check order and `allowlist.json` schema.
+
+A file made with `sanitize --preserve-length` carries stand-ins that have no placeholder shape. Its record
+(`log._har_capture.sanitization.stand_ins`) names them, and `validate_har` holds `stand_ins_scope` over that record, so
+`is_redacted()`, `is_fully_redacted()` and `is_safe_value()` treat each as redacted. Nothing else vouches for a
+stand-in: a file stripped of its record reports them as values
+([Length-Preserving Stand-ins](SANITIZATION_SPEC.md#length-preserving-stand-ins---preserve-length),
+[ADR-25](../ARCHITECTURE_DECISIONS.md#adr-25-a-length-preserving-stand-in-is-known-by-the-files-record-not-by-its-shape)).
 
 ## Pattern Relationship
 

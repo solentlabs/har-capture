@@ -263,6 +263,12 @@ no rule named it, and the value is too short or word-shaped for the Pass 1b swee
 replaced unasked
 ([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#pass-1d-surviving-copies-of-a-network-name-or-passphrase)).
 
+**Placeholders or stand-ins.** By default a replaced value becomes a placeholder whose shape says it is redacted
+(`WIFI_<hash>`, `10.255.x.x`). `sanitize --preserve-length` writes a stand-in of the value's byte length and character
+classes instead, so a capture served back as the device keeps every page's length, and records the stand-ins in the
+file, where the tools look them up
+([SANITIZATION_SPEC](specs/SANITIZATION_SPEC.md#length-preserving-stand-ins---preserve-length)).
+
 **Pass 2** presents flagged values for interactive review (TTY); without a terminal nobody is prompted. User-selected
 redactions replace every copy of a value inside string values — escaped and percent-encoded forms too — using the same
 session salt, and the sanitized file records how the review ended (`sanitization.review`, see ADR-6).

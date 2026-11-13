@@ -11,6 +11,8 @@ validation modules.
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
 import functools
 import ipaddress
 import json
@@ -23,9 +25,49 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from .loader import load_allowlist
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping, Set
 
 _LOGGER = logging.getLogger(__name__)
+
+# The length-preserving stand-ins in force (SANITIZATION_SPEC "Length-Preserving
+# Stand-ins"): a stand-in has no shape that says "redacted", so the tools know
+# one by the record of the file or run that wrote it.
+_STAND_INS_CTX: contextvars.ContextVar[Set[str]] = contextvars.ContextVar(
+    "har_capture_stand_ins", default=frozenset()
+)
+
+
+@contextlib.contextmanager
+def stand_ins_scope(stand_ins: Set[str]) -> Iterator[None]:
+    """Treat each of ``stand_ins`` as redacted (``is_redacted``, ``is_safe_value``) inside the block.
+
+    The set is read, not copied, so a run's record that grows as the run
+    writes stand-ins is honored as it grows.
+    """
+    token = _STAND_INS_CTX.set(stand_ins)
+    try:
+        yield
+    finally:
+        _STAND_INS_CTX.reset(token)
+
+
+def is_stand_in(value: str) -> bool:
+    """Whether ``value`` is a length-preserving stand-in recorded for the current scope."""
+    return value in _STAND_INS_CTX.get()
+
+
+def recorded_stand_ins(har_data: Any) -> frozenset[str]:
+    """The stand-ins a HAR records it carries (``log._har_capture.sanitization.stand_ins``).
+
+    Anything that is not a list of strings records nothing.
+    """
+    try:
+        recorded = har_data["log"]["_har_capture"]["sanitization"]["stand_ins"]
+    except (KeyError, TypeError):
+        return frozenset()
+    if not isinstance(recorded, list):
+        return frozenset()
+    return frozenset(value for value in recorded if isinstance(value, str) and value)
 
 
 def _check_patterns(value: str, allowlist: dict[str, Any]) -> bool:
@@ -94,6 +136,8 @@ def is_redacted(value: str, custom_patterns: str | dict[str, Any] | None = None)
         >>> is_redacted("my_password")
         False
     """
+    if is_stand_in(value) or is_stand_in(value.strip()):
+        return True
     allowlist = load_allowlist(custom_patterns)
     return _check_patterns(value, allowlist)
 
@@ -156,6 +200,8 @@ def is_fully_redacted(value: str, custom_patterns: str | dict[str, Any] | None =
         False
     """
     stripped = value.strip()
+    if stripped and is_stand_in(stripped):
+        return True
     if not stripped or "<" in stripped or not _PLACEHOLDER_TOKEN_RE.fullmatch(stripped):
         return False
 

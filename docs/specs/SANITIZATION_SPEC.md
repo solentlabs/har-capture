@@ -1026,6 +1026,14 @@ and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob se
 covered, and left to pass 14's review: a bare `KEY1` WEP sink, a name the sink does not call an SSID
 (`GuestNetworkName1`), and rows the script reads with no name and no headed table.
 
+The limits above are kept where a device's own network name sits behind them. A Netgear C6250 carries its name in a
+position no script reads, labeled only by a comment (`/* … | Name (SSID) | … */` above `'1|6|<name>|13|1|'` on its scan
+pages), and in a headed `SSID` table whose variable is `TagValueList`, whose cell pads the value with `&nbsp;`, and
+whose rows are one field each (`'2|<name>|<guest name>|'`). Reading either would mean reading comments, padded values or
+one-field rows on every device, for a name that is redacted on the device's settings page and so already offered for
+review wherever it survives ([Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase)). No other capture in
+the CMM fleet holds these pages, so nothing yet shows the shapes elsewhere.
+
 Every scan is one pass over the text or one function's body and is kept for the page's other blobs (`PipeSinks`). At
 most 16 row layouts, views and tables are read for one function, and the function a blob sits in is looked for among the
 16 declared nearest before it.
@@ -1409,6 +1417,61 @@ a private-address placeholder for a run of hex digits, in the case style of the 
 The static placeholders are not the width of the value they replace. The two hex-address spellings and the hex-token
 sweep are the exception: `$XXXXXXXXXXXX`, `$00000000` and twelve `X`s inside a token keep the length of what they
 replaced.
+
+### Length-Preserving Stand-ins (`--preserve-length`)
+
+With `sanitize --preserve-length` (`preserve_length=True` on `sanitize_har`, `sanitize_har_file`;
+`Hasher.preserve_length`) every hasher method writes a **stand-in** instead of a placeholder: the same UTF-8 byte length
+as the value it replaces, the same character classes, derived from the salt, so equal values of one kind keep one
+stand-in
+([ADR-25](../ARCHITECTURE_DECISIONS.md#adr-25-a-length-preserving-stand-in-is-known-by-the-files-record-not-by-its-shape)).
+The kind is the method and its prefix (`MAC`, `PRIV_IP`, `PUB_IP`, `IPV6`, `EMAIL`, `WIFI`, `PASS`, …), so a value
+redacted as a Wi-Fi name and confirmed in review as `wifi_ssid` gets one stand-in, as it gets one placeholder today.
+
+| Kind                 | Stand-in (salted)                                                                                                        | Without a salt                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
+| MAC, in a MAC layout | `02` then hashed hex digits, in the input's layout and the case of its hex letters                                       | `X` for each hex digit         |
+| Private IPv4         | its RFC 1918 prefix kept (`10.`, `172.16.`–`172.31.`, `192.168.`); each other octet hashed with its digit count          | the prefix kept, `1` per digit |
+| Public IPv4          | each octet hashed with its digit count                                                                                   | `1` per digit                  |
+| IPv6                 | each hex digit hashed in its case; `:` kept; a link-local or unique-local first group kept; a dotted tail as public IPv4 | `0` per hex digit              |
+| E-mail               | local part and each domain label by the class rule; `@`, `.` and the top-level domain kept                               | the class fill, TLD kept       |
+| Everything else      | the class rule                                                                                                           | the class fill                 |
+
+An octet keeps its digit count and stays an octet: one digit is `0`–`9`, two are `10`–`99`, three are `100`–`255`, and a
+zero-padded octet (`001`) stays zero-padded.
+
+**Class rule.** Each character keeps its class: a digit becomes a digit, an ASCII letter a letter of the same case, and
+every other ASCII character (space, punctuation, separator) is kept. When the value's letters and digits are all hex
+digits and it has at least one of each, letters stay within `a`–`f`, so a hex token stays hex. A non-ASCII character
+becomes lowercase ASCII letters, one per UTF-8 byte. The **class fill** applies the same rule with fixed characters: `0`
+for a digit, `X` or `x` for a letter.
+
+**Drawing a stand-in.** Characters come from SHA-256 of the salt, the kind, the value and an attempt number. A candidate
+is taken when it differs from the value, does not occur in the input's text (`_readable_text` of the capture as loaded),
+and is not another value's stand-in; otherwise the next attempt is drawn, up to 64. A value that exhausts them (a short
+value whose every candidate already occurs in the capture) is replaced by the last candidate and is **not recorded**. A
+fill is always recorded: it carries no character of the value.
+
+**Record.** The run records each stand-in it takes (`Hasher.stand_ins`). `_embed_sanitization_metadata` writes
+`sanitization.preserve_length: true` and `sanitization.stand_ins`: the sorted recorded stand-ins that occur in the
+output. A run on a file that already carries a record starts from it.
+
+**Recognition.** `stand_ins_scope(stand_ins)` (`patterns/redaction.py`) makes `is_redacted()` and `is_safe_value()`
+treat each recorded stand-in as redacted. `sanitize_har` holds the scope for its run, over the hasher's growing record,
+so no guarded pass re-replaces and no heuristic offers a stand-in written earlier in the run; the vendor-serial pass
+skips one too, since a stand-in serial keeps the serial's shape. `validate` and the review step
+(`apply_user_redactions`) hold the scope over the file's record. The format-preserving passes do not take the guard (see
+[Idempotency Boundary](#idempotency-boundary)), but the hasher returns a recorded stand-in as its own stand-in, so a
+second run on a length-preserving file keeps every recorded stand-in as it is.
+
+**Review.** `apply_user_redactions` writes stand-ins when the file records `preserve_length`, drawn against the file's
+own text, and adds them to the record.
+
+**What keeps its length.** Every replacement keeps the byte length of the value as decoded. A body therefore keeps its
+byte length unless it carries a replaced non-ASCII value escaped — a JSON `\u00e9`, a percent-encoded `%C3%A9` — where
+the ASCII stand-in is written as itself.
+
+`check_for_pii` and any consumer that does not read `log._har_capture` cannot tell a stand-in from a value.
 
 ## Two-Pass Model
 
