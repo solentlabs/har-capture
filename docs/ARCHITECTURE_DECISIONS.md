@@ -27,7 +27,7 @@ redirects, and errors naturally — the user is present to respond.
 - **Connectivity check (1 GET):** Validates the device is reachable before launching Playwright, which otherwise hangs
   silently on an unreachable device, and settles `http` vs `https`. Bare hostnames auto-detect the scheme via TCP+TLS
   probes; an explicit scheme bypasses detection (ADR-10).
-- **Session check (1 GET):** Detects a live session before capture starts (ADR-9).
+- **Session check (1 GET):** Warns before capture when the device serves data without a login (ADR-9).
 - **No auth detection.** When a device responds with 401, Playwright shows a native Basic Auth dialog and the user
   enters credentials. Both the 401 and the authenticated retry are captured in the HAR.
 - **No probes without credentials.** The 401 headers and `Set-Cookie` a probe would record are captured in the HAR when
@@ -176,14 +176,22 @@ Its signature: the first request already carries `Secure`, `XSRF_TOKEN` or `PHPS
    every signature above.
 
 1. **Pre-flight session check.** Before launching Playwright, an unauthenticated GET checks whether the device serves
-   data content (no login page). If so, the device has a live session from another source (another tab, a connection
-   from the same IP), and the workflow aborts with a clear message. Skipped in `--minimal` mode.
+   data content (no login page). That response has two causes the GET cannot tell apart: the device has no login, or a
+   session opened elsewhere is still live. The clean browser context rules out inherited cookies, so the live-session
+   case left is a device that ties a login to the client IP. Only the operator knows which case applies, so the check
+   warns and the capture continues. In cable_modem_monitor's catalog both cases are real: 7 modems have no login, and
+   the root page of 4 of them (SB6141, SB6183, CM1200, F3896LG-VMB) fails this check in fleet captures; 4 modems (Ubee
+   EVW32C, Motorola MB7621, Sercomm DM1000, Netgear CM2500) track the login by client IP with no cookie. The check stays
+   because the capture-completeness "no credential submission" warning cannot cover those IP-tracked devices: it is
+   withheld whenever the HAR holds any POST, PUT or PATCH, and all four send non-login POSTs. Skipped in `--minimal`
+   mode.
 
 1. **Pre-capture cookie audit.** `context.cookies()` is called immediately after context creation and before any
    navigation. The result is emitted as `_solentlabs.pre_capture_cookies` in the HAR. With the clean storage state, this
    is always empty — a non-empty list is a diagnostic signal for downstream tools.
 
-**Consequence:** The default workflow sends one pre-flight GET for the session check. `--minimal` skips it for
+**Consequence:** The default workflow sends one pre-flight GET for the session check. Its result is a warning — printed
+by the CLI, recorded in `result.session` by the library — and never stops a capture. `--minimal` skips it for
 session-constrained devices. The pre-capture cookie audit has zero network cost — it reads local context state. All
 three defenses are additive and composable.
 

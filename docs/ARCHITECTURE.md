@@ -103,9 +103,8 @@ graph TD
     browser_check -->|Yes| conn
 
     conn[Connectivity Check<br>1 GET → validate reachability]
-    conn --> session{Session Check<br>1 GET → detect live session}
-    session -->|Contaminated| abort([ABORT: clear cookies])
-    session -->|Clean| has_creds{Credentials provided?}
+    conn --> session[Session Check<br>1 GET → warn if data served without login]
+    session --> has_creds{Credentials provided?}
 
     has_creds -->|No| launch[Launch Browser<br>Clean context: empty storage_state]
     has_creds -->|Yes| probe[Auth Probe<br>1 GET → capture 401 headers]

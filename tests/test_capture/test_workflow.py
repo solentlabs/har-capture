@@ -778,29 +778,45 @@ class TestRunCaptureWorkflow:
         assert result.auth_realm == "Router Admin"
         assert result.capture_success is False
 
+    @patch("har_capture.capture.browser.capture_device_har")
+    @patch("har_capture.capture.connectivity.check_basic_auth", return_value=(False, None))
+    @patch("har_capture.capture.probes.run_probes", return_value={})
     @patch("har_capture.capture.connectivity.check_session_contamination")
     @patch("har_capture.capture.connectivity._parse_target")
     @patch("har_capture.capture.connectivity.check_device_connectivity")
     @patch("har_capture.capture.deps.check_browser_installed")
-    def test_stops_if_session_contaminated(
+    def test_continues_if_session_contaminated(
         self,
         mock_browser: MagicMock,
         mock_conn: MagicMock,
         mock_parse: MagicMock,
         mock_session: MagicMock,
+        mock_probes: MagicMock,
+        mock_auth: MagicMock,
+        mock_capture: MagicMock,
     ) -> None:
-        """Test workflow stops if session contamination detected."""
+        """A data page served without a login is a warning; the capture still runs."""
         mock_browser.return_value = True
         mock_parse.return_value = ("192.168.100.1", None)
         mock_conn.return_value = (True, "http", None)
-        mock_session.return_value = (True, "Browser has a live session")
+        mock_session.return_value = (True, "served data without a login")
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.error = None
+        mock_result.har_path = None
+        mock_result.compressed_path = None
+        mock_result.sanitized_path = None
+        mock_result.stats = {}
+        mock_capture.return_value = mock_result
 
         result = run_capture_workflow("192.168.100.1")
 
-        assert result.phase == "session_check"
         assert result.session_contaminated is True
-        assert result.session_message == "Browser has a live session"
-        assert result.capture_success is False
+        assert result.session_message == "served data without a login"
+        assert result.phase == "complete"
+        assert result.capture_success is True
+        mock_capture.assert_called_once()
 
     @patch("har_capture.capture.browser.capture_device_har")
     @patch("har_capture.capture.connectivity.check_basic_auth")

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from har_capture.capture.connectivity import (
+    SESSION_WARNING,
     ProtocolDetectionResult,
     _parse_target,
     check_basic_auth,
@@ -484,7 +485,7 @@ class TestCheckSessionContamination:
         body: bytes,
         desc: str,
     ) -> None:
-        """200 with data content and no login indicators means live session."""
+        """200 with data content and no login indicators is flagged with the warning."""
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = body
@@ -493,8 +494,7 @@ class TestCheckSessionContamination:
         contaminated, message = check_session_contamination("http://192.168.100.1/")
 
         assert contaminated is True, f"{desc}: data page should be flagged"
-        assert message is not None
-        assert "live session" in message
+        assert message == SESSION_WARNING
 
     @pytest.mark.parametrize(
         ("bodies", "expect_contaminated", "desc"),

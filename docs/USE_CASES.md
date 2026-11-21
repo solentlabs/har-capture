@@ -64,7 +64,8 @@ ______________________________________________________________________
 1. System checks browser availability
 1. System checks device connectivity. If the user did not supply a scheme, system probes TCP `:80` and `:443` and
    prefers HTTPS when its TLS handshake completes (see ADR-10); explicit schemes are used as given
-1. System checks for session contamination — aborts if the device has a live session (serves data without login)
+1. System checks whether the device serves data without a login — warns (no login, or a session still open) and
+   continues
 1. System launches Playwright browser with a clean context (empty cookie jar), navigates to device URL
 1. Browser records all HTTP traffic to a temp HAR file with embedded response bodies
 1. Wait-for-data mechanism captures async XHR/fetch requests
@@ -77,7 +78,8 @@ ______________________________________________________________________
 **Variations**:
 
 - Device uses self-signed cert → accepted automatically
-- Device has a live session from another browser tab → session check aborts with "clear cookies or use a clean profile"
+- Device has no login → session check warns, capture continues
+- Device has a session still open from another browser tab → session check warns to log out first; capture continues
 - Device serves SPA that loads data async → wait-for-data captures it
 - Browser not installed → user prompted to download (~150 MB)
 

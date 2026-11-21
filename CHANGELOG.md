@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A device with no login no longer fails the session check.** The pre-flight check stopped every capture of a device
+  that serves its pages without a login (`get` exited 1 with "Browser has a live session"; `run_capture_workflow`
+  returned with `capture_success` false and no `capture_error`). One unauthenticated GET cannot tell such a device from
+  one with a session still open elsewhere, so the check now warns and the capture continues. The CLI prints the warning
+  before the browser opens, and the library records it in `result.session`. `skip_session_check` is no longer needed for
+  these devices.
+
 ## [0.19.0] - 2026-11-13
 
 ### Added

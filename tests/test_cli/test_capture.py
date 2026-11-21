@@ -659,14 +659,20 @@ class TestCaptureCommand:
         assert result.exit_code == 1
         assert "connection refused" in result.output
 
-    def test_capture_session_contamination_exits(
+    def test_capture_session_warning_continues(
         self,
         monkeypatch: pytest.MonkeyPatch,
         workflow_module: Any,
     ) -> None:
-        """Live session detected -> exit 1 with the warning."""
+        """Data page served without a login -> warning printed, capture still runs."""
         from typer.testing import CliRunner
 
+        from har_capture.capture.workflow import (
+            BrowserCheckResult,
+            CaptureWorkflowResult,
+            ConnectivityResult,
+            SessionCheckResult,
+        )
         from har_capture.cli.main import app
 
         monkeypatch.setattr(
@@ -682,34 +688,24 @@ class TestCaptureCommand:
         monkeypatch.setattr(
             workflow_module,
             "check_session_phase",
-            lambda target_url, result: _make_full_session_result(
-                contaminated=True,
-                target_url=target_url,
-            )._replace_session_message("device has live session"),
-        )
-
-        runner = CliRunner()
-        # We need a properly-formed contaminated result.
-        from har_capture.capture.workflow import (
-            BrowserCheckResult,
-            CaptureWorkflowResult,
-            ConnectivityResult,
-            SessionCheckResult,
-        )
-
-        monkeypatch.setattr(
-            workflow_module,
-            "check_session_phase",
             lambda target_url, r: CaptureWorkflowResult(
                 browser=BrowserCheckResult(),
                 connectivity=ConnectivityResult(ok=True, target_url=target_url),
-                session=SessionCheckResult(contaminated=True, message="live session detected"),
+                session=SessionCheckResult(contaminated=True, message="served data without a login"),
             ),
         )
+        captured: list[dict[str, Any]] = []
 
-        result = runner.invoke(app, ["get", "10.0.0.1", "--patterns", "base"])
-        assert result.exit_code == 1
-        assert "live session detected" in result.output
+        def fake_capture(**kwargs: Any) -> Any:
+            captured.append(kwargs)
+            return _make_capture_result(success=True)
+
+        monkeypatch.setattr(workflow_module, "run_capture_phase", fake_capture)
+
+        result = CliRunner().invoke(app, ["get", "10.0.0.1", "--patterns", "base"])
+        assert result.exit_code == 0
+        assert "WARNING: served data without a login" in result.output
+        assert captured, "the session warning must not stop the capture"
 
     def test_capture_with_credentials_runs_auth_probe(
         self,

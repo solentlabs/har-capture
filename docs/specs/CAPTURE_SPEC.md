@@ -77,7 +77,7 @@ har-capture cannot act on it (Chromium runs its own TLS stack); see ADR-10 for t
 `cable_modem_monitor_core/connectivity.py` and is intentionally duplicated rather than shared so har-capture's runtime
 stays stdlib-only.
 
-### Phase 3: Session Contamination Check (`check_session_phase`)
+### Phase 3: Session Check (`check_session_phase`)
 
 ```python
 result = check_session_phase(target_url, result)
@@ -86,7 +86,8 @@ result = check_session_phase(target_url, result)
 ```
 
 `check_session_contamination()` in `connectivity.py` makes an unauthenticated GET to the target URL and inspects the
-response to detect whether the device has a live session that would cause the capture to miss the login flow.
+response to detect whether the device serves data without asking for a login: either it has no login, or a session still
+open elsewhere would cause the capture to miss the login flow (ADR-9).
 
 1. If the response is non-200 (401, 403, redirect) → clean state, auth is required
 1. If the response is 200 with a body under 100 bytes → clean (redirect stub)
@@ -96,11 +97,11 @@ response to detect whether the device has a live session that would cause the ca
    the same URL, is never treated as data
 1. If the response body contains login-page indicators (`password`, `login`, `sign in`, `signin`, `log in`,
    `authenticate`) → clean, login page is being served
-1. If the response is 200 with substantial content and no login indicators → **contaminated** — the device is serving
-   authenticated content without requiring login
+1. If the response is 200 with substantial content and no login indicators → **contaminated** — the device served data
+   without a login
 
-When contamination is detected, the workflow aborts with: *"Browser has a live session — clear cookies or use a clean
-profile."*
+When contamination is detected, `result.session.message` carries the warning (`SESSION_WARNING` in `connectivity.py`)
+and the workflow continues: the check never stops a capture. The CLI prints it as `WARNING:` before the browser opens.
 
 Skipped in `--minimal` mode and when `skip_session_check=True`.
 
