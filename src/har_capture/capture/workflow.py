@@ -62,10 +62,12 @@ class AuthResult:
 
 @dataclass
 class SessionCheckResult:
-    """Result of pre-capture session contamination check.
+    """Result of the pre-capture session check.
 
     Attributes:
-        contaminated: True if device has a live session (no login required)
+        contaminated: True if the device served a data page without a login
+            (it has no login, or a session is still open elsewhere); a
+            warning, never a reason the capture stops
         message: Warning message if contaminated
     """
 
@@ -171,12 +173,12 @@ class CaptureWorkflowResult:
 
     @property
     def session_contaminated(self) -> bool:
-        """True if target has a live session (no login required)."""
+        """True if the target served a data page without a login (warning only)."""
         return self.session.contaminated if self.session else False
 
     @property
     def session_message(self) -> str | None:
-        """Warning message if session is contaminated."""
+        """Warning message if the target served a data page without a login."""
         return self.session.message if self.session else None
 
     @property
@@ -301,10 +303,11 @@ def check_session_phase(
     target_url: str,
     result: CaptureWorkflowResult | None = None,
 ) -> CaptureWorkflowResult:
-    """Check for session contamination before capture.
+    """Check whether the target serves data without a login, before capture.
 
-    Detects whether the target has a live session that would cause the
-    capture to miss the login flow.
+    Records a warning when it does: the device has no login, or a session
+    still open elsewhere would cause the capture to miss the login flow.
+    The workflow continues either way.
 
     Args:
         target_url: Full URL to check
@@ -533,7 +536,7 @@ def run_capture_workflow(
     This function orchestrates all phases of the capture workflow:
     1. Check if browser is installed
     2. Check connectivity to target
-    3. Check for session contamination
+    3. Check for a session left open (warns, never stops)
     4. Run pre-capture diagnostic probes
     5. Detect authentication requirements
     6. Run the capture
@@ -554,7 +557,8 @@ def run_capture_workflow(
         skip_browser_check: Skip browser installation check
         wait_for_data: Wait for async data fetches before navigating
         skip_probes: Skip pre-capture diagnostic probes (Phase 4)
-        skip_session_check: Skip session contamination check (Phase 3)
+        skip_session_check: Skip the session check (Phase 3); its result is
+            a warning in ``result.session``, never a reason to stop
         skip_auth_check: Skip Basic Auth detection (Phase 5)
         page_load_strategy: Playwright wait_until for page.goto
         custom_patterns: Custom patterns file path or pre-loaded dict (resolve a
@@ -603,11 +607,9 @@ def run_capture_workflow(
     if not result.connectivity_ok:
         return result
 
-    # Phase 3: Session contamination check
+    # Phase 3: Session check — warns only; a device with no login looks the same
     if not skip_session_check:
         result = check_session_phase(result.target_url, result)
-        if result.session_contaminated:
-            return result
 
     # Phase 4: Pre-capture diagnostic probes (skippable for single-session devices)
     if not skip_probes:

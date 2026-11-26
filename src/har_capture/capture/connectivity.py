@@ -28,9 +28,17 @@ _LOGGER = logging.getLogger(__name__)
 
 _DEFAULT_DETECT_TIMEOUT = 5.0
 
+SESSION_WARNING = (
+    "The device served a data page without asking for a login. If it has no "
+    "login, this is expected. If it has one, a session is still open (from "
+    "another browser or tab on this machine, or the same IP): log out of the "
+    "device first, or the capture will not contain the login."
+)
+
 # Response body indicators that a login/authentication page is being served.
-# If none of these appear in a 200 response, the device likely has a live
-# session and is serving authenticated content without requiring login.
+# If none of these appear in a 200 response, the device served a data page
+# without asking for a login: either it has no login, or a session from
+# another browser is still open.
 _LOGIN_PAGE_INDICATORS = (
     b"password",
     b"login",
@@ -453,11 +461,14 @@ def _redirect_target(body: bytes, base_url: str) -> str | None:
 
 
 def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str | None]:
-    """Check if the target has a live session that would skip the login flow.
+    """Check whether the target serves a data page without asking for a login.
 
-    Makes an unauthenticated GET and inspects the response.  If the device
-    returns 200 with data content (no login-page indicators), it means a
-    previous session is still active — the capture would miss the auth flow.
+    Makes an unauthenticated GET and inspects the response.  A 200 with data
+    content (no login-page indicators) has two causes this GET cannot tell
+    apart: the device has no login, or a session opened elsewhere is still
+    live (some devices tie a login to the client IP, not a cookie) and the
+    capture would miss the auth flow.  The result is a warning for the
+    operator, who knows which case applies; it never blocks a capture.
 
     A page that only redirects (meta refresh or JS ``location``) is never
     treated as data: the redirect is followed (up to a few hops) and the page
@@ -469,8 +480,8 @@ def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str |
 
     Returns:
         Tuple of (contaminated, message).
-        *contaminated* is ``True`` when the device appears to have a live
-        session.  *message* contains a human-readable warning.
+        *contaminated* is ``True`` when the device served a data page
+        without a login.  *message* contains a human-readable warning.
     """
     try:
         current = url
@@ -502,11 +513,9 @@ def check_session_contamination(url: str, timeout: int = 5) -> tuple[bool, str |
             if len(body) < 100:
                 return False, None
 
-            # 200 with substantial content and no login indicators → live session
-            return True, (
-                "Browser has a live session \u2014 clear cookies or use a clean "
-                "profile. The device returned data content without requiring login."
-            )
+            # 200 with substantial content and no login indicators → no login
+            # asked: a device with no login, or a session still open elsewhere
+            return True, SESSION_WARNING
         # Redirect chain never settled → can't tell, don't block capture
         return False, None
     except urllib.error.HTTPError:

@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-26
+
+### Fixed
+
+- **A device with no login no longer fails the session check.** The pre-flight check stopped every capture of a device
+  that serves its pages without a login (`get` exited 1 with "Browser has a live session"; `run_capture_workflow`
+  returned with `capture_success` false and no `capture_error`). One unauthenticated GET cannot tell such a device from
+  one with a session still open elsewhere, so the check now warns and the capture continues. The CLI prints the warning
+  before the browser opens, and the library records it in `result.session`. `skip_session_check` is no longer needed for
+  these devices.
+- **Netgear password-recovery answers and device names no longer survive `--patterns network-device`.** On a Netgear
+  C3700, `SetPassword.htm` kept both password-recovery answers, and `AccessControl.htm` and `AttachedDevices_new.htm`
+  kept the names of the owner's devices beside redacted MACs and addresses. They are plain words no heuristic flags, so
+  even a review that redacted every flagged item missed them. The page's own script names these fields, and `sanitize`
+  now reads it: a value it writes into an `answer1` / `answer2` field becomes `PASS_…`, and a value it writes into a
+  table column headed "Device Name" becomes `DEVICE_…` (a column headed "SSID" becomes `WIFI_…`, which also covers guest
+  network names on `GuestNetwork.htm`). `validate` reports an unredacted answer as an error and a device name as a
+  warning. Netgear's `TableTagValueList` and `TagValueList` blobs are now read like `tagValueList`.
+- **Netgear factory words are no longer offered for review.** `ReadyShare`, the default USB share name, was flagged as a
+  possible network name, and redacting it rewrote `/img/ReadyShare.gif` in request URLs. The default admin password
+  `password`, printed on `BackupSettings_h.htm`, was redacted and then flagged in every place the word appears,
+  `type="password"` among them. Both are now kept. A cell holding two redacted addresses (`10.255.0.5<br>2001:db8::1`)
+  is no longer offered for review either.
+
 ## [0.19.0] - 2026-11-13
 
 ### Added
@@ -1667,6 +1691,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.17.1]: https://github.com/solentlabs/har-capture/compare/v0.17.0...v0.17.1
 [0.18.0]: https://github.com/solentlabs/har-capture/compare/v0.17.1...v0.18.0
 [0.19.0]: https://github.com/solentlabs/har-capture/compare/v0.18.0...v0.19.0
+[0.19.1]: https://github.com/solentlabs/har-capture/compare/v0.19.0...v0.19.1
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1694,4 +1719,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.19.0...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.19.1...HEAD

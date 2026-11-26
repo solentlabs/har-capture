@@ -1430,6 +1430,17 @@ def test_pipe_value_the_page_writes_into_a_named_sink(case: dict) -> None:
     assert [f for f in cleared if "pipe-delimited" in f.reason] == []
 
 
+REDACTED_PIPE_VALUE_CASES = _FIXTURE["redacted_pipe_value_cases"]["cases"]
+
+
+@pytest.mark.parametrize("case", REDACTED_PIPE_VALUE_CASES, ids=[c["id"] for c in REDACTED_PIPE_VALUE_CASES])
+def test_redacted_pipe_value(case: dict) -> None:
+    """A placeholder, or a cell whose every part between tags is one, is already redacted."""
+    from har_capture.sanitization.html import _is_redacted_pipe_value
+
+    assert _is_redacted_pipe_value(case["value"]) is case["expected"]
+
+
 LINEAR_INDEX_CASES = _FIXTURE["linear_index_cases"]["cases"]
 
 

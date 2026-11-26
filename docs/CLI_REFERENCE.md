@@ -106,13 +106,14 @@ Before launching the browser, `get` runs two checks (skipped with `--minimal`):
    `:443` to pick HTTP vs HTTPS (HTTPS wins when its TLS handshake completes); explicit schemes bypass this and are used
    as given.
 
-1. **Session contamination** — detects if the device has a live session that would skip the login flow. If the device
-   returns data content without requiring authentication, the capture aborts with:
+1. **Session check** — warns when the device serves a data page without asking for a login, then continues:
 
-   > ERROR: Browser has a live session — clear cookies or use a clean profile.
+   > WARNING: The device served a data page without asking for a login. If it has no login, this is expected. If it has
+   > one, a session is still open (from another browser or tab on this machine, or the same IP): log out of the device
+   > first, or the capture will not contain the login.
 
-   **Resolution:** log out from other browser tabs, reboot the device, or wait for the session to expire. Use
-   `--minimal` to skip this check for devices that don't require login.
+   **Resolution:** for a device with no login, nothing. For a device with a login, close the capture, log out from the
+   other browser or tab (or wait for the session to expire, or reboot the device), and capture again.
 
 ### Default Workflow (get)
 

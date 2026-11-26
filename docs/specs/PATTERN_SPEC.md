@@ -348,7 +348,9 @@ review). Other categories at `high` keep the ordinary heuristic meaning (review 
 
 Case-insensitive exact-match strings safe in pipe-delimited data. Domain-specific technical vocabulary.
 
-Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclient`
+Examples for `network-device`: `qam256`, `atdma`, `bpi+`, `honor mdd`, `dhcpclient`; and Netgear's factory words
+`readyshare` (the default USB share name) and `password` (the default admin password its help pages print), which would
+otherwise be offered for review as a network name or redacted as a password and then flagged wherever the word appears.
 
 ### Section: `script_variables`
 
@@ -356,10 +358,10 @@ Names of JavaScript variables (`var NAME = '…'`) whose string value the HTML e
 knowledge ([ADR-5](../ARCHITECTURE_DECISIONS.md#adr-5-domain-agnostic-core-domain-knowledge-via-data)), so the core
 names none: without a pattern file that lists them, no script variable is read by name.
 
-| Field            | Type       | Description                                                                                                                                                                                                        |
-| ---------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup                                                                                    |
-| `pipe_delimited` | object\[\] | Names whose value is split on `\|`: a position the page's script writes into a password or SSID sink is redacted (pass 13b), the rest judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics) |
+| Field            | Type       | Description                                                                                                                                                                                                                                                                   |
+| ---------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `password`       | object\[\] | Names whose value is redacted whole (`PASS_`, HTML engine pass 13); `check_for_pii` reports them as `script_password` in markup                                                                                                                                               |
+| `pipe_delimited` | object\[\] | Names whose value is split on `\|`: a position the page's script writes into a password, answer or SSID sink, or into a column headed as a network or a device, is redacted (pass 13b), the rest judged one value at a time (pass 14; `tagValueList.safe_values`, heuristics) |
 
 Each entry is `{"regex": "NAME", "flags": [...]}`. The regex matches the variable name and becomes
 `var\s+(?:NAME)\s*=\s*['"]VALUE['"]`, whose head, value and closing quote are named groups, so a group inside NAME
@@ -368,9 +370,11 @@ either kind: a value holding the other quote (`var CurrentPw = "ab'cd"`) is reda
 entry that is not an object, or whose regex is not a string or does not compile, is skipped with a warning. Lists extend
 across pattern files.
 
-`network-device` lists Motorola's `Current(?:Pw|Password)…` (ignoring case) as `password`, and Netgear's `tagValueList`
-plus `connectedDevices`/`deviceList`/`systemInfo`-style names as `pipe_delimited`. Across the CMM fleet (480 HARs) they
-match 38 password assignments in 19 captures, 2,721 `tagValueList` blobs in 124, and 0 of the other pipe names.
+`network-device` lists Motorola's `Current(?:Pw|Password)…` (ignoring case) as `password`, and Netgear's `tagValueList`,
+`TableTagValueList` (the attached-device, guest-network and blocked-service tables) and `TagValueList`, plus
+`connectedDevices`/`deviceList`/`systemInfo`-style names, as `pipe_delimited`. Across the CMM fleet (490 HARs) they
+match 32 password assignments in 16 captures; 7,784 `tagValueList`, 400 `TableTagValueList` and 212 `TagValueList` blobs
+in 159, 29 and 25 captures; and 0 of the other pipe names.
 
 ### Section: `include_patterns`
 

@@ -3263,6 +3263,42 @@
         "hunter2hunter2",
         "My Home Net"
       ]
+    },
+    {
+      "id": "pipe_sink_answer_and_device_name_column_in_html",
+      "patterns": "network-device",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "https://192.168.100.1/AccessControl.htm",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "mimeType": "text/html",
+              "text": "<table id=\"DevTable\"><tr><td>Device Name</td><td>MAC Address</td></tr></table><script>function Src(){var TableTagValueList = '1|Kitchen Tablet|x|';return TableTagValueList.split(\"|\");}function View(tagValues){var Row = \"\";for(var i = 0; i < 1; i++){Row += '<tr><td>' + piplineDecode(tagValues[i * 2 + 1]) + '</td><td>' + tagValues[i * 2 + 2] + '</td></tr>';}$('#DevTable tr:last').after(Row);}function InitAnswers(){var tagValueList = '1|tulip';return tagValueList.split(\"|\");}function ShowAnswers(tagValues){document.getElementsByName(\"answer1\")[0].value = piplineDecode(tagValues[1]);}View(Src());ShowAnswers(InitAnswers());</script>"
+            }
+          }
+        }
+      ],
+      "raw_findings": [
+        {
+          "severity": "warning",
+          "reason": "Device name in a pipe-delimited value"
+        },
+        {
+          "severity": "error",
+          "reason": "Password-recovery answer in a pipe-delimited value"
+        }
+      ],
+      "leaked": [
+        "Kitchen Tablet",
+        "tulip"
+      ]
     }
   ]
 }

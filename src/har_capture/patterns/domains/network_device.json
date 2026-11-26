@@ -47,12 +47,12 @@
   },
 
   "script_variables": {
-    "_comment": "JavaScript variables (var NAME = '...') whose string value the HTML engine reads. password: redacted whole (Motorola CurrentPwAdmin/CurrentPwUser). pipe_delimited: split on | and each value judged alone (Netgear tagValueList).",
+    "_comment": "JavaScript variables (var NAME = '...') whose string value the HTML engine reads. password: redacted whole (Motorola CurrentPwAdmin/CurrentPwUser). pipe_delimited: split on | and each value judged alone (Netgear tagValueList, TableTagValueList, TagValueList).",
     "password": [
       {"regex": "Current(?:Pw|Password)[A-Za-z]*", "flags": ["IGNORECASE"]}
     ],
     "pipe_delimited": [
-      {"regex": "tagValueList"},
+      {"regex": "(?:Table)?[Tt]agValueList"},
       {"regex": "(?:connected)?[Dd]evice(?:s|List)?|(?:system|wifi|network|modem|router|wan|lan)[Ii]nfo"}
     ]
   },
@@ -168,7 +168,7 @@
   },
 
   "tagValueList": {
-    "_comment": "Network-device-specific safe values in pipe-delimited data (case-insensitive exact match)",
+    "_comment": "Network-device-specific safe values in pipe-delimited data (case-insensitive exact match). readyshare: Netgear's factory USB share name. password: Netgear's factory admin password, which help pages (BackupSettings_h.htm) print.",
     "safe_values": [
       "atdma",
       "tdma",
@@ -189,7 +189,9 @@
       "honor mdd",
       "dhcpclient",
       "fixed ip",
-      "backup primary"
+      "backup primary",
+      "readyshare",
+      "password"
     ]
   }
 }

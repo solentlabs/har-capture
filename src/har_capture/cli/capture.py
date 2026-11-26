@@ -209,11 +209,10 @@ def capture(
             raise typer.Exit(1)
         typer.echo(f"  Connected:  {result.target_url}")
 
-        # Phase 3: Session contamination check
+        # Phase 3: Session check — warns only; a device with no login looks the same
         result = check_session_phase(result.target_url, result)
         if result.session_contaminated:
-            typer.echo(f"  ERROR: {result.session_message}", err=True)
-            raise typer.Exit(1)
+            typer.echo(f"  WARNING: {result.session_message}", err=True)
 
     # Credentials handling: if user provides --username/--password, we set
     # http_credentials on the Playwright context (handles Basic Auth automatically).
