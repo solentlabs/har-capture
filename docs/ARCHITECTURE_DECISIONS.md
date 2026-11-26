@@ -650,8 +650,9 @@ function InitUpdateView(tagValues) {
 InitUpdateView(InitTagValue());
 ```
 
-**Decision.** A position of a pipe-delimited blob that the page's own script writes into a password- or SSID-named sink
-is that credential or network name, and is deterministic for both tools (`iter_pipe_sink_values`, `PipeSinks`).
+**Decision.** A position of a pipe-delimited blob that the page's own script writes into a password-, answer- or
+SSID-named sink, or into a table column headed as a network or a device, is that credential, password-recovery answer,
+network name or device name, and is deterministic for both tools (`iter_pipe_sink_values`, `PipeSinks`).
 
 1. **The blob is bound to the function that indexes it by the call that passes one to the other** (`View(Source())`).
    Two blobs on one page never share an index, and a firmware that moves a field moves the redaction with it. A blob
@@ -665,17 +666,29 @@ is that credential or network name, and is deterministic for both tools (`iter_p
 1. **A table read is a row callback handed, with the blob, to the function that draws a table**
    (`drawTable('apTable', tagValues, onAddRowCB)`). Where the callback fills column *k* from the row's field *a*
    (`cells[0] = decode(tags[firstCellIdx + 0])`) and the first row of the table with that id heads column *k* "Network
-   Name" or "SSID", field *a* of every row is a network name. Rows are a count, then that many equal rows.
+   Name" or "SSID", field *a* of every row is a network name; headed "Device Name", a device name. Rows are a count,
+   then that many equal rows.
+1. **A row written as markup is a string of cells the view puts after a table's last row**
+   (`$('#online_list_table tr:last').after(AppendRowText)`, or `.append(…)`). Each `AppendRowText += …` statement in the
+   view adds to the row; a read of the view's parameter at a start plus a stride times the loop variable that fills a
+   cell alone, between two tags (`…<span>' + decode(tagValues[i * 5 + 2]) + '</span></td>`), sits in the column counted
+   by the `<td>`s written since the row's `<tr>`. That column's heading names the field as rule 4's does. A read
+   compared (`(tagValues[i * 5 + 1] == "1") ? …`) or joined to other text is not a cell's value.
 1. **The sink's name is a credential label or an SSID name followed only by a number, `Hidden` and a radio band**
-   (`wirelessPassword1_5g`, `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an`). The labels are
-   the ones the labeled passes already use (ADR-14, ADR-19).
+   (`wirelessPassword1_5g`, `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an`), **or `answer`
+   followed only by a number** (`answer1`, the reply to a password-recovery question). The credential and SSID labels
+   are the ones the labeled passes already use (ADR-14, ADR-19).
 1. **The value is kept when it is empty, a placeholder, a safe or status word, or a bare integer** — except an integer
    of eight or more digits in a password sink, which is a numeric passphrase.
-1. **Both tools apply it to every body.** The sanitizer replaces the value (`PASS` / `WIFI` placeholders, HTML engine
-   pass 13b and the non-HTML text route); `validate` reports an unredacted one, a password as an **error** and a network
-   name as a **warning**, as ADR-14 does for a labeled pair.
+1. **Both tools apply it to every body.** The sanitizer replaces the value (`PASS` for a password or an answer, `WIFI`,
+   `DEVICE`; HTML engine pass 13b and the non-HTML text route); `validate` reports an unredacted one, a password or an
+   answer as an **error** and a network or device name as a **warning**, as ADR-14 does for a labeled pair. A copy of a
+   password or a network name that no rule names elsewhere is offered for review (Pass 1d); a copy of an answer or a
+   device name is not, since those are often words other text holds (`blue`, `iPhone`).
 1. **The blob's names are domain data** (`script_variables.pipe_delimited`, ADR-5): without a pattern file no blob is
-   read.
+   read. `network-device` names Netgear's `tagValueList`, `TableTagValueList` and `TagValueList`, and lists the factory
+   words `password` (the default admin password a help page prints into `#Password`) and `readyshare` (the default USB
+   share name) as safe values, so neither is redacted or offered for review.
 
 Everything the rule does not bind stays where it was: pass 14 offers it for review.
 
@@ -683,7 +696,10 @@ Everything the rule does not bind stays where it was: pass 14 offers it for revi
 
 - *Concrete leak closed:* a plaintext Wi-Fi passphrase and the SSIDs that make it usable, on `DashBoard.htm`, the
   wireless-settings pages and `RouterStatus.htm`, and the names of the neighbouring networks the unit hears, on its five
-  Wi-Fi scan pages, in a file `validate` called clean.
+  Wi-Fi scan pages, in a file `validate` called clean. On a Netgear C3700, both password-recovery answers
+  (`SetPassword.htm`) and the names of the owner's devices (`AccessControl.htm`, `AttachedDevices_new.htm`) shipped
+  through a standard pass with every flagged item redacted: plain words no heuristic flags, beside MACs and addresses
+  that were redacted.
 - *Fidelity cost:* the sink-named values, each replaced by one placeholder in its position. Field count, delimiters,
   spacing and every other value survive; the script is not touched.
 - *Cannot-be-structure proof:* the page's script declares the position's meaning, as a label does in ADR-14. Of the
@@ -691,18 +707,27 @@ Everything the rule does not bind stays where it was: pass 14 offers it for revi
   every change inside a blob literal. The guards are each held by a fleet counterexample: `ssid_sel`, `ssid_bc_enable`,
   `bssid_enable` and `multiple_ssid` hold flags; `initDefaultKey` holds a key index and `group_key_update_interval` a
   number of seconds; `passwordId` on `SetPassword_h.htm` holds the factory word `password` in all 34 captures that carry
-  the page.
+  the page. The answer, device-name and markup-row readings and the two further blob names change 73 of the fleet's
+  50,964 response bodies across 491 HARs, every change inside a blob literal: 411 device-name, 412 network-name (guest
+  networks on `GuestNetwork.htm`) and 26 answer placeholders. Their guards are held the same way: `answer1_changed`
+  holds a flag on 9 pages; every Status and Connection Type cell on the markup-row pages is a flag compared
+  (`(tagValues[…] == "1") ? …`), not a value; and the factory `password` on `BackupSettings_h.htm`, redacted without the
+  safe value, is offered for review wherever the word appears (296 places in one C3700 capture, `type="password"` among
+  them).
 
 **Not covered.** A bare `KEY1`…`KEY4` (WEP) sink is not a credential label (ADR-19's bare `key`). A guest network name
 written into a sink that does not say SSID (`GuestNetworkName1`) is not named. A table whose heading row names no
-network, or whose rows the script reads with no name and no table, is not read. All stay with the review.
+network or device, or whose rows the script reads with no name and no table, is not read. A cell value joined to other
+text in a markup row is not read. An answer outside a blob (a form field or POST body) is not labeled: the fleet holds
+112 `answer` inputs, every one empty, and no POST of one. All stay with the review.
 
 **Bounded work.** Every scan is one pass over the page or over one function's body, kept for the page's other blobs. An
 index expression over 100 characters is not read, and at most 16 row layouts, views and tables are read for one
 function, so a hostile page cannot multiply the work or run the reader out of stack.
 
-**Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs, and of its neighbours'
-network names, without a review, and `validate` fails (exit 1) on a capture that still carries the passphrase.
+**Consequence.** A Netgear gateway capture is clean of its own Wi-Fi passphrase and SSIDs, its password-recovery
+answers, the names of the devices it lists, and its neighbours' network names, without a review, and `validate` fails
+(exit 1) on a capture that still carries the passphrase or an answer.
 
 ## ADR-25: A Length-Preserving Stand-in Is Known by the File's Record, Not by Its Shape
 

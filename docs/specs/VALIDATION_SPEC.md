@@ -310,9 +310,11 @@ and each object key, at any depth (`iter_json_strings()`) — the unit the sanit
 **Pipe-delimited values the page writes into a named sink (error / warning):**
 
 - Reports what `iter_pipe_sink_values` (`sanitization/html.py`) yields: a position of a
-  `script_variables.pipe_delimited` blob that the page's own script writes into a password- or SSID-named sink
-  (`$('#wirelessPassword1').html(tagValues[6])`), whose value is not empty, a placeholder, a safe word or an index
-- A **password** is an **error** and a **Wi-Fi network name** a **warning**, as for the labeled pairs above
+  `script_variables.pipe_delimited` blob that the page's own script writes into a password-, answer- or SSID-named sink
+  (`$('#wirelessPassword1').html(tagValues[6])`), or into a table column headed `SSID`, `Network Name` or `Device Name`,
+  whose value is not empty, a placeholder, a safe word or an index
+- A **password** or **password-recovery answer** is an **error**, and a **Wi-Fi network name** or **device name** a
+  **warning**, as for the labeled pairs above
 - The sanitizer replaces the same values from the same iterator in every body (pass 13b and the non-HTML text route), so
   a finding here is one a sanitize run clears; without a pattern file that names a blob, nothing is reported
 - See [Pipe-Delimited Sinks](SANITIZATION_SPEC.md#pipe-delimited-sinks-pass-13b) and

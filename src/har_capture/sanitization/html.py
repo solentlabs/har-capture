@@ -771,12 +771,19 @@ def capture_pipe_context(values: list[str], index: int, window: int = 3) -> str:
 
 
 def _is_redacted_pipe_value(value: str) -> bool:
-    """Whether a pipe-delimited value is a placeholder: ``***…``, ``PREFIX_<hash>`` or the static MAC."""
-    return (
+    """Whether a pipe-delimited value is a placeholder: ``***…``, ``PREFIX_<hash>`` or the static MAC.
+
+    A cell holding several values between tags (Netgear's
+    ``10.255.0.5<br>2001:db8::1``) is a placeholder when every part is one.
+    """
+    if (
         value.startswith("***")
         or _ALREADY_REDACTED_HASH_RE.match(value) is not None
         or value == "XX:XX:XX:XX:XX:XX"
-    )
+    ):
+        return True
+    parts = [part.strip() for part in _TAG_RE.split(value) if part.strip()] if _TAG_RE.search(value) else []
+    return bool(parts) and all(is_redacted(part) for part in parts)
 
 
 def _sanitize_pipe_value(
@@ -1493,7 +1500,8 @@ def _sanitize_html_impl(
         html = variable_re.sub(replace_script_password, html)
 
     # 13b. Pipe-delimited values the page's own script writes into a password-
-    # or SSID-named sink (redact_pipe_sink_values).
+    # or SSID-named sink, or into an SSID or Device Name column
+    # (redact_pipe_sink_values).
     html = redact_pipe_sink_values(html, hasher, collector, custom_patterns)
 
     # 14. Pipe-delimited script variables a pattern file names
@@ -1636,7 +1644,7 @@ def redact_structural_credentials(
 _FUNCTION_RE = re.compile(r"\bfunction\s+([\w$]+)\s*\(([^)]*)\)\s*\{")
 # The name a sink carries: a credential label (PASSWORD_FIELD_RE's) or an SSID
 # name (SSID_ATTRIBUTE_RE's), followed by nothing but a number, `Hidden` and a
-# radio band. `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`
+# radio band; or a password-recovery answer (`answer1`), followed by a number. `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`
 # and `group_key_update_interval` name something else; `bssid` is a MAC.
 _PIPE_SINK_BAND = r"\d*(?:[-_]?(?:an|2g|5g|6g|24g))*"
 _PIPE_SINK_NAME_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -1648,6 +1656,7 @@ _PIPE_SINK_NAME_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
             re.IGNORECASE,
         ),
     ),
+    ("answer", re.compile(r"[\w$-]*?answer\d*", re.IGNORECASE)),
     (
         "ssid",
         re.compile(
@@ -1699,6 +1708,28 @@ _PIPE_TABLE_CELL_RE = re.compile(
     r"(?<![\w$.])[\w$]+\s*\[\s*(?P<column>\d+)\s*\]\s*=\s*(?:[\w$.]+\(\s*)*"
     r"(?P<array>[\w$]+)\[\s*(?P<base>[A-Za-z_$][\w$]*)\s*(?:\+\s*(?P<offset>\d+)\s*)?\]"
 )
+# A row written as markup: a view adds each row's cells to a string
+# (`AppendRowText += '<td><span>' + decode(tagValues[i * 5 + 2]) + '</span></td>';`)
+# and puts the string after the last row of a table it names
+# (`$('#online_list_table tr:last').after(AppendRowText);`). The cell a read
+# sits in is counted from the `<td>`s written since the row's `<tr>`; the
+# first row of that table heads the column.
+_PIPE_MARKUP_TARGET_RE = re.compile(
+    r"\$\(\s*([\"'])#(?P<table>[\w-]+)(?![\w-])[^\"'\n]*\1\s*\)\s*\.\s*(?:after|append)\("
+    r"\s*(?P<variable>[A-Za-z_$][\w$]*)\s*\)"
+)
+_PIPE_MARKUP_LEXEME = (
+    r"(?P<string>'(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")"
+    r"|(?<![\w$.])(?P<read>{parameter}\s*\[(?P<expression>[^\[\];\n]*)\])"
+    r"|(?P<end>;)|[\w$]+|[^'\";\w$]+|['\"]"
+)
+_PIPE_MARKUP_TAG_RE = re.compile(r"<(\\?/)?t([dhr])\b", re.IGNORECASE)
+# A read is the cell's value when it fills the cell alone, inside calls or
+# not, between two tags: `…><span>' + decode(tagValues[…]) + '</span>…`. A read
+# compared (`(tagValues[…] == "1") ? …`) or joined to other text
+# (`tagValues[…] + ' dBm'`) is not.
+_PIPE_MARKUP_BEFORE_RE = re.compile(r">[\"']\s*\+\s*(?:[\w$.]+\(\s*)*$")
+_PIPE_MARKUP_AFTER_RE = re.compile(r"[\s)]*(?:\+\s*[\"']\\?<|;|$)")
 _TABLE_CELL_RE = re.compile(r"<t[dh]\b" + _TAG_RUN + r">(.*?)</t[dh]\s*>", re.IGNORECASE | re.DOTALL)
 _TABLE_ROW_END_RE = re.compile(r"</tr\s*>", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^<>]*>")
@@ -1710,8 +1741,12 @@ def _table_open(table: str) -> re.Pattern[str]:
     return re.compile(r"<table\b" + _tag_run_to(identifier) + identifier + _TAG_RUN + r">", re.IGNORECASE)
 
 
-# A column heading that names a network: pass 7a's SSID labels. `BSSID` is a MAC.
-_SSID_HEADING_RE = re.compile(r"(?<![A-Za-z])(?:SSID|Network\s*Name)(?![A-Za-z])", re.IGNORECASE)
+# A column heading that names what its cells hold: a network (pass 7a's SSID
+# labels; `BSSID` is a MAC) or a device on the network.
+_COLUMN_HEADING_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("ssid", re.compile(r"(?<![A-Za-z])(?:SSID|Network\s*Name)(?![A-Za-z])", re.IGNORECASE)),
+    ("device", re.compile(r"(?<![A-Za-z])Device\s*Name(?![A-Za-z])", re.IGNORECASE)),
+)
 # How many names deep an index is followed (`a` = `b + 1`, `b` = `i * 7`).
 _INDEX_NAME_DEPTH = 3
 # The longest index expression read. A real one is a few terms; a longer one is
@@ -1729,12 +1764,29 @@ _PIPE_ENCLOSING_LIMIT = 16
 # A numeric passphrase is at least this long (WPA's minimum); a shorter number
 # in a credential-named sink is an index or an interval.
 _PIPE_SINK_MIN_NUMERIC_PASSWORD = 8
-PIPE_SINK_PREFIXES = {"password": "PASS", "ssid": "WIFI"}  # pragma: allowlist secret
-PIPE_SINK_CATEGORIES = {"password": "password", "ssid": "wifi"}  # pragma: allowlist secret
+PIPE_SINK_PREFIXES = {
+    "password": "PASS",  # pragma: allowlist secret
+    "answer": "PASS",
+    "ssid": "WIFI",
+    "device": "DEVICE",
+}
+PIPE_SINK_CATEGORIES = {
+    "password": "password",  # pragma: allowlist secret
+    "answer": "password",  # pragma: allowlist secret
+    "ssid": "wifi",
+    "device": "device_name",
+}
+# The kinds whose copies elsewhere are offered for review (Pass 1d). A device
+# name or a recovery answer is often a word other text also holds (`iPhone`,
+# `blue`), so it only feeds the Pass 1b sweep.
+_PIPE_SINK_REVIEW_AS = {
+    "password": REVIEW_CATEGORY_BY_PREFIX["PASS"],
+    "ssid": REVIEW_CATEGORY_BY_PREFIX["WIFI"],
+}
 
 
 def pipe_sink_kind(name: str) -> str | None:
-    """Return ``"password"`` or ``"ssid"`` when a sink's name says it holds one, else ``None``."""
+    """Return ``"password"``, ``"answer"`` or ``"ssid"`` when a sink's name says it holds one, else ``None``."""
     for kind, name_re in _PIPE_SINK_NAME_RES:
         if name_re.fullmatch(name):
             return kind
@@ -1827,7 +1879,7 @@ class _PipeLayout:
 
     constants: dict[int, str] = field(default_factory=dict)  # position -> kind (a sink)
     rows: dict[tuple[int, int], str] = field(default_factory=dict)  # (start, stride) -> kind (a row read)
-    columns: set[int] = field(default_factory=set)  # offset in a table row of a network-name column
+    columns: dict[int, str] = field(default_factory=dict)  # offset in a table row -> kind (a headed column)
 
     def add(self, position: int, kind: str) -> None:
         """Record a sink. A position two sinks disagree on is a password: the stricter reading."""
@@ -1849,7 +1901,7 @@ class PipeSinks:
         self._functions: list[tuple[int, str, list[str]]] | None = None
         self._ends: dict[int, int] = {}
         self._layouts: dict[int, _PipeLayout] = {}
-        self._headings: dict[str, set[int]] = {}
+        self._headings: dict[str, dict[int, str]] = {}
 
     def _scan(self) -> list[tuple[int, str, list[str]]]:
         """Every function declared in script code, as ``(body_start, name, parameters)``, in order."""
@@ -1889,8 +1941,8 @@ class PipeSinks:
     def kinds_at(self, offset: int, fields: Sequence[str]) -> dict[int, str]:
         """Map each sink-named position of the blob assigned at ``offset`` to its kind.
 
-        The kind is ``"password"`` or ``"ssid"``; ``fields`` is the blob,
-        split. Empty when the assignment is not script code (a commented-out
+        The kind is ``"password"``, ``"answer"``, ``"ssid"`` or ``"device"``;
+        ``fields`` is the blob, split. Empty when the assignment is not script code (a commented-out
         firmware example) or sits in no function. Positions come from the
         function the blob's own is passed to (its sinks, row reads and table
         reads) and from row reads of the split blob in the blob's own function.
@@ -1912,9 +1964,9 @@ class PipeSinks:
         rows = int(fields[0]) if fields[0].strip().isdigit() else 0
         if layout.columns and rows >= 1 and total % rows == 0 and total // rows >= _PIPE_ROW_MIN_STRIDE:
             stride = total // rows
-            for column in layout.columns:
+            for column, kind in layout.columns.items():
                 if column < stride:
-                    kinds.update(dict.fromkeys(range(1 + column, len(fields), stride), "ssid"))
+                    kinds.update(dict.fromkeys(range(1 + column, len(fields), stride), kind))
         # A position two readings disagree on is a password: the stricter one.
         for (start, stride), kind in sorted(layout.rows.items(), key=lambda row: row[1] == "password"):
             kinds.update(dict.fromkeys(range(start, len(fields), stride), kind))
@@ -1953,6 +2005,7 @@ class PipeSinks:
             self._read_sinks(start, end, parameter, layout)
             self._read_rows(start, end, {parameter}, layout)
             self._read_tables(start, end, parameter, layout)
+            self._read_markup_rows(start, end, parameter, layout)
         return layout
 
     def _read_sinks(self, start: int, end: int, parameter: str, layout: _PipeLayout) -> None:
@@ -1974,14 +2027,7 @@ class PipeSinks:
         """Add the row a named variable reads from one of ``arrays`` (``linear_index``)."""
         if not arrays:
             return
-        # A name is the expression the function last assigned it. A loop
-        # header's own assignment (`for (j = 0; …`) starts the loop variable;
-        # it does not define it.
-        definitions = {
-            assigned.group(2): assigned.group(3)
-            for assigned in _PIPE_ASSIGNMENT_RE.finditer(self._text, start, end)
-            if assigned.group(1) is None and self._code.contains(assigned.start(2))
-        }
+        definitions = self._definitions(start, end)
         indexes: dict[str, tuple[int, int] | None] = {}
         for read in _PIPE_ROW_RE.finditer(self._text, start, end):
             kind = pipe_sink_kind(read.group("name"))
@@ -1996,8 +2042,77 @@ class PipeSinks:
             if layout.rows.get(index) != "password":
                 layout.rows[index] = kind
 
+    def _definitions(self, start: int, end: int) -> dict[str, str]:
+        """Each name the function ``[start, end)`` assigns, as the expression it last assigned it.
+
+        A loop header's own assignment (`for (j = 0; …`) starts the loop
+        variable; it does not define it.
+        """
+        return {
+            assigned.group(2): assigned.group(3)
+            for assigned in _PIPE_ASSIGNMENT_RE.finditer(self._text, start, end)
+            if assigned.group(1) is None and self._code.contains(assigned.start(2))
+        }
+
+    def _read_markup_rows(self, start: int, end: int, parameter: str, layout: _PipeLayout) -> None:
+        """Add the row a view writes as markup into a headed column of a table it names."""
+        targets = {
+            (target.group("table"), target.group("variable"))
+            for target in _PIPE_MARKUP_TARGET_RE.finditer(self._text, start, end)
+            if self._code.contains(target.start())
+        }
+        token_re = re.compile(_PIPE_MARKUP_LEXEME.format(parameter=re.escape(parameter)))
+        definitions: dict[str, str] | None = None
+        for table, variable in sorted(targets)[:_PIPE_TABLE_LIMIT]:
+            columns = self._column_kinds(table)
+            if not columns:
+                continue
+            if definitions is None:
+                definitions = self._definitions(start, end)
+            column, in_cell = -1, False
+            append_re = re.compile(r"(?<![\w$.])" + re.escape(variable) + r"\s*\+=")
+            for append in append_re.finditer(self._text, start, end):
+                if not self._code.contains(append.start()):
+                    continue
+                position = append.end()
+                while position < end:
+                    # The last two alternatives match any character, so a token always matches.
+                    token = cast("re.Match[str]", token_re.match(self._text, position, end))
+                    position = token.end()
+                    if token.group("end") is not None:
+                        break
+                    if token.group("string") is not None:
+                        for tag in _PIPE_MARKUP_TAG_RE.finditer(token.group("string")):
+                            if tag.group(2).lower() == "r":
+                                column, in_cell = -1, False
+                            elif tag.group(1):
+                                in_cell = False
+                            else:
+                                column, in_cell = column + 1, True
+                        continue
+                    kind = columns.get(column) if in_cell and token.group("read") is not None else None
+                    if (
+                        kind is None
+                        or _PIPE_MARKUP_BEFORE_RE.search(
+                            self._text[max(append.end(), token.start() - _INDEX_MAX_LENGTH) : token.start()]
+                        )
+                        is None
+                        or _PIPE_MARKUP_AFTER_RE.match(self._text, token.end(), end) is None
+                        or not self._code.contains(token.start())
+                    ):
+                        continue
+                    index = linear_index(token.group("expression"), definitions.get)
+                    if (
+                        index is None
+                        or index[1] < _PIPE_ROW_MIN_STRIDE
+                        or len(layout.rows) >= _PIPE_ROW_LIMIT
+                    ):
+                        continue
+                    if layout.rows.get(index) != "password":
+                        layout.rows[index] = kind
+
     def _read_tables(self, start: int, end: int, parameter: str, layout: _PipeLayout) -> None:
-        """Add the row offsets a row callback writes into a column whose heading names a network."""
+        """Add the row offsets a row callback writes into a column whose heading names what it holds."""
         call_re = re.compile(_PIPE_TABLE_CALL.format(parameter=re.escape(parameter)))
         tables = {
             (call.group("table"), call.group("callback"))
@@ -2005,33 +2120,38 @@ class PipeSinks:
             if self._code.contains(call.start())
         }
         for table, callback in sorted(tables)[:_PIPE_TABLE_LIMIT]:
-            columns = self._ssid_columns(table)
+            columns = self._column_kinds(table)
             declared = self._named(callback) if columns else None
             if declared is None:
                 continue
             body_start, parameters = declared
             for cell in _PIPE_TABLE_CELL_RE.finditer(self._text, body_start, self._end(body_start)):
+                kind = columns.get(int(cell.group("column")))
                 if (
-                    int(cell.group("column")) in columns
+                    kind is not None
                     and cell.group("array") in parameters
                     and cell.group("base") in parameters
                     and self._code.contains(cell.start())
                 ):
-                    layout.columns.add(int(cell.group("offset") or 0))
+                    layout.columns[int(cell.group("offset") or 0)] = kind
 
-    def _ssid_columns(self, table: str) -> set[int]:
-        """The columns of the table with this id whose heading, in its first row, names a network."""
+    def _column_kinds(self, table: str) -> dict[int, str]:
+        """The columns of the table with this id whose heading, in its first row, names a network or a device."""
         if table not in self._headings:
             opening = _table_open(table).search(self._text)
             header = ""
             if opening is not None:
                 row_end = _TABLE_ROW_END_RE.search(self._text, opening.end())
                 header = self._text[opening.end() : row_end.start() if row_end else len(self._text)]
-            self._headings[table] = {
-                column
-                for column, cell in enumerate(_TABLE_CELL_RE.findall(header))
-                if _SSID_HEADING_RE.search(_TAG_RE.sub(" ", cell))
-            }
+            kinds: dict[int, str] = {}
+            for column, cell in enumerate(_TABLE_CELL_RE.findall(header)):
+                heading = _TAG_RE.sub(" ", cell)
+                kind = next(
+                    (kind for kind, heading_re in _COLUMN_HEADING_RES if heading_re.search(heading)), None
+                )
+                if kind is not None:
+                    kinds[column] = kind
+            self._headings[table] = kinds
         return self._headings[table]
 
 
@@ -2041,7 +2161,7 @@ def is_pipe_sink_value_sensitive(
     safe_values: Collection[str],
     allowlist: dict[str, Any],
 ) -> bool:
-    """Check whether the value at a sink-named position is a credential or a network name.
+    """Check whether the value at a sink-named position is a credential, an answer, a network name or a device name.
 
     ``allowlist`` is ``load_allowlist()`` for the run, loaded once by the
     caller: a blob holds thousands of values on some pages.
@@ -2105,7 +2225,7 @@ def redact_pipe_sink_values(
     collector: RedactionCollector,
     custom_patterns: str | dict[str, Any] | None = None,
 ) -> str:
-    """Redact the pipe-delimited values the page's own script names a password or an SSID (pass 13b).
+    """Redact the pipe-delimited values the page's own script names a password, an SSID or a device (pass 13b).
 
     Exposed separately from :func:`sanitize_html` for the reason
     :func:`redact_structural_credentials` is: ``validate`` checks every
@@ -2128,9 +2248,7 @@ def redact_pipe_sink_values(
         collector.record_auto_redaction(PIPE_SINK_CATEGORIES[kind])
         placeholder = hasher.hash_generic(value, PIPE_SINK_PREFIXES[kind])
         # A blob on another page can repeat the value with no sink naming it.
-        collector.record_redacted_value(
-            value, placeholder, review_as=REVIEW_CATEGORY_BY_PREFIX[PIPE_SINK_PREFIXES[kind]]
-        )
+        collector.record_redacted_value(value, placeholder, review_as=_PIPE_SINK_REVIEW_AS.get(kind))
         pieces.append(content[written:offset] + placeholder)
         written = offset + len(value)
     return "".join(pieces) + content[written:] if pieces else content

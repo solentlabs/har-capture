@@ -150,7 +150,9 @@ def _load_sensitive_fields(custom_patterns: str | dict[str, Any] | None = None) 
 _PIPE_SINK_REASONS = {
     # pragma: allowlist nextline secret
     "password": "Plaintext password in a pipe-delimited value the page writes into a password field",
+    "answer": "Password-recovery answer in a pipe-delimited value the page writes into an answer field",
     "ssid": "Wi-Fi network name (SSID) in a pipe-delimited value the page writes into an SSID field",
+    "device": "Device name in a pipe-delimited value the page writes into a Device Name column",
 }
 
 
@@ -1215,14 +1217,16 @@ def _scan_text(
         )
 
     # A pipe-delimited value the page's own script writes into a password- or
-    # SSID-named sink (`$('#wirelessPassword1').html(tagValues[6])`). The
+    # SSID-named sink (`$('#wirelessPassword1').html(tagValues[6])`), or into
+    # an SSID or Device Name column of a table it draws. The
     # sanitizer's redact_pipe_sink_values replaces what this iterator yields,
     # in every body, so a finding here is one a sanitize run clears. Severity
-    # follows the labeled pairs above: the script names the password outright.
+    # follows the labeled pairs above: the script names the password (or the
+    # recovery answer that resets it) outright.
     for sink_kind, sink_value, _offset in iter_pipe_sink_values(text, custom_patterns):
         findings.append(
             Finding(
-                severity="error" if sink_kind == "password" else "warning",
+                severity="error" if sink_kind in ("password", "answer") else "warning",
                 location=location,
                 field="content",
                 value=truncate(sink_value),

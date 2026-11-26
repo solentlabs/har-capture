@@ -793,33 +793,33 @@ numbers.
 The engine runs sequential passes over HTML/JavaScript content (numbered 0–16 in the code, with sub-passes like 0b, 2c,
 7a/7b, 8b, 13b). Each pass uses regex substitution with callback functions that invoke the hasher.
 
-| Pass | Scanner                        | Pattern                                                  | Redaction                               |
-| ---- | ------------------------------ | -------------------------------------------------------- | --------------------------------------- |
-| 0    | Custom patterns                | Domain-specific PII regex                                | Per-pattern prefix                      |
-| 0b   | Web storage                    | `localStorage.setItem('KEY', 'VALUE')`                   | Auto-redact if key is sensitive         |
-| 1    | MAC addresses                  | `MAC_RE` (see [MAC addresses](#mac-addresses))           | `hasher.hash_mac()`                     |
-| 2    | Serial numbers (inline)        | `\bSN\b\|S/N\|Serial Number` + value with a digit        | `hasher.hash_value(val, "SERIAL")`      |
-| 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial      | `hasher.hash_value(val, "SERIAL")`      |
-| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value                          | `hasher.hash_value(val, "PIN")`         |
-| 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token       | `hasher.hash_value(val, "SERIAL")`      |
-| 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`     |
-| 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`   |
-| 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`  |
-| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; constants kept     | `hasher.hash_ipv6()`                    |
-| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`        |
-| 7a   | SSID text labels               | SSID labels in HTML text nodes, literals only            | `hasher.hash_value(val, "WIFI")`        |
-| 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`        |
-| 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")` |
-| 8    | Password inputs                | `<input type="password" value="...">`                    | `hasher.hash_value(val, "PASS")`        |
-| 8b   | SSID inputs                    | SSID-related input fields                                | `hasher.hash_value(val, "WIFI")`        |
-| 9    | Session tokens                 | `SESSION_TOKEN_RE`: 20+ char literal after a label       | `hasher.hash_value(val, "TOKEN")`       |
-| 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`        |
-| 11   | Email addresses                | `EMAIL_RE` from each `@`: `user+tag@sub.domain.co.uk`    | `hasher.hash_email()`                   |
-| 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`      |
-| 13   | Password script variables      | `script_variables.password` names (domain file)          | `hasher.hash_value(val, "PASS")`        |
-| 13b  | Pipe-delimited sinks           | Blob position the page's script writes into a named sink | `hasher.hash_value(val, "PASS"/"WIFI")` |
-| 14   | Pipe-delimited variables       | `script_variables.pipe_delimited` names (domain file)    | Per-value heuristic analysis            |
-| 15   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`        |
+| Pass | Scanner                        | Pattern                                                  | Redaction                                        |
+| ---- | ------------------------------ | -------------------------------------------------------- | ------------------------------------------------ |
+| 0    | Custom patterns                | Domain-specific PII regex                                | Per-pattern prefix                               |
+| 0b   | Web storage                    | `localStorage.setItem('KEY', 'VALUE')`                   | Auto-redact if key is sensitive                  |
+| 1    | MAC addresses                  | `MAC_RE` (see [MAC addresses](#mac-addresses))           | `hasher.hash_mac()`                              |
+| 2    | Serial numbers (inline)        | `\bSN\b\|S/N\|Serial Number` + value with a digit        | `hasher.hash_value(val, "SERIAL")`               |
+| 2c   | JS serial variables            | Names with serial+Number/Num/No or ending in serial      | `hasher.hash_value(val, "SERIAL")`               |
+| 2d   | WPS / pairing / default PINs   | Known PIN label + 8-digit value                          | `hasher.hash_value(val, "PIN")`                  |
+| 2e   | Vendor-format serials          | High-confidence serial_number detectors, per token       | `hasher.hash_value(val, "SERIAL")`               |
+| 3    | Account/subscriber IDs         | `ACCOUNT_LABEL_RE`: label, separator, tags, value to tag | `hasher.hash_value(val, "ACCOUNT")`              |
+| 4    | Private IPs                    | `PRIVATE_IP_RE`, octets ≤ 255 (preserves gateway IPs)    | `hasher.hash_ip(ip, is_private=True)`            |
+| 5    | Public IPs                     | `PUBLIC_IP_RE`, less version strings                     | `hasher.hash_ip(ip, is_private=False)`           |
+| 6    | IPv6 addresses (runs before 4) | `IPV6_RE` + `is_ipv6_host_address()`; constants kept     | `hasher.hash_ipv6()`                             |
+| 7    | Passwords/passphrases          | `PASSWORD_FIELD_RE`, literals only; bare `key`: offered  | `hasher.hash_value(val, "PASS")`                 |
+| 7a   | SSID text labels               | SSID labels in HTML text nodes, literals only            | `hasher.hash_value(val, "WIFI")`                 |
+| 7b   | JS password objects            | JavaScript object password fields                        | `hasher.hash_value(val, "PASS")`                 |
+| 7c   | Structural label/value         | Value alone in its own element; SSID-named elements      | `hasher.hash_value(val, "PASS"/"WIFI")`          |
+| 8    | Password inputs                | `<input type="password" value="...">`                    | `hasher.hash_value(val, "PASS")`                 |
+| 8b   | SSID inputs                    | SSID-related input fields                                | `hasher.hash_value(val, "WIFI")`                 |
+| 9    | Session tokens                 | `SESSION_TOKEN_RE`: 20+ char literal after a label       | `hasher.hash_value(val, "TOKEN")`                |
+| 10   | CSRF tokens                    | CSRF tokens in meta tags                                 | `hasher.hash_value(val, "CSRF")`                 |
+| 11   | Email addresses                | `EMAIL_RE` from each `@`: `user+tag@sub.domain.co.uk`    | `hasher.hash_email()`                            |
+| 12   | Config paths                   | `.cfg` file references                                   | `hasher.hash_value(val, "CONFIG")`               |
+| 13   | Password script variables      | `script_variables.password` names (domain file)          | `hasher.hash_value(val, "PASS")`                 |
+| 13b  | Pipe-delimited sinks           | Blob position the page's script writes into a named sink | `hasher.hash_value(val, "PASS"/"WIFI"/"DEVICE")` |
+| 14   | Pipe-delimited variables       | `script_variables.pipe_delimited` names (domain file)    | Per-value heuristic analysis                     |
+| 15   | SSID fields in JS              | `ssid_24g: 'value'`, `guest_ssid: 'value'`               | `hasher.hash_value(val, "WIFI")`                 |
 
 **Pass 0 — pattern-file regexes** (`redact_pattern_file_matches()`: every `pii.json` pattern without a dedicated pass,
 and custom ones): each match is hashed with the pattern's prefix, except the built-in number patterns, which keep one
@@ -1005,26 +1005,42 @@ InitUpdateView(InitTagValue());
 1. **Read the tables**: a call in the view of the shape `draw('TABLE', parameter, callback)`. The callback is the
    function of that name; a cell it fills from its own parameters (`cells[K] = decode(tags[first + A])`) is column `K`
    read from field `A` of a row. Column `K` names a network when the first row of `<table id="TABLE">` heads it `SSID`
-   or `Network Name` (not `BSSID`). Rows are laid out as that drawing function lays them: field 0 is the row count, the
-   rest divide into that many equal rows of two or more fields, an empty field after a trailing delimiter aside; a blob
-   that does not divide is not read.
+   or `Network Name` (not `BSSID`), and a device when it heads it `Device Name`. Rows are laid out as that drawing
+   function lays them: field 0 is the row count, the rest divide into that many equal rows of two or more fields, an
+   empty field after a trailing delimiter aside; a blob that does not divide is not read.
+1. **Read the rows written as markup**: in a view, `$('#TABLE …').after(VARIABLE)` or `.append(VARIABLE)` in script code
+   names the table, and every `VARIABLE += …;` statement in script code adds to its rows, in order. A `<tr` in a string
+   literal starts a row, each `<td` or `<th` the next column, and a closing tag (`</td>`, `<\/td>`) leaves the cell. A
+   read of the view's parameter inside a cell is that column's value when it fills the cell alone: a string ending in
+   `>` and a `+` before it (calls between allowed, `' + decode(tagValues[i * 5 + 2])`), and `+` and a string opening
+   with `<`, or the statement's end, after it. `linear_index()` reads its index as for a row read (stride two or more),
+   and the column's heading names its kind as for a table read. A read compared (`(tagValues[…] == "1") ? …`) or joined
+   to text (`tagValues[…] + ' dBm'`) is not a value; neither is an append statement or a table call in a comment or a
+   string.
 1. **Name** (`pipe_sink_kind`): `NAME` is a password sink when it is a credential label (`password`, `passphrase`,
    `psk`, `wpa…key`, a glued `key`) and an SSID sink when it is an SSID name (`ssid` not after `b`, `wifi_ntwrk`,
    `wifi_network`, `priwifinet`, `wireless_name`), in both cases followed only by digits, `Hidden` (passwords) and a
-   band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix. `wirelessPassword1_5g`, `passphraseHidden_an`,
-   `radius_key_2G`, `wiressSSID1` and `WirelessName_an` are sinks; `passwordId`, `passphraseStr`, `ssid_sel`,
-   `ssid_bc_enable`, `bssid_enable` and `group_key_update_interval_2G` are not. A position two readings disagree on is a
-   password.
+   band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix. It is an answer sink when it is `answer` followed only by
+   digits (`answer1`, Netgear's password-recovery answers on `SetPassword.htm`). `wirelessPassword1_5g`,
+   `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an` and `answer2` are sinks; `passwordId`,
+   `passphraseStr`, `ssid_sel`, `ssid_bc_enable`, `bssid_enable`, `group_key_update_interval_2G` and `answer1_changed`
+   are not. A position two readings disagree on is a password.
 1. **Judge the value** (`is_pipe_sink_value_sensitive`), without its surrounding whitespace: kept when empty, already a
    placeholder (`is_redacted()`, a `***…` marker, `PREFIX_<hash>`), a `tagValueList.safe_values` word, a safe or status
    word (`is_safe_value()`), or a bare integer — except eight or more digits in a password sink (a numeric passphrase).
-   Anything else is replaced in place by `PASS_<hash>` or `WIFI_<hash>`, spaces inside it included.
+   Anything else is replaced in place by `PASS_<hash>` (a password or an answer), `WIFI_<hash>` or `DEVICE_<hash>`,
+   spaces inside it included. `network-device` lists Netgear's factory words `password` (the default admin password its
+   help pages print, `$("#Password").html(tagValues[1])` on `BackupSettings_h.htm`) and `readyshare` (the default USB
+   share name) as safe values, so neither is redacted nor offered for review.
 
 The pass runs in every heuristic mode, ahead of pass 14, which then skips the placeholders. It is exposed as a function
 and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob served from a `.js` file is covered and
 `validate`, which reports what `iter_pipe_sink_values` yields, never reports a value a sanitize run cannot clear. Not
 covered, and left to pass 14's review: a bare `KEY1` WEP sink, a name the sink does not call an SSID
-(`GuestNetworkName1`), and rows the script reads with no name and no headed table.
+(`GuestNetworkName1`), and rows the script reads with no name and no headed table. A redacted password or network name
+is registered for [Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase); an answer or a device name only
+feeds the [Pass 1b](#pass-1b-redacted-value-propagation) sweep, since Pass 1d looks for a value as a substring and both
+are often words firmware text holds (`blue`, `iPhone`).
 
 The limits above are kept where a device's own network name sits behind them. A Netgear C6250 carries its name in a
 position no script reads, labeled only by a comment (`/* … | Name (SSID) | … */` above `'1|6|<name>|13|1|'` on its scan
@@ -1668,6 +1684,9 @@ next, with nothing in the review queue to say so.
 | SSID-named JSON key (`_is_redactable_ssid`)                           | `wifi_ssid`     | `WIFI_`     |
 | Pipe-delimited sink (pass 13b), SSID sink                             | `wifi_ssid`     | `WIFI_`     |
 | Pipe-delimited sink (pass 13b), password sink                         | `password`      | `PASS_`     |
+
+A pipe-delimited answer or device name (pass 13b) is not registered here; see
+[Pipe-Delimited Sinks](#pipe-delimited-sinks-pass-13b).
 
 A registered value also enters the Pass 1b registry, so one that meets the eligibility bar is replaced by that sweep.
 
