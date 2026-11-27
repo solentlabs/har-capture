@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Netgear log rows are no longer offered for review as credentials.** With `--patterns network-device`, the event text
+  of each row on a Netgear `Logs.htm` page (`[admin login failure] from source …`, `[DHCP IP: …] to MAC address …`,
+  `[UPnP set event: GetTotalBytesSent] from source …`) was flagged as a high-entropy credential, about 20 to 30 times
+  per capture. The addresses in those rows are still redacted.
+
 ## [0.19.1] - 2026-11-26
 
 ### Fixed

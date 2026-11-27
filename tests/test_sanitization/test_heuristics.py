@@ -56,6 +56,8 @@ SAFE_VALUE_CASES = [(c["value"], c["is_safe"], c["id"]) for c in _FIXTURES["safe
 
 DOMAIN_SAFE_VALUE_CASES = [(c["value"], c["id"]) for c in _FIXTURES["domain_safe_value_cases"]]
 
+DOMAIN_UNSAFE_VALUE_CASES = [(c["value"], c["id"]) for c in _FIXTURES["domain_unsafe_value_cases"]]
+
 SSID_LIKE_CASES = [
     # The "too_long" case uses a generated string that can't live in JSON
     ("a" * 35, c["is_match"], c["id"]) if c["id"] == "too_long" else (c["value"], c["is_match"], c["id"])
@@ -171,6 +173,22 @@ class TestDomainSafeValues:
     def test_not_safe_without_domain_patterns(self, value: str, desc: str) -> None:
         """Domain-specific values are NOT safe without domain patterns."""
         assert not is_safe_value(value), f"{desc}: '{value}' should NOT be safe without domain patterns"
+
+    @pytest.mark.parametrize(
+        ("value", "desc"),
+        DOMAIN_UNSAFE_VALUE_CASES,
+        ids=[c[1] for c in DOMAIN_UNSAFE_VALUE_CASES],
+    )
+    def test_not_safe_with_domain_patterns(
+        self,
+        value: str,
+        desc: str,
+        network_device_patterns: list[re.Pattern[str]],
+    ) -> None:
+        """Values beside a domain pattern's shape stay unsafe with the domain patterns loaded."""
+        assert not is_safe_value(value, extra_patterns=network_device_patterns), (
+            f"{desc}: '{value}' should NOT be safe with network-device patterns"
+        )
 
 
 class TestRunDetector:

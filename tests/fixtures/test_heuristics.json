@@ -667,6 +667,30 @@
     {
       "value": "C3700-100NAS",
       "id": "model_number_c3700"
+    },
+    {
+      "value": "[admin login failure] from source 192.168.0.2",
+      "id": "netgear_log_login_failure"
+    },
+    {
+      "value": "[ login failure] from source 192.168.0.2",
+      "id": "netgear_log_leading_space"
+    },
+    {
+      "value": "[DHCP IP: 192.168.0.9] to MAC address 02:00:00:00:00:01",
+      "id": "netgear_log_dhcp"
+    },
+    {
+      "value": "[DHCP IP: 192.168.0.9] to MAC address XX:XX:XX:XX:XX:XX",
+      "id": "netgear_log_dhcp_redacted_mac"
+    },
+    {
+      "value": "[Internet connected] IP address: 203.0.113.7",
+      "id": "netgear_log_internet_connected"
+    },
+    {
+      "value": "[UPnP set event: GetTotalBytesSent] from source 192.168.0.2",
+      "id": "netgear_log_upnp"
     }
   ],
   "ssid_like_cases": [
@@ -1231,6 +1255,20 @@
       "is_adjacent": false,
       "expected": "low",
       "id": "det_null_ent_false_adj_false_low"
+    }
+  ],
+  "domain_unsafe_value_cases": [
+    {
+      "value": "[admin login] from source Xk9#mQ2vL7pR",
+      "id": "netgear_log_suffix_not_an_address"
+    },
+    {
+      "value": "[Xk9mQ2vL7pR4] from source 192.168.0.2",
+      "id": "netgear_log_event_not_words"
+    },
+    {
+      "value": "[admin login] Xk9mQ2vL7pR4",
+      "id": "netgear_log_unknown_suffix"
     }
   ]
 }

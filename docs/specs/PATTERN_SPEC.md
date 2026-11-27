@@ -305,6 +305,8 @@ Examples of domain-specific safe values:
 - Speed descriptions: `Up to 300 Mbps`, `1000 Mbps`
 - Config filenames: `GatewaySettings1.bin`, `settings.cfg`
 - Hardware models: `C279T00-01`, `C3700-100NAS`
+- Netgear log events: `[admin login failure] from source 192.168.0.2`, `[DHCP IP: 192.168.0.9] to MAC address …` (the
+  addresses are redacted by their own passes)
 
 ### Section: `heuristics.detectors`
 
