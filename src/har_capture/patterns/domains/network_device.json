@@ -144,6 +144,20 @@
         "_comment": "Speed/bandwidth descriptions"
       },
       {
+        "regex": "^-?\\d+(?:\\.\\d+)?\\s*(?:dBmV|dBm|dB)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "DOCSIS signal levels: 30.8 dBmV, -1.02 dBmV, 38.9 dB"
+      },
+      {
+        "regex": "^\\d+(?:\\.\\d+)?\\s*[KM]sym/s(?:ec)?$",
+        "flags": ["IGNORECASE"],
+        "_comment": "DOCSIS symbol rates: 5120 Ksym/sec"
+      },
+      {
+        "regex": "^\\d+(?:\\.\\d+)?\\s*~\\s*\\d+(?:\\.\\d+)?$",
+        "_comment": "Numeric ranges: 1108 ~ 2987 (OFDM active subcarriers)"
+      },
+      {
         "regex": "^(?:United States|United Kingdom|New Zealand|South Korea|North Korea|South Africa|Hong Kong|Saudi Arabia|Costa Rica|Puerto Rico|Czech Republic|Dominican Republic|El Salvador|Sri Lanka|[A-Z][a-z]+)$",
         "_comment": "Country/region names (router region settings)"
       },

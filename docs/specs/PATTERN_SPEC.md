@@ -303,6 +303,7 @@ Examples of domain-specific safe values:
 - Security types: `WPA`, `WPA2`, `WPA2-PSK`, `WPA2-PSK AES-CCMP`
 - WiFi standards: `802.11ac`, `802.11n/ac`
 - Speed descriptions: `Up to 300 Mbps`, `1000 Mbps`
+- DOCSIS measurements: `30.8 dBmV`, `38.9 dB`, `5120 Ksym/sec`, `1108 ~ 2987`
 - Config filenames: `GatewaySettings1.bin`, `settings.cfg`
 - Hardware models: `C279T00-01`, `C3700-100NAS`
 - Netgear log events: `[admin login failure] from source 192.168.0.2`, `[DHCP IP: 192.168.0.9] to MAC address …` (the

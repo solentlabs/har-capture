@@ -691,6 +691,26 @@
     {
       "value": "[UPnP set event: GetTotalBytesSent] from source 192.168.0.2",
       "id": "netgear_log_upnp"
+    },
+    {
+      "value": "30.8 dBmV",
+      "id": "docsis_power_dbmv"
+    },
+    {
+      "value": "-1.02 dBmV",
+      "id": "docsis_power_negative"
+    },
+    {
+      "value": "38.9 dB",
+      "id": "docsis_snr_db"
+    },
+    {
+      "value": "5120 Ksym/sec",
+      "id": "docsis_symbol_rate"
+    },
+    {
+      "value": "1108 ~ 2987",
+      "id": "numeric_range"
     }
   ],
   "ssid_like_cases": [
@@ -1269,6 +1289,14 @@
     {
       "value": "[admin login] Xk9mQ2vL7pR4",
       "id": "netgear_log_unknown_suffix"
+    },
+    {
+      "value": "30.8 dBmVx9Kq",
+      "id": "signal_level_with_trailing_text"
+    },
+    {
+      "value": "1108 ~ abc2987",
+      "id": "range_with_a_word"
     }
   ]
 }

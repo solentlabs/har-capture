@@ -1508,28 +1508,23 @@ def _sanitize_html_impl(
     # (script_variables.pipe_delimited): Wi-Fi credentials and device names
     safe_values = set(v.lower() for v in sensitive.get("tagValueList", {}).get("safe_values", []))
 
-    def sanitize_pipe_variable(match: re.Match[str]) -> str:
-        """Sanitize a pipe-delimited script variable's values.
+    def sanitize_pipe_blob(blob: re.Match[str]) -> list[tuple[int, int, str]]:
+        """Sanitize a pipe-delimited blob's values, as ``(offset, length, placeholder)`` edits.
 
-        Splits by ``|``, delegates each value to ``_sanitize_pipe_value()``
-        without its surrounding whitespace, and reassembles with that
-        whitespace written back: the blob's spacing is not the pass's to change.
+        Reads the blob's whole chain of literals (``read_pipe_blob``) and
+        delegates each value to ``_sanitize_pipe_value()`` without its
+        surrounding whitespace; an edit replaces the value alone, in the
+        literal that holds it, so the blob's spacing is kept.
         """
-        prefix = match.group("script_head")
-        values_str = match.group("script_value")
-        suffix = match.group("script_tail")
-
-        values = values_str.split("|")
+        fields = read_pipe_blob(html, blob)
+        values = [raw for raw, _ in fields]
         sanitized_values: list[str] = []
-        written: list[str] = []
-
-        for val in values:
-            stripped = val.strip()
+        edits: list[tuple[int, int, str]] = []
+        for raw, at in fields:
+            stripped = raw.strip()
             if not stripped:
                 sanitized_values.append(stripped)
-                written.append(val)
                 continue
-            start = val.index(stripped)
             result = _sanitize_pipe_value(
                 stripped,
                 hasher=hasher,
@@ -1543,12 +1538,13 @@ def _sanitize_html_impl(
                 all_values=values,
             )
             sanitized_values.append(result)
-            written.append(val[:start] + result + val[start + len(stripped) :])
-
-        return prefix + "|".join(written) + suffix
+            if result != stripped:
+                edits.append((at + raw.index(stripped), len(stripped), result))
+        return edits
 
     for variable_re in compile_script_variables(sensitive, "pipe_delimited"):
-        html = variable_re.sub(sanitize_pipe_variable, html)
+        edits = [edit for blob in variable_re.finditer(html) for edit in sanitize_pipe_blob(blob)]
+        html = _apply_edits(html, edits)
 
     # 15. SSID fields in JavaScript objects (ssid_24g: 'value', guest_ssid: 'value')
     def replace_js_ssid(match: re.Match[str]) -> str:
@@ -1642,16 +1638,18 @@ def redact_structural_credentials(
 # redaction with it. Anything the binding cannot follow yields no sink, and
 # the value stays with pass 14's heuristics.
 _FUNCTION_RE = re.compile(r"\bfunction\s+([\w$]+)\s*\(([^)]*)\)\s*\{")
-# The name a sink carries: a credential label (PASSWORD_FIELD_RE's) or an SSID
-# name (SSID_ATTRIBUTE_RE's), followed by nothing but a number, `Hidden` and a
-# radio band; or a password-recovery answer (`answer1`), followed by a number. `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`
+# The name a sink carries: a credential label (PASSWORD_FIELD_RE's, or a bare
+# `key` followed by a number: Netgear's WEP keys `KEY1`…`KEY4`) or an SSID name
+# (SSID_ATTRIBUTE_RE's), followed by nothing but a number, `Hidden` and a radio
+# band; or a password-recovery answer (`answer1`), followed by a number.
+# `passwordId` (a help page's sample), `ssid_sel`, `ssid_bc_enable`, `keyword`
 # and `group_key_update_interval` name something else; `bssid` is a MAC.
 _PIPE_SINK_BAND = r"\d*(?:[-_]?(?:an|2g|5g|6g|24g))*"
 _PIPE_SINK_NAME_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "password",
         re.compile(
-            r"[\w$-]*?(?:password|passphrase|psk|wpa[0-9]*key|(?<=[A-Za-z0-9_])key)\d*(?:hidden)?"
+            r"[\w$-]*?(?:password|passphrase|psk|wpa[0-9]*key|(?<=[A-Za-z0-9_])key|key(?=\d))\d*(?:hidden)?"
             + _PIPE_SINK_BAND,
             re.IGNORECASE,
         ),
@@ -2155,6 +2153,64 @@ class PipeSinks:
         return self._headings[table]
 
 
+# A further literal of a blob: `+` and a string literal, with spaces and line
+# breaks around the `+`. In a blob on a `//` line, a `//` may start each
+# further line (a commented-out sample continues that way).
+_PIPE_BLOB_JOIN_RE = re.compile(r"""[ \t\r\n]*\+[ \t\r\n]*(['"])([^'"]*)\1""")
+_PIPE_BLOB_COMMENTED_JOIN_RE = re.compile(
+    r"""(?:[ \t\r\n]|^[ \t]*//)*\+(?:[ \t\r\n]|^[ \t]*//)*(['"])([^'"]*)\1""", re.MULTILINE
+)
+_LINE_COMMENT_START_RE = re.compile(r"[ \t]*//")
+
+
+def _pipe_blob_literals(text: str, blob: re.Match[str]) -> Iterator[tuple[int, str]]:
+    """Yield ``(offset, text)`` for the blob's literal and each literal joined to it by ``+``."""
+    yield blob.start("script_value"), blob.group("script_value")
+    line_start = text.rfind("\n", 0, blob.start()) + 1
+    commented = _LINE_COMMENT_START_RE.match(text, line_start, blob.start()) is not None
+    join_re = _PIPE_BLOB_COMMENTED_JOIN_RE if commented else _PIPE_BLOB_JOIN_RE
+    position = blob.end()
+    while (literal := join_re.match(text, position)) is not None:
+        yield literal.start(2), literal.group(2)
+        position = literal.end()
+
+
+def read_pipe_blob(text: str, blob: re.Match[str]) -> list[tuple[str, int]]:
+    """Split a pipe-delimited blob into ``(field, offset)`` pairs, its whole chain of literals read.
+
+    ``blob`` is a ``script_variables.pipe_delimited`` assignment match. The
+    literals joined to it by ``+`` are joined and split on ``|``; each field
+    keeps its surrounding whitespace and the offset in ``text`` where it
+    starts. The chain stops before a literal that would join a field across
+    two literals (``'ab' + 'cd'``): no one literal could take its placeholder.
+    """
+    fields: list[tuple[str, int]] = []
+    field, field_at = "", blob.start("script_value")
+    for index, (at, literal) in enumerate(_pipe_blob_literals(text, blob)):
+        parts = literal.split("|")
+        if index == 0 or (parts[0] and not field):
+            field, field_at = parts[0], at
+        elif parts[0]:
+            break
+        offset = at + len(parts[0]) + 1
+        for part in parts[1:]:
+            fields.append((field, field_at))
+            field, field_at = part, offset
+            offset += len(part) + 1
+    fields.append((field, field_at))
+    return fields
+
+
+def _apply_edits(text: str, edits: list[tuple[int, int, str]]) -> str:
+    """Apply non-overlapping ``(offset, length, replacement)`` edits to ``text``."""
+    pieces: list[str] = []
+    written = 0
+    for offset, length, replacement in sorted(edits):
+        pieces.append(text[written:offset] + replacement)
+        written = offset + length
+    return "".join(pieces) + text[written:] if pieces else text
+
+
 def is_pipe_sink_value_sensitive(
     value: str,
     kind: str,
@@ -2208,15 +2264,13 @@ def iter_pipe_sink_values(
             if blob.start("script_value") in read:
                 continue  # a blob two variable names both match is read once
             read.add(blob.start("script_value"))
-            fields = blob.group("script_value").split("|")
-            kinds = sinks.kinds_at(blob.start(), fields)
-            offset = blob.start("script_value")
-            for index, raw in enumerate(fields if kinds else ()):
+            fields = read_pipe_blob(text, blob)
+            kinds = sinks.kinds_at(blob.start(), [raw for raw, _ in fields])
+            for index, (raw, at) in enumerate(fields if kinds else ()):
                 value = raw.strip()
                 kind = kinds.get(index)
                 if kind is not None and is_pipe_sink_value_sensitive(value, kind, safe_values, allowlist):
-                    yield kind, value, offset + raw.index(value)
-                offset += len(raw) + 1
+                    yield kind, value, at + raw.index(value)
 
 
 def redact_pipe_sink_values(
@@ -2240,18 +2294,14 @@ def redact_pipe_sink_values(
     Returns:
         The text with each sink-named value replaced by its placeholder
     """
-    pieces: list[str] = []
-    written = 0
-    for kind, value, offset in sorted(
-        iter_pipe_sink_values(content, custom_patterns), key=lambda found: found[2]
-    ):
+    edits: list[tuple[int, int, str]] = []
+    for kind, value, offset in iter_pipe_sink_values(content, custom_patterns):
         collector.record_auto_redaction(PIPE_SINK_CATEGORIES[kind])
         placeholder = hasher.hash_generic(value, PIPE_SINK_PREFIXES[kind])
         # A blob on another page can repeat the value with no sink naming it.
         collector.record_redacted_value(value, placeholder, review_as=_PIPE_SINK_REVIEW_AS.get(kind))
-        pieces.append(content[written:offset] + placeholder)
-        written = offset + len(value)
-    return "".join(pieces) + content[written:] if pieces else content
+        edits.append((offset, len(value), placeholder))
+    return _apply_edits(content, edits)
 
 
 def _sanitizer_rewrites(pattern_name: str, value: str, preserved_ips: frozenset[str]) -> bool:

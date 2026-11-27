@@ -31,7 +31,11 @@ from pathlib import Path
 import pytest
 
 from har_capture.patterns import Hasher, load_allowlist, load_pii_patterns
-from har_capture.patterns.loader import resolve_patterns_arg
+from har_capture.patterns.loader import (
+    compile_script_variables,
+    load_sensitive_patterns,
+    resolve_patterns_arg,
+)
 from har_capture.sanitization.collector import RedactionCollector
 from har_capture.sanitization.html import (
     ACCOUNT_LABEL_RE,
@@ -114,6 +118,8 @@ PIPE_SERIAL_CASES = [
 PIPE_CONTEXT_CASES = _FIXTURE["pipe_context_cases"]["cases"]
 SCRIPT_VARIABLE_CASES = _FIXTURE["script_variable_cases"]["cases"]
 PIPE_WHITESPACE_CASES = _FIXTURE["pipe_whitespace_cases"]["cases"]
+PIPE_BLOB_CASES = _FIXTURE["pipe_blob_cases"]["cases"]
+PIPE_BLOB_CHAIN_CASES = _FIXTURE["pipe_blob_chain_cases"]["cases"]
 PII_SCRIPT_VARIABLE_CASES = _FIXTURE["pii_script_variable_cases"]["cases"]
 
 
@@ -1428,6 +1434,32 @@ def test_pipe_value_the_page_writes_into_a_named_sink(case: dict) -> None:
     cleared: list[Finding] = []
     check_content(case["output"], "entry", cleared, patterns)
     assert [f for f in cleared if "pipe-delimited" in f.reason] == []
+
+
+@pytest.mark.parametrize("case", PIPE_BLOB_CASES, ids=[c["id"] for c in PIPE_BLOB_CASES])
+def test_read_pipe_blob(case: dict) -> None:
+    """A blob is its literal and every literal joined to it by ``+``; each field sits at its offset."""
+    from har_capture.sanitization.html import read_pipe_blob
+
+    sensitive = load_sensitive_patterns(str(resolve_patterns_arg("network-device")))
+    (variable_re, *_) = compile_script_variables(sensitive, "pipe_delimited")
+    blob = variable_re.search(case["text"])
+    assert blob is not None
+    fields = read_pipe_blob(case["text"], blob)
+    assert [field for field, _ in fields] == case["fields"]
+    assert all(case["text"][at : at + len(field)] == field for field, at in fields)
+
+
+@pytest.mark.parametrize("case", PIPE_BLOB_CHAIN_CASES, ids=[c["id"] for c in PIPE_BLOB_CHAIN_CASES])
+def test_pipe_blob_chain(case: dict) -> None:
+    """Pass 14 judges every literal of a blob's chain and writes each placeholder into its own literal."""
+    result = sanitize_html(
+        case["input_html"],
+        salt=None,
+        custom_patterns=str(resolve_patterns_arg("network-device")),
+        heuristics=HeuristicMode(case["heuristics"]),
+    )
+    assert result == case["output"]
 
 
 REDACTED_PIPE_VALUE_CASES = _FIXTURE["redacted_pipe_value_cases"]["cases"]

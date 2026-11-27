@@ -710,16 +710,18 @@ Everything the rule does not bind stays where it was: pass 14 offers it for revi
   the page. The answer, device-name and markup-row readings and the two further blob names change 73 of the fleet's
   50,964 response bodies across 491 HARs, every change inside a blob literal: 411 device-name, 412 network-name (guest
   networks on `GuestNetwork.htm`) and 26 answer placeholders. Their guards are held the same way: `answer1_changed`
-  holds a flag on 9 pages; every Status and Connection Type cell on the markup-row pages is a flag compared
-  (`(tagValues[…] == "1") ? …`), not a value; and the factory `password` on `BackupSettings_h.htm`, redacted without the
-  safe value, is offered for review wherever the word appears (296 places in one C3700 capture, `type="password"` among
-  them).
+  holds a flag on 9 pages; the WEP key sinks (`KEY1`…`KEY4`, with `Hidden` and `_an`) bind 368 positions on
+  `GuestNetwork.htm` and `WirelessSettings.htm` and change none, since each holds an empty field, a digit or the
+  all-zero default the allowlist keeps, while a bare `key` (ADR-19) or `keyword` names no sink; every Status and
+  Connection Type cell on the markup-row pages is a flag compared (`(tagValues[…] == "1") ? …`), not a value; and the
+  factory `password` on `BackupSettings_h.htm`, redacted without the safe value, is offered for review wherever the word
+  appears (296 places in one C3700 capture, `type="password"` among them).
 
-**Not covered.** A bare `KEY1`…`KEY4` (WEP) sink is not a credential label (ADR-19's bare `key`). A guest network name
-written into a sink that does not say SSID (`GuestNetworkName1`) is not named. A table whose heading row names no
-network or device, or whose rows the script reads with no name and no table, is not read. A cell value joined to other
-text in a markup row is not read. An answer outside a blob (a form field or POST body) is not labeled: the fleet holds
-112 `answer` inputs, every one empty, and no POST of one. All stay with the review.
+**Not covered.** A guest network name written into a sink that does not say SSID (`GuestNetworkName1`) is not named. A
+table whose heading row names no network or device, or whose rows the script reads with no name and no table, is not
+read. A cell value joined to other text in a markup row is not read. An answer outside a blob (a form field or POST
+body) is not labeled: the fleet holds 112 `answer` inputs, every one empty, and no POST of one. All stay with the
+review.
 
 **Bounded work.** Every scan is one pass over the page or over one function's body, kept for the page's other blobs. An
 index expression over 100 characters is not read, and at most 16 row layouts, views and tables are read for one
