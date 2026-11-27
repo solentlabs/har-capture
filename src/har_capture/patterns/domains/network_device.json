@@ -144,6 +144,20 @@
         "_comment": "Speed/bandwidth descriptions"
       },
       {
+        "regex": "^-?\\d+(?:\\.\\d+)?\\s*(?:dBmV|dBm|dB)$",
+        "flags": ["IGNORECASE"],
+        "_comment": "DOCSIS signal levels: 30.8 dBmV, -1.02 dBmV, 38.9 dB"
+      },
+      {
+        "regex": "^\\d+(?:\\.\\d+)?\\s*[KM]sym/s(?:ec)?$",
+        "flags": ["IGNORECASE"],
+        "_comment": "DOCSIS symbol rates: 5120 Ksym/sec"
+      },
+      {
+        "regex": "^\\d+(?:\\.\\d+)?\\s*~\\s*\\d+(?:\\.\\d+)?$",
+        "_comment": "Numeric ranges: 1108 ~ 2987 (OFDM active subcarriers)"
+      },
+      {
         "regex": "^(?:United States|United Kingdom|New Zealand|South Korea|North Korea|South Africa|Hong Kong|Saudi Arabia|Costa Rica|Puerto Rico|Czech Republic|Dominican Republic|El Salvador|Sri Lanka|[A-Z][a-z]+)$",
         "_comment": "Country/region names (router region settings)"
       },
@@ -163,6 +177,10 @@
       {
         "regex": "^[A-Z]{1,4}\\d{2,5}[A-Z]?\\d{0,2}-\\d{2,3}[A-Z]{0,3}$",
         "_comment": "Hardware model numbers: C279T00-01, C3700-100NAS"
+      },
+      {
+        "regex": "^\\[\\s*[A-Za-z]+(?: [A-Za-z]+)*(?::\\s*(?:[A-Za-z]+|\\d{1,3}(?:\\.\\d{1,3}){3}))?\\](?: (?:from source|IP address:) \\d{1,3}(?:\\.\\d{1,3}){3}| to MAC address [0-9A-Fa-fX]{2}(?::[0-9A-Fa-fX]{2}){5})?$",
+        "_comment": "Netgear log events (Logs.htm): [admin login failure] from source 192.168.0.2, [DHCP IP: 192.168.0.9] to MAC address 02:00:00:00:00:01, [UPnP set event: GetTotalBytesSent]. The addresses are redacted by their own passes."
       }
     ]
   },

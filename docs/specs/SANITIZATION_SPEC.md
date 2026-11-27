@@ -971,6 +971,31 @@ Detects `localStorage.setItem()` and `sessionStorage.setItem()` in inline script
 - **Tier B**: Value contains IPs/MACs → handled by subsequent passes
 - **Tier C**: Heuristic analysis if enabled (`FLAG` or `REDACT` mode)
 
+### Pipe-Delimited Blobs
+
+A blob is an assignment, to a variable a pattern file lists in `script_variables.pipe_delimited`, of a string literal
+and every string literal joined to it by `+` (`read_pipe_blob`). Firmware builds long blobs that way, one row per line,
+with the delimiter at either end of a literal:
+
+```javascript
+var tagValueList = '2'
+    + '|1||Locked|QAM256'
+    + '|2||Locked|QAM256';
+```
+
+The literals are joined and split on `|`, so passes 13b and 14 number and judge every field of the chain, and each
+replacement is written back into the literal that holds it. Line breaks and spaces may sit around a `+`; when the
+assignment is on a `//` line, so may a `//` at the start of each further line, which is how a commented-out sample
+continues. A `//` line inside live code is commented out of the value, so the chain stops before it. The chain also
+stops before a literal that would join a field across two literals (`'ab' + 'cd'`), since no single literal could take
+the field's placeholder. A blob in a comment is read the same way as one in code; pass 13b binds no sinks to it.
+
+The CMM fleet holds 1,080 joined blobs on Netgear pages, 1,063 of them commented-out samples and 17 in live code
+(`RouterStatus.asp`, `DashBoard.asp`), and no literal in them splits a field. Reading the whole chain adds review items
+for the two-word names in `AccessControl.htm`'s commented sample rows (144) and, with `--heuristics redact`, redacts the
+WEP-key-shaped values that `WirelessSettings.htm`'s commented sample repeats on its second line (48), which were already
+redacted on its first.
+
 ### Pipe-Delimited Sinks (Pass 13b)
 
 A pipe-delimited blob has no labels, but the page's own script names a position when it writes it into a control
@@ -986,11 +1011,12 @@ function InitUpdateView(tagValues) {
 InitUpdateView(InitTagValue());
 ```
 
-1. **Bind** (`PipeSinks.kinds_at`): the blob is an assignment in script code to a variable a pattern file lists in
-   `script_variables.pipe_delimited`. The function it sits in is the source; every function a `View(Source())` call in
-   script code passes it to is a view, read through its first parameter. A blob in no function, a source passed to no
-   function, a view with no parameter and a commented-out blob or call bind nothing. A function's body ends at its
-   closing brace, counted in script code only (`ScriptCode.block_end`), or at the end of the text when it has none.
+1. **Bind** (`PipeSinks.kinds_at`): the [blob](#pipe-delimited-blobs) is an assignment in script code to a variable a
+   pattern file lists in `script_variables.pipe_delimited`; its fields are the whole chain's. The function it sits in is
+   the source; every function a `View(Source())` call in script code passes it to is a view, read through its first
+   parameter. A blob in no function, a source passed to no function, a view with no parameter and a commented-out blob
+   or call bind nothing. A function's body ends at its closing brace, counted in script code only
+   (`ScriptCode.block_end`), or at the end of the text when it has none.
 1. **Read the sinks**: in a view, a write of `parameter[N]` — `N` a constant, alone or inside calls, ending the
    statement — into `getElementsByName("NAME")[0].value` / `.innerHTML`, `getElementById("NAME").value` / `.innerHTML`,
    `$('#NAME').html(` / `.val(` / `.text(`, `form.NAME.value` or `var NAME`. A sink in a comment or a string is not
@@ -1018,13 +1044,14 @@ InitUpdateView(InitTagValue());
    to text (`tagValues[…] + ' dBm'`) is not a value; neither is an append statement or a table call in a comment or a
    string.
 1. **Name** (`pipe_sink_kind`): `NAME` is a password sink when it is a credential label (`password`, `passphrase`,
-   `psk`, `wpa…key`, a glued `key`) and an SSID sink when it is an SSID name (`ssid` not after `b`, `wifi_ntwrk`,
-   `wifi_network`, `priwifinet`, `wireless_name`), in both cases followed only by digits, `Hidden` (passwords) and a
-   band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix. It is an answer sink when it is `answer` followed only by
-   digits (`answer1`, Netgear's password-recovery answers on `SetPassword.htm`). `wirelessPassword1_5g`,
-   `passphraseHidden_an`, `radius_key_2G`, `wiressSSID1`, `WirelessName_an` and `answer2` are sinks; `passwordId`,
-   `passphraseStr`, `ssid_sel`, `ssid_bc_enable`, `bssid_enable`, `group_key_update_interval_2G` and `answer1_changed`
-   are not. A position two readings disagree on is a password.
+   `psk`, `wpa…key`, a glued `key`, or `key` followed by a number: Netgear's WEP keys `KEY1`…`KEY4`) and an SSID sink
+   when it is an SSID name (`ssid` not after `b`, `wifi_ntwrk`, `wifi_network`, `priwifinet`, `wireless_name`), in both
+   cases followed only by digits, `Hidden` (passwords) and a band (`_an`, `_2g`, `_5g`, `_6g`, `_24g`), with any prefix.
+   It is an answer sink when it is `answer` followed only by digits (`answer1`, Netgear's password-recovery answers on
+   `SetPassword.htm`). `wirelessPassword1_5g`, `passphraseHidden_an`, `radius_key_2G`, `KEY1Hidden_an`, `wiressSSID1`,
+   `WirelessName_an` and `answer2` are sinks; `passwordId`, `passphraseStr`, `keyword`, `ssid_sel`, `ssid_bc_enable`,
+   `bssid_enable`, `group_key_update_interval_2G` and `answer1_changed` are not. A position two readings disagree on is
+   a password.
 1. **Judge the value** (`is_pipe_sink_value_sensitive`), without its surrounding whitespace: kept when empty, already a
    placeholder (`is_redacted()`, a `***…` marker, `PREFIX_<hash>`), a `tagValueList.safe_values` word, a safe or status
    word (`is_safe_value()`), or a bare integer — except eight or more digits in a password sink (a numeric passphrase).
@@ -1036,11 +1063,11 @@ InitUpdateView(InitTagValue());
 The pass runs in every heuristic mode, ahead of pass 14, which then skips the placeholders. It is exposed as a function
 and also runs on the non-HTML text route (`_sanitize_body_string`), so a blob served from a `.js` file is covered and
 `validate`, which reports what `iter_pipe_sink_values` yields, never reports a value a sanitize run cannot clear. Not
-covered, and left to pass 14's review: a bare `KEY1` WEP sink, a name the sink does not call an SSID
-(`GuestNetworkName1`), and rows the script reads with no name and no headed table. A redacted password or network name
-is registered for [Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase); an answer or a device name only
-feeds the [Pass 1b](#pass-1b-redacted-value-propagation) sweep, since Pass 1d looks for a value as a substring and both
-are often words firmware text holds (`blue`, `iPhone`).
+covered, and left to pass 14's review: a name the sink does not call an SSID (`GuestNetworkName1`), and rows the script
+reads with no name and no headed table. A redacted password or network name is registered for
+[Pass 1d](#pass-1d-surviving-copies-of-a-network-name-or-passphrase); an answer or a device name only feeds the
+[Pass 1b](#pass-1b-redacted-value-propagation) sweep, since Pass 1d looks for a value as a substring and both are often
+words firmware text holds (`blue`, `iPhone`).
 
 The limits above are kept where a device's own network name sits behind them. A Netgear C6250 carries its name in a
 position no script reads, labeled only by a comment (`/* … | Name (SSID) | … */` above `'1|6|<name>|13|1|'` on its scan
@@ -1058,17 +1085,16 @@ most 16 row layouts, views and tables are read for one function, and the functio
 
 Handles vendor-specific data structures like Netgear's tagValueList (`"val1|val2|val3"`):
 
-1. Match a variable assignment whose name a pattern file lists in `script_variables.pipe_delimited` (PATTERN_SPEC); the
+1. Read each [blob](#pipe-delimited-blobs) a pattern file names in `script_variables.pipe_delimited` (PATTERN_SPEC); the
    core names none, so without `--patterns network-device` (or a file of your own) no blob is read
-1. Split value by `|` delimiter
+1. Split the joined value by `|` delimiter
 1. For each value, judged without its surrounding whitespace:
    - Skip if empty or matches safe values (`sensitive.tagValueList.safe_values`)
    - Skip if already redacted (contains hash prefix or format-preserving pattern), pass 13b's placeholders included
    - Auto-redact if MAC pattern, serial number pattern (`SN-`, `S/N-`, `SN_`, `S-N-`)
    - If heuristics enabled: run through `analyze_value()` from heuristics.py
-1. Reassemble the pipe-delimited string with each value's whitespace written back around the value or its placeholder —
-   the blob's spacing is not the pass's to change (19 Netgear captures in the CMM fleet space their `tagValueList`
-   values)
+1. Write each placeholder into the literal that holds its value, with the value's whitespace kept around it — the blob's
+   spacing is not the pass's to change (19 Netgear captures in the CMM fleet space their `tagValueList` values)
 
 ### `sanitize_html()` Signature
 

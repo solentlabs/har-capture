@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-11-27
+
+### Fixed
+
+- **Netgear log rows and DOCSIS measurements are no longer offered for review as credentials.** With
+  `--patterns network-device`, the event text of each row on a Netgear `Logs.htm` page
+  (`[admin login failure] from source …`, `[DHCP IP: …] to MAC address …`,
+  `[UPnP set event: GetTotalBytesSent] from source …`) was flagged as a high-entropy credential, about 20 to 30 times
+  per capture, and signal levels (`30.8 dBmV`), symbol rates (`5120 Ksym/sec`) and subcarrier ranges (`1108 ~ 2987`) on
+  `DocsisStatus.htm` were flagged too, and with `--heuristics redact` replaced. The addresses in the log rows are still
+  redacted.
+- **Every line of a pipe-delimited value built across several lines is now checked.** Netgear firmware builds some
+  `tagValueList` values as `'…|' + '…|' + …`, one row per line, including commented-out samples on
+  `WirelessSettings.htm`, `GuestNetwork.htm` and `AccessControl.htm`. Only the first line was read, so a value there
+  could be redacted on that line and kept on the next. The whole value is now read, so the review offers every line's
+  values and `--heuristics redact` replaces them all.
+- **Netgear WEP keys no longer survive `--patterns network-device`.** The C3700's `GuestNetwork.htm` and
+  `WirelessSettings.htm` write WEP keys into fields named `KEY1`…`KEY4` (and `KEY1Hidden`, `KEY1_an`). `sanitize` did
+  not read these names as credentials, so a WEP key the owner had set was kept. It is now redacted as `PASS_…`, and
+  `validate` reports one left unredacted as an error. The all-zero default (no key set) is kept.
+
 ## [0.19.1] - 2026-11-26
 
 ### Fixed
@@ -1692,6 +1713,7 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.18.0]: https://github.com/solentlabs/har-capture/compare/v0.17.1...v0.18.0
 [0.19.0]: https://github.com/solentlabs/har-capture/compare/v0.18.0...v0.19.0
 [0.19.1]: https://github.com/solentlabs/har-capture/compare/v0.19.0...v0.19.1
+[0.19.2]: https://github.com/solentlabs/har-capture/compare/v0.19.1...v0.19.2
 [0.2.0]: https://github.com/solentlabs/har-capture/compare/v0.1.2...v0.2.0
 [0.2.1]: https://github.com/solentlabs/har-capture/compare/v0.2.0...v0.2.1
 [0.2.2]: https://github.com/solentlabs/har-capture/compare/v0.2.1...v0.2.2
@@ -1719,4 +1741,4 @@ har-capture sanitize input.har --patterns custom-allowlist.json
 [0.8.2]: https://github.com/solentlabs/har-capture/compare/v0.8.1...v0.8.2
 [0.9.0]: https://github.com/solentlabs/har-capture/compare/v0.8.2...v0.9.0
 [0.9.1]: https://github.com/solentlabs/har-capture/compare/v0.9.0...v0.9.1
-[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.19.1...HEAD
+[unreleased]: https://github.com/solentlabs/har-capture/compare/v0.19.2...HEAD
